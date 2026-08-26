@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Review Queue · YuJian AI</title>
+  <style>
+    body{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f5f6f7;color:#171717}
+    header{position:sticky;top:0;background:#fff;border-bottom:1px solid #e5e7eb;padding:14px 24px;display:flex;gap:16px;align-items:center;z-index:2}
+    header a{text-decoration:none;color:#111;font-weight:700}.filters{display:flex;gap:8px;flex-wrap:wrap}select,input,button,textarea{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:8px;background:#fff}
+    main{max-width:1180px;margin:0 auto;padding:20px}.item{display:grid;grid-template-columns:360px 1fr;gap:18px;background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin-bottom:14px}
+    .image{width:100%;height:280px;object-fit:contain;background:#111;border-radius:10px}.meta{display:grid;grid-template-columns:150px 1fr;gap:7px 12px;font-size:14px}.label{color:#6b7280}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.actions button{cursor:pointer;font-weight:600}.ok{background:#111;color:#fff}.danger{background:#fff1f2}.hard{background:#fff7ed}.pending{background:#f3f4f6}.notes{width:100%;box-sizing:border-box;margin-top:10px;min-height:60px}.status{font-weight:700}.source{word-break:break-all}.empty{padding:50px;text-align:center;color:#6b7280}
+    @media(max-width:800px){.item{grid-template-columns:1fr}.image{height:240px}}
+  </style>
+</head>
+<body>
+<header>
+  <a href="/">← Overview</a>
+  <div class="filters">
+    <select id="status"><option value="pending">Pending</option><option value="needs_review">Needs Review</option><option value="hard_case">Hard Case</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="">All</option></select>
+    <input id="batch" placeholder="Batch ID" />
+    <input id="species" placeholder="鱼种" />
+    <input id="q" placeholder="图片ID/来源" />
+    <button onclick="load()">筛选</button>
+  </div>
+</header>
+<main><div id="list"></div></main>
+<script>
+const truthStatuses=['LIKELY_CORRECT','UNCERTAIN','HARD_PAIR_REVIEW','WRONG_LABEL_SUSPECTED','EXPERT_HOLD'];
+function esc(v){return (v??'').toString().replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+async function load(){
+  const p=new URLSearchParams(); for(const id of ['status','batch','species','q']){const v=document.getElementById(id).value;if(v)p.set(id==='batch'?'batch_id':id,v)} p.set('limit','100');
+  const data=await (await fetch('/api/review?'+p.toString())).json();
+  const list=document.getElementById('list');
+  if(!data.length){list.innerHTML='<div class="empty">当前筛选条件没有图片</div>';return}
+  list.innerHTML=data.map((x,i)=>`<div class="item" id="row-${i}">
+    <img class="image" loading="lazy" src="${x.media_url}" />
+    <div><div class="meta">
+      <div class="label">Image</div><div>${esc(x.image_id)}</div>
+      <div class="label">Batch</div><div>${esc(x.batch_id)}</div>
+      <div class="label">声明鱼种</div><div>${esc(x.claimed_species||'-')}</div>
+      <div class="label">Truth</div><div><input id="truth-${i}" value="${esc(x.truth_species||x.claimed_species||'')}" /></div>
+      <div class="label">Truth Status</div><div><select id="truthStatus-${i}">${truthStatuses.map(s=>`<option ${s===x.truth_status?'selected':''}>${s}</option>`).join('')}</select></div>
+      <div class="label">Review</div><div class="status">${esc(x.review_status)}</div>
+      <div class="label">Scene / Quality</div><div>${esc(x.scene||'-')} / ${esc(x.quality||'-')}</div>
+      <div class="label">来源</div><div class="source">${x.source_url?`<a target="_blank" href="${esc(x.source_url)}">${esc(x.source_platform||x.source_url)}</a>`:'-'}</div>
+    </div>
+    <textarea class="notes" id="notes-${i}" placeholder="审核备注">${esc(x.notes||'')}</textarea>
+    <div class="actions">
+      <button class="ok" onclick="save(${i},'approved','${esc(x.batch_id)}','${esc(x.image_id)}')">Approve</button>
+      <button class="pending" onclick="save(${i},'needs_review','${esc(x.batch_id)}','${esc(x.image_id)}')">Needs Review</button>
+      <button class="hard" onclick="save(${i},'hard_case','${esc(x.batch_id)}','${esc(x.image_id)}')">Hard Case</button>
+      <button class="danger" onclick="save(${i},'rejected','${esc(x.batch_id)}','${esc(x.image_id)}')">Reject</button>
+    </div></div></div>`).join('');
+}
+async function save(i,status,batch,image){
+  const payload={review_status:status,truth_species:document.getElementById('truth-'+i).value,truth_status:document.getElementById('truthStatus-'+i).value,notes:document.getElementById('notes-'+i).value,reviewer:'web-review'};
+  const r=await fetch(`/api/review/${encodeURIComponent(batch)}/${encodeURIComponent(image)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  if(!r.ok){alert(await r.text());return;} document.getElementById('row-'+i).remove();
+}
+load();
+</script>
+</body>
+</html>
