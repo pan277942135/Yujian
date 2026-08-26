@@ -70,12 +70,12 @@ def health():
 
 @app.get("/", response_class=HTMLResponse)
 def overview_page(request: Request):
-    return templates.TemplateResponse("overview.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="overview.html", context={})
 
 
 @app.get("/review", response_class=HTMLResponse)
 def review_page(request: Request):
-    return templates.TemplateResponse("review.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="review.html", context={})
 
 
 @app.get("/api/overview")
