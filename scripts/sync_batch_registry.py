@@ -4,7 +4,12 @@ import csv
 import io
 import json
 import os
-from pathlib import PurePosixPath
+import sys
+from pathlib import Path, PurePosixPath
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from google.cloud import storage
 from sqlalchemy import select
@@ -60,6 +65,7 @@ def main():
     rows = list(csv.DictReader(io.StringIO(manifest_blob.download_as_text(encoding="utf-8-sig"))))
 
     objects = [b.name for b in client.list_blobs(args.bucket, prefix=prefix + "/")]
+    object_set = set(objects)
     image_objects = [o for o in objects if PurePosixPath(o).suffix.lower() in IMAGE_EXTS]
     by_basename: dict[str, list[str]] = {}
     for obj in image_objects:
@@ -90,7 +96,7 @@ def main():
             object_name = None
             if rel:
                 candidate = rel if rel.startswith(prefix + "/") else f"{prefix}/{rel}"
-                if candidate in objects:
+                if candidate in object_set:
                     object_name = candidate
             if not object_name and file_name:
                 matches = by_basename.get(PurePosixPath(norm_path(file_name)).name, [])
