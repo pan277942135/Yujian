@@ -1,7 +1,14 @@
 project:
-  name: yujian-ai
+  name: yujian-project
   dataset_family: M1
   timezone: Asia/Shanghai
+
+cloud:
+  provider: gcp
+  project_id: gemini-api-project-503706
+  project_number: '571785698442'
+  region: asia-east1
+  bucket_name: yujian-model-factory-571785698442
 
 storage:
   provider: gcs
