@@ -1,0 +1,21 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile Python scripts
+        run: python -m compileall scripts
+      - name: Validate project config exists
+        run: test -f config/project.yaml
+      - name: Validate registry schema exists
+        run: test -f schemas/registry.sql

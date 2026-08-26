@@ -1,0 +1,43 @@
+project:
+  name: yujian-ai
+  dataset_family: M1
+  timezone: Asia/Shanghai
+
+storage:
+  provider: gcs
+  raw_prefix: raw/batches
+  reviewed_prefix: reviewed/batches
+  annotation_prefix: annotations/cvat
+  dataset_prefix: datasets
+  model_prefix: models
+  evaluation_prefix: evaluations
+  error_pool_prefix: error_pool
+
+species:
+  0: grass_carp
+  1: bighead_carp
+  2: silver_carp
+  3: common_carp
+  4: crucian_carp
+  5: largemouth_bass
+  6: snakehead
+  7: yellow_catfish
+  8: black_carp
+  9: other_freshwater_fish
+
+review:
+  approved_values: [approved, confirmed]
+  excluded_values: [rejected, hard_case, needs_review, pending]
+
+split:
+  train: 0.70
+  val: 0.15
+  test: 0.15
+  group_fields: [group_id, capture_event_id, event_id]
+  seed: 20260826
+
+naming:
+  batch_prefix: BATCH_
+  dataset_pattern: 'DS_M1_v{major}.{minor}'
+  run_prefix: RUN_M1_
+  model_prefix: MODEL_M1_
