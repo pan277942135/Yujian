@@ -12,6 +12,7 @@ cloud:
 
 storage:
   provider: gcs
+  incoming_prefix: incoming
   raw_prefix: raw/batches
   reviewed_prefix: reviewed/batches
   annotation_prefix: annotations/cvat
