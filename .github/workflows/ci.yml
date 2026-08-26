@@ -13,8 +13,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Compile Python scripts
-        run: python -m compileall scripts
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Compile Python
+        run: python -m compileall app scripts
+      - name: Import Review Registry app
+        env:
+          REGISTRY_DB_URL: sqlite:///:memory:
+        run: python -c "from app.main import app; from app.db import init_db; init_db(); print(app.title)"
       - name: Validate project config exists
         run: test -f config/project.yaml
       - name: Validate registry schema exists
