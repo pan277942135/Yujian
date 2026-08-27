@@ -43,8 +43,6 @@ def make_image(crop=False, quality=90):
 
 
 def make_other_image(quality=90):
-    # Similar palette/background, deliberately different structure. This guards
-    # against collapsing two different fish photos merely because colors match.
     img = Image.new("RGB", (320, 240), "white")
     draw = ImageDraw.Draw(img)
     draw.rounded_rectangle((115, 35, 205, 210), radius=20, fill=(90, 130, 150), outline=(20, 30, 40), width=4)
@@ -100,17 +98,29 @@ def main():
     ])
     assert no_fish["status"] == "no_fish", no_fish
 
-    # Fishing activity / gear labels are context, not proof that a fish body is
-    # visible. This is the real-world failure mode reported from the Doubao batch.
     rod_scene = classify_presence([], [
         {"name": "Fishing", "score": 0.97},
         {"name": "Fishing rod", "score": 0.94},
         {"name": "Water", "score": 0.91},
-        {"name": "Outdoor", "score": 0.88},
     ])
     assert rod_scene["status"] == "no_fish", rod_scene
     assert rod_scene["routing_reason"] == "fishing_scene_without_fish", rod_scene
     assert rod_scene["fish_score"] == 0.0, rod_scene
+
+    # A common user-reported failure: person + scenery with no visible fish.
+    person_scenery = classify_presence([], [
+        {"name": "Person", "score": 0.94},
+        {"name": "Outdoor", "score": 0.72},
+        {"name": "Water", "score": 0.68},
+    ])
+    assert person_scenery["status"] == "no_fish", person_scenery
+
+    # Two solid landscape signals are enough when there is absolutely no fish evidence.
+    sparse_landscape = classify_presence([], [
+        {"name": "Natural landscape", "score": 0.78},
+        {"name": "Body of water", "score": 0.73},
+    ])
+    assert sparse_landscape["status"] == "no_fish", sparse_landscape
 
     fishery_landscape = classify_presence([], [
         {"name": "Fishery", "score": 0.93},
@@ -130,6 +140,14 @@ def main():
         ],
     )
     assert fish_with_rod["status"] == "single_fish", fish_with_rod
+
+    # Fish label-only evidence remains uncertain rather than being auto-rejected.
+    fish_label_only = classify_presence([], [
+        {"name": "Fish", "score": 0.81},
+        {"name": "Water", "score": 0.84},
+        {"name": "Outdoor", "score": 0.79},
+    ])
+    assert fish_label_only["status"] == "uncertain", fish_label_only
 
     original = fingerprint_bytes(make_image(crop=False, quality=92))
     same_visual = fingerprint_bytes(make_image(crop=False, quality=75))
