@@ -5,8 +5,6 @@ PROJECT_ID="${PROJECT_ID:-gemini-api-project-503706}"
 REGION="${REGION:-asia-east1}"
 BUCKET="${BUCKET:-yujian-model-factory-571785698442}"
 SERVICE="${SERVICE:-yujian-model-factory-console}"
-TRAINING_JOB_NAME="${TRAINING_JOB_NAME:-yujian-classifier-trainer}"
-DEPLOY_TRAINER="${DEPLOY_TRAINER:-1}"
 SQL_INSTANCE="${SQL_INSTANCE:-yujian-registry}"
 DB_NAME="${DB_NAME:-yujian_registry}"
 DB_USER="${DB_USER:-yujian_console}"
@@ -103,11 +101,6 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --role="roles/serviceusage.serviceUsageConsumer" \
   --condition=None >/dev/null
 
-gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-  --member="serviceAccount:${RUNTIME_SA}" \
-  --role="roles/run.jobsExecutorWithOverrides" \
-  --condition=None >/dev/null
-
 gcloud secrets add-iam-policy-binding "$DB_SECRET" \
   --project "$PROJECT_ID" \
   --member="serviceAccount:${RUNTIME_SA}" \
@@ -132,7 +125,7 @@ gcloud run deploy "$SERVICE" \
   --source . \
   --service-account "$RUNTIME_SA" \
   --add-cloudsql-instances "$CONNECTION_NAME" \
-  --set-env-vars="GCS_BUCKET=${BUCKET},CLOUD_SQL_CONNECTION_NAME=${CONNECTION_NAME},DB_USER=${DB_USER},DB_NAME=${DB_NAME},APP_GIT_COMMIT=${GIT_SHA},CONSOLE_COOKIE_SECURE=1,GCP_PROJECT_ID=${PROJECT_ID},GCP_REGION=${REGION},TRAINING_JOB_NAME=${TRAINING_JOB_NAME}" \
+  --set-env-vars="GCS_BUCKET=${BUCKET},CLOUD_SQL_CONNECTION_NAME=${CONNECTION_NAME},DB_USER=${DB_USER},DB_NAME=${DB_NAME},APP_GIT_COMMIT=${GIT_SHA},CONSOLE_COOKIE_SECURE=1" \
   --set-secrets="DB_PASSWORD=${DB_SECRET}:latest,CONSOLE_ACCESS_KEY=${CONSOLE_SECRET}:latest" \
   --cpu=1 \
   --memory=1Gi \
@@ -149,37 +142,20 @@ log "Health check"
 curl -fsS "${SERVICE_URL}/health"
 printf '\n'
 
-if [[ "$DEPLOY_TRAINER" == "1" ]]; then
-  log "Deploying classifier training worker"
-  PROJECT_ID="$PROJECT_ID" \
-  REGION="$REGION" \
-  BUCKET="$BUCKET" \
-  TRAINING_JOB_NAME="$TRAINING_JOB_NAME" \
-  SQL_INSTANCE="$SQL_INSTANCE" \
-  DB_NAME="$DB_NAME" \
-  DB_USER="$DB_USER" \
-  RUNTIME_SA="$RUNTIME_SA" \
-  DB_SECRET="$DB_SECRET" \
-  bash scripts/deploy_training_gcp.sh
-else
-  log "Skipping classifier training worker because DEPLOY_TRAINER=${DEPLOY_TRAINER}"
-fi
-
 cat <<EOF
 
 ============================================================
 YuJian Model Factory Console deployed
 ============================================================
 URL: ${SERVICE_URL}
-Training Job: ${TRAINING_JOB_NAME}
 
 Retrieve the Console access key when needed:
   gcloud secrets versions access latest \\
     --secret=${CONSOLE_SECRET} \\
     --project=${PROJECT_ID}
 
-日常操作：总览 -> 数据批次 -> 鱼体检测 -> 人工审核 -> 鱼种管理 -> 用户反馈 -> 数据集 -> 模型训练
+日常操作：总览 -> 数据批次 -> 鱼体检测 -> 人工审核 -> 鱼种管理 -> 用户反馈 -> 数据集
 
-Cloud Shell is no longer required for normal daily data / training operations.
+Cloud Shell is no longer required for normal daily data operations.
 ============================================================
 EOF

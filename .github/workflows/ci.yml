@@ -18,13 +18,13 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
       - name: Compile Python
-        run: python -m compileall app scripts trainer
+        run: python -m compileall app scripts
       - name: Validate deployment shell syntax
-        run: bash -n scripts/deploy_console_gcp.sh && bash -n scripts/deploy_training_gcp.sh
+        run: bash -n scripts/deploy_console_gcp.sh
       - name: Import Model Factory Console
         env:
           REGISTRY_DB_URL: 'sqlite:///:memory:'
-        run: python -c "from app.entry import app; from app.db import init_db; init_db(); p=app.openapi()['paths']; print(app.title, app.version); assert '/api/presence/scan' in p; assert '/api/dedupe/scan' in p; assert '/api/bulk-review/apply' in p; assert '/review/bulk' in p; assert '/inspect' in p; assert '/api/inspect/images' in p; assert '/api/inspect/presence/{batch_id}/{image_id}' in p; assert '/api/datasets/freeze' in p; assert '/api/dataset-freeze/preview' in p; assert '/api/dataset-freeze/{dataset_version}/finalize' in p; assert '/api/dataset-freeze/{dataset_version}/items' in p; assert '/training' in p; assert '/api/training/runs' in p; assert '/api/training/runs/{run_id}/metrics' in p; assert '/api/models' in p"
+        run: python -c "from app.entry import app; from app.db import init_db; init_db(); p=app.openapi()['paths']; print(app.title, app.version); assert '/api/presence/scan' in p; assert '/api/dedupe/scan' in p; assert '/api/bulk-review/apply' in p; assert '/review/bulk' in p; assert '/inspect' in p; assert '/api/inspect/images' in p; assert '/api/inspect/presence/{batch_id}/{image_id}' in p; assert '/api/datasets/freeze' in p; assert '/api/dataset-freeze/preview' in p; assert '/api/dataset-freeze/{dataset_version}/finalize' in p; assert '/api/dataset-freeze/{dataset_version}/items' in p"
       - name: Run Console flywheel smoke test
         env:
           REGISTRY_DB_URL: 'sqlite:///:memory:'
@@ -37,15 +37,9 @@ jobs:
         env:
           REGISTRY_DB_URL: 'sqlite:///:memory:'
         run: python scripts/smoke_dataset_freeze.py
-      - name: Run classifier training API smoke test
-        env:
-          REGISTRY_DB_URL: 'sqlite:///:memory:'
-        run: python scripts/smoke_training.py
       - name: Validate project config exists
         run: test -f config/project.yaml
       - name: Validate registry schema exists
         run: test -f schemas/registry.sql
       - name: Validate Dataset Freeze migration exists
         run: test -f schemas/0012_dataset_freeze_v01.sql
-      - name: Validate classifier trainer assets exist
-        run: test -f Dockerfile.trainer && test -f requirements-training.txt && test -f infra/cloudbuild.trainer.yaml
