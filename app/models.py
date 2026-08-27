@@ -26,15 +26,12 @@ class Batch(Base):
 
 
 class SpeciesCatalog(Base):
-    """Stable species identity independent from any one model's class index.
-
-    `species_key` is the durable machine identifier. Dataset snapshots assign their
-    own class_index via class_map.json so adding species never changes old models.
-    """
+    """Stable species identity independent from any one model's class index."""
 
     __tablename__ = "species_catalog"
 
     species_key = Column(String(128), primary_key=True)
+    catalog_order = Column(Integer, nullable=False, unique=True, index=True)
     common_name_zh = Column(String(128), nullable=False, unique=True, index=True)
     common_name_en = Column(String(256))
     scientific_name = Column(String(256))
@@ -109,11 +106,7 @@ class DatasetVersion(Base):
 
 
 class FeedbackEvent(Base):
-    """Online inference feedback that feeds back into the data factory.
-
-    Both confirmations and corrections are valuable. The image itself can later be
-    materialized into a feedback Batch and reviewed like any other training asset.
-    """
+    """Online inference feedback that feeds back into the data factory."""
 
     __tablename__ = "feedback_events"
     __table_args__ = (UniqueConstraint("source_event_id", name="uq_feedback_source_event"),)
