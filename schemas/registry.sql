@@ -61,6 +61,23 @@ CREATE TABLE IF NOT EXISTS review_events (
   FOREIGN KEY(image_asset_id) REFERENCES image_assets(id)
 );
 
+CREATE TABLE IF NOT EXISTS fish_presence_results (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  image_asset_id INTEGER NOT NULL UNIQUE,
+  batch_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  fish_score REAL NOT NULL DEFAULT 0,
+  fish_count INTEGER NOT NULL DEFAULT 0,
+  max_box_area_ratio REAL NOT NULL DEFAULT 0,
+  provider TEXT NOT NULL DEFAULT 'google_vision',
+  model_version TEXT NOT NULL,
+  evidence_json TEXT,
+  error_message TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(image_asset_id) REFERENCES image_assets(id)
+);
+
 CREATE TABLE IF NOT EXISTS datasets (
   dataset_version TEXT PRIMARY KEY,
   parent_version TEXT,
@@ -153,6 +170,8 @@ CREATE INDEX IF NOT EXISTS idx_batches_status ON batches(status);
 CREATE INDEX IF NOT EXISTS idx_species_status ON species_catalog(status);
 CREATE INDEX IF NOT EXISTS idx_images_review ON image_assets(review_status);
 CREATE INDEX IF NOT EXISTS idx_images_truth ON image_assets(truth_species);
+CREATE INDEX IF NOT EXISTS idx_presence_batch ON fish_presence_results(batch_id);
+CREATE INDEX IF NOT EXISTS idx_presence_status ON fish_presence_results(status);
 CREATE INDEX IF NOT EXISTS idx_feedback_pipeline ON feedback_events(pipeline_status);
 CREATE INDEX IF NOT EXISTS idx_feedback_batch ON feedback_events(materialized_batch_id);
 CREATE INDEX IF NOT EXISTS idx_runs_dataset ON training_runs(dataset_version);
