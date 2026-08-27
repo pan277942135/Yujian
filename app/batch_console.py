@@ -73,9 +73,8 @@ def audit_with_species_catalog(
 ) -> dict:
     """Run deterministic audit, then recognize newly-activated Catalog species.
 
-    The low-level audit intentionally remains conservative. This Console adapter
-    upgrades rows whose *only* problem is the old fixed target-species list when
-    their claimed species is now active/candidate in Species Catalog.
+    The low-level audit is intentionally conservative. This adapter keeps
+    compatibility with reports produced before Species Catalog became dynamic.
     """
     bucket_name = bucket_name or get_bucket_name()
     report = audit_incoming_batch(incoming_prefix, batch_id, source, bucket_name)
