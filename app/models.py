@@ -35,7 +35,7 @@ class SpeciesCatalog(Base):
     common_name_zh = Column(String(128), nullable=False, unique=True, index=True)
     common_name_en = Column(String(256))
     scientific_name = Column(String(256))
-    status = Column(String(32), nullable=False, default="candidate", index=True)  # candidate/active/retired
+    status = Column(String(32), nullable=False, default="candidate", index=True)
     is_other = Column(Boolean, nullable=False, default=False)
     notes = Column(Text)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
@@ -118,11 +118,13 @@ class FeedbackEvent(Base):
     model_version = Column(String(128), index=True)
     predicted_species = Column(String(128), index=True)
     confidence = Column(Float)
-    feedback_type = Column(String(64), nullable=False, index=True)  # confirmed/corrected/unknown/new_species_candidate
+    feedback_type = Column(String(64), nullable=False, index=True)
     corrected_species = Column(String(128), index=True)
     user_note = Column(Text)
-    pipeline_status = Column(String(64), nullable=False, default="NEW", index=True)  # NEW/BATCHED/REVIEWED/IGNORED
-    materialized_batch_id = Column(String(128), ForeignKey("batches.batch_id"))
+    pipeline_status = Column(String(64), nullable=False, default="NEW", index=True)
+    # A feedback batch exists in incoming/ before it is promoted/synced into batches,
+    # so this reference intentionally is not a database FK.
+    materialized_batch_id = Column(String(128), index=True)
     materialized_image_id = Column(String(256))
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
