@@ -12,6 +12,10 @@ def _configured_key() -> str:
     return os.getenv("CONSOLE_ACCESS_KEY", "").strip()
 
 
+def _feedback_ingest_key() -> str:
+    return os.getenv("FEEDBACK_INGEST_KEY", "").strip()
+
+
 def _cookie_value(key: str) -> str:
     return hashlib.sha256(("yujian-console:" + key).encode("utf-8")).hexdigest()
 
@@ -22,6 +26,12 @@ def install_access_guard(app: FastAPI) -> None:
         key = _configured_key()
         if not key or request.url.path in {"/health", "/login"}:
             return await call_next(request)
+
+        ingest_key = _feedback_ingest_key()
+        if request.method == "POST" and request.url.path == "/api/feedback" and ingest_key:
+            supplied = request.headers.get("X-YuJian-Ingest-Key", "")
+            if supplied and secrets.compare_digest(supplied, ingest_key):
+                return await call_next(request)
 
         expected = _cookie_value(key)
         actual = request.cookies.get(COOKIE_NAME, "")
