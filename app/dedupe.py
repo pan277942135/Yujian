@@ -20,7 +20,7 @@ from app.models import Batch, ImageAsset, ReviewEvent
 
 router = APIRouter(prefix="/api/dedupe", tags=["image-dedupe"])
 
-FINGERPRINT_VERSION = "phash-dhash-hist-v0.1"
+FINGERPRINT_VERSION = "phash-dhash-crophash-hist-v0.2"
 FILTERABLE_REVIEW_STATUSES = {"pending", "needs_review", "hard_case"}
 CENTER_CROP_RATIOS = (1.0, 0.9, 0.8, 0.7)
 
@@ -39,6 +39,7 @@ class ImageFingerprint(Base):
     sha256 = Column(String(64), nullable=False, index=True)
     phash_json = Column(Text, nullable=False)
     dhash = Column(String(64), nullable=False)
+    crop_hash = Column(Text, nullable=False)
     histogram_json = Column(Text, nullable=False)
     width = Column(Integer, nullable=False)
     height = Column(Integer, nullable=False)
@@ -90,11 +91,21 @@ def fingerprint_bytes(content: bytes) -> dict:
         width, height = image.size
         phashes = [str(imagehash.phash(_center_crop(image, ratio), hash_size=8)) for ratio in CENTER_CROP_RATIOS]
         dhash = str(imagehash.dhash(image, hash_size=8))
+        # ImageHash's crop-resistant multihash segments salient image regions, so a
+        # crop can still match the surviving regions in its source image.
+        crop_hash = str(
+            imagehash.crop_resistant_hash(
+                image,
+                min_segment_size=250,
+                segmentation_image_size=300,
+            )
+        )
         hist = _histogram(image)
     return {
         "sha256": hashlib.sha256(content).hexdigest(),
         "phashes": phashes,
         "dhash": dhash,
+        "crop_hash": crop_hash,
         "histogram": hist,
         "width": width,
         "height": height,
@@ -118,6 +129,32 @@ def _hist_similarity(a: list[float], b: list[float]) -> float:
     return max(0.0, min(1.0, sum(x * y for x, y in zip(a, b))))
 
 
+def _crop_match(left: str, right: str) -> tuple[float, float]:
+    """Return (coverage, avg_hamming) for the smaller crop-resistant hash.
+
+    A true crop is asymmetric: most segments in the cropped image should find a
+    close segment in the larger original, while the original may have extra regions.
+    Scoring the smaller side therefore handles crops without requiring both images
+    to retain exactly the same segmentation.
+    """
+    try:
+        left_hash = imagehash.hex_to_multihash(left)
+        right_hash = imagehash.hex_to_multihash(right)
+        if not left_hash.segment_hashes or not right_hash.segment_hashes:
+            return 0.0, 64.0
+        smaller, larger = (
+            (left_hash, right_hash)
+            if len(left_hash.segment_hashes) <= len(right_hash.segment_hashes)
+            else (right_hash, left_hash)
+        )
+        matches, distance = smaller.hash_diff(larger, bit_error_rate=0.18)
+        coverage = matches / max(1, len(smaller.segment_hashes))
+        avg_distance = distance / max(1, matches)
+        return round(float(coverage), 6), round(float(avg_distance), 6)
+    except Exception:
+        return 0.0, 64.0
+
+
 def duplicate_distance(left: ImageFingerprint, right: ImageFingerprint) -> tuple[str | None, float | None]:
     if left.sha256 == right.sha256:
         return "exact", 0.0
@@ -129,13 +166,23 @@ def duplicate_distance(left: ImageFingerprint, right: ImageFingerprint) -> tuple
     p_dist = _min_phash_distance(left_phash, right_phash)
     d_dist = _hamming_hex(left.dhash, right.dhash)
     hist_sim = _hist_similarity(left_hist, right_hist)
+    crop_coverage, crop_hamming = _crop_match(left.crop_hash or "", right.crop_hash or "")
 
-    # Deliberately conservative. Same-species photos with a similar background
-    # should not be collapsed unless both structural and color evidence agree.
-    near = (p_dist <= 3 and hist_sim >= 0.965) or (p_dist <= 5 and d_dist <= 7 and hist_sim >= 0.985)
+    # Three independent routes cover common duplicate transformations while
+    # keeping thresholds conservative enough not to collapse merely similar fish.
+    reencode_near = (p_dist <= 3 and hist_sim >= 0.965) or (p_dist <= 5 and d_dist <= 7 and hist_sim >= 0.985)
+    crop_near = (
+        crop_coverage >= 0.60
+        and crop_hamming <= 8.0
+        and hist_sim >= 0.88
+        and p_dist <= 14
+    )
+    near = reencode_near or crop_near
     if not near:
         return None, None
-    score = float(p_dist) + float(d_dist) * 0.25 + (1.0 - hist_sim) * 20.0
+
+    crop_penalty = (1.0 - crop_coverage) * 4.0 + min(crop_hamming, 16.0) * 0.15
+    score = float(p_dist) + float(d_dist) * 0.20 + (1.0 - hist_sim) * 16.0 + crop_penalty
     return "near", round(score, 4)
 
 
@@ -159,14 +206,11 @@ def _rebuild_groups(db: Session, batch_id: str) -> None:
         if ra != rb:
             parent[rb] = ra
 
-    pair_kind: dict[tuple[int, int], tuple[str, float]] = {}
     for i in range(len(rows)):
         for j in range(i + 1, len(rows)):
-            kind, distance = duplicate_distance(rows[i], rows[j])
-            if kind is None:
-                continue
-            union(i, j)
-            pair_kind[(i, j)] = (kind, float(distance or 0.0))
+            kind, _ = duplicate_distance(rows[i], rows[j])
+            if kind is not None:
+                union(i, j)
 
     groups: dict[int, list[int]] = {}
     for idx in range(len(rows)):
@@ -200,6 +244,8 @@ def _rebuild_groups(db: Session, batch_id: str) -> None:
             row = rows[idx]
             kind, distance = duplicate_distance(representative, row)
             if kind is None:
+                # Transitive clusters can contain a member that only matched an
+                # intermediate image. Keep it grouped, but surface a large distance.
                 kind, distance = "near", 999.0
             row.duplicate_group = group_id
             row.is_representative = False
@@ -277,11 +323,22 @@ def scan_batch(db: Session, batch_id: str, limit: int = 100, rescan: bool = Fals
         fp = fingerprint_bytes(content)
         row = db.scalar(select(ImageFingerprint).where(ImageFingerprint.image_asset_id == image.id))
         if not row:
-            row = ImageFingerprint(image_asset_id=image.id, batch_id=batch_id, sha256=fp["sha256"], phash_json="[]", dhash="", histogram_json="[]", width=fp["width"], height=fp["height"])
+            row = ImageFingerprint(
+                image_asset_id=image.id,
+                batch_id=batch_id,
+                sha256=fp["sha256"],
+                phash_json="[]",
+                dhash="",
+                crop_hash=fp["crop_hash"],
+                histogram_json="[]",
+                width=fp["width"],
+                height=fp["height"],
+            )
             db.add(row)
         row.sha256 = fp["sha256"]
         row.phash_json = json.dumps(fp["phashes"])
         row.dhash = fp["dhash"]
+        row.crop_hash = fp["crop_hash"]
         row.histogram_json = json.dumps(fp["histogram"])
         row.width = fp["width"]
         row.height = fp["height"]
