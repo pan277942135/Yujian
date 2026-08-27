@@ -37,6 +37,7 @@ def as_row(fp, image_id):
         sha256=fp["sha256"],
         phash_json=json.dumps(fp["phashes"]),
         dhash=fp["dhash"],
+        crop_hash=fp["crop_hash"],
         histogram_json=json.dumps(fp["histogram"]),
         width=fp["width"],
         height=fp["height"],
