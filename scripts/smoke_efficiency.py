@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import io
+import json
 import os
 import sys
 from pathlib import Path
@@ -12,7 +13,15 @@ os.environ.setdefault("REGISTRY_DB_URL", "sqlite:///:memory:")
 
 from PIL import Image, ImageDraw  # noqa: E402
 
-from app.dedupe import ImageFingerprint, duplicate_distance, fingerprint_bytes  # noqa: E402
+from app.dedupe import (  # noqa: E402
+    ImageFingerprint,
+    _crop_match,
+    _hamming_hex,
+    _hist_similarity,
+    _min_phash_distance,
+    duplicate_distance,
+    fingerprint_bytes,
+)
 from app.presence import classify_presence  # noqa: E402
 
 
@@ -30,7 +39,6 @@ def make_image(crop=False, quality=90):
 
 
 def as_row(fp, image_id):
-    import json
     return ImageFingerprint(
         image_asset_id=image_id,
         batch_id="TEST",
@@ -42,6 +50,15 @@ def as_row(fp, image_id):
         width=fp["width"],
         height=fp["height"],
     )
+
+
+def metrics(a, b):
+    return {
+        "p_dist": _min_phash_distance(a["phashes"], b["phashes"]),
+        "d_dist": _hamming_hex(a["dhash"], b["dhash"]),
+        "hist": round(_hist_similarity(a["histogram"], b["histogram"]), 6),
+        "crop": _crop_match(a["crop_hash"], b["crop_hash"]),
+    }
 
 
 def main():
@@ -71,6 +88,8 @@ def main():
     original = fingerprint_bytes(make_image(crop=False, quality=92))
     same_visual = fingerprint_bytes(make_image(crop=False, quality=75))
     cropped = fingerprint_bytes(make_image(crop=True, quality=88))
+    print("reencode metrics", metrics(original, same_visual))
+    print("crop metrics", metrics(original, cropped))
     kind1, _ = duplicate_distance(as_row(original, 1), as_row(same_visual, 2))
     kind2, _ = duplicate_distance(as_row(original, 1), as_row(cropped, 3))
     assert kind1 in {"near", "exact"}, kind1
