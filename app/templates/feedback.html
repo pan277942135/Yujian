@@ -3,30 +3,31 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Feedback · YuJian AI</title>
+  <title>用户反馈 · 渔见 AI</title>
   <style>
     body{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f6f7f8;color:#171717}header{background:#fff;border-bottom:1px solid #e5e7eb;padding:14px 24px;display:flex;gap:22px;align-items:center;position:sticky;top:0;z-index:3}header a{text-decoration:none;color:#111827;font-weight:650}main{max-width:1180px;margin:0 auto;padding:24px}.muted{color:#6b7280}.section{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin-top:18px}.top{display:flex;justify-content:space-between;gap:12px;align-items:flex-end}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:16px}.card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:14px}.num{font-size:28px;font-weight:750}.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}input,button,select{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:9px;background:#fff}button{cursor:pointer;font-weight:650}.primary{background:#111827;color:#fff}.pill{display:inline-block;padding:3px 8px;border-radius:999px;background:#f3f4f6;font-size:12px}.confirmed{background:#ecfdf5}.corrected{background:#eef2ff}.unknown,.new_species_candidate{background:#fff7ed}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid #eee;font-size:13px;vertical-align:top}th{color:#6b7280}.banner{display:none;white-space:pre-wrap;padding:12px;border-radius:10px;background:#eef2ff;margin-top:12px}@media(max-width:850px){.cards{grid-template-columns:1fr 1fr}.section{overflow:auto}}
   </style>
 </head>
 <body>
-<header><a href="/">Overview</a><a href="/batches">Batches</a><a href="/review">Review</a><a href="/species">Species</a><a href="/feedback">Feedback</a><a href="/datasets">Dataset</a></header>
+<header><a href="/">总览</a><a href="/batches">数据批次</a><a href="/review">人工审核</a><a href="/species">鱼种管理</a><a href="/feedback">用户反馈</a><a href="/datasets">数据集</a></header>
 <main>
-  <div class="top"><div><h1>User Feedback</h1><div class="muted">线上识别“对 / 错 / 不认识”都重新进入数据生产线。</div></div><button onclick="load()">刷新</button></div>
+  <div class="top"><div><h1>用户反馈</h1><div class="muted">线上识别“正确 / 错误 / 不认识”都会重新进入数据生产线，形成持续学习闭环。</div></div><button onclick="load()">刷新</button></div>
   <div id="banner" class="banner"></div>
   <div id="cards" class="cards"></div>
   <div class="section">
-    <h2>生成反馈 Batch</h2>
-    <div class="actions"><input id="batch" style="width:300px" placeholder="BATCH_20260827_APPFB_001"><button class="primary" onclick="materialize()">把 NEW Feedback 生成 Incoming Batch</button></div>
-    <p class="muted">只处理已经有 image_gcs_uri 的 NEW 反馈。生成后去 Batches 页面点“准备审核”；用户确认也不会直接成为训练真值，仍需经过 Review。</p>
+    <h2>生成反馈批次</h2>
+    <div class="actions"><input id="batch" style="width:300px" placeholder="BATCH_20260827_APPFB_001"><button class="primary" onclick="materialize()">把待处理反馈生成上传批次</button></div>
+    <p class="muted">只处理已有图片地址的待处理反馈。生成后到“数据批次”页面点击“准备审核”；即使用户确认识别正确，也仍需经过统一审核流程后才进入训练数据。</p>
   </div>
-  <div class="section"><h2>最近反馈</h2><table><thead><tr><th>时间 / Event</th><th>模型</th><th>预测</th><th>用户反馈</th><th>纠正</th><th>置信度</th><th>Pipeline</th></tr></thead><tbody id="table"></tbody></table></div>
+  <div class="section"><h2>最近反馈</h2><table><thead><tr><th>时间 / 事件 ID</th><th>模型版本</th><th>模型预测</th><th>用户反馈</th><th>用户纠正</th><th>置信度</th><th>处理状态</th></tr></thead><tbody id="table"></tbody></table></div>
 </main>
 <script>
 function esc(v){return (v??'').toString().replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function msg(t,err=false){const b=document.getElementById('banner');b.style.display='block';b.style.background=err?'#fff1f2':'#eef2ff';b.textContent=t}
 async function api(url,opts){const r=await fetch(url,opts);const t=await r.text();let d;try{d=JSON.parse(t)}catch{d=t}if(!r.ok)throw new Error(d.detail||t);return d}
-async function load(){const [s,d]=await Promise.all([api('/api/flywheel/summary'),api('/api/feedback?limit=200')]);document.getElementById('cards').innerHTML=[['NEW Feedback',s.new_feedback],['Approved Master',s.approved_master_pool],['Active Species',s.active_species],['Candidate Species',s.candidate_species]].map(x=>`<div class="card"><div class="muted">${x[0]}</div><div class="num">${x[1]}</div></div>`).join('');document.getElementById('table').innerHTML=d.map(x=>`<tr><td>${esc(x.created_at||'')}<br><span class="muted">${esc(x.source_event_id)}</span></td><td>${esc(x.model_version||'-')}</td><td>${esc(x.predicted_species||'-')}</td><td><span class="pill ${esc(x.feedback_type)}">${esc(x.feedback_type)}</span></td><td>${esc(x.corrected_species||'-')}</td><td>${x.confidence==null?'-':Number(x.confidence).toFixed(3)}</td><td><span class="pill">${esc(x.pipeline_status)}</span></td></tr>`).join('')||'<tr><td colspan="7" class="muted">还没有线上反馈。App 接入 POST /api/feedback 后会出现在这里。</td></tr>'}
-async function materialize(){const batch=document.getElementById('batch').value.trim();if(!batch){msg('请输入 Batch ID',true);return}try{const d=await api('/api/feedback/materialize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({batch_id:batch})});msg(JSON.stringify(d,null,2));await load()}catch(e){msg(e.message,true)}}
+function feedbackName(v){return ({confirmed:'确认正确',corrected:'已纠正',unknown:'无法确认',new_species_candidate:'候选新鱼种'})[v]||v||'-'}function pipelineName(v){return ({NEW:'待处理',BATCHED:'已生成批次',REVIEWED:'已审核',IGNORED:'已忽略'})[v]||v||'-'}
+async function load(){const [s,d]=await Promise.all([api('/api/flywheel/summary'),api('/api/feedback?limit=200')]);document.getElementById('cards').innerHTML=[['待处理反馈',s.new_feedback],['累计可用图片',s.approved_master_pool],['已启用鱼种',s.active_species],['候选新鱼种',s.candidate_species]].map(x=>`<div class="card"><div class="muted">${x[0]}</div><div class="num">${x[1]}</div></div>`).join('');document.getElementById('table').innerHTML=d.map(x=>`<tr><td>${esc(x.created_at||'')}<br><span class="muted">${esc(x.source_event_id)}</span></td><td>${esc(x.model_version||'-')}</td><td>${esc(x.predicted_species||'-')}</td><td><span class="pill ${esc(x.feedback_type)}">${esc(feedbackName(x.feedback_type))}</span></td><td>${esc(x.corrected_species||'-')}</td><td>${x.confidence==null?'-':Number(x.confidence).toFixed(3)}</td><td><span class="pill">${esc(pipelineName(x.pipeline_status))}</span></td></tr>`).join('')||'<tr><td colspan="7" class="muted">还没有线上用户反馈。后续 App 接入反馈接口后会自动出现在这里。</td></tr>'}
+async function materialize(){const batch=document.getElementById('batch').value.trim();if(!batch){msg('请输入正式批次 ID',true);return}try{const d=await api('/api/feedback/materialize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({batch_id:batch})});msg(`已生成反馈批次：${d.batch_id}\n反馈数量：${d.feedback_events}\n已复制图片：${d.copied_images}\n\n下一步：到“数据批次”页面点击“准备审核”。`);await load()}catch(e){msg(e.message,true)}}
 load().catch(e=>msg(e.message,true));
 </script>
 </body>
