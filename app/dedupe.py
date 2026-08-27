@@ -91,8 +91,6 @@ def fingerprint_bytes(content: bytes) -> dict:
         width, height = image.size
         phashes = [str(imagehash.phash(_center_crop(image, ratio), hash_size=8)) for ratio in CENTER_CROP_RATIOS]
         dhash = str(imagehash.dhash(image, hash_size=8))
-        # ImageHash's crop-resistant multihash segments salient image regions, so a
-        # crop can still match the surviving regions in its source image.
         crop_hash = str(
             imagehash.crop_resistant_hash(
                 image,
@@ -130,13 +128,7 @@ def _hist_similarity(a: list[float], b: list[float]) -> float:
 
 
 def _crop_match(left: str, right: str) -> tuple[float, float]:
-    """Return (coverage, avg_hamming) for the smaller crop-resistant hash.
-
-    A true crop is asymmetric: most segments in the cropped image should find a
-    close segment in the larger original, while the original may have extra regions.
-    Scoring the smaller side therefore handles crops without requiring both images
-    to retain exactly the same segmentation.
-    """
+    """Return (coverage, avg_hamming) for the smaller crop-resistant hash."""
     try:
         left_hash = imagehash.hex_to_multihash(left)
         right_hash = imagehash.hex_to_multihash(right)
@@ -155,35 +147,47 @@ def _crop_match(left: str, right: str) -> tuple[float, float]:
         return 0.0, 64.0
 
 
-def duplicate_distance(left: ImageFingerprint, right: ImageFingerprint) -> tuple[str | None, float | None]:
-    if left.sha256 == right.sha256:
+def _row_features(row: ImageFingerprint) -> dict:
+    return {
+        "sha256": row.sha256,
+        "phashes": json.loads(row.phash_json or "[]"),
+        "dhash": row.dhash or "",
+        "crop_hash": row.crop_hash or "",
+        "histogram": json.loads(row.histogram_json or "[]"),
+    }
+
+
+def _compare_features(left: dict, right: dict) -> tuple[str | None, float | None]:
+    if left["sha256"] == right["sha256"]:
         return "exact", 0.0
 
-    left_phash = json.loads(left.phash_json or "[]")
-    right_phash = json.loads(right.phash_json or "[]")
-    left_hist = json.loads(left.histogram_json or "[]")
-    right_hist = json.loads(right.histogram_json or "[]")
-    p_dist = _min_phash_distance(left_phash, right_phash)
-    d_dist = _hamming_hex(left.dhash, right.dhash)
-    hist_sim = _hist_similarity(left_hist, right_hist)
-    crop_coverage, crop_hamming = _crop_match(left.crop_hash or "", right.crop_hash or "")
+    p_dist = _min_phash_distance(left["phashes"], right["phashes"])
+    d_dist = _hamming_hex(left["dhash"], right["dhash"])
+    hist_sim = _hist_similarity(left["histogram"], right["histogram"])
 
-    # Three independent routes cover common duplicate transformations while
-    # keeping thresholds conservative enough not to collapse merely similar fish.
+    # Fast path for same framing under re-encoding/resizing.
     reencode_near = (p_dist <= 3 and hist_sim >= 0.965) or (p_dist <= 5 and d_dist <= 7 and hist_sim >= 0.985)
-    crop_near = (
-        crop_coverage >= 0.60
-        and crop_hamming <= 8.0
-        and hist_sim >= 0.88
-        and p_dist <= 14
-    )
-    near = reencode_near or crop_near
-    if not near:
+    if reencode_near:
+        score = float(p_dist) + float(d_dist) * 0.20 + (1.0 - hist_sim) * 16.0
+        return "near", round(score, 4)
+
+    # Only invoke the more expensive crop-resistant comparison when cheap
+    # structural + color evidence already says the pair is plausible.
+    if p_dist > 12 or hist_sim < 0.94:
+        return None, None
+
+    crop_coverage, crop_hamming = _crop_match(left["crop_hash"], right["crop_hash"])
+    crop_near = crop_coverage >= 0.50 and crop_hamming <= 6.0
+    if not crop_near:
         return None, None
 
     crop_penalty = (1.0 - crop_coverage) * 4.0 + min(crop_hamming, 16.0) * 0.15
     score = float(p_dist) + float(d_dist) * 0.20 + (1.0 - hist_sim) * 16.0 + crop_penalty
     return "near", round(score, 4)
+
+
+def duplicate_distance(left: ImageFingerprint, right: ImageFingerprint) -> tuple[str | None, float | None]:
+    return _compare_features(_row_features(left), _row_features(right))
 
 
 def _rebuild_groups(db: Session, batch_id: str) -> None:
@@ -193,6 +197,7 @@ def _rebuild_groups(db: Session, batch_id: str) -> None:
     if not rows:
         return
 
+    features = [_row_features(row) for row in rows]
     parent = list(range(len(rows)))
 
     def find(x: int) -> int:
@@ -208,7 +213,7 @@ def _rebuild_groups(db: Session, batch_id: str) -> None:
 
     for i in range(len(rows)):
         for j in range(i + 1, len(rows)):
-            kind, _ = duplicate_distance(rows[i], rows[j])
+            kind, _ = _compare_features(features[i], features[j])
             if kind is not None:
                 union(i, j)
 
@@ -242,10 +247,10 @@ def _rebuild_groups(db: Session, batch_id: str) -> None:
             if idx == representative_idx:
                 continue
             row = rows[idx]
-            kind, distance = duplicate_distance(representative, row)
+            kind, distance = _compare_features(features[representative_idx], features[idx])
             if kind is None:
-                # Transitive clusters can contain a member that only matched an
-                # intermediate image. Keep it grouped, but surface a large distance.
+                # Transitive clusters can contain a member that matched through an
+                # intermediate transform. Keep the cluster intact and flag distance.
                 kind, distance = "near", 999.0
             row.duplicate_group = group_id
             row.is_representative = False
@@ -347,8 +352,12 @@ def scan_batch(db: Session, batch_id: str, limit: int = 100, rescan: bool = Fals
         db.commit()
         processed += 1
 
-    _rebuild_groups(db, batch_id)
+    # Fingerprinting is chunked for browser/Cloud Run resilience. The O(N²)
+    # clustering pass is deferred until the whole batch is fingerprinted.
     summary = dedupe_summary(db, batch_id)
+    if summary["remaining"] == 0:
+        _rebuild_groups(db, batch_id)
+        summary = dedupe_summary(db, batch_id)
     summary["processed"] = processed
     return summary
 
