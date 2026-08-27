@@ -3,62 +3,37 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Review Queue · YuJian AI</title>
+  <title>Review · YuJian AI</title>
   <style>
-    body{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f5f6f7;color:#171717}
-    header{position:sticky;top:0;background:#fff;border-bottom:1px solid #e5e7eb;padding:14px 24px;display:flex;gap:16px;align-items:center;z-index:2}
-    header a{text-decoration:none;color:#111;font-weight:700}.filters{display:flex;gap:8px;flex-wrap:wrap}select,input,button,textarea{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:8px;background:#fff}
-    main{max-width:1180px;margin:0 auto;padding:20px}.item{display:grid;grid-template-columns:360px 1fr;gap:18px;background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin-bottom:14px}
-    .image{width:100%;height:280px;object-fit:contain;background:#111;border-radius:10px}.meta{display:grid;grid-template-columns:150px 1fr;gap:7px 12px;font-size:14px}.label{color:#6b7280}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.actions button{cursor:pointer;font-weight:600}.ok{background:#111;color:#fff}.danger{background:#fff1f2}.hard{background:#fff7ed}.pending{background:#f3f4f6}.notes{width:100%;box-sizing:border-box;margin-top:10px;min-height:60px}.status{font-weight:700}.source{word-break:break-all}.empty{padding:50px;text-align:center;color:#6b7280}
-    @media(max-width:800px){.item{grid-template-columns:1fr}.image{height:240px}}
+    body{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f6f7f8;color:#171717}header{background:#fff;border-bottom:1px solid #e5e7eb;padding:12px 22px;display:flex;gap:18px;align-items:center;position:sticky;top:0;z-index:4}header a{text-decoration:none;color:#111827;font-weight:650}.filters{display:flex;gap:7px;flex-wrap:wrap;margin-left:auto}select,input,button,textarea{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:8px;background:#fff}button{cursor:pointer;font-weight:650}main{max-width:1250px;margin:0 auto;padding:20px}.summary{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.pill{padding:5px 9px;border-radius:999px;background:#fff;border:1px solid #e5e7eb;font-size:12px}.workspace{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(340px,.75fr);gap:16px}.panel{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:16px}.photo{width:100%;height:68vh;object-fit:contain;background:#111;border-radius:10px}.meta{display:grid;grid-template-columns:125px 1fr;gap:8px 10px;font-size:13px}.label{color:#6b7280}.notes{width:100%;box-sizing:border-box;min-height:90px;margin-top:12px}.actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}.actions button{padding:11px}.ok{background:#111827;color:#fff}.danger{background:#fff1f2}.hard{background:#fff7ed}.review{background:#eef2ff}.skip{width:100%;margin-top:8px}.empty{text-align:center;padding:100px 20px;color:#6b7280}.hint{font-size:12px;color:#6b7280;margin-top:10px}.source{word-break:break-all}.candidateMark{color:#b45309;font-size:12px}@media(max-width:980px){header{align-items:flex-start;flex-wrap:wrap}.filters{margin-left:0}.workspace{grid-template-columns:1fr}.photo{height:48vh}}
   </style>
 </head>
 <body>
-<header>
-  <a href="/">← Overview</a>
-  <div class="filters">
-    <select id="status"><option value="pending">Pending</option><option value="needs_review">Needs Review</option><option value="hard_case">Hard Case</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="">All</option></select>
-    <input id="batch" placeholder="Batch ID" />
-    <input id="species" placeholder="鱼种" />
-    <input id="q" placeholder="图片ID/来源" />
-    <button onclick="load()">筛选</button>
-  </div>
-</header>
-<main><div id="list"></div></main>
+<header><a href="/">Overview</a><a href="/batches">Batches</a><a href="/review">Review</a><a href="/species">Species</a><a href="/feedback">Feedback</a><a href="/datasets">Dataset</a><div class="filters"><select id="status"><option value="pending">Pending</option><option value="needs_review">Needs Review</option><option value="hard_case">Hard Case</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="">All</option></select><select id="batch"><option value="">全部 Batch</option></select><select id="species"><option value="">全部鱼种</option></select><input id="q" placeholder="图片ID / 来源"><button onclick="applyFilters()">筛选</button></div></header>
+<main><div class="summary" id="summary"></div><div id="content"></div></main>
 <script>
 const truthStatuses=['LIKELY_CORRECT','UNCERTAIN','HARD_PAIR_REVIEW','WRONG_LABEL_SUSPECTED','EXPERT_HOLD'];
+let catalog=[],current=null,offset=0;
 function esc(v){return (v??'').toString().replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+async function api(url,opts){const r=await fetch(url,opts);const t=await r.text();let d;try{d=JSON.parse(t)}catch{d=t}if(!r.ok)throw new Error(d.detail||t);return d}
+function params(includeStatus=true){const p=new URLSearchParams();for(const id of ['batch','species','q']){const v=document.getElementById(id).value.trim();if(v)p.set(id==='batch'?'batch_id':id,v)}if(includeStatus){const s=document.getElementById('status').value;if(s)p.set('status',s)}return p}
+function speciesOptions(selected){return catalog.filter(x=>x.status!=='retired').map(x=>`<option value="${esc(x.common_name_zh)}" ${x.common_name_zh===selected?'selected':''}>${esc(x.common_name_zh)}${x.status==='candidate'?' · Candidate':''}</option>`).join('')}
+async function init(){
+  const [batches,speciesCatalog]=await Promise.all([api('/api/batches'),api('/api/species')]);catalog=speciesCatalog;
+  document.getElementById('species').innerHTML+=catalog.map(x=>`<option value="${esc(x.common_name_zh)}">${esc(x.common_name_zh)}${x.status==='candidate'?' · Candidate':''}</option>`).join('');
+  document.getElementById('batch').innerHTML+=batches.map(x=>`<option value="${esc(x.batch_id)}">${esc(x.batch_id)} · ${esc(x.source)}</option>`).join('');
+  await load();
+}
 async function load(){
-  const p=new URLSearchParams(); for(const id of ['status','batch','species','q']){const v=document.getElementById(id).value;if(v)p.set(id==='batch'?'batch_id':id,v)} p.set('limit','100');
-  const data=await (await fetch('/api/review?'+p.toString())).json();
-  const list=document.getElementById('list');
-  if(!data.length){list.innerHTML='<div class="empty">当前筛选条件没有图片</div>';return}
-  list.innerHTML=data.map((x,i)=>`<div class="item" id="row-${i}">
-    <img class="image" loading="lazy" src="${x.media_url}" />
-    <div><div class="meta">
-      <div class="label">Image</div><div>${esc(x.image_id)}</div>
-      <div class="label">Batch</div><div>${esc(x.batch_id)}</div>
-      <div class="label">声明鱼种</div><div>${esc(x.claimed_species||'-')}</div>
-      <div class="label">Truth</div><div><input id="truth-${i}" value="${esc(x.truth_species||x.claimed_species||'')}" /></div>
-      <div class="label">Truth Status</div><div><select id="truthStatus-${i}">${truthStatuses.map(s=>`<option ${s===x.truth_status?'selected':''}>${s}</option>`).join('')}</select></div>
-      <div class="label">Review</div><div class="status">${esc(x.review_status)}</div>
-      <div class="label">Scene / Quality</div><div>${esc(x.scene||'-')} / ${esc(x.quality||'-')}</div>
-      <div class="label">来源</div><div class="source">${x.source_url?`<a target="_blank" href="${esc(x.source_url)}">${esc(x.source_platform||x.source_url)}</a>`:'-'}</div>
-    </div>
-    <textarea class="notes" id="notes-${i}" placeholder="审核备注">${esc(x.notes||'')}</textarea>
-    <div class="actions">
-      <button class="ok" onclick="save(${i},'approved','${esc(x.batch_id)}','${esc(x.image_id)}')">Approve</button>
-      <button class="pending" onclick="save(${i},'needs_review','${esc(x.batch_id)}','${esc(x.image_id)}')">Needs Review</button>
-      <button class="hard" onclick="save(${i},'hard_case','${esc(x.batch_id)}','${esc(x.image_id)}')">Hard Case</button>
-      <button class="danger" onclick="save(${i},'rejected','${esc(x.batch_id)}','${esc(x.image_id)}')">Reject</button>
-    </div></div></div>`).join('');
+  const p=params(true);p.set('limit','1');p.set('offset',offset);const [items,stats,fly]=await Promise.all([api('/api/review?'+p),api('/api/review/stats?'+params(true)),api('/api/flywheel/summary')]);
+  const s=stats.status||{};document.getElementById('summary').innerHTML=`<span class="pill">当前筛选 ${stats.filtered}</span><span class="pill">Approved ${s.approved||0}</span><span class="pill">Pending ${s.pending||0}</span><span class="pill">Needs Review ${s.needs_review||0}</span><span class="pill">Hard ${s.hard_case||0}</span><span class="pill">Rejected ${s.rejected||0}</span><span class="pill">Master Pool ${fly.approved_master_pool}</span>`;
+  current=items[0]||null;render();
 }
-async function save(i,status,batch,image){
-  const payload={review_status:status,truth_species:document.getElementById('truth-'+i).value,truth_status:document.getElementById('truthStatus-'+i).value,notes:document.getElementById('notes-'+i).value,reviewer:'web-review'};
-  const r=await fetch(`/api/review/${encodeURIComponent(batch)}/${encodeURIComponent(image)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-  if(!r.ok){alert(await r.text());return;} document.getElementById('row-'+i).remove();
-}
-load();
+function render(){const c=document.getElementById('content');if(!current){c.innerHTML='<div class="panel empty">当前筛选条件已经没有图片。可以切换状态或 Batch。</div>';return}const x=current;const selected=x.truth_species||x.claimed_species||'';const selectedCatalog=catalog.find(s=>s.common_name_zh===selected);c.innerHTML=`<div class="workspace"><div class="panel"><img class="photo" src="${x.media_url}" alt="${esc(x.image_id)}"></div><div class="panel"><div class="meta"><div class="label">Image</div><div><b>${esc(x.image_id)}</b></div><div class="label">Batch</div><div>${esc(x.batch_id)}</div><div class="label">声明鱼种</div><div>${esc(x.claimed_species||'-')}</div><div class="label">真实鱼种</div><div><select id="truthSpecies">${speciesOptions(selected)}</select>${selectedCatalog?.status==='candidate'?'<div class="candidateMark">Candidate 鱼种：即使 Approved，也要等 Species 激活后才进入训练 Dataset。</div>':''}</div><div class="label">Truth Status</div><div><select id="truthStatus">${truthStatuses.map(s=>`<option ${s===x.truth_status?'selected':''}>${s}</option>`).join('')}</select></div><div class="label">当前状态</div><div><b>${esc(x.review_status)}</b></div><div class="label">场景 / 质量</div><div>${esc(x.scene||'-')} / ${esc(x.quality||'-')}</div><div class="label">来源</div><div class="source">${x.source_url?`<a target="_blank" href="${esc(x.source_url)}">${esc(x.source_platform||x.source_url)}</a>`:'-'}</div></div><textarea class="notes" id="notes" placeholder="审核备注">${esc(x.notes||'')}</textarea><div class="actions"><button class="ok" onclick="save('approved')">A · 通过</button><button class="danger" onclick="save('rejected')">R · 拒绝</button><button class="hard" onclick="save('hard_case')">H · Hard Case</button><button class="review" onclick="save('needs_review')">N · 需复核</button></div><button class="skip" onclick="skip()">→ 跳过</button><div class="hint">快捷键：A 通过 · R 拒绝 · H Hard Case · N 需复核 · → 跳过。发现新鱼种时先到 <a href="/species">Species</a> 加入 Candidate。</div></div></div>`}
+async function save(status){if(!current)return;const selected=document.getElementById('status').value;const payload={review_status:status,truth_species:document.getElementById('truthSpecies').value,truth_status:document.getElementById('truthStatus').value,notes:document.getElementById('notes').value,reviewer:'web-review'};try{await api(`/api/review/${encodeURIComponent(current.batch_id)}/${encodeURIComponent(current.image_id)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});if(!selected||selected===status)offset++;await load()}catch(e){alert(e.message)}}
+function skip(){offset++;load().catch(e=>alert(e.message))}function applyFilters(){offset=0;load().catch(e=>alert(e.message))}
+document.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName))return;if(e.key.toLowerCase()==='a')save('approved');else if(e.key.toLowerCase()==='r')save('rejected');else if(e.key.toLowerCase()==='h')save('hard_case');else if(e.key.toLowerCase()==='n')save('needs_review');else if(e.key==='ArrowRight')skip()});
+init().catch(e=>document.getElementById('content').innerHTML=`<div class="panel empty">${esc(e.message)}</div>`);
 </script>
 </body>
 </html>

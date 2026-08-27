@@ -14,14 +14,18 @@ storage:
   provider: gcs
   incoming_prefix: incoming
   raw_prefix: raw/batches
+  cleaning_prefix: cleaning
   reviewed_prefix: reviewed/batches
+  feedback_prefix: feedback
   annotation_prefix: annotations/cvat
   dataset_prefix: datasets
   model_prefix: models
   evaluation_prefix: evaluations
   error_pool_prefix: error_pool
 
-species:
+# Bootstrap only. Runtime species truth lives in Registry SpeciesCatalog and can expand.
+# catalog_order is append-only; Dataset class_map.json freezes model-specific indices.
+species_seed:
   0: grass_carp
   1: bighead_carp
   2: silver_carp
@@ -43,6 +47,15 @@ split:
   test: 0.15
   group_fields: [group_id, capture_event_id, event_id]
   seed: 20260826
+
+dataset:
+  canonical_selection_mode: ALL_APPROVED
+  preserve_parent_class_indices: true
+  include_species_status: [active]
+
+feedback:
+  accepted_types: [confirmed, corrected, unknown, new_species_candidate]
+  reenter_review: true
 
 naming:
   batch_prefix: BATCH_

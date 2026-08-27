@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.db import Base
@@ -23,6 +23,23 @@ class Batch(Base):
     notes = Column(Text)
 
     images = relationship("ImageAsset", back_populates="batch", cascade="all, delete-orphan")
+
+
+class SpeciesCatalog(Base):
+    """Stable species identity independent from any one model's class index."""
+
+    __tablename__ = "species_catalog"
+
+    species_key = Column(String(128), primary_key=True)
+    catalog_order = Column(Integer, nullable=False, unique=True, index=True)
+    common_name_zh = Column(String(128), nullable=False, unique=True, index=True)
+    common_name_en = Column(String(256))
+    scientific_name = Column(String(256))
+    status = Column(String(32), nullable=False, default="candidate", index=True)
+    is_other = Column(Boolean, nullable=False, default=False)
+    notes = Column(Text)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
 
 
 class ImageAsset(Base):
@@ -76,12 +93,41 @@ class DatasetVersion(Base):
     parent_version = Column(String(128), ForeignKey("datasets.dataset_version"))
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     manifest_uri = Column(Text, nullable=False)
+    class_map_uri = Column(Text)
     train_count = Column(Integer, nullable=False, default=0)
     val_count = Column(Integer, nullable=False, default=0)
     test_count = Column(Integer, nullable=False, default=0)
+    species_count = Column(Integer, nullable=False, default=0)
     gold_version = Column(String(128))
     git_commit = Column(String(128), nullable=False)
+    selection_mode = Column(String(64), nullable=False, default="ALL_APPROVED")
+    source_cutoff_at = Column(DateTime(timezone=True))
     status = Column(String(64), nullable=False)
+
+
+class FeedbackEvent(Base):
+    """Online inference feedback that feeds back into the data factory."""
+
+    __tablename__ = "feedback_events"
+    __table_args__ = (UniqueConstraint("source_event_id", name="uq_feedback_source_event"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_event_id = Column(String(256), nullable=False, index=True)
+    source = Column(String(64), nullable=False, default="app")
+    image_gcs_uri = Column(Text)
+    model_version = Column(String(128), index=True)
+    predicted_species = Column(String(128), index=True)
+    confidence = Column(Float)
+    feedback_type = Column(String(64), nullable=False, index=True)
+    corrected_species = Column(String(128), index=True)
+    user_note = Column(Text)
+    pipeline_status = Column(String(64), nullable=False, default="NEW", index=True)
+    # A feedback batch exists in incoming/ before it is promoted/synced into batches,
+    # so this reference intentionally is not a database FK.
+    materialized_batch_id = Column(String(128), index=True)
+    materialized_image_id = Column(String(256))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
 
 
 class TrainingRun(Base):
