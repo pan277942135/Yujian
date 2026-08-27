@@ -18,7 +18,8 @@ def parse_gs(uri: str) -> tuple[str, str]:
     body = uri[5:]
     if "/" not in body:
         raise ValueError(f"invalid GCS URI: {uri}")
-    return tuple(body.split("/", 1))  # type: ignore[return-value]
+    bucket_name, object_name = body.split("/", 1)
+    return bucket_name, object_name
 
 
 def materialize_feedback_batch(
@@ -69,7 +70,7 @@ def materialize_feedback_batch(
         target_object = prefix + "images/feedback/" + safe_name
         target_blob = target_bucket.blob(target_object)
         if not target_blob.exists(client):
-            target_bucket.copy_blob(source_blob, target_bucket, target_object)
+            source_bucket.copy_blob(source_blob, target_bucket, target_object)
             copied += 1
 
         claimed = (event.corrected_species or event.predicted_species or "").strip()
