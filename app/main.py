@@ -12,15 +12,9 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
+from app.batch_console import audit_with_species_catalog, list_incoming_batches
 from app.db import SessionLocal, get_db, init_db
-from app.factory import (
-    DOWNLOAD_RETRY,
-    audit_incoming_batch,
-    get_bucket_name,
-    list_incoming_batches,
-    promote_incoming_batch,
-    sync_batch_registry,
-)
+from app.factory import DOWNLOAD_RETRY, get_bucket_name, promote_incoming_batch, sync_batch_registry
 from app.feedback_pipeline import materialize_feedback_batch
 from app.flywheel import (
     create_species_candidate,
@@ -251,9 +245,14 @@ def batches(db: Session = Depends(get_db)):
 
 
 @app.post("/api/batches/audit")
-def batch_audit(payload: BatchAction):
+def batch_audit(payload: BatchAction, db: Session = Depends(get_db)):
     try:
-        return audit_incoming_batch(payload.incoming_prefix, payload.batch_id, payload.source)
+        return audit_with_species_catalog(
+            db,
+            incoming_prefix=payload.incoming_prefix,
+            batch_id=payload.batch_id,
+            source=payload.source,
+        )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
