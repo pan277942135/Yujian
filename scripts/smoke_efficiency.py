@@ -100,6 +100,37 @@ def main():
     ])
     assert no_fish["status"] == "no_fish", no_fish
 
+    # Fishing activity / gear labels are context, not proof that a fish body is
+    # visible. This is the real-world failure mode reported from the Doubao batch.
+    rod_scene = classify_presence([], [
+        {"name": "Fishing", "score": 0.97},
+        {"name": "Fishing rod", "score": 0.94},
+        {"name": "Water", "score": 0.91},
+        {"name": "Outdoor", "score": 0.88},
+    ])
+    assert rod_scene["status"] == "no_fish", rod_scene
+    assert rod_scene["routing_reason"] == "fishing_scene_without_fish", rod_scene
+    assert rod_scene["fish_score"] == 0.0, rod_scene
+
+    fishery_landscape = classify_presence([], [
+        {"name": "Fishery", "score": 0.93},
+        {"name": "Landscape", "score": 0.91},
+        {"name": "Water", "score": 0.90},
+        {"name": "Sky", "score": 0.89},
+    ])
+    assert fishery_landscape["status"] == "no_fish", fishery_landscape
+    assert fishery_landscape["fish_score"] == 0.0, fishery_landscape
+
+    fish_with_rod = classify_presence(
+        [{"name": "Fish", "score": 0.82, "vertices": [{"x": 0.2, "y": 0.2}, {"x": 0.7, "y": 0.7}]}],
+        [
+            {"name": "Fishing", "score": 0.97},
+            {"name": "Fishing rod", "score": 0.95},
+            {"name": "Water", "score": 0.90},
+        ],
+    )
+    assert fish_with_rod["status"] == "single_fish", fish_with_rod
+
     original = fingerprint_bytes(make_image(crop=False, quality=92))
     same_visual = fingerprint_bytes(make_image(crop=False, quality=75))
     cropped = fingerprint_bytes(make_image(crop=True, quality=88))
