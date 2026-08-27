@@ -1,17 +1,28 @@
+#!/usr/bin/env python3
 """Offline Dataset Freeze V0.1 smoke test.
 
 Runs against SQLite and never calls GCS/Vision. It validates preview selection,
 stable group splitting, DatasetItem schema registration, and FastAPI routes.
 """
 
-from app.entry import app
-from app.dataset_api import DatasetFreezePreviewRequest, build_preview
-from app.dataset_models import DatasetItem
-from app.db import Base, SessionLocal, init_db
-from app.dedupe import ImageFingerprint
-from app.flywheel import ensure_species_catalog
-from app.models import Batch, ImageAsset
-from app.presence import FishPresenceResult
+import os
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+os.environ.setdefault("REGISTRY_DB_URL", "sqlite:///:memory:")
+
+from app.entry import app  # noqa: E402
+from app.dataset_api import DatasetFreezePreviewRequest, build_preview  # noqa: E402
+from app.dataset_models import DatasetItem  # noqa: E402
+from app.db import Base, SessionLocal, init_db  # noqa: E402
+from app.dedupe import ImageFingerprint  # noqa: E402
+from app.flywheel import ensure_species_catalog  # noqa: E402
+from app.models import Batch, ImageAsset  # noqa: E402
+from app.presence import FishPresenceResult  # noqa: E402
 
 
 def add_image(db, batch_id: str, image_id: str, species: str, status: str = "approved") -> ImageAsset:
@@ -52,7 +63,7 @@ def main() -> None:
         db.flush()
 
         single = add_image(db, batch_id, "IMG_SINGLE", "鲫鱼")
-        unscanned = add_image(db, batch_id, "IMG_UNSCANNED", "鲤鱼")
+        add_image(db, batch_id, "IMG_UNSCANNED", "鲤鱼")
         multi = add_image(db, batch_id, "IMG_MULTI", "草鱼")
         duplicate = add_image(db, batch_id, "IMG_DUP", "黑鱼")
         no_fish = add_image(db, batch_id, "IMG_NO_FISH", "黄骨鱼")
