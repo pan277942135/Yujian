@@ -94,8 +94,7 @@ CREATE TABLE IF NOT EXISTS feedback_events (
   materialized_batch_id TEXT,
   materialized_image_id TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  FOREIGN KEY(materialized_batch_id) REFERENCES batches(batch_id)
+  updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS training_runs (
@@ -155,6 +154,7 @@ CREATE INDEX IF NOT EXISTS idx_species_status ON species_catalog(status);
 CREATE INDEX IF NOT EXISTS idx_images_review ON image_assets(review_status);
 CREATE INDEX IF NOT EXISTS idx_images_truth ON image_assets(truth_species);
 CREATE INDEX IF NOT EXISTS idx_feedback_pipeline ON feedback_events(pipeline_status);
+CREATE INDEX IF NOT EXISTS idx_feedback_batch ON feedback_events(materialized_batch_id);
 CREATE INDEX IF NOT EXISTS idx_runs_dataset ON training_runs(dataset_version);
 CREATE INDEX IF NOT EXISTS idx_models_status ON models(status);
 CREATE INDEX IF NOT EXISTS idx_error_pool_status ON error_pool(status);
