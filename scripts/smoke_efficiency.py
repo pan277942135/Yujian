@@ -25,6 +25,12 @@ from app.dedupe import (  # noqa: E402
 from app.presence import classify_presence  # noqa: E402
 
 
+def encode(img, quality=90):
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=quality)
+    return buf.getvalue()
+
+
 def make_image(crop=False, quality=90):
     img = Image.new("RGB", (320, 240), "white")
     draw = ImageDraw.Draw(img)
@@ -33,9 +39,18 @@ def make_image(crop=False, quality=90):
     draw.ellipse((90, 102, 100, 112), fill="black")
     if crop:
         img = img.crop((35, 35, 305, 205)).resize((320, 200))
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=quality)
-    return buf.getvalue()
+    return encode(img, quality)
+
+
+def make_other_image(quality=90):
+    # Similar palette/background, deliberately different structure. This guards
+    # against collapsing two different fish photos merely because colors match.
+    img = Image.new("RGB", (320, 240), "white")
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle((115, 35, 205, 210), radius=20, fill=(90, 130, 150), outline=(20, 30, 40), width=4)
+    draw.rectangle((130, 60, 190, 85), fill=(20, 30, 40))
+    draw.rectangle((130, 160, 190, 185), fill=(20, 30, 40))
+    return encode(img, quality)
 
 
 def as_row(fp, image_id):
@@ -88,12 +103,18 @@ def main():
     original = fingerprint_bytes(make_image(crop=False, quality=92))
     same_visual = fingerprint_bytes(make_image(crop=False, quality=75))
     cropped = fingerprint_bytes(make_image(crop=True, quality=88))
+    different = fingerprint_bytes(make_other_image(quality=90))
+
     print("reencode metrics", metrics(original, same_visual))
     print("crop metrics", metrics(original, cropped))
+    print("negative metrics", metrics(original, different))
+
     kind1, _ = duplicate_distance(as_row(original, 1), as_row(same_visual, 2))
     kind2, _ = duplicate_distance(as_row(original, 1), as_row(cropped, 3))
+    kind3, _ = duplicate_distance(as_row(original, 1), as_row(different, 4))
     assert kind1 in {"near", "exact"}, kind1
     assert kind2 in {"near", "exact"}, kind2
+    assert kind3 is None, kind3
 
     print("P0 efficiency smoke test: OK")
 
