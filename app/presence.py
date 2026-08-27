@@ -23,10 +23,8 @@ STRONG_CONTEXT_THRESHOLD = 0.65
 MIN_CONTEXT_LABELS_FOR_NO_FISH = 2
 FISHING_CONTEXT_THRESHOLD = 0.45
 SCENE_CONTEXT_THRESHOLD = 0.60
+VALID_PRESENCE_STATUSES = {"single_fish", "multi_fish", "no_fish", "uncertain"}
 
-# Only terms that actually imply a visible fish body belong here. Generic
-# fishing activity / gear labels are intentionally excluded; otherwise a
-# landscape with a fishing rod is incorrectly treated as fish evidence.
 FISH_TERMS = {
     "fish",
     "freshwater fish",
@@ -99,8 +97,6 @@ class FishPresenceResult(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     image_asset_id = Column(Integer, ForeignKey("image_assets.id"), nullable=False, index=True)
     batch_id = Column(String(128), nullable=False, index=True)
-    # V0.2+ stores sample type directly in status: single_fish/multi_fish/no_fish/uncertain/error.
-    # Legacy fish_present rows are interpreted from fish_count for backward compatibility.
     status = Column(String(32), nullable=False, index=True)
     fish_score = Column(Float, nullable=False, default=0.0)
     fish_count = Column(Integer, nullable=False, default=0)
@@ -161,11 +157,8 @@ def _matching_evidence(rows: list[dict], terms: set[str], threshold: float) -> l
 def classify_presence(objects: list[dict], labels: list[dict]) -> dict:
     """Four-way routing: no fish / single / multiple / uncertain.
 
-    V0.4 keeps any real fish evidence conservative, but is more decisive when
-    there is *zero* fish evidence. Fishing gear, people, water and landscape
-    context are not fish-body evidence. If Vision sees no fish object or label,
-    two reliable scene/context labels are enough to route a likely empty scene
-    to ``no_fish`` for human spot-checking before bulk rejection.
+    V0.4 is decisive only when there is no real fish evidence. Fishing gear,
+    people, water and landscape context are not fish-body evidence.
     """
     fish_objects = [x for x in objects if _is_fish_term(x.get("name"))]
     fish_labels = [x for x in labels if _is_fish_term(x.get("name"))]
@@ -238,6 +231,15 @@ def effective_status(row: FishPresenceResult | None) -> str:
     return row.status
 
 
+def _saved_evidence(row: FishPresenceResult) -> dict:
+    if not row.evidence_json:
+        return {}
+    try:
+        return json.loads(row.evidence_json)
+    except Exception:
+        return {}
+
+
 def _vision_evidence(client: vision.ImageAnnotatorClient, content: bytes) -> dict:
     image = vision.Image(content=content)
     features = [
@@ -253,14 +255,23 @@ def _vision_evidence(client: vision.ImageAnnotatorClient, content: bytes) -> dic
         vertices = [{"x": float(v.x or 0.0), "y": float(v.y or 0.0)} for v in item.bounding_poly.normalized_vertices]
         objects.append({"name": item.name, "score": float(item.score), "vertices": vertices})
     labels = [{"name": item.description, "score": float(item.score)} for item in response.label_annotations]
-    return classify_presence(objects, labels)
+    evidence = classify_presence(objects, labels)
+    evidence["machine_status"] = evidence["status"]
+    return evidence
 
 
 def _result_dict(row: FishPresenceResult) -> dict:
+    saved = _saved_evidence(row)
+    human_override = saved.get("human_override") if saved.get("human_override") in VALID_PRESENCE_STATUSES else None
+    machine_status = saved.get("machine_status") or saved.get("status")
+    if machine_status not in VALID_PRESENCE_STATUSES:
+        machine_status = effective_status(row) if not human_override else "unknown"
     return {
         "image_asset_id": row.image_asset_id,
         "batch_id": row.batch_id,
         "status": effective_status(row),
+        "machine_status": machine_status,
+        "human_override": human_override,
         "raw_status": row.status,
         "fish_score": row.fish_score,
         "fish_count": row.fish_count,
@@ -302,12 +313,7 @@ def presence_summary(db: Session, batch_id: str) -> dict:
 
 
 def _reclassify_saved_evidence(db: Session, batch_id: str) -> int:
-    """Re-run only the routing rules on stored Vision evidence.
-
-    This deliberately avoids another Google Vision request, so rule tuning does
-    not create duplicate API cost. Rows with missing/corrupt evidence are left
-    untouched and can still be explicitly rescanned later.
-    """
+    """Re-run machine routing on saved Vision evidence without losing human overrides."""
     rows = db.scalars(
         select(FishPresenceResult).where(
             FishPresenceResult.batch_id == batch_id,
@@ -320,15 +326,20 @@ def _reclassify_saved_evidence(db: Session, batch_id: str) -> int:
             continue
         try:
             saved = json.loads(row.evidence_json)
+            human_override = saved.get("human_override")
             objects = saved.get("objects") or []
             labels = saved.get("labels") or []
             evidence = classify_presence(objects, labels)
+            evidence["machine_status"] = evidence["status"]
+            if human_override in VALID_PRESENCE_STATUSES:
+                evidence["human_override"] = human_override
         except Exception:
             continue
-        row.status = evidence["status"]
+        row.status = human_override if human_override in VALID_PRESENCE_STATUSES else evidence["status"]
         row.fish_score = evidence["fish_score"]
         row.fish_count = evidence["fish_count"]
         row.max_box_area_ratio = evidence["max_box_area_ratio"]
+        row.provider = "human_override" if human_override in VALID_PRESENCE_STATUSES else "google_vision"
         row.model_version = PRESENCE_MODEL_VERSION
         row.evidence_json = json.dumps(evidence, ensure_ascii=False)
         row.error_message = None
@@ -343,8 +354,6 @@ def scan_batch(db: Session, batch_id: str, limit: int = 40, rescan: bool = False
     if not db.get(Batch, batch_id):
         raise ValueError("batch not found")
 
-    # A normal "检测鱼体" click first upgrades old results from saved evidence.
-    # This is local rule recomputation and does not call Vision again.
     reclassified = 0 if rescan else _reclassify_saved_evidence(db, batch_id)
 
     stmt = select(ImageAsset).where(
@@ -373,11 +382,15 @@ def scan_batch(db: Session, batch_id: str, limit: int = 40, rescan: bool = False
         try:
             content = bucket.blob(image.object_name).download_as_bytes(timeout=120, retry=DOWNLOAD_RETRY)
             evidence = _vision_evidence(vision_client, content)
-            row.status = evidence["status"]
+            saved = _saved_evidence(row)
+            human_override = saved.get("human_override") if saved.get("human_override") in VALID_PRESENCE_STATUSES else None
+            if human_override:
+                evidence["human_override"] = human_override
+            row.status = human_override or evidence["status"]
             row.fish_score = evidence["fish_score"]
             row.fish_count = evidence["fish_count"]
             row.max_box_area_ratio = evidence["max_box_area_ratio"]
-            row.provider = "google_vision"
+            row.provider = "human_override" if human_override else "google_vision"
             row.model_version = PRESENCE_MODEL_VERSION
             row.evidence_json = json.dumps(evidence, ensure_ascii=False)
             row.error_message = None
@@ -472,7 +485,7 @@ def api_presence_image(batch_id: str, image_id: str, db: Session = Depends(get_d
         raise HTTPException(status_code=404, detail="image not found")
     row = db.scalar(select(FishPresenceResult).where(FishPresenceResult.image_asset_id == image.id))
     if not row:
-        return {"status": "not_scanned"}
+        return {"status": "not_scanned", "machine_status": "not_scanned", "human_override": None}
     return _result_dict(row)
 
 
