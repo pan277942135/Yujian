@@ -24,11 +24,15 @@ jobs:
       - name: Import Model Factory Console
         env:
           REGISTRY_DB_URL: 'sqlite:///:memory:'
-        run: python -c "from app.entry import app; from app.db import init_db; init_db(); print(app.title, app.version); assert '/api/presence/scan' in app.openapi()['paths']"
+        run: python -c "from app.entry import app; from app.db import init_db; init_db(); p=app.openapi()['paths']; print(app.title, app.version); assert '/api/presence/scan' in p; assert '/api/dedupe/scan' in p; assert '/api/bulk-review/apply' in p; assert '/review/bulk' in p"
       - name: Run Console flywheel smoke test
         env:
           REGISTRY_DB_URL: 'sqlite:///:memory:'
         run: python scripts/smoke_console.py
+      - name: Run P0 efficiency smoke test
+        env:
+          REGISTRY_DB_URL: 'sqlite:///:memory:'
+        run: python scripts/smoke_efficiency.py
       - name: Validate project config exists
         run: test -f config/project.yaml
       - name: Validate registry schema exists

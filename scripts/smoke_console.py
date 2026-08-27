@@ -17,7 +17,7 @@ from app.flywheel import (  # noqa: E402
     list_species,
     record_feedback,
 )
-from app.presence import classify_presence  # noqa: E402,F401  (registers presence table)
+from app.presence import classify_presence  # noqa: E402,F401
 
 
 def main():
@@ -53,7 +53,7 @@ def main():
             objects=[{"name": "Fish", "score": 0.91, "vertices": [{"x": 0.1, "y": 0.2}, {"x": 0.8, "y": 0.2}, {"x": 0.8, "y": 0.7}, {"x": 0.1, "y": 0.7}]}],
             labels=[{"name": "Fish", "score": 0.98}, {"name": "Animal", "score": 0.85}],
         )
-        assert fish["status"] == "fish_present", fish
+        assert fish["status"] == "single_fish", fish
         assert fish["fish_count"] == 1, fish
         assert fish["max_box_area_ratio"] > 0.30, fish
 
@@ -72,7 +72,7 @@ def main():
         uncertain = classify_presence(objects=[], labels=[{"name": "Outdoor", "score": 0.64}])
         assert uncertain["status"] == "uncertain", uncertain
 
-        print("Console flywheel + fish presence smoke test: OK")
+        print("Console flywheel + fish routing smoke test: OK")
     finally:
         db.close()
 
