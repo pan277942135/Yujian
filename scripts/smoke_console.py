@@ -17,6 +17,7 @@ from app.flywheel import (  # noqa: E402
     list_species,
     record_feedback,
 )
+from app.presence import classify_presence  # noqa: E402,F401  (registers presence table)
 
 
 def main():
@@ -47,7 +48,31 @@ def main():
         assert summary["active_species"] >= 10
         assert summary["candidate_species"] >= 2
         assert summary["new_feedback"] == 1
-        print("Console flywheel smoke test: OK")
+
+        fish = classify_presence(
+            objects=[{"name": "Fish", "score": 0.91, "vertices": [{"x": 0.1, "y": 0.2}, {"x": 0.8, "y": 0.2}, {"x": 0.8, "y": 0.7}, {"x": 0.1, "y": 0.7}]}],
+            labels=[{"name": "Fish", "score": 0.98}, {"name": "Animal", "score": 0.85}],
+        )
+        assert fish["status"] == "fish_present", fish
+        assert fish["fish_count"] == 1, fish
+        assert fish["max_box_area_ratio"] > 0.30, fish
+
+        no_fish = classify_presence(
+            objects=[{"name": "Person", "score": 0.95, "vertices": []}],
+            labels=[
+                {"name": "Person", "score": 0.99},
+                {"name": "Clothing", "score": 0.94},
+                {"name": "Road", "score": 0.90},
+                {"name": "Sky", "score": 0.88},
+                {"name": "Vehicle", "score": 0.82},
+            ],
+        )
+        assert no_fish["status"] == "no_fish", no_fish
+
+        uncertain = classify_presence(objects=[], labels=[{"name": "Outdoor", "score": 0.64}])
+        assert uncertain["status"] == "uncertain", uncertain
+
+        print("Console flywheel + fish presence smoke test: OK")
     finally:
         db.close()
 
