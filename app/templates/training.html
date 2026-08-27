@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>模型训练 · 渔见 AI</title>
+  <style>
+    body{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f6f7f8;color:#171717}header{background:#fff;border-bottom:1px solid #e5e7eb;padding:14px 24px;display:flex;gap:22px;align-items:center;position:sticky;top:0;z-index:3}header a{text-decoration:none;color:#111827;font-weight:650}main{max-width:1180px;margin:0 auto;padding:24px}.muted{color:#6b7280}.section{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin-top:18px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.row{display:grid;grid-template-columns:170px 1fr;gap:10px;align-items:center;margin:10px 0}input,select,button{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:9px;background:#fff}button{cursor:pointer;font-weight:650}.primary{background:#111827;color:#fff;border-color:#111827}.primary:disabled{opacity:.45;cursor:not-allowed}.banner{display:none;white-space:pre-wrap;padding:12px;border-radius:10px;background:#eef2ff;margin-top:12px}.pill{display:inline-block;padding:3px 8px;border-radius:999px;background:#f3f4f6;font-size:12px}.good{background:#ecfdf5}.warn{background:#fff7ed}.bad{background:#fff1f2}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}.metric{background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:12px}.metric b{display:block;font-size:24px;margin-top:3px}.rule{border-left:4px solid #111827;padding:10px 12px;background:#f9fafb;border-radius:0 8px 8px 0;margin-top:14px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid #eee;font-size:13px}th{color:#6b7280}.uri{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;word-break:break-all;max-width:360px}.spinner{opacity:.6;pointer-events:none}.result{display:none;margin-top:14px;border:1px solid #d1fae5;background:#ecfdf5;border-radius:12px;padding:14px}@media(max-width:850px){.grid{grid-template-columns:1fr}.metrics{grid-template-columns:1fr 1fr}.section{overflow:auto}.row{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<header><a href="/">总览</a><a href="/batches">数据批次</a><a href="/review/bulk">快速审核</a><a href="/review">单张审核</a><a href="/species">鱼种管理</a><a href="/feedback">用户反馈</a><a href="/datasets">数据集</a><a href="/training">模型训练</a></header>
+<main>
+  <h1>第一次鱼种分类模型训练</h1>
+  <div class="muted">基于已冻结 Dataset，启动 Cloud Run Job。V0.1 使用 MobileNetV3 Small + ImageNet 预训练，先验证“数据集 → 训练 → 指标 → 模型产物”的完整 MVP 闭环。</div>
+  <div id="banner" class="banner"></div>
+
+  <div class="grid">
+    <div class="section">
+      <h2>训练输入</h2>
+      <div class="row"><label>Dataset</label><select id="dataset" onchange="datasetChanged()"></select></div>
+      <div class="row"><label>Run ID</label><input id="run" value="RUN_M1_v0.1_001"></div>
+      <div class="row"><label>模型版本</label><input id="model" value="MODEL_M1_v0.1"></div>
+      <div class="row"><label>模型骨干</label><input id="family" value="mobilenet_v3_small" readonly></div>
+      <div class="rule"><b>首轮目标</b><br><span class="muted">不是追求最终准确率，而是建立可重复基线。图片仍是 whole-image 分类；后续 bbox 数据成熟后再升级为 Detector → Crop → Fine-grained Classifier。</span></div>
+    </div>
+
+    <div class="section">
+      <h2>训练参数</h2>
+      <div class="row"><label>Epoch</label><input id="epochs" type="number" value="12" min="1" max="100"></div>
+      <div class="row"><label>Batch Size</label><input id="batch" type="number" value="16" min="1" max="128"></div>
+      <div class="row"><label>输入尺寸</label><input id="size" type="number" value="224" min="128" max="512"></div>
+      <div class="row"><label>学习率</label><input id="lr" type="number" step="0.0001" value="0.001"></div>
+      <div class="row"><label>冻结骨干 Epoch</label><input id="warmup" type="number" value="2" min="0" max="20"></div>
+      <div class="row"><label>Early Stop</label><input id="patience" type="number" value="4" min="1" max="30"></div>
+      <div class="row"><label>随机种子</label><input id="seed" type="number" value="20260827"></div>
+      <div class="actions"><button id="startBtn" class="primary" onclick="startTraining()">启动第一次训练</button><button onclick="loadRuns()">刷新状态</button></div>
+    </div>
+  </div>
+
+  <div id="result" class="result">
+    <b>最新训练指标</b>
+    <div class="metrics">
+      <div class="metric"><span class="muted">Test Top-1</span><b id="mAcc">-</b></div>
+      <div class="metric"><span class="muted">Test Top-3</span><b id="mTop3">-</b></div>
+      <div class="metric"><span class="muted">Macro F1</span><b id="mF1">-</b></div>
+      <div class="metric"><span class="muted">Test 样本</span><b id="mCount">-</b></div>
+    </div>
+    <div id="warnings" class="muted"></div>
+  </div>
+
+  <div class="section">
+    <h2>训练记录</h2>
+    <table><thead><tr><th>Run</th><th>Dataset</th><th>模型</th><th>状态</th><th>开始 / 结束</th><th>产物</th><th>操作</th></tr></thead><tbody id="runs"></tbody></table>
+  </div>
+</main>
+<script>
+function esc(v){return (v??'').toString().replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function msg(t,err=false){const b=document.getElementById('banner');b.style.display='block';b.style.background=err?'#fff1f2':'#eef2ff';b.textContent=t}
+async function api(url,opts){const r=await fetch(url,opts);const text=await r.text();let d;try{d=JSON.parse(text)}catch{d=text}if(!r.ok)throw new Error(d.detail||text);return d}
+function statusPill(status){const cls=status==='COMPLETED'?'good':status==='FAILED'?'bad':'warn';const zh=({QUEUED:'排队中',RUNNING:'训练中',COMPLETED:'已完成',FAILED:'失败'})[status]||status;return `<span class="pill ${cls}">${esc(zh)}</span>`}
+function suggestedNames(ds){if(ds==='DS_M1_v0.1')return ['RUN_M1_v0.1_001','MODEL_M1_v0.1'];const suffix=ds.replace(/^DS_/,'');return [`RUN_${suffix}_001`,`MODEL_${suffix}`]}
+function datasetChanged(){const ds=document.getElementById('dataset').value;const [run,model]=suggestedNames(ds);document.getElementById('run').value=run;document.getElementById('model').value=model}
+
+async function loadDatasets(){const rows=await api('/api/datasets');const frozen=rows.filter(x=>x.status==='FROZEN');const select=document.getElementById('dataset');select.innerHTML=frozen.map(x=>`<option value="${esc(x.dataset_version)}">${esc(x.dataset_version)} · ${x.train_count+x.val_count+x.test_count}张 · ${x.species_count}类</option>`).join('');const query=new URLSearchParams(location.search).get('dataset');if(query&&frozen.some(x=>x.dataset_version===query))select.value=query;else if(frozen.some(x=>x.dataset_version==='DS_M1_v0.1'))select.value='DS_M1_v0.1';datasetChanged();document.getElementById('startBtn').disabled=!frozen.length;if(!frozen.length)msg('还没有可训练的冻结 Dataset，请先到“数据集”页面生成 DS_M1_v0.1。',true)}
+
+function payload(){return {dataset_version:document.getElementById('dataset').value,run_id:document.getElementById('run').value.trim(),model_version:document.getElementById('model').value.trim(),model_family:'mobilenet_v3_small',seed:Number(document.getElementById('seed').value),epochs:Number(document.getElementById('epochs').value),batch_size:Number(document.getElementById('batch').value),image_size:Number(document.getElementById('size').value),learning_rate:Number(document.getElementById('lr').value),warmup_epochs:Number(document.getElementById('warmup').value),early_stopping_patience:Number(document.getElementById('patience').value),label_smoothing:0.05}}
+
+async function startTraining(){const p=payload();if(!p.dataset_version){msg('请选择已冻结 Dataset。',true);return}if(!confirm(`确认启动 ${p.run_id}？\nDataset: ${p.dataset_version}\n模型: ${p.model_version}`))return;document.body.classList.add('spinner');msg('正在创建 Training Run 并启动 Cloud Run Job …');try{const d=await api('/api/training/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});msg(`训练已启动：${d.run_id}\n模型版本：${d.model_version}\n状态：${d.status}\n页面会自动刷新训练状态。`);await loadRuns()}catch(e){msg(e.message,true)}finally{document.body.classList.remove('spinner')}}
+
+async function showMetrics(runId){try{const d=await api('/api/training/runs/'+encodeURIComponent(runId)+'/metrics');const t=d.test||{};document.getElementById('mAcc').textContent=((t.accuracy||0)*100).toFixed(1)+'%';document.getElementById('mTop3').textContent=((t.top3_accuracy||0)*100).toFixed(1)+'%';document.getElementById('mF1').textContent=((t.macro_f1||0)*100).toFixed(1)+'%';document.getElementById('mCount').textContent=t.count??'-';document.getElementById('warnings').textContent=(d.warnings||[]).length?'数据提醒：'+d.warnings.join('；'):'未发现低样本训练提醒。';document.getElementById('result').style.display='block';document.getElementById('result').scrollIntoView({behavior:'smooth',block:'center'})}catch(e){msg(e.message,true)}}
+
+async function loadRuns(){try{const rows=await api('/api/training/runs');document.getElementById('runs').innerHTML=rows.map(x=>{const model=x.params?.model_version||'-';const time=`${x.started_at?new Date(x.started_at).toLocaleString():'-'}<br>${x.finished_at?new Date(x.finished_at).toLocaleString():'-'}`;const action=x.status==='COMPLETED'?`<button onclick="showMetrics('${esc(x.run_id)}')">看指标</button>`:'';return `<tr><td><b>${esc(x.run_id)}</b></td><td>${esc(x.dataset_version)}</td><td>${esc(model)}<div class="muted">${esc(x.model_family)}</div></td><td>${statusPill(x.status)}</td><td>${time}</td><td><div class="uri">${esc(x.artifact_uri||x.metrics_uri||'-')}</div></td><td>${action}</td></tr>`}).join('')||'<tr><td colspan="7" class="muted">还没有训练记录</td></tr>';const active=rows.some(x=>x.status==='QUEUED'||x.status==='RUNNING');if(active)setTimeout(loadRuns,10000)}catch(e){msg(e.message,true)}}
+
+Promise.all([loadDatasets(),loadRuns()]).catch(e=>msg(e.message,true));
+</script>
+</body>
+</html>
