@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.db import get_db
-from app.models import ImageAsset
+from app.models import DatasetVersion, ImageAsset, ReviewEvent
 from app.presence import (
     PRESENCE_MODEL_VERSION,
     FishPresenceResult,
@@ -84,6 +84,7 @@ def inspect_images(
     species: str | None = None,
     review_status: str | None = Query(default="all"),
     presence: str | None = None,
+    new_since_latest: bool = Query(default=False),
     q: str | None = None,
     limit: int = Query(default=24, ge=1, le=60),
     offset: int = Query(default=0, ge=0),
@@ -103,6 +104,10 @@ def inspect_images(
         stmt = stmt.where(ImageAsset.review_status.in_(statuses))
     if species:
         stmt = stmt.where(or_(ImageAsset.truth_species == species, ImageAsset.claimed_species == species))
+    if new_since_latest:
+        latest = db.scalar(select(DatasetVersion).order_by(DatasetVersion.created_at.desc()).limit(1))
+        if latest and latest.source_cutoff_at:
+            stmt = stmt.where(ImageAsset.updated_at > latest.source_cutoff_at)
     if q:
         like = f"%{q}%"
         stmt = stmt.where(
@@ -162,9 +167,10 @@ def inspect_presence_override(
         raise HTTPException(status_code=400, detail="invalid presence override")
 
     row = db.scalar(select(FishPresenceResult).where(FishPresenceResult.image_asset_id == image.id))
+    before = _presence_meta(row)
     if not row:
         if payload.status is None:
-            return _presence_meta(None)
+            return before
         evidence = {
             "status": "not_scanned",
             "machine_status": "not_scanned",
@@ -186,43 +192,64 @@ def inspect_presence_override(
             updated_at=utcnow(),
         )
         db.add(row)
-        db.commit()
+        db.flush()
+    else:
+        saved = {}
+        if row.evidence_json:
+            try:
+                saved = json.loads(row.evidence_json)
+            except Exception:
+                saved = {}
+
+        if payload.status is None:
+            if saved.get("created_by_override") and not (saved.get("objects") or saved.get("labels")):
+                db.delete(row)
+                db.add(
+                    ReviewEvent(
+                        image_asset_id=image.id,
+                        action="presence_override_clear",
+                        reviewer="数据检查",
+                        before_json=json.dumps(before, ensure_ascii=False),
+                        after_json=json.dumps(_presence_meta(None), ensure_ascii=False),
+                    )
+                )
+                db.commit()
+                return _presence_meta(None)
+            saved.pop("human_override", None)
+            objects = saved.get("objects") or []
+            labels = saved.get("labels") or []
+            machine = classify_presence(objects, labels)
+            row.status = machine["status"]
+            row.fish_score = machine["fish_score"]
+            row.fish_count = machine["fish_count"]
+            row.max_box_area_ratio = machine["max_box_area_ratio"]
+            saved.update(machine)
+            saved["machine_status"] = machine["status"]
+            row.provider = "google_vision"
+        else:
+            machine_status = saved.get("machine_status") or saved.get("status") or effective_status(row)
+            saved["machine_status"] = machine_status
+            saved["human_override"] = payload.status
+            row.status = payload.status
+            row.provider = "human_override"
+
+        row.model_version = PRESENCE_MODEL_VERSION
+        row.evidence_json = json.dumps(saved, ensure_ascii=False)
+        row.updated_at = utcnow()
+        db.flush()
+
+    after = _presence_meta(row)
+    db.add(
+        ReviewEvent(
+            image_asset_id=image.id,
+            action="presence_override_update",
+            reviewer="数据检查",
+            before_json=json.dumps(before, ensure_ascii=False),
+            after_json=json.dumps(after, ensure_ascii=False),
+        )
+    )
+    db.commit()
+    if row in db:
         db.refresh(row)
         return _presence_meta(row)
-
-    saved = {}
-    if row.evidence_json:
-        try:
-            saved = json.loads(row.evidence_json)
-        except Exception:
-            saved = {}
-
-    if payload.status is None:
-        if saved.get("created_by_override") and not (saved.get("objects") or saved.get("labels")):
-            db.delete(row)
-            db.commit()
-            return _presence_meta(None)
-        saved.pop("human_override", None)
-        objects = saved.get("objects") or []
-        labels = saved.get("labels") or []
-        machine = classify_presence(objects, labels)
-        row.status = machine["status"]
-        row.fish_score = machine["fish_score"]
-        row.fish_count = machine["fish_count"]
-        row.max_box_area_ratio = machine["max_box_area_ratio"]
-        saved.update(machine)
-        saved["machine_status"] = machine["status"]
-        row.provider = "google_vision"
-    else:
-        machine_status = saved.get("machine_status") or saved.get("status") or effective_status(row)
-        saved["machine_status"] = machine_status
-        saved["human_override"] = payload.status
-        row.status = payload.status
-        row.provider = "human_override"
-
-    row.model_version = PRESENCE_MODEL_VERSION
-    row.evidence_json = json.dumps(saved, ensure_ascii=False)
-    row.updated_at = utcnow()
-    db.commit()
-    db.refresh(row)
-    return _presence_meta(row)
+    return after
