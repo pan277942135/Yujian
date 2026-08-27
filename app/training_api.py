@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from google.auth.transport.requests import AuthorizedSession
+from google.cloud import storage
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -44,6 +45,15 @@ class TrainingCreate(BaseModel):
     warmup_epochs: int = Field(default=2, ge=0, le=20)
     early_stopping_patience: int = Field(default=4, ge=1, le=30)
     label_smoothing: float = Field(default=0.05, ge=0, le=0.3)
+
+
+def _parse_gs_uri(uri: str) -> tuple[str, str]:
+    if not uri.startswith("gs://"):
+        raise ValueError(f"不是有效的 GCS URI：{uri}")
+    body = uri[5:]
+    if "/" not in body:
+        raise ValueError(f"不是有效的 GCS URI：{uri}")
+    return tuple(body.split("/", 1))  # type: ignore[return-value]
 
 
 def _names(payload: TrainingCreate) -> tuple[str, str]:
@@ -212,6 +222,23 @@ def training_run_detail(run_id: str, db: Session = Depends(get_db)):
         else None
     )
     return result
+
+
+@router.get("/api/training/runs/{run_id}/metrics")
+def training_run_metrics(run_id: str, db: Session = Depends(get_db)):
+    row = db.get(TrainingRun, run_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="训练 Run 不存在")
+    if row.status != "COMPLETED" or not row.metrics_uri:
+        raise HTTPException(status_code=409, detail="训练尚未完成，暂无指标")
+    try:
+        bucket_name, object_name = _parse_gs_uri(row.metrics_uri)
+        text = storage.Client().bucket(bucket_name).blob(object_name).download_as_text(encoding="utf-8")
+        return json.loads(text)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"读取训练指标失败：{exc}") from exc
 
 
 @router.post("/api/training/runs")
