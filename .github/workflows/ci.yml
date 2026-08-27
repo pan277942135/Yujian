@@ -24,7 +24,7 @@ jobs:
       - name: Import Model Factory Console
         env:
           REGISTRY_DB_URL: 'sqlite:///:memory:'
-        run: python -c "from app.main import app; from app.db import init_db; init_db(); print(app.title, app.version)"
+        run: python -c "from app.entry import app; from app.db import init_db; init_db(); print(app.title, app.version); assert any(r.path == '/api/presence/scan' for r in app.routes)"
       - name: Run Console flywheel smoke test
         env:
           REGISTRY_DB_URL: 'sqlite:///:memory:'
