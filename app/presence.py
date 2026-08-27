@@ -15,14 +15,14 @@ from app.models import Batch, ImageAsset, ReviewEvent
 
 router = APIRouter(prefix="/api/presence", tags=["fish-presence"])
 
-PRESENCE_MODEL_VERSION = "google-vision-presence-v0.3"
+PRESENCE_MODEL_VERSION = "google-vision-presence-v0.4"
 FISH_OBJECT_THRESHOLD = 0.45
 FISH_LABEL_THRESHOLD = 0.65
 UNCERTAIN_FISH_THRESHOLD = 0.20
-STRONG_CONTEXT_THRESHOLD = 0.75
-MIN_CONTEXT_LABELS_FOR_NO_FISH = 4
-FISHING_CONTEXT_THRESHOLD = 0.60
-SCENE_CONTEXT_THRESHOLD = 0.70
+STRONG_CONTEXT_THRESHOLD = 0.65
+MIN_CONTEXT_LABELS_FOR_NO_FISH = 2
+FISHING_CONTEXT_THRESHOLD = 0.45
+SCENE_CONTEXT_THRESHOLD = 0.60
 
 # Only terms that actually imply a visible fish body belong here. Generic
 # fishing activity / gear labels are intentionally excluded; otherwise a
@@ -48,17 +48,21 @@ NON_BODY_FISH_TERMS = {
 
 FISHING_CONTEXT_TERMS = {
     "fishing",
+    "fishery",
     "fishing rod",
     "fishing reel",
     "fishing tackle",
     "fishing equipment",
     "angling",
+    "rod",
+    "reel",
 }
 
 NO_FISH_SCENE_TERMS = {
     "landscape",
     "nature",
     "outdoor",
+    "outdoors",
     "sky",
     "cloud",
     "water",
@@ -75,6 +79,9 @@ NO_FISH_SCENE_TERMS = {
     "mountain",
     "shore",
     "beach",
+    "water resources",
+    "natural landscape",
+    "body of water",
 }
 
 SCANNABLE_REVIEW_STATUSES = {"approved", "pending", "needs_review", "hard_case"}
@@ -152,12 +159,13 @@ def _matching_evidence(rows: list[dict], terms: set[str], threshold: float) -> l
 
 
 def classify_presence(objects: list[dict], labels: list[dict]) -> dict:
-    """Conservative four-way routing: no fish / single / multiple / uncertain.
+    """Four-way routing: no fish / single / multiple / uncertain.
 
-    V0.3 fixes a common fishing-photo failure mode: activity/gear terms such as
-    ``Fishing`` or ``Fishing rod`` are context, not evidence that a fish body is
-    visible. When actual fish evidence is absent, a strong fishing-scene pattern
-    can therefore route to ``no_fish`` instead of ``uncertain``.
+    V0.4 keeps any real fish evidence conservative, but is more decisive when
+    there is *zero* fish evidence. Fishing gear, people, water and landscape
+    context are not fish-body evidence. If Vision sees no fish object or label,
+    two reliable scene/context labels are enough to route a likely empty scene
+    to ``no_fish`` for human spot-checking before bulk rejection.
     """
     fish_objects = [x for x in objects if _is_fish_term(x.get("name"))]
     fish_labels = [x for x in labels if _is_fish_term(x.get("name"))]
@@ -189,17 +197,17 @@ def classify_presence(objects: list[dict], labels: list[dict]) -> dict:
         status = "single_fish"
         routing_reason = "single_fish_object"
     elif max_label_score >= FISH_LABEL_THRESHOLD:
-        # Label-only evidence can confirm fish exists but cannot safely count bodies.
         status = "uncertain"
         routing_reason = "fish_label_only"
     elif fish_score >= UNCERTAIN_FISH_THRESHOLD:
         status = "uncertain"
         routing_reason = "weak_fish_evidence"
-    elif fishing_context and len(scene_context) >= 2:
-        # Typical no-catch photo: rod/reel/fishing activity + water/outdoor scenery,
-        # but no actual fish object/label evidence.
+    elif fishing_context and scene_context:
         status = "no_fish"
         routing_reason = "fishing_scene_without_fish"
+    elif len(scene_context) >= 2:
+        status = "no_fish"
+        routing_reason = "landscape_without_fish"
     elif len(strong_context) >= MIN_CONTEXT_LABELS_FOR_NO_FISH:
         status = "no_fish"
         routing_reason = "context_without_fish"
