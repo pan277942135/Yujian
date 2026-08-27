@@ -27,6 +27,7 @@ gcloud services enable \
   artifactregistry.googleapis.com \
   storage.googleapis.com \
   iam.googleapis.com \
+  vision.googleapis.com \
   --project "$PROJECT_ID"
 
 log "Ensuring runtime service account"
@@ -95,6 +96,11 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --role="roles/cloudsql.client" \
   --condition=None >/dev/null
 
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:${RUNTIME_SA}" \
+  --role="roles/serviceusage.serviceUsageConsumer" \
+  --condition=None >/dev/null
+
 gcloud secrets add-iam-policy-binding "$DB_SECRET" \
   --project "$PROJECT_ID" \
   --member="serviceAccount:${RUNTIME_SA}" \
@@ -148,8 +154,7 @@ Retrieve the Console access key when needed:
     --secret=${CONSOLE_SECRET} \\
     --project=${PROJECT_ID}
 
-Open the URL, enter that access key, then use:
-  Overview -> Batches -> Review -> Species -> Feedback -> Dataset
+日常操作：总览 -> 数据批次 -> 鱼体检测 -> 人工审核 -> 鱼种管理 -> 用户反馈 -> 数据集
 
 Cloud Shell is no longer required for normal daily data operations.
 ============================================================
