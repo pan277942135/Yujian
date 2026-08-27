@@ -78,6 +78,26 @@ CREATE TABLE IF NOT EXISTS fish_presence_results (
   FOREIGN KEY(image_asset_id) REFERENCES image_assets(id)
 );
 
+CREATE TABLE IF NOT EXISTS image_fingerprints (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  image_asset_id INTEGER NOT NULL UNIQUE,
+  batch_id TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  phash_json TEXT NOT NULL,
+  dhash TEXT NOT NULL,
+  histogram_json TEXT NOT NULL,
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  fingerprint_version TEXT NOT NULL,
+  duplicate_group TEXT,
+  is_representative INTEGER NOT NULL DEFAULT 1,
+  duplicate_kind TEXT,
+  distance_to_representative REAL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(image_asset_id) REFERENCES image_assets(id)
+);
+
 CREATE TABLE IF NOT EXISTS datasets (
   dataset_version TEXT PRIMARY KEY,
   parent_version TEXT,
@@ -172,6 +192,9 @@ CREATE INDEX IF NOT EXISTS idx_images_review ON image_assets(review_status);
 CREATE INDEX IF NOT EXISTS idx_images_truth ON image_assets(truth_species);
 CREATE INDEX IF NOT EXISTS idx_presence_batch ON fish_presence_results(batch_id);
 CREATE INDEX IF NOT EXISTS idx_presence_status ON fish_presence_results(status);
+CREATE INDEX IF NOT EXISTS idx_fingerprint_batch ON image_fingerprints(batch_id);
+CREATE INDEX IF NOT EXISTS idx_fingerprint_sha ON image_fingerprints(sha256);
+CREATE INDEX IF NOT EXISTS idx_fingerprint_group ON image_fingerprints(duplicate_group);
 CREATE INDEX IF NOT EXISTS idx_feedback_pipeline ON feedback_events(pipeline_status);
 CREATE INDEX IF NOT EXISTS idx_feedback_batch ON feedback_events(materialized_batch_id);
 CREATE INDEX IF NOT EXISTS idx_runs_dataset ON training_runs(dataset_version);
