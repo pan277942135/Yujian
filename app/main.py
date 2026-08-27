@@ -21,6 +21,7 @@ from app.factory import (
     promote_incoming_batch,
     sync_batch_registry,
 )
+from app.feedback_pipeline import materialize_feedback_batch
 from app.flywheel import (
     create_species_candidate,
     ensure_species_catalog,
@@ -33,6 +34,7 @@ from app.flywheel import (
     species_names,
 )
 from app.models import Batch, DatasetVersion, ImageAsset, ReviewEvent
+from app.secure import install_access_guard
 
 REVIEW_VALUES = {"approved", "needs_review", "rejected", "hard_case", "pending"}
 TRUTH_VALUES = {
@@ -45,6 +47,7 @@ TRUTH_VALUES = {
 
 app = FastAPI(title="YuJian AI Model Factory", version="0.1.0")
 templates = Jinja2Templates(directory="app/templates")
+install_access_guard(app)
 
 
 @app.on_event("startup")
@@ -106,6 +109,11 @@ class FeedbackCreate(BaseModel):
     confidence: float | None = None
     corrected_species: str | None = None
     user_note: str | None = None
+
+
+class FeedbackMaterialize(BaseModel):
+    batch_id: str
+    limit: int = Field(default=500, ge=1, le=2000)
 
 
 def image_dict(image: ImageAsset):
@@ -391,6 +399,15 @@ def api_feedback(status: str | None = None, limit: int = Query(default=100, ge=1
 def api_record_feedback(payload: FeedbackCreate, db: Session = Depends(get_db)):
     try:
         return record_feedback(db, **payload.model_dump())
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/feedback/materialize")
+def api_materialize_feedback(payload: FeedbackMaterialize, db: Session = Depends(get_db)):
+    try:
+        return materialize_feedback_batch(db, batch_id=payload.batch_id, limit=payload.limit)
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
