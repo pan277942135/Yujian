@@ -15,13 +15,18 @@ from app.models import Batch, ImageAsset, ReviewEvent
 
 router = APIRouter(prefix="/api/presence", tags=["fish-presence"])
 
-PRESENCE_MODEL_VERSION = "google-vision-presence-v0.2"
+PRESENCE_MODEL_VERSION = "google-vision-presence-v0.3"
 FISH_OBJECT_THRESHOLD = 0.45
 FISH_LABEL_THRESHOLD = 0.65
 UNCERTAIN_FISH_THRESHOLD = 0.20
 STRONG_CONTEXT_THRESHOLD = 0.75
 MIN_CONTEXT_LABELS_FOR_NO_FISH = 4
+FISHING_CONTEXT_THRESHOLD = 0.60
+SCENE_CONTEXT_THRESHOLD = 0.70
 
+# Only terms that actually imply a visible fish body belong here. Generic
+# fishing activity / gear labels are intentionally excluded; otherwise a
+# landscape with a fishing rod is incorrectly treated as fish evidence.
 FISH_TERMS = {
     "fish",
     "freshwater fish",
@@ -29,8 +34,47 @@ FISH_TERMS = {
     "bony fish",
     "marine fish",
     "game fish",
-    "fishery",
+}
+
+NON_BODY_FISH_TERMS = {
     "fishing",
+    "fishery",
+    "fishing rod",
+    "fishing reel",
+    "fishing tackle",
+    "fishing equipment",
+    "angling",
+}
+
+FISHING_CONTEXT_TERMS = {
+    "fishing",
+    "fishing rod",
+    "fishing reel",
+    "fishing tackle",
+    "fishing equipment",
+    "angling",
+}
+
+NO_FISH_SCENE_TERMS = {
+    "landscape",
+    "nature",
+    "outdoor",
+    "sky",
+    "cloud",
+    "water",
+    "lake",
+    "river",
+    "sea",
+    "ocean",
+    "pond",
+    "reservoir",
+    "grass",
+    "plant",
+    "tree",
+    "vegetation",
+    "mountain",
+    "shore",
+    "beach",
 }
 
 SCANNABLE_REVIEW_STATUSES = {"approved", "pending", "needs_review", "hard_case"}
@@ -48,7 +92,7 @@ class FishPresenceResult(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     image_asset_id = Column(Integer, ForeignKey("image_assets.id"), nullable=False, index=True)
     batch_id = Column(String(128), nullable=False, index=True)
-    # V0.2 stores sample type directly in status: single_fish/multi_fish/no_fish/uncertain/error.
+    # V0.2+ stores sample type directly in status: single_fish/multi_fish/no_fish/uncertain/error.
     # Legacy fish_present rows are interpreted from fish_count for backward compatibility.
     status = Column(String(32), nullable=False, index=True)
     fish_score = Column(Float, nullable=False, default=0.0)
@@ -80,9 +124,13 @@ def _is_fish_term(name: str | None) -> bool:
     value = _norm(name)
     if not value:
         return False
+    if value in NON_BODY_FISH_TERMS:
+        return False
+    if value.startswith("fishing ") or "fishery" in value:
+        return False
     if value in FISH_TERMS:
         return True
-    return "fish" in value and "fishing rod" not in value and "fishing reel" not in value
+    return "fish" in value and "fishing" not in value
 
 
 def _box_area(vertices: list[dict]) -> float:
@@ -95,8 +143,22 @@ def _box_area(vertices: list[dict]) -> float:
     return min(1.0, width * height)
 
 
+def _matching_evidence(rows: list[dict], terms: set[str], threshold: float) -> list[dict]:
+    return [
+        x
+        for x in rows
+        if _norm(x.get("name")) in terms and float(x.get("score", 0.0) or 0.0) >= threshold
+    ]
+
+
 def classify_presence(objects: list[dict], labels: list[dict]) -> dict:
-    """Conservative four-way routing: no fish / single / multiple / uncertain."""
+    """Conservative four-way routing: no fish / single / multiple / uncertain.
+
+    V0.3 fixes a common fishing-photo failure mode: activity/gear terms such as
+    ``Fishing`` or ``Fishing rod`` are context, not evidence that a fish body is
+    visible. When actual fish evidence is absent, a strong fishing-scene pattern
+    can therefore route to ``no_fish`` instead of ``uncertain``.
+    """
     fish_objects = [x for x in objects if _is_fish_term(x.get("name"))]
     fish_labels = [x for x in labels if _is_fish_term(x.get("name"))]
 
@@ -111,21 +173,43 @@ def classify_presence(objects: list[dict], labels: list[dict]) -> dict:
     areas = [_box_area(x.get("vertices") or []) for x in strong_fish_objects]
     max_area = max(areas, default=0.0)
 
+    strong_context = [
+        x
+        for x in labels
+        if not _is_fish_term(x.get("name"))
+        and float(x.get("score", 0.0) or 0.0) >= STRONG_CONTEXT_THRESHOLD
+    ]
+    fishing_context = _matching_evidence(objects + labels, FISHING_CONTEXT_TERMS, FISHING_CONTEXT_THRESHOLD)
+    scene_context = _matching_evidence(labels, NO_FISH_SCENE_TERMS, SCENE_CONTEXT_THRESHOLD)
+
     if fish_count >= 2:
         status = "multi_fish"
+        routing_reason = "multiple_fish_objects"
     elif fish_count == 1:
         status = "single_fish"
+        routing_reason = "single_fish_object"
     elif max_label_score >= FISH_LABEL_THRESHOLD:
         # Label-only evidence can confirm fish exists but cannot safely count bodies.
         status = "uncertain"
+        routing_reason = "fish_label_only"
     elif fish_score >= UNCERTAIN_FISH_THRESHOLD:
         status = "uncertain"
+        routing_reason = "weak_fish_evidence"
+    elif fishing_context and len(scene_context) >= 2:
+        # Typical no-catch photo: rod/reel/fishing activity + water/outdoor scenery,
+        # but no actual fish object/label evidence.
+        status = "no_fish"
+        routing_reason = "fishing_scene_without_fish"
+    elif len(strong_context) >= MIN_CONTEXT_LABELS_FOR_NO_FISH:
+        status = "no_fish"
+        routing_reason = "context_without_fish"
     else:
-        strong_context = [x for x in labels if float(x.get("score", 0.0) or 0.0) >= STRONG_CONTEXT_THRESHOLD]
-        status = "no_fish" if len(strong_context) >= MIN_CONTEXT_LABELS_FOR_NO_FISH else "uncertain"
+        status = "uncertain"
+        routing_reason = "insufficient_evidence"
 
     return {
         "status": status,
+        "routing_reason": routing_reason,
         "fish_score": round(fish_score, 6),
         "fish_count": fish_count,
         "max_box_area_ratio": round(max_area, 6),
@@ -209,9 +293,52 @@ def presence_summary(db: Session, batch_id: str) -> dict:
     }
 
 
+def _reclassify_saved_evidence(db: Session, batch_id: str) -> int:
+    """Re-run only the routing rules on stored Vision evidence.
+
+    This deliberately avoids another Google Vision request, so rule tuning does
+    not create duplicate API cost. Rows with missing/corrupt evidence are left
+    untouched and can still be explicitly rescanned later.
+    """
+    rows = db.scalars(
+        select(FishPresenceResult).where(
+            FishPresenceResult.batch_id == batch_id,
+            FishPresenceResult.model_version != PRESENCE_MODEL_VERSION,
+        )
+    ).all()
+    changed = 0
+    for row in rows:
+        if not row.evidence_json:
+            continue
+        try:
+            saved = json.loads(row.evidence_json)
+            objects = saved.get("objects") or []
+            labels = saved.get("labels") or []
+            evidence = classify_presence(objects, labels)
+        except Exception:
+            continue
+        row.status = evidence["status"]
+        row.fish_score = evidence["fish_score"]
+        row.fish_count = evidence["fish_count"]
+        row.max_box_area_ratio = evidence["max_box_area_ratio"]
+        row.model_version = PRESENCE_MODEL_VERSION
+        row.evidence_json = json.dumps(evidence, ensure_ascii=False)
+        row.error_message = None
+        row.updated_at = utcnow()
+        changed += 1
+    if changed:
+        db.commit()
+    return changed
+
+
 def scan_batch(db: Session, batch_id: str, limit: int = 40, rescan: bool = False) -> dict:
     if not db.get(Batch, batch_id):
         raise ValueError("batch not found")
+
+    # A normal "检测鱼体" click first upgrades old results from saved evidence.
+    # This is local rule recomputation and does not call Vision again.
+    reclassified = 0 if rescan else _reclassify_saved_evidence(db, batch_id)
+
     stmt = select(ImageAsset).where(
         ImageAsset.batch_id == batch_id,
         ImageAsset.review_status.in_(SCANNABLE_REVIEW_STATUSES),
@@ -221,7 +348,9 @@ def scan_batch(db: Session, batch_id: str, limit: int = 40, rescan: bool = False
     images = db.scalars(stmt.limit(limit)).all()
     if not images:
         summary = presence_summary(db, batch_id)
-        summary["processed"] = 0
+        summary["processed"] = reclassified
+        summary["reclassified"] = reclassified
+        summary["vision_processed"] = 0
         return summary
 
     storage_client = storage.Client()
@@ -258,7 +387,9 @@ def scan_batch(db: Session, batch_id: str, limit: int = 40, rescan: bool = False
         processed += 1
 
     summary = presence_summary(db, batch_id)
-    summary["processed"] = processed
+    summary["processed"] = processed + reclassified
+    summary["reclassified"] = reclassified
+    summary["vision_processed"] = processed
     return summary
 
 
