@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>快速审核 · 渔见 AI</title>
+  <style>
+    body{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f6f7f8;color:#171717}header{background:#fff;border-bottom:1px solid #e5e7eb;padding:12px 22px;display:flex;gap:18px;align-items:center;position:sticky;top:0;z-index:5}header a{text-decoration:none;color:#111827;font-weight:650}main{max-width:1440px;margin:0 auto;padding:20px}.bar,.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.toolbar{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:12px;margin:12px 0}.spacer{flex:1}select,button{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:8px;background:#fff}button{cursor:pointer;font-weight:650}.primary{background:#111827;color:#fff}.soft{background:#f3f4f6}.danger{background:#fff1f2}.pending{background:#fff7ed}.speciesTabs{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0}.speciesTabs button{font-size:13px}.speciesTabs .active{background:#111827;color:#fff}.grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}.card{background:#fff;border:2px solid transparent;border-radius:12px;padding:8px;box-shadow:0 1px 1px rgba(0,0,0,.03)}.card[data-state="approved"]{border-color:#059669}.card[data-state="rejected"]{border-color:#e11d48}.card[data-state="pending"]{border-color:#d97706}.photo{width:100%;aspect-ratio:4/3;object-fit:contain;background:#111;border-radius:8px}.meta{font-size:12px;margin-top:7px;display:flex;flex-direction:column;gap:5px}.row{display:flex;gap:5px;align-items:center;flex-wrap:wrap}.pill{padding:3px 7px;border-radius:999px;background:#f3f4f6;font-size:11px}.good{background:#ecfdf5}.warn{background:#fff7ed}.bad{background:#fff1f2}.stateBtns{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin-top:6px}.stateBtns button{padding:6px 4px;font-size:12px}.speciesSelect{width:100%;padding:6px;border:1px solid #d1d5db;border-radius:7px}.banner{display:none;padding:10px 12px;border-radius:9px;background:#eef2ff;margin:10px 0;white-space:pre-wrap}.empty{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:80px 20px;text-align:center;color:#6b7280}.footer{display:flex;justify-content:space-between;gap:10px;align-items:center;margin:14px 0}.muted{color:#6b7280;font-size:13px}@media(max-width:1200px){.grid{grid-template-columns:repeat(4,1fr)}}@media(max-width:800px){.grid{grid-template-columns:repeat(2,1fr)}header{flex-wrap:wrap}}
+  </style>
+</head>
+<body>
+<header><a href="/">总览</a><a href="/batches">数据批次</a><a href="/review/bulk">快速审核</a><a href="/review">单张审核</a><a href="/species">鱼种管理</a><a href="/datasets">数据集</a></header>
+<main>
+  <div class="bar"><div><h1 style="margin:0">快速审核</h1><div class="muted">按鱼种连续看图；默认真实鱼种沿用采集标注，只处理异常图片。</div></div></div>
+  <div id="banner" class="banner"></div>
+  <div class="toolbar">
+    <select id="batch"><option value="">选择批次</option></select>
+    <select id="presence"><option value="">全部鱼体结果</option><option value="single_fish">单鱼</option><option value="multi_fish">多鱼</option><option value="no_fish">无鱼</option><option value="uncertain">不确定</option><option value="not_scanned">未检测</option></select>
+    <span id="counter" class="muted"></span>
+    <div class="spacer"></div>
+    <button class="soft" onclick="markAll('approved')">本页全部通过</button>
+    <button class="soft" onclick="markAll('pending')">本页全部待定</button>
+    <button class="primary" onclick="submitPage()">提交本页</button>
+  </div>
+  <div id="speciesTabs" class="speciesTabs"></div>
+  <div id="content"></div>
+  <div class="footer"><button onclick="prevPage()">← 上一页</button><span id="pageInfo" class="muted"></span><button onclick="nextPage()">下一页 →</button></div>
+</main>
+<script>
+let batches=[],catalog=[],speciesRows=[],currentSpecies='',items=[],offset=0,limit=24,total=0;
+function esc(v){return (v??'').toString().replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+async function api(url,opts){const r=await fetch(url,opts);const t=await r.text();let d;try{d=JSON.parse(t)}catch{d=t}if(!r.ok)throw new Error(d.detail||t);return d}
+function msg(text,err=false){const b=document.getElementById('banner');b.style.display='block';b.style.background=err?'#fff1f2':'#eef2ff';b.textContent=text}
+function sourceName(v){return ({pilot:'种子集',doubao:'豆包',app_feedback:'用户反馈',workbuddy:'WorkBuddy',other:'其他'})[v]||v||'-'}
+function presenceName(v){return ({single_fish:'单鱼',multi_fish:'多鱼',no_fish:'无鱼',uncertain:'不确定',error:'检测失败',not_scanned:'未检测'})[v]||'未检测'}
+function presenceClass(v){if(v==='single_fish')return 'good';if(v==='multi_fish'||v==='uncertain')return 'warn';if(v==='no_fish')return 'bad';return ''}
+function speciesOptions(selected){return catalog.filter(x=>x.status!=='retired').map(x=>`<option value="${esc(x.common_name_zh)}" ${x.common_name_zh===selected?'selected':''}>${esc(x.common_name_zh)}</option>`).join('')}
+async function init(){
+  [batches,catalog]=await Promise.all([api('/api/batches'),api('/api/species')]);
+  document.getElementById('batch').innerHTML+=[...batches].map(x=>`<option value="${esc(x.batch_id)}">${esc(x.batch_id)} · ${esc(sourceName(x.source))}</option>`).join('');
+  const u=new URLSearchParams(location.search);if(u.get('batch'))document.getElementById('batch').value=u.get('batch');
+  document.getElementById('batch').addEventListener('change',()=>{offset=0;loadSpecies().catch(e=>msg(e.message,true))});
+  document.getElementById('presence').addEventListener('change',()=>{offset=0;loadImages().catch(e=>msg(e.message,true))});
+  if(document.getElementById('batch').value)await loadSpecies();
+}
+async function loadSpecies(){const batch=document.getElementById('batch').value;if(!batch){document.getElementById('content').innerHTML='<div class="empty">先选择一个批次。</div>';return}speciesRows=await api(`/api/bulk-review/species?batch_id=${encodeURIComponent(batch)}&status=pending`);if(!speciesRows.length){currentSpecies='';renderTabs();document.getElementById('content').innerHTML='<div class="empty">这个批次已经没有待审核图片。</div>';return}if(!speciesRows.some(x=>x.species===currentSpecies))currentSpecies=speciesRows[0].species;offset=0;renderTabs();await loadImages()}
+function renderTabs(){document.getElementById('speciesTabs').innerHTML=speciesRows.map(x=>`<button class="${x.species===currentSpecies?'active':''}" onclick="chooseSpecies('${esc(x.species)}')">${esc(x.species)} · ${x.count}</button>`).join('')}
+function chooseSpecies(name){currentSpecies=name;offset=0;renderTabs();loadImages().catch(e=>msg(e.message,true))}
+async function loadImages(){const batch=document.getElementById('batch').value;if(!batch||!currentSpecies)return;const p=new URLSearchParams({batch_id:batch,species:currentSpecies,status:'pending',limit:String(limit),offset:String(offset)});const presence=document.getElementById('presence').value;if(presence)p.set('presence',presence);const d=await api('/api/bulk-review/images?'+p);items=d.items||[];total=d.total||0;document.getElementById('counter').textContent=`${currentSpecies} · 待处理 ${total}`;render();updatePageInfo()}
+function render(){const c=document.getElementById('content');if(!items.length){c.innerHTML='<div class="empty">当前筛选下没有图片。可以切换鱼体结果或下一个鱼种。</div>';return}c.innerHTML=`<div class="grid">${items.map((x,i)=>{const initial=(x.review_status==='approved'?'approved':x.review_status==='rejected'?'rejected':'pending');const dup=x.duplicate?.is_duplicate?`<span class="pill warn">近重复${x.duplicate.kind==='exact'?'·完全':'·相似'}</span>`:'';return `<div class="card" id="card-${i}" data-state="${initial}"><img class="photo" loading="lazy" src="${x.media_url}"><div class="meta"><div class="row"><b>${esc(x.image_id)}</b></div><div class="row"><span class="pill ${presenceClass(x.presence?.status)}">${presenceName(x.presence?.status)}${(x.presence?.fish_count||0)>0?' · '+x.presence.fish_count+'条':''}</span>${dup}</div><div class="muted">采集：${esc(x.claimed_species||'-')}</div><select class="speciesSelect" id="species-${i}">${speciesOptions(x.truth_species||x.claimed_species||currentSpecies)}</select><div class="stateBtns"><button onclick="setState(${i},'approved')">通过</button><button onclick="setState(${i},'rejected')">不通过</button><button onclick="setState(${i},'pending')">待定</button></div></div></div>`}).join('')}</div>`;items.forEach((x,i)=>{x._state=(x.review_status==='approved'?'approved':x.review_status==='rejected'?'rejected':'pending')})}
+function setState(i,state){items[i]._state=state;document.getElementById('card-'+i).dataset.state=state}
+function markAll(state){items.forEach((_,i)=>setState(i,state))}
+async function submitPage(){if(!items.length)return;const batch=document.getElementById('batch').value;const payload={batch_id:batch,items:items.map((x,i)=>({image_id:x.image_id,review_status:x._state||'pending',truth_species:document.getElementById('species-'+i).value,notes:x.notes||''}))};try{const d=await api('/api/bulk-review/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});msg(`已提交 ${d.updated} 张。正在继续当前鱼种…`);offset=0;await loadSpecies();if(speciesRows.length&&currentSpecies)await loadImages()}catch(e){msg(e.message,true)}}
+function updatePageInfo(){const from=total?offset+1:0;const to=Math.min(total,offset+limit);document.getElementById('pageInfo').textContent=`${from}-${to} / ${total}`}
+function nextPage(){if(offset+limit<total){offset+=limit;loadImages().catch(e=>msg(e.message,true));return}const idx=speciesRows.findIndex(x=>x.species===currentSpecies);if(idx>=0&&idx+1<speciesRows.length){currentSpecies=speciesRows[idx+1].species;offset=0;renderTabs();loadImages().catch(e=>msg(e.message,true))}}
+function prevPage(){if(offset>=limit){offset-=limit;loadImages().catch(e=>msg(e.message,true))}}
+init().catch(e=>msg(e.message,true));
+</script>
+</body>
+</html>
