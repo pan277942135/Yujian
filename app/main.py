@@ -12,18 +12,25 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
-from app.db import get_db, init_db
+from app.db import SessionLocal, get_db, init_db
 from app.factory import (
     DOWNLOAD_RETRY,
-    TARGET_SPECIES,
-    approved_summary,
     audit_incoming_batch,
-    freeze_dataset,
     get_bucket_name,
-    list_datasets,
     list_incoming_batches,
     promote_incoming_batch,
     sync_batch_registry,
+)
+from app.flywheel import (
+    create_species_candidate,
+    ensure_species_catalog,
+    flywheel_summary,
+    freeze_cumulative_dataset,
+    list_feedback,
+    list_species,
+    record_feedback,
+    set_species_status,
+    species_names,
 )
 from app.models import Batch, DatasetVersion, ImageAsset, ReviewEvent
 
@@ -43,6 +50,11 @@ templates = Jinja2Templates(directory="app/templates")
 @app.on_event("startup")
 def startup():
     init_db()
+    db = SessionLocal()
+    try:
+        ensure_species_catalog(db)
+    finally:
+        db.close()
 
 
 class ReviewUpdate(BaseModel):
@@ -65,12 +77,35 @@ class BatchSync(BaseModel):
 
 class DatasetFreeze(BaseModel):
     dataset_version: str
-    batch_ids: list[str]
     parent_version: str | None = None
     git_commit: str = Field(default_factory=lambda: os.getenv("APP_GIT_COMMIT", "unknown"))
     seed: int = 20260826
     train: float = 0.70
     val: float = 0.15
+
+
+class SpeciesCreate(BaseModel):
+    common_name_zh: str
+    species_key: str | None = None
+    common_name_en: str | None = None
+    scientific_name: str | None = None
+    notes: str | None = None
+
+
+class SpeciesStatusUpdate(BaseModel):
+    status: str
+
+
+class FeedbackCreate(BaseModel):
+    source_event_id: str
+    feedback_type: str
+    source: str = "app"
+    image_gcs_uri: str | None = None
+    model_version: str | None = None
+    predicted_species: str | None = None
+    confidence: float | None = None
+    corrected_species: str | None = None
+    user_note: str | None = None
 
 
 def image_dict(image: ImageAsset):
@@ -139,6 +174,16 @@ def datasets_page(request: Request):
     return templates.TemplateResponse(request=request, name="datasets.html", context={})
 
 
+@app.get("/species", response_class=HTMLResponse)
+def species_page(request: Request):
+    return templates.TemplateResponse(request=request, name="species.html", context={})
+
+
+@app.get("/feedback", response_class=HTMLResponse)
+def feedback_page(request: Request):
+    return templates.TemplateResponse(request=request, name="feedback.html", context={})
+
+
 @app.get("/api/overview")
 def overview(db: Session = Depends(get_db)):
     total = db.scalar(select(func.count()).select_from(ImageAsset)) or 0
@@ -148,13 +193,20 @@ def overview(db: Session = Depends(get_db)):
     species_rows = db.execute(
         select(species_key.label("species"), func.count()).group_by(species_key).order_by(func.count().desc())
     ).all()
-    return {
+    result = {
         "total_images": total,
         "batch_count": db.scalar(select(func.count()).select_from(Batch)) or 0,
         "dataset_count": db.scalar(select(func.count()).select_from(DatasetVersion)) or 0,
         "review": {name: status_counts.get(name, 0) for name in REVIEW_VALUES},
         "species": [{"species": species, "count": count} for species, count in species_rows],
     }
+    result["flywheel"] = flywheel_summary(db)
+    return result
+
+
+@app.get("/api/flywheel/summary")
+def api_flywheel_summary(db: Session = Depends(get_db)):
+    return flywheel_summary(db)
 
 
 @app.get("/api/incoming")
@@ -240,11 +292,10 @@ def review_stats(
 ):
     filtered = apply_review_filters(select(ImageAsset.id), status, batch_id, species, q).subquery()
     count = db.scalar(select(func.count()).select_from(filtered)) or 0
-    all_status = db.execute(
-        select(ImageAsset.review_status, func.count())
-        .where(ImageAsset.batch_id == batch_id if batch_id else True)
-        .group_by(ImageAsset.review_status)
-    ).all()
+    all_status_stmt = select(ImageAsset.review_status, func.count()).group_by(ImageAsset.review_status)
+    if batch_id:
+        all_status_stmt = all_status_stmt.where(ImageAsset.batch_id == batch_id)
+    all_status = db.execute(all_status_stmt).all()
     return {"filtered": count, "status": {key: value for key, value in all_status}}
 
 
@@ -257,8 +308,8 @@ def update_review(batch_id: str, image_id: str, payload: ReviewUpdate, db: Sessi
         raise HTTPException(status_code=400, detail=f"invalid review_status: {payload.review_status}")
     if payload.truth_status is not None and payload.truth_status not in TRUTH_VALUES:
         raise HTTPException(status_code=400, detail=f"invalid truth_status: {payload.truth_status}")
-    if payload.truth_species and payload.truth_species not in TARGET_SPECIES:
-        raise HTTPException(status_code=400, detail=f"invalid truth_species: {payload.truth_species}")
+    if payload.truth_species and payload.truth_species not in species_names(db, include_candidates=True):
+        raise HTTPException(status_code=400, detail="truth_species is not in Species Catalog; add it as a candidate first")
 
     before = image_dict(image)
     if payload.review_status is not None:
@@ -301,28 +352,89 @@ def media(batch_id: str, image_id: str, db: Session = Depends(get_db)):
     return Response(content=content, media_type=media_type, headers={"Cache-Control": "private, max-age=300"})
 
 
+@app.get("/api/species")
+def api_species(status: str | None = None, db: Session = Depends(get_db)):
+    return list_species(db, status=status)
+
+
+@app.post("/api/species")
+def api_create_species(payload: SpeciesCreate, db: Session = Depends(get_db)):
+    try:
+        return create_species_candidate(
+            db,
+            common_name_zh=payload.common_name_zh,
+            species_key=payload.species_key,
+            common_name_en=payload.common_name_en,
+            scientific_name=payload.scientific_name,
+            notes=payload.notes,
+        )
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/api/species/{species_key}/status")
+def api_species_status(species_key: str, payload: SpeciesStatusUpdate, db: Session = Depends(get_db)):
+    try:
+        return set_species_status(db, species_key, payload.status)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/feedback")
+def api_feedback(status: str | None = None, limit: int = Query(default=100, ge=1, le=500), db: Session = Depends(get_db)):
+    return list_feedback(db, status=status, limit=limit)
+
+
+@app.post("/api/feedback")
+def api_record_feedback(payload: FeedbackCreate, db: Session = Depends(get_db)):
+    try:
+        return record_feedback(db, **payload.model_dump())
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/api/datasets/summary")
 def dataset_summary(db: Session = Depends(get_db)):
-    return approved_summary(db)
+    return flywheel_summary(db)
 
 
 @app.get("/api/datasets")
 def datasets(db: Session = Depends(get_db)):
-    return list_datasets(db)
+    rows = db.scalars(select(DatasetVersion).order_by(DatasetVersion.created_at.desc())).all()
+    return [
+        {
+            "dataset_version": row.dataset_version,
+            "parent_version": row.parent_version,
+            "created_at": row.created_at.isoformat(),
+            "manifest_uri": row.manifest_uri,
+            "class_map_uri": row.class_map_uri,
+            "train_count": row.train_count,
+            "val_count": row.val_count,
+            "test_count": row.test_count,
+            "species_count": row.species_count,
+            "selection_mode": row.selection_mode,
+            "source_cutoff_at": row.source_cutoff_at.isoformat() if row.source_cutoff_at else None,
+            "git_commit": row.git_commit,
+            "status": row.status,
+        }
+        for row in rows
+    ]
 
 
 @app.post("/api/datasets/freeze")
 def dataset_freeze(payload: DatasetFreeze, db: Session = Depends(get_db)):
     try:
-        return freeze_dataset(
-            db=db,
+        return freeze_cumulative_dataset(
+            db,
             dataset_version=payload.dataset_version,
-            batch_ids=payload.batch_ids,
+            parent_version=payload.parent_version,
             git_commit=payload.git_commit,
             seed=payload.seed,
             train=payload.train,
             val=payload.val,
-            parent_version=payload.parent_version,
         )
     except Exception as exc:
         db.rollback()
