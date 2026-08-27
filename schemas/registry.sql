@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS image_fingerprints (
   sha256 TEXT NOT NULL,
   phash_json TEXT NOT NULL,
   dhash TEXT NOT NULL,
+  crop_hash TEXT NOT NULL,
   histogram_json TEXT NOT NULL,
   width INTEGER NOT NULL,
   height INTEGER NOT NULL,
