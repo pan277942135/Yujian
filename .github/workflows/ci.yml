@@ -21,11 +21,11 @@ jobs:
         run: python -m compileall app scripts
       - name: Import Model Factory Console
         env:
-          REGISTRY_DB_URL: sqlite:///:memory:
+          REGISTRY_DB_URL: 'sqlite:///:memory:'
         run: python -c "from app.main import app; from app.db import init_db; init_db(); print(app.title, app.version)"
       - name: Run Console flywheel smoke test
         env:
-          REGISTRY_DB_URL: sqlite:///:memory:
+          REGISTRY_DB_URL: 'sqlite:///:memory:'
         run: python scripts/smoke_console.py
       - name: Validate project config exists
         run: test -f config/project.yaml
