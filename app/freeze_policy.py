@@ -56,10 +56,7 @@ def _group_composition(items: list[dict]) -> Counter[str]:
     return Counter(item["catalog"].species_key for item in items)
 
 
-def _deviation_cost(
-    current: dict[str, Counter[str]],
-    targets: dict[str, dict[str, int]],
-) -> float:
+def _deviation_cost(current: dict[str, Counter[str]], targets: dict[str, dict[str, int]]) -> float:
     cost = 0.0
     for species_key, target in targets.items():
         for split in SPLITS:
@@ -69,20 +66,8 @@ def _deviation_cost(
     return cost
 
 
-def _assign_stratified_group_splits(
-    selected: list[dict],
-    *,
-    seed: int,
-    train: float,
-    val: float,
-) -> dict:
-    """Assign whole groups to splits while balancing every species deterministically.
-
-    Group integrity is preserved to reduce train/val/test leakage. The assignment is
-    deterministic for a fixed candidate set + seed. If group structure makes three-way
-    coverage impossible for any represented species, the preview reports blockers and
-    formal Freeze must not proceed.
-    """
+def _assign_stratified_group_splits(selected: list[dict], *, seed: int, train: float, val: float) -> dict:
+    """Assign whole groups to splits while balancing every species deterministically."""
     groups: dict[str, list[dict]] = defaultdict(list)
     species_totals: Counter[str] = Counter()
     species_group_keys: dict[str, set[str]] = defaultdict(set)
@@ -96,14 +81,10 @@ def _assign_stratified_group_splits(
         species_group_keys[species_key].add(group_key)
         species_names[species_key] = item["catalog"].common_name_zh
 
-    targets = {
-        species_key: _target_split_counts(total, train, val)
-        for species_key, total in species_totals.items()
-    }
+    targets = {species_key: _target_split_counts(total, train, val) for species_key, total in species_totals.items()}
     current: dict[str, Counter[str]] = {key: Counter() for key in species_totals}
     assignment: dict[str, str] = {}
 
-    # Larger / mixed groups are placed first because they constrain the solution most.
     group_order = sorted(
         groups,
         key=lambda key: (
@@ -133,8 +114,6 @@ def _assign_stratified_group_splits(
         for species_key, count in composition.items():
             current[species_key][chosen] += count
 
-    # Repair any zero-coverage species/split by moving a whole group when doing so does
-    # not create a new zero in its donor split for any species carried by that group.
     for _ in range(max(1, len(groups) * 3)):
         missing = [
             (species_key, split)
@@ -153,7 +132,6 @@ def _assign_stratified_group_splits(
                 if donor == wanted_split:
                     continue
                 composition = _group_composition(groups[group_key])
-                # Preserve at least one item in the donor split for every affected class.
                 if any(current[key][donor] - count <= 0 for key, count in composition.items()):
                     continue
 
@@ -203,31 +181,13 @@ def _assign_stratified_group_splits(
         }
 
         if total < 3:
-            blockers.append(
-                {
-                    "species": name,
-                    "code": "TOO_FEW_SAMPLES_FOR_THREE_WAY_SPLIT",
-                    "message": f"{name} 仅 {total} 张，无法同时覆盖 Train/Val/Test",
-                }
-            )
+            blockers.append({"species": name, "code": "TOO_FEW_SAMPLES_FOR_THREE_WAY_SPLIT", "message": f"{name} 仅 {total} 张，无法同时覆盖 Train/Val/Test"})
         elif group_count < 3:
-            blockers.append(
-                {
-                    "species": name,
-                    "code": "TOO_FEW_GROUPS_FOR_THREE_WAY_SPLIT",
-                    "message": f"{name} 仅 {group_count} 个独立 group，保持 group 隔离时无法稳定三路切分",
-                }
-            )
+            blockers.append({"species": name, "code": "TOO_FEW_GROUPS_FOR_THREE_WAY_SPLIT", "message": f"{name} 仅 {group_count} 个独立 group，保持 group 隔离时无法稳定三路切分"})
 
         for split in SPLITS:
             if counts[split] == 0:
-                blockers.append(
-                    {
-                        "species": name,
-                        "code": f"ZERO_{split.upper()}_COVERAGE",
-                        "message": f"{name} 的 {split} 样本为 0，禁止 Freeze",
-                    }
-                )
+                blockers.append({"species": name, "code": f"ZERO_{split.upper()}_COVERAGE", "message": f"{name} 的 {split} 样本为 0，禁止 Freeze"})
 
         if 0 < counts["train"] < 10:
             warnings.append({"species": name, "code": "LOW_TRAIN", "message": f"{name} Train 仅 {counts['train']} 张（<10）"})
@@ -249,7 +209,14 @@ def _assign_stratified_group_splits(
     }
 
 
-def select_freeze_candidates(db: Session, *, seed: int, train: float, val: float) -> dict:
+def select_freeze_candidates(
+    db: Session,
+    *,
+    seed: int,
+    train: float,
+    val: float,
+    allow_split_blockers: bool = False,
+) -> dict:
     catalog_rows = db.scalars(select(SpeciesCatalog).order_by(SpeciesCatalog.catalog_order)).all()
     active_by_name = {row.common_name_zh: row for row in catalog_rows if row.status == "active"}
     images = db.scalars(
@@ -290,7 +257,6 @@ def select_freeze_candidates(db: Session, *, seed: int, train: float, val: float
         fp = fingerprints.get(image.id)
         presence = presences.get(image.id)
 
-        # A Dataset Freeze is only allowed after both automated QA stages ran.
         if fp is None:
             excluded_quality["dedupe_not_scanned"] += 1
             continue
@@ -343,6 +309,12 @@ def select_freeze_candidates(db: Session, *, seed: int, train: float, val: float
         "blockers": [],
         "group_count": 0,
     }
+
+    if split["blockers"] and not allow_split_blockers:
+        messages = "; ".join(item["message"] for item in split["blockers"][:8])
+        if len(split["blockers"]) > 8:
+            messages += f"; 另有 {len(split['blockers']) - 8} 项"
+        raise ValueError(f"Dataset Split Gate 未通过：{messages}")
 
     return {
         "approved_master_pool_count": len(images),
