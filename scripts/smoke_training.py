@@ -14,7 +14,11 @@ os.environ.setdefault("REGISTRY_DB_URL", "sqlite:///:memory:")
 from app.db import SessionLocal, init_db  # noqa: E402
 from app.entry import app  # noqa: E402
 from app.models import DatasetVersion, TrainingRun  # noqa: E402
-from app.training_api import TrainingCreate, queue_training_run  # noqa: E402
+from app.training_api import (  # noqa: E402
+    TrainingCreate,
+    _enrich_metrics_diagnostics,
+    queue_training_run,
+)
 
 
 def fake_launcher(run_id: str, dataset_version: str, model_version: str, model_family: str, params: dict) -> dict:
@@ -24,6 +28,55 @@ def fake_launcher(run_id: str, dataset_version: str, model_version: str, model_f
     assert model_family == "mobilenet_v3_small"
     assert params["epochs"] == 12
     return {"name": "projects/test/locations/test/operations/op-1"}
+
+
+def assert_metrics_diagnostics() -> None:
+    report = {
+        "per_class_split_counts": {
+            "0": {"train": 6, "val": 2, "test": 0},
+            "1": {"train": 20, "val": 5, "test": 2},
+        },
+        "test": {
+            "per_class": [
+                {"class_index": 0, "support": 0, "precision": 0, "recall": 0, "f1": 0},
+                {"class_index": 1, "support": 2, "precision": 1, "recall": 0.5, "f1": 0.666667},
+            ],
+            "confusion_matrix": [[0, 0], [1, 1]],
+        },
+    }
+    class_map = {
+        "classes": [
+            {"class_index": 0, "species_key": "silver_carp", "common_name_zh": "白鲢"},
+            {"class_index": 1, "species_key": "bighead_carp", "common_name_zh": "鳙鱼"},
+        ]
+    }
+    enriched = _enrich_metrics_diagnostics(report, class_map)
+    assert enriched["classes"][0]["common_name_zh"] == "白鲢"
+    kinds = {row["kind"] for row in enriched["evaluation_warnings"]}
+    assert "train_low" in kinds
+    assert "val_low" in kinds
+    assert "test_zero" in kinds
+    assert "test_low" in kinds
+    test_zero = next(row for row in enriched["evaluation_warnings"] if row["kind"] == "test_zero")
+    assert test_zero["severity"] == "critical"
+    assert "白鲢" in test_zero["message"]
+
+
+def assert_metrics_ui() -> None:
+    text = (ROOT / "app" / "templates" / "training.html").read_text(encoding="utf-8")
+    required = [
+        'id="perClass"',
+        'id="matrix"',
+        'id="errorPairs"',
+        "renderPerClass(d)",
+        "renderMatrix(d)",
+        "renderErrorPairs(d)",
+        "evaluation_warnings",
+        "Test=0",
+        "Top 错误组合",
+    ]
+    for token in required:
+        assert token in text, token
 
 
 def main() -> None:
@@ -67,7 +120,10 @@ def main() -> None:
         assert "/api/training/runs/{run_id}" in paths
         assert "/api/training/runs/{run_id}/metrics" in paths
         assert "/api/models" in paths
-        print("Classifier training API smoke test: OK")
+
+        assert_metrics_diagnostics()
+        assert_metrics_ui()
+        print("Classifier training API + diagnostics UI smoke test: OK")
     finally:
         db.close()
 
