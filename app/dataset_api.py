@@ -67,7 +67,15 @@ def build_preview(db: Session, payload: DatasetFreezePreviewRequest) -> dict:
         parent = db.scalar(select(DatasetVersion).order_by(DatasetVersion.created_at.desc()).limit(1))
     parent_version = parent.dataset_version if parent else None
 
-    policy = select_freeze_candidates(db, seed=payload.seed, train=payload.train, val=payload.val)
+    # Preview must expose split blockers rather than raising so operators can repair
+    # the Master Pool before formal Freeze.
+    policy = select_freeze_candidates(
+        db,
+        seed=payload.seed,
+        train=payload.train,
+        val=payload.val,
+        allow_split_blockers=True,
+    )
     selected = policy["selected"]
     species_counts: Counter[str] = Counter(item["catalog"].common_name_zh for item in selected)
     split_counts: Counter[str] = Counter(item["split"] for item in selected)
@@ -289,7 +297,7 @@ def audit_dataset(dataset_version: str, db: Session = Depends(get_db)):
         if fp and fp.duplicate_group and not fp.is_representative:
             current_nonrepresentative_duplicates += 1
 
-    for species, counts in species_splits.items():
+    for _species, counts in species_splits.items():
         if any(counts.get(split, 0) == 0 for split in ("train", "val", "test")):
             split_zero_coverage += 1
 
@@ -305,6 +313,7 @@ def audit_dataset(dataset_version: str, db: Session = Depends(get_db)):
         "inactive_species": inactive_species,
         "missing_source": missing_source,
         "current_nonrepresentative_duplicates": current_nonrepresentative_duplicates,
+        # Advisory for historical datasets; new Freeze Gate prevents this for v0.3+.
         "species_with_zero_split_coverage": split_zero_coverage,
     }
     passed = (
@@ -315,7 +324,6 @@ def audit_dataset(dataset_version: str, db: Session = Depends(get_db)):
         and inactive_species == 0
         and missing_source == 0
         and current_nonrepresentative_duplicates == 0
-        and split_zero_coverage == 0
     )
     return {"dataset_version": dataset_version, "passed": passed, "checks": checks}
 
