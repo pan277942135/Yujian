@@ -293,22 +293,39 @@ def presence_summary(db: Session, batch_id: str) -> dict:
             ImageAsset.review_status.in_(SCANNABLE_REVIEW_STATUSES),
         )
     ) or 0
-    rows = db.scalars(select(FishPresenceResult).where(FishPresenceResult.batch_id == batch_id)).all()
+    pairs = db.execute(
+        select(ImageAsset, FishPresenceResult)
+        .join(FishPresenceResult, FishPresenceResult.image_asset_id == ImageAsset.id)
+        .where(ImageAsset.batch_id == batch_id)
+    ).all()
     counts = {"single_fish": 0, "multi_fish": 0, "no_fish": 0, "uncertain": 0, "error": 0}
-    for row in rows:
+    filterable_no_fish = 0
+    for image, row in pairs:
         status = effective_status(row)
         counts[status] = counts.get(status, 0) + 1
-    scanned = len(rows)
+        if status == "no_fish" and image.review_status in FILTERABLE_REVIEW_STATUSES:
+            filterable_no_fish += 1
+    remaining = db.scalar(
+        select(func.count())
+        .select_from(ImageAsset)
+        .outerjoin(FishPresenceResult, FishPresenceResult.image_asset_id == ImageAsset.id)
+        .where(
+            ImageAsset.batch_id == batch_id,
+            ImageAsset.review_status.in_(SCANNABLE_REVIEW_STATUSES),
+            FishPresenceResult.id.is_(None),
+        )
+    ) or 0
     return {
         "batch_id": batch_id,
         "eligible": eligible,
-        "scanned": scanned,
+        "scanned": len(pairs),
         "single_fish": counts.get("single_fish", 0),
         "multi_fish": counts.get("multi_fish", 0),
         "no_fish": counts.get("no_fish", 0),
+        "filterable_no_fish": filterable_no_fish,
         "uncertain": counts.get("uncertain", 0),
         "error": counts.get("error", 0),
-        "remaining": max(0, eligible - scanned),
+        "remaining": remaining,
     }
 
 

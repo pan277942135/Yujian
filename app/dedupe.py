@@ -296,12 +296,23 @@ def dedupe_summary(db: Session, batch_id: str) -> dict:
             ImageFingerprint.duplicate_kind == "near",
         )
     ) or 0
+    filterable_duplicates = db.scalar(
+        select(func.count()).select_from(ImageFingerprint)
+        .join(ImageAsset, ImageAsset.id == ImageFingerprint.image_asset_id)
+        .where(
+            ImageFingerprint.batch_id == batch_id,
+            ImageFingerprint.duplicate_group.is_not(None),
+            ImageFingerprint.is_representative.is_(False),
+            ImageAsset.review_status.in_(FILTERABLE_REVIEW_STATUSES),
+        )
+    ) or 0
     return {
         "batch_id": batch_id,
         "total": total,
         "scanned": scanned,
         "groups": groups,
         "duplicate_images": duplicates,
+        "filterable_duplicate_images": filterable_duplicates,
         "exact_duplicates": exact,
         "near_duplicates": near,
         "remaining": max(0, total - scanned),

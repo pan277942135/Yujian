@@ -27,6 +27,14 @@ from app.flywheel import (
     set_species_status,
     species_names,
 )
+from app.data_policy import (
+    UNCONFIRMED_TRUTH,
+    mark_feedback_reviewed,
+    normalized_truth,
+    truth_distribution,
+    truth_filter_clause,
+    valid_truth_for_image,
+)
 from app.models import Batch, DatasetVersion, ImageAsset, ReviewEvent
 from app.secure import install_access_guard
 
@@ -75,7 +83,8 @@ class BatchSync(BaseModel):
 class DatasetFreeze(BaseModel):
     dataset_version: str
     parent_version: str | None = None
-    git_commit: str = Field(default_factory=lambda: os.getenv("APP_GIT_COMMIT", "unknown"))
+    git_commit: str | None = None
+    preview_hash: str | None = None
     seed: int = 20260826
     train: float = 0.70
     val: float = 0.15
@@ -138,7 +147,7 @@ def apply_review_filters(stmt, status=None, batch_id=None, species=None, q=None)
     if batch_id:
         stmt = stmt.where(ImageAsset.batch_id == batch_id)
     if species:
-        stmt = stmt.where(or_(ImageAsset.truth_species == species, ImageAsset.claimed_species == species))
+        stmt = stmt.where(truth_filter_clause(species))
     if q:
         like = f"%{q}%"
         stmt = stmt.where(
@@ -191,16 +200,17 @@ def overview(db: Session = Depends(get_db)):
     total = db.scalar(select(func.count()).select_from(ImageAsset)) or 0
     status_rows = db.execute(select(ImageAsset.review_status, func.count()).group_by(ImageAsset.review_status)).all()
     status_counts = {status: count for status, count in status_rows}
-    species_key = func.coalesce(ImageAsset.truth_species, ImageAsset.claimed_species, "unknown")
-    species_rows = db.execute(
-        select(species_key.label("species"), func.count()).group_by(species_key).order_by(func.count().desc())
-    ).all()
+    species_rows, unconfirmed_truth = truth_distribution(db)
+    species = [{"species": name, "count": count} for name, count in species_rows]
+    if unconfirmed_truth:
+        species.append({"species": UNCONFIRMED_TRUTH, "count": unconfirmed_truth})
     result = {
         "total_images": total,
         "batch_count": db.scalar(select(func.count()).select_from(Batch)) or 0,
         "dataset_count": db.scalar(select(func.count()).select_from(DatasetVersion)) or 0,
         "review": {name: status_counts.get(name, 0) for name in REVIEW_VALUES},
-        "species": [{"species": species, "count": count} for species, count in species_rows],
+        "species": species,
+        "unconfirmed_truth_count": unconfirmed_truth,
     }
     result["flywheel"] = flywheel_summary(db)
     return result
@@ -234,7 +244,8 @@ def batches(db: Session = Depends(get_db)):
                 "batch_id": batch.batch_id,
                 "source": batch.source,
                 "created_at": batch.created_at.isoformat(),
-                "image_count": batch.image_count,
+                "image_count": db.scalar(select(func.count()).select_from(ImageAsset).where(ImageAsset.batch_id == batch.batch_id)) or 0,
+                "raw_image_count": batch.image_count,
                 "status": batch.status,
                 "manifest_uri": batch.manifest_uri,
                 "raw_uri": batch.raw_uri,
@@ -299,10 +310,14 @@ def review_stats(
 ):
     filtered = apply_review_filters(select(ImageAsset.id), status, batch_id, species, q).subquery()
     count = db.scalar(select(func.count()).select_from(filtered)) or 0
-    all_status_stmt = select(ImageAsset.review_status, func.count()).group_by(ImageAsset.review_status)
-    if batch_id:
-        all_status_stmt = all_status_stmt.where(ImageAsset.batch_id == batch_id)
-    all_status = db.execute(all_status_stmt).all()
+    status_stmt = apply_review_filters(
+        select(ImageAsset.review_status, func.count()),
+        None,
+        batch_id,
+        species,
+        q,
+    ).group_by(ImageAsset.review_status)
+    all_status = db.execute(status_stmt).all()
     return {"filtered": count, "status": {key: value for key, value in all_status}}
 
 
@@ -315,20 +330,31 @@ def update_review(batch_id: str, image_id: str, payload: ReviewUpdate, db: Sessi
         raise HTTPException(status_code=400, detail=f"invalid review_status: {payload.review_status}")
     if payload.truth_status is not None and payload.truth_status not in TRUTH_VALUES:
         raise HTTPException(status_code=400, detail=f"invalid truth_status: {payload.truth_status}")
-    if payload.truth_species and payload.truth_species not in species_names(db, include_candidates=True):
-        raise HTTPException(status_code=400, detail="truth_species is not in Species Catalog; add it as a candidate first")
+
+    proposed_truth = normalized_truth(image)
+    if "truth_species" in payload.model_fields_set:
+        proposed_truth = (payload.truth_species or "").strip()
+    if proposed_truth and not valid_truth_for_image(db, image, proposed_truth):
+        raise HTTPException(status_code=400, detail="真实鱼种不是可用鱼种；已停用鱼种只能保留历史值，不能新分配")
+
+    proposed_status = payload.review_status if payload.review_status is not None else image.review_status
+    if proposed_status == "approved" and not proposed_truth:
+        raise HTTPException(status_code=400, detail="通过前必须确认真实鱼种；采集标注不能自动作为 Ground Truth")
 
     before = image_dict(image)
-    if payload.review_status is not None:
-        image.review_status = payload.review_status
-    if payload.truth_species is not None:
-        image.truth_species = payload.truth_species.strip() or None
+    image.review_status = proposed_status
+    image.truth_species = proposed_truth or None
     if payload.truth_status is not None:
         image.truth_status = payload.truth_status
+    elif not proposed_truth:
+        image.truth_status = "UNCERTAIN"
+    elif proposed_status == "approved":
+        image.truth_status = "LIKELY_CORRECT"
     if payload.notes is not None:
         image.notes = payload.notes
     image.reviewed_by = payload.reviewer
     image.reviewed_at = datetime.now(timezone.utc)
+    mark_feedback_reviewed(db, image)
     after = image_dict(image)
     db.add(
         ReviewEvent(
@@ -443,11 +469,28 @@ def datasets(db: Session = Depends(get_db)):
 @app.post("/api/datasets/freeze")
 def dataset_freeze(payload: DatasetFreeze, db: Session = Depends(get_db)):
     try:
+        from app.dataset_api import DatasetFreezePreviewRequest, build_preview
+
+        if not payload.preview_hash:
+            raise ValueError("请先生成冻结预览；Freeze 必须携带 preview_hash")
+        preview = build_preview(
+            db,
+            DatasetFreezePreviewRequest(
+                dataset_version=payload.dataset_version,
+                parent_version=payload.parent_version,
+                seed=payload.seed,
+                train=payload.train,
+                val=payload.val,
+            ),
+        )
+        if preview.get("selection_hash") != payload.preview_hash:
+            raise ValueError("冻结预览已失效：数据、鱼种状态或父版本发生变化，请重新预览")
+        deployed_git = (os.getenv("APP_GIT_COMMIT") or "unknown").strip() or "unknown"
         return freeze_cumulative_dataset(
             db,
             dataset_version=payload.dataset_version,
-            parent_version=payload.parent_version,
-            git_commit=payload.git_commit,
+            parent_version=preview.get("parent_version"),
+            git_commit=deployed_git,
             seed=payload.seed,
             train=payload.train,
             val=payload.val,

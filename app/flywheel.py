@@ -12,7 +12,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.dedupe import ImageFingerprint
+from app.data_policy import UNCONFIRMED_TRUTH, truth_distribution
 from app.factory import get_bucket_name
+from app.freeze_policy import select_freeze_candidates
 from app.models import DatasetVersion, FeedbackEvent, ImageAsset, SpeciesCatalog
 from app.presence import FishPresenceResult, effective_status
 
@@ -232,21 +234,19 @@ def flywheel_summary(db: Session) -> dict:
     candidate_species = db.scalar(select(func.count()).select_from(SpeciesCatalog).where(SpeciesCatalog.status == "candidate")) or 0
     feedback_new = db.scalar(select(func.count()).select_from(FeedbackEvent).where(FeedbackEvent.pipeline_status == "NEW")) or 0
 
-    species_key = func.coalesce(ImageAsset.truth_species, ImageAsset.claimed_species, "unknown")
-    distribution = db.execute(
-        select(species_key, func.count())
-        .where(ImageAsset.review_status == "approved")
-        .group_by(species_key)
-        .order_by(func.count().desc())
-    ).all()
+    distribution, unconfirmed_truth = truth_distribution(db, review_status="approved")
+    approved_species = [{"species": name, "count": count} for name, count in distribution]
+    if unconfirmed_truth:
+        approved_species.append({"species": UNCONFIRMED_TRUTH, "count": unconfirmed_truth})
     return {
         "approved_master_pool": approved_total,
+        "approved_truth_unconfirmed": unconfirmed_truth,
         "new_approved_since_latest_dataset": new_approved,
         "active_species": active_species,
         "candidate_species": candidate_species,
         "new_feedback": feedback_new,
         "latest_dataset": latest.dataset_version if latest else None,
-        "approved_species": [{"species": name, "count": count} for name, count in distribution],
+        "approved_species": approved_species,
     }
 
 
@@ -292,12 +292,7 @@ def freeze_cumulative_dataset(
     val: float = 0.15,
     bucket_name: str | None = None,
 ) -> dict:
-    """Freeze cumulative approved data with P0 quality guards.
-
-    Approved Master Pool remains permanent. For the current single-fish classifier,
-    explicit multi-fish/no-fish detections and non-representative near duplicates
-    are excluded from the immutable Dataset snapshot.
-    """
+    """Freeze the canonical approved + verified-truth + machine-QA snapshot."""
     ensure_species_catalog(db)
     bucket_name = bucket_name or get_bucket_name()
     if not dataset_version.startswith("DS_"):
@@ -322,67 +317,23 @@ def freeze_cumulative_dataset(
     if marker.exists(client):
         raise ValueError(f"dataset already exists in GCS: gs://{bucket_name}/{out_prefix}")
 
-    catalog_rows = db.scalars(select(SpeciesCatalog).order_by(SpeciesCatalog.catalog_order)).all()
-    active_by_name = {row.common_name_zh: row for row in catalog_rows if row.status == "active"}
-    images = db.scalars(
-        select(ImageAsset).where(ImageAsset.review_status == "approved").order_by(ImageAsset.batch_id, ImageAsset.id)
-    ).all()
-    if not images:
-        raise ValueError("Approved Master Pool is empty")
+    policy = select_freeze_candidates(db, seed=seed, train=train, val=val)
+    selected = policy["selected"]
+    if not selected:
+        raise ValueError("no images remain after verified-truth, machine-QA and active-species gates")
 
-    image_ids = [image.id for image in images]
-    fingerprints = {
-        row.image_asset_id: row
-        for row in db.scalars(select(ImageFingerprint).where(ImageFingerprint.image_asset_id.in_(image_ids))).all()
-    }
-    presences = {
-        row.image_asset_id: row
-        for row in db.scalars(select(FishPresenceResult).where(FishPresenceResult.image_asset_id.in_(image_ids))).all()
-    }
-
-    cutoff = utcnow()
-    seen: set[str] = set()
-    eligible: list[tuple[ImageAsset, SpeciesCatalog, str, str]] = []
-    excluded_species = Counter()
-    excluded_quality = Counter()
-    for image in images:
-        fp = fingerprints.get(image.id)
-        presence = presences.get(image.id)
-        presence_status = effective_status(presence)
-        if fp and fp.duplicate_group and not fp.is_representative:
-            excluded_quality["near_duplicate"] += 1
-            continue
-        if presence_status == "multi_fish":
-            excluded_quality["multi_fish"] += 1
-            continue
-        if presence_status == "no_fish":
-            excluded_quality["no_fish"] += 1
-            continue
-
-        unique_key = fp.sha256 if fp else image.gcs_uri
-        if unique_key in seen:
-            excluded_quality["exact_duplicate"] += 1
-            continue
-        seen.add(unique_key)
-
-        truth_name = (image.truth_species or image.claimed_species or "").strip()
-        catalog = active_by_name.get(truth_name)
-        if not catalog:
-            excluded_species[truth_name or "unknown"] += 1
-            continue
-        eligible.append((image, catalog, presence_status, fp.duplicate_group if fp and fp.duplicate_group else ""))
-    if not eligible:
-        raise ValueError("no approved images remain after active-species and P0 quality filters")
-
-    used_keys = {catalog.species_key for _, catalog, _, _ in eligible}
+    catalog_rows = policy["catalog_rows"]
+    used_keys = {item["catalog"].species_key for item in selected}
     parent_classes = _load_parent_class_map(bucket, parent)
     class_rows: list[dict] = []
     used_parent_keys: set[str] = set()
+
+    # Preserve prior ordering only for classes that are active and actually have samples.
     for item in sorted(parent_classes, key=lambda x: int(x.get("class_index", 0))):
         key = item.get("species_key")
-        if not key:
+        if not key or key not in used_keys:
             continue
-        row = next((r for r in catalog_rows if r.species_key == key), None)
+        row = next((r for r in catalog_rows if r.species_key == key and r.status == "active"), None)
         if not row:
             continue
         class_rows.append({
@@ -396,7 +347,7 @@ def freeze_cumulative_dataset(
         used_parent_keys.add(key)
 
     for row in catalog_rows:
-        if row.species_key not in used_keys or row.species_key in used_parent_keys:
+        if row.status != "active" or row.species_key not in used_keys or row.species_key in used_parent_keys:
             continue
         class_rows.append({
             "class_index": len(class_rows),
@@ -408,9 +359,11 @@ def freeze_cumulative_dataset(
         })
     class_index = {row["species_key"]: row["class_index"] for row in class_rows}
 
+    cutoff = utcnow()
     frozen: list[dict] = []
-    for image, catalog, presence_status, duplicate_group in eligible:
-        group = image.group_id or duplicate_group or f"{image.batch_id}:{image.image_id}"
+    for item in selected:
+        image = item["image"]
+        catalog = item["catalog"]
         frozen.append({
             "dataset_version": dataset_version,
             "batch_id": image.batch_id,
@@ -427,10 +380,10 @@ def freeze_cumulative_dataset(
             "class_index": class_index[catalog.species_key],
             "truth_status": image.truth_status,
             "review_status": image.review_status,
-            "presence_status": presence_status,
-            "duplicate_group": duplicate_group,
+            "presence_status": item["presence_status"],
+            "duplicate_group": item["duplicate_group"],
             "group_id": image.group_id or "",
-            "split": _choose_split(group, seed, train, val),
+            "split": item["split"],
         })
 
     csv_buf = io.StringIO()
@@ -438,7 +391,9 @@ def freeze_cumulative_dataset(
     writer.writeheader()
     writer.writerows(frozen)
     manifest_uri = f"gs://{bucket_name}/{out_prefix}dataset_manifest.csv"
-    bucket.blob(out_prefix + "dataset_manifest.csv").upload_from_string(csv_buf.getvalue(), content_type="text/csv", if_generation_match=0)
+    bucket.blob(out_prefix + "dataset_manifest.csv").upload_from_string(
+        csv_buf.getvalue(), content_type="text/csv", if_generation_match=0
+    )
 
     class_map_doc = {
         "dataset_version": dataset_version,
@@ -460,15 +415,23 @@ def freeze_cumulative_dataset(
         "parent_version": parent_version,
         "created_at": cutoff.isoformat(),
         "source_cutoff_at": cutoff.isoformat(),
-        "selection_mode": "ALL_APPROVED",
-        "quality_filters": ["exclude_nonrepresentative_duplicates", "exclude_multi_fish", "exclude_no_fish"],
+        "selection_mode": "ALL_APPROVED_VERIFIED_TRUTH",
+        "quality_filters": [
+            "require_truth_species",
+            "require_presence_scan",
+            "require_dedupe_scan",
+            "exclude_nonrepresentative_duplicates_unless_human_reapproved",
+            "exclude_multi_fish_unless_human_reapproved",
+            "exclude_no_fish_unless_human_reapproved",
+            "active_species_only",
+        ],
         "git_commit": git_commit or "unknown",
         "seed": seed,
-        "approved_master_pool_count": len(images),
+        "approved_master_pool_count": policy["approved_master_pool_count"],
         "image_count": len(frozen),
-        "excluded_non_active_species_count": sum(excluded_species.values()),
-        "excluded_species_counts": dict(excluded_species),
-        "excluded_quality_counts": dict(excluded_quality),
+        "excluded_non_active_species_count": sum(policy["excluded_species"].values()),
+        "excluded_species_counts": dict(policy["excluded_species"]),
+        "excluded_quality_counts": dict(policy["excluded_quality"]),
         "split_counts": dict(split_counts),
         "species_counts": dict(species_counts),
         "species_count": len(class_rows),
@@ -476,7 +439,9 @@ def freeze_cumulative_dataset(
         "class_map_uri": class_map_uri,
         "immutable": True,
     }
-    marker.upload_from_string(json.dumps(meta, ensure_ascii=False, indent=2), content_type="application/json", if_generation_match=0)
+    marker.upload_from_string(
+        json.dumps(meta, ensure_ascii=False, indent=2), content_type="application/json", if_generation_match=0
+    )
 
     db.add(DatasetVersion(
         dataset_version=dataset_version,
@@ -488,7 +453,7 @@ def freeze_cumulative_dataset(
         test_count=split_counts.get("test", 0),
         species_count=len(class_rows),
         git_commit=git_commit or "unknown",
-        selection_mode="ALL_APPROVED",
+        selection_mode="ALL_APPROVED_VERIFIED_TRUTH",
         source_cutoff_at=cutoff,
         status="FROZEN",
     ))
