@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 import os
@@ -13,9 +14,11 @@ from google.cloud import storage
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Batch, ImageAsset
+from app.models import Batch, DatasetVersion, ImageAsset
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+TARGET_SPECIES = ["草鱼", "鳙鱼", "白鲢", "鲤鱼", "鲫鱼", "加州鲈", "黑鱼", "黄骨鱼", "青鱼"]
+TARGET_SPECIES_SET = set(TARGET_SPECIES)
 VALID_REVIEW = {"approved", "needs_review", "rejected", "hard_case", "pending"}
 REQUIRED_COLUMNS = {"image_id", "file_name", "claimed_species"}
 DOWNLOAD_RETRY = Retry(initial=1.0, maximum=20.0, multiplier=2.0, deadline=600.0)
@@ -156,6 +159,9 @@ def audit_incoming_batch(
             reasons.append("missing_file_name")
         if not species:
             reasons.append("missing_claimed_species")
+        elif species not in TARGET_SPECIES_SET:
+            reasons.append("non_target_or_unknown_species")
+
         if file_name in rel_blob:
             blob = rel_blob[file_name]
         elif file_name:
@@ -194,7 +200,7 @@ def audit_incoming_batch(
         }
         if any(reason in hard_reject for reason in reasons):
             status = "AUTO_REJECT"
-        elif any(reason in {"missing_claimed_species", "duplicate_source_url"} for reason in reasons):
+        elif any(reason in {"missing_claimed_species", "non_target_or_unknown_species", "duplicate_source_url"} for reason in reasons):
             status = "NEEDS_REVIEW"
 
         resolved.append(
@@ -460,3 +466,167 @@ def sync_batch_registry(db: Session, batch_id: str, bucket_name: str | None = No
         "updated": updated,
         "missing": missing,
     }
+
+
+def stable_fraction(value: str, seed: int) -> float:
+    digest = hashlib.sha256(f"{seed}:{value}".encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big") / float(2**64)
+
+
+def choose_split(key: str, seed: int, train: float, val: float) -> str:
+    p = stable_fraction(key, seed)
+    if p < train:
+        return "train"
+    if p < train + val:
+        return "val"
+    return "test"
+
+
+def approved_summary(db: Session) -> dict:
+    rows = db.execute(
+        select(
+            ImageAsset.batch_id,
+            func.coalesce(ImageAsset.truth_species, ImageAsset.claimed_species, "unknown"),
+            func.count(),
+        )
+        .where(ImageAsset.review_status == "approved")
+        .group_by(ImageAsset.batch_id, func.coalesce(ImageAsset.truth_species, ImageAsset.claimed_species, "unknown"))
+    ).all()
+    batches: dict[str, dict] = {}
+    total = 0
+    for batch_id, species, count in rows:
+        entry = batches.setdefault(batch_id, {"batch_id": batch_id, "approved": 0, "species": {}})
+        entry["approved"] += count
+        entry["species"][species] = count
+        total += count
+    return {"total_approved": total, "batches": list(batches.values())}
+
+
+def list_datasets(db: Session) -> list[dict]:
+    rows = db.scalars(select(DatasetVersion).order_by(DatasetVersion.created_at.desc())).all()
+    return [
+        {
+            "dataset_version": row.dataset_version,
+            "parent_version": row.parent_version,
+            "created_at": row.created_at.isoformat(),
+            "manifest_uri": row.manifest_uri,
+            "train_count": row.train_count,
+            "val_count": row.val_count,
+            "test_count": row.test_count,
+            "git_commit": row.git_commit,
+            "status": row.status,
+        }
+        for row in rows
+    ]
+
+
+def freeze_dataset(
+    db: Session,
+    dataset_version: str,
+    batch_ids: list[str],
+    git_commit: str,
+    seed: int = 20260826,
+    train: float = 0.70,
+    val: float = 0.15,
+    parent_version: str | None = None,
+    bucket_name: str | None = None,
+) -> dict:
+    bucket_name = bucket_name or get_bucket_name()
+    if not dataset_version.startswith("DS_"):
+        raise ValueError("dataset_version must start with DS_")
+    if not batch_ids:
+        raise ValueError("select at least one batch")
+    if not (0 < train < 1 and 0 <= val < 1 and train + val < 1):
+        raise ValueError("invalid split ratios")
+    if db.get(DatasetVersion, dataset_version):
+        raise ValueError(f"dataset already registered: {dataset_version}")
+
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    out_prefix = f"datasets/{dataset_version}/"
+    marker = bucket.blob(out_prefix + "dataset.json")
+    if marker.exists(client):
+        raise ValueError(f"dataset already exists in GCS: gs://{bucket_name}/{out_prefix}")
+
+    images = db.scalars(
+        select(ImageAsset)
+        .where(ImageAsset.review_status == "approved", ImageAsset.batch_id.in_(batch_ids))
+        .order_by(ImageAsset.batch_id, ImageAsset.id)
+    ).all()
+    if not images:
+        raise ValueError("no approved images in selected batches")
+
+    seen: set[str] = set()
+    frozen: list[dict] = []
+    for image in images:
+        unique_key = image.gcs_uri
+        if unique_key in seen:
+            continue
+        seen.add(unique_key)
+        species = image.truth_species or image.claimed_species or "unknown"
+        group = image.group_id or f"{image.batch_id}:{image.image_id}"
+        split = choose_split(group, seed, train, val)
+        frozen.append(
+            {
+                "dataset_version": dataset_version,
+                "batch_id": image.batch_id,
+                "image_id": image.image_id,
+                "file_name": image.file_name,
+                "gcs_uri": image.gcs_uri,
+                "object_name": image.object_name,
+                "source_url": image.source_url or "",
+                "source_platform": image.source_platform or "",
+                "claimed_species": image.claimed_species or "",
+                "truth_species": image.truth_species or "",
+                "species": species,
+                "truth_status": image.truth_status,
+                "review_status": image.review_status,
+                "group_id": image.group_id or "",
+                "split": split,
+            }
+        )
+
+    fields = list(frozen[0].keys())
+    csv_buf = io.StringIO()
+    writer = csv.DictWriter(csv_buf, fieldnames=fields)
+    writer.writeheader()
+    writer.writerows(frozen)
+    manifest_uri = f"gs://{bucket_name}/{out_prefix}dataset_manifest.csv"
+    bucket.blob(out_prefix + "dataset_manifest.csv").upload_from_string(
+        csv_buf.getvalue(), content_type="text/csv", if_generation_match=0
+    )
+
+    split_counts = Counter(row["split"] for row in frozen)
+    species_counts = Counter(row["species"] for row in frozen)
+    meta = {
+        "dataset_version": dataset_version,
+        "parent_version": parent_version,
+        "created_at": utcnow_iso(),
+        "git_commit": git_commit or "unknown",
+        "seed": seed,
+        "batch_ids": batch_ids,
+        "image_count": len(frozen),
+        "split_counts": dict(split_counts),
+        "species_counts": dict(species_counts),
+        "manifest_uri": manifest_uri,
+        "immutable": True,
+    }
+    marker.upload_from_string(
+        json.dumps(meta, ensure_ascii=False, indent=2),
+        content_type="application/json",
+        if_generation_match=0,
+    )
+    db.add(
+        DatasetVersion(
+            dataset_version=dataset_version,
+            parent_version=parent_version,
+            manifest_uri=manifest_uri,
+            train_count=split_counts.get("train", 0),
+            val_count=split_counts.get("val", 0),
+            test_count=split_counts.get("test", 0),
+            git_commit=git_commit or "unknown",
+            status="FROZEN",
+        )
+    )
+    db.commit()
+    return meta

@@ -5,71 +5,74 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>数据集 · 渔见 AI</title>
   <style>
-    body{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f6f7f8;color:#171717}header{background:#fff;border-bottom:1px solid #e5e7eb;padding:14px 24px;display:flex;gap:22px;align-items:center;position:sticky;top:0;z-index:3}header a{text-decoration:none;color:#111827;font-weight:650}main{max-width:1240px;margin:0 auto;padding:24px}.muted{color:#6b7280}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.section{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin-top:18px}input,button{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:9px;background:#fff}button{cursor:pointer;font-weight:650}.primary{background:#111827;color:#fff}.primary:disabled{opacity:.45;cursor:not-allowed}.row{display:grid;grid-template-columns:130px 1fr;gap:10px;align-items:center;margin:10px 0}.pill{display:inline-block;padding:3px 8px;border-radius:999px;background:#f3f4f6;font-size:12px;margin:2px}.good{background:#ecfdf5}.warn{background:#fff7ed}.bad{background:#fff1f2}.info{background:#eef2ff}.banner{display:none;white-space:pre-wrap;padding:12px;border-radius:10px;background:#eef2ff;margin-top:12px}.spinner{opacity:.6;pointer-events:none}.rule{border-left:4px solid #111827;padding:10px 12px;background:#f9fafb;border-radius:0 8px 8px 0;margin-top:14px}.preview{display:none;margin-top:14px;border:1px solid #dbeafe;background:#eff6ff;border-radius:12px;padding:14px}.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:12px 0}.metric{background:#fff;border:1px solid #dbeafe;border-radius:10px;padding:12px}.metric b{display:block;font-size:24px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}.subsection{margin-top:14px;padding-top:12px;border-top:1px solid #dbeafe}.classMap{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}.classRow{background:#fff;border:1px solid #dbeafe;border-radius:8px;padding:7px 9px;font-size:13px}.uri{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;max-width:260px;word-break:break-all}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid #eee;font-size:13px}th{color:#6b7280}.link{color:#2563eb;text-decoration:none;font-weight:650}.empty{padding:20px;color:#6b7280}@media(max-width:900px){.grid{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}.classMap{grid-template-columns:1fr}.section{overflow:auto}}
+    body{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f6f7f8;color:#171717}header{background:#fff;border-bottom:1px solid #e5e7eb;padding:14px 24px;display:flex;gap:22px;align-items:center;position:sticky;top:0;z-index:3}header a{text-decoration:none;color:#111827;font-weight:650}main{max-width:1180px;margin:0 auto;padding:24px}.muted{color:#6b7280}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.section{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin-top:18px}input,button{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:9px;background:#fff}button{cursor:pointer;font-weight:650}.primary{background:#111827;color:#fff}.secondary{background:#fff}.primary:disabled{opacity:.45;cursor:not-allowed}.row{display:grid;grid-template-columns:150px 1fr;gap:10px;align-items:center;margin:10px 0}.species{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.pill{display:inline-block;padding:3px 8px;border-radius:999px;background:#f3f4f6;font-size:12px}.pillBtn{cursor:pointer;border:0}.pillBtn:hover{text-decoration:underline;text-underline-offset:2px;box-shadow:0 0 0 2px rgba(15,23,42,.07)}.good{background:#ecfdf5}.warn{background:#fff7ed}.bad{background:#fff1f2}.bigBtn{border:0;padding:0;background:transparent;font-size:34px;font-weight:750;cursor:pointer;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:4px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid #eee;font-size:13px}th{color:#6b7280}.banner{display:none;white-space:pre-wrap;padding:12px;border-radius:10px;background:#eef2ff;margin-top:12px}.spinner{opacity:.6;pointer-events:none}.rule{border-left:4px solid #111827;padding:10px 12px;background:#f9fafb;border-radius:0 8px 8px 0;margin-top:14px}.preview{display:none;margin-top:14px;border:1px solid #dbeafe;background:#eff6ff;border-radius:12px;padding:14px}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:12px 0}.metric{background:#fff;border:1px solid #dbeafe;border-radius:10px;padding:12px}.metric b{display:block;font-size:24px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}.mini{font-size:12px;padding:5px 8px}.uri{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;max-width:260px;word-break:break-all}@media(max-width:850px){.grid{grid-template-columns:1fr}.metrics{grid-template-columns:1fr 1fr}.section{overflow:auto}}
   </style>
 </head>
 <body>
 <header><a href="/">总览</a><a href="/batches">数据批次</a><a href="/review/bulk">快速审核</a><a href="/review">单张审核</a><a href="/species">鱼种管理</a><a href="/feedback">用户反馈</a><a href="/datasets">数据集</a></header>
 <main>
-  <h1>数据集冻结</h1>
-  <div class="muted">从 Approved Master Pool 生成不可变快照。预览和正式冻结使用同一套资格、分组切分和类别继承规则。</div>
+  <h1>Dataset Freeze · 数据集版本</h1>
+  <div class="muted">先预览，再冻结。冻结版本不可修改；后续新增或纠正数据通过创建新版本进入下一轮训练。</div>
   <div id="banner" class="banner"></div>
 
   <div class="grid">
     <div class="section">
-      <h2>当前可用数据池</h2>
-      <div id="summary" class="muted">加载中…</div>
-      <div class="rule"><b>冻结规则</b><br><span class="muted">仅使用已通过审核且属于已启用鱼种的图片；排除明确无鱼、多鱼、非代表近重复和完全重复；单鱼、不确定、未检测保留。同一 catch / event / group 只进入一个 split。</span></div>
+      <h2>累计可用数据总池</h2>
+      <div id="summary"></div>
+      <div class="rule"><b>当前分类模型冻结规则</b><br><span class="muted">从全部“通过”图片中，排除明确无鱼、多鱼、近重复和完全重复；只训练已启用鱼种。同一鱼获组使用同一 split，避免跨训练/验证/测试泄漏。</span></div>
     </div>
 
     <div class="section">
-      <h2>填写版本并生成预览</h2>
-      <div class="row"><label for="version">数据集版本</label><input id="version" value="DS_M1_v0.1"></div>
-      <div class="row"><label for="parent">父版本</label><input id="parent" placeholder="留空则自动继承最新版本"></div>
-      <div class="row"><label for="git">代码版本</label><input id="git" placeholder="留空则记录 unknown"></div>
-      <div class="row"><label for="seed">随机种子</label><input id="seed" type="number" value="20260826"></div>
-      <div class="row"><label for="train">训练集比例</label><input id="train" type="number" step="0.01" value="0.70"></div>
-      <div class="row"><label for="val">验证集比例</label><input id="val" type="number" step="0.01" value="0.15"></div>
-      <div class="actions"><button onclick="previewFreeze()">生成预览</button><button id="freezeBtn" class="primary" onclick="freeze()" disabled>确认冻结</button></div>
+      <h2>创建 Dataset Freeze</h2>
+      <div class="row"><label>数据集版本</label><input id="version" value="DS_M1_v0.1"></div>
+      <div class="row"><label>父版本</label><input id="parent" placeholder="留空则自动继承最新版本"></div>
+      <div class="row"><label>代码版本</label><input id="git" placeholder="留空则记录 unknown"></div>
+      <div class="row"><label>随机种子</label><input id="seed" type="number" value="20260826"></div>
+      <div class="row"><label>训练集比例</label><input id="train" type="number" step="0.01" value="0.70"></div>
+      <div class="row"><label>验证集比例</label><input id="val" type="number" step="0.01" value="0.15"></div>
+      <div class="actions"><button class="secondary" onclick="previewFreeze()">生成预览</button><button id="freezeBtn" class="primary" onclick="freeze()" disabled>确认冻结</button></div>
+      <div class="muted" style="margin-top:9px">确认冻结后会生成 dataset_manifest.csv、class_map.json、dataset.json、freeze_report.json，并登记每张图片的数据集追溯关系。</div>
 
       <div id="preview" class="preview">
         <b>冻结预览</b>
         <div class="metrics">
-          <div class="metric"><span class="muted">可进入数据集</span><b id="pvTotal">0</b></div>
-          <div class="metric"><span class="muted">类别数</span><b id="pvSpecies">0</b></div>
-          <div class="metric"><span class="muted">Train</span><b id="pvTrain">0</b></div>
-          <div class="metric"><span class="muted">Val</span><b id="pvVal">0</b></div>
-          <div class="metric"><span class="muted">Test</span><b id="pvTest">0</b></div>
+          <div class="metric"><span class="muted">可训练图片</span><b id="pvTotal">0</b></div>
+          <div class="metric"><span class="muted">鱼种</span><b id="pvSpecies">0</b></div>
+          <div class="metric"><span class="muted">训练集</span><b id="pvTrain">0</b></div>
+          <div class="metric"><span class="muted">验证 / 测试</span><b id="pvRest">0 / 0</b></div>
         </div>
-        <div id="pvParent" class="muted"></div>
-        <div class="subsection"><b>鱼种分布</b><div id="pvSpeciesList" class="species"></div></div>
-        <div class="subsection"><b>类别继承</b><div id="pvClassMap" class="classMap"></div></div>
-        <div class="subsection"><b>排除原因</b><div id="pvExcluded"></div></div>
-        <div class="subsection"><b>风险提示</b><div id="pvWarnings"></div></div>
+        <div id="pvSpeciesList" class="species"></div>
+        <div id="pvExcluded" class="muted" style="margin-top:10px"></div>
       </div>
     </div>
   </div>
 
-  <div class="section">
+  <div class="section" id="frozen">
     <h2>已冻结版本</h2>
-    <table><thead><tr><th>版本</th><th>父版本</th><th>状态</th><th>鱼种数</th><th>Train</th><th>Val</th><th>Test</th><th>manifest_uri</th><th>class_map_uri</th><th>创建时间</th><th>样本</th></tr></thead><tbody id="datasets"></tbody></table>
+    <table><thead><tr><th>版本</th><th>图片</th><th>鱼种</th><th>训练</th><th>验证</th><th>测试</th><th>规则</th><th>状态 / 操作</th></tr></thead><tbody id="datasets"></tbody></table>
   </div>
 </main>
 <script>
 let previewSignature='';
 function esc(v){return (v??'').toString().replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function apiError(d){return d?.detail||d||'请求失败'}
-async function api(url,opts){const r=await fetch(url,opts);const t=await r.text();let d;try{d=JSON.parse(t)}catch{d=t}if(!r.ok)throw new Error(apiError(d));return d}
 function msg(t,err=false){const b=document.getElementById('banner');b.style.display='block';b.style.background=err?'#fff1f2':'#eef2ff';b.textContent=t}
+async function api(url,opts){const r=await fetch(url,opts);const text=await r.text();let d;try{d=JSON.parse(text)}catch{d=text}if(!r.ok)throw new Error(d.detail||text);return d}
+function modeName(v){return ({ALL_APPROVED:'全部已通过数据'})[v]||v||'-'}function datasetStatus(v){return ({FROZEN:'已冻结'})[v]||v||'-'}
+function openInspect(params={}){const p=new URLSearchParams(params);window.open('/inspect?'+p.toString(),'yujian-data-inspect')}
+function openSpecies(status){window.open('/species?status='+encodeURIComponent(status),'yujian-species')}
+function jumpLatest(){document.getElementById('frozen').scrollIntoView({behavior:'smooth'})}
 function payload(){return {dataset_version:document.getElementById('version').value.trim(),parent_version:document.getElementById('parent').value.trim()||null,git_commit:document.getElementById('git').value.trim()||'unknown',seed:Number(document.getElementById('seed').value),train:Number(document.getElementById('train').value),val:Number(document.getElementById('val').value)}}
-function signature(p){return JSON.stringify(p)}
+function signature(p){return JSON.stringify({dataset_version:p.dataset_version,parent_version:p.parent_version,seed:p.seed,train:p.train,val:p.val})}
 function invalidate(){previewSignature='';document.getElementById('freezeBtn').disabled=true;document.getElementById('preview').style.display='none'}
-['version','parent','git','seed','train','val'].forEach(id=>document.getElementById(id).addEventListener('input',invalidate));
-function renderSummary(s){document.getElementById('summary').innerHTML=`<div><b style="font-size:32px">${s.approved_master_pool||0}</b> 张已通过图片</div><div class="species"><span class="pill good">已启用鱼种 ${s.active_species||0}</span><span class="pill warn">候选鱼种 ${s.candidate_species||0}</span><span class="pill info">最新版本 ${esc(s.latest_dataset||'暂无')}</span></div>`}
-function renderPreview(d){document.getElementById('pvTotal').textContent=d.eligible_images||0;document.getElementById('pvSpecies').textContent=d.species_count||0;document.getElementById('pvTrain').textContent=d.train_count||0;document.getElementById('pvVal').textContent=d.val_count||0;document.getElementById('pvTest').textContent=d.test_count||0;document.getElementById('pvParent').textContent=`父版本：${d.parent_version||'无（首个版本）'}`;document.getElementById('pvSpeciesList').innerHTML=(d.species_distribution||[]).map(x=>`<span class="pill">${esc(x.species||x.species_key)}：${x.count}</span>`).join('')||'<span class="muted">没有可进入数据集的鱼种</span>';const classes=d.class_map?.classes||[];document.getElementById('pvClassMap').innerHTML=classes.map(x=>`<div class="classRow"><b>${x.class_index}</b> · ${esc(x.common_name_zh||x.species_key)} <span class="muted">(${esc(x.species_key)})</span></div>`).join('')||'<span class="muted">暂无类别</span>';const q=d.excluded||{};document.getElementById('pvExcluded').innerHTML=Object.entries(q).map(([k,v])=>`<span class="pill ${v?'bad':''}">${esc(({no_fish:'无鱼',multi_fish:'多鱼',near_duplicate:'近重复',exact_duplicate:'完全重复',inactive_species:'非启用鱼种',presence_error:'检测异常'}[k]||k))}：${v||0}</span>`).join('');document.getElementById('pvWarnings').innerHTML=(d.warnings||[]).map(x=>`<div class="pill warn">${esc(x.message||`${x.species||x.species_key} 样本数较少`)}</div>`).join('')||'<span class="pill good">暂无风险提示</span>';document.getElementById('preview').style.display='block'}
-async function load(){try{const [s,d]=await Promise.all([api('/api/datasets/summary'),api('/api/datasets')]);renderSummary(s);if(!document.getElementById('parent').value&&s.latest_dataset)document.getElementById('parent').placeholder=`自动继承：${s.latest_dataset}`;document.getElementById('datasets').innerHTML=d.map(x=>`<tr><td><b>${esc(x.dataset_version)}</b></td><td>${esc(x.parent_version||'—')}</td><td><span class="pill good">${esc(x.status||'—')}</span></td><td>${x.species_count||0}</td><td>${x.train_count||0}</td><td>${x.val_count||0}</td><td>${x.test_count||0}</td><td class="uri">${esc(x.manifest_uri||'')}</td><td class="uri">${esc(x.class_map_uri||'')}</td><td>${esc(x.created_at||'')}</td><td><a class="link" href="${esc(x.inspect_url||'/inspect?review_status=approved')}" target="_blank">查看样本</a></td></tr>`).join('')||'<tr><td colspan="11" class="empty">还没有冻结任何数据集版本</td></tr>'}catch(e){msg(e.message,true)}}
-async function previewFreeze(){const p=payload();document.body.classList.add('spinner');msg('正在计算预览，不会写入生产 GCS …');try{const d=await api('/api/datasets/freeze/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});renderPreview(d);previewSignature=signature(p);document.getElementById('freezeBtn').disabled=(d.eligible_images||0)<=0;msg(`预览完成：${d.eligible_images||0} 张图片、${d.species_count||0} 个类别`)}catch(e){invalidate();msg(e.message,true)}finally{document.body.classList.remove('spinner')}}
-async function freeze(){const p=payload();if(previewSignature!==signature(p)){msg('配置已变化，请重新生成预览。',true);return}if(!confirm(`确认冻结 ${p.dataset_version}？\n冻结后该版本不可修改。`))return;document.body.classList.add('spinner');msg('正在冻结 Dataset，并写入 canonical GCS artifacts …');try{const d=await api('/api/datasets/freeze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});msg(`已冻结 ${d.dataset_version}\n图片：${d.image_count}\n鱼种：${d.species_count}\nTrain / Val / Test：${d.split_counts?.train||0} / ${d.split_counts?.val||0} / ${d.split_counts?.test||0}\nManifest：${d.manifest_uri}`);invalidate();await load()}catch(e){msg(e.message,true)}finally{document.body.classList.remove('spinner')}}
+['version','parent','seed','train','val'].forEach(id=>document.getElementById(id).addEventListener('input',invalidate));
+
+async function load(){try{const [s,d]=await Promise.all([api('/api/datasets/summary'),api('/api/datasets')]);document.getElementById('summary').innerHTML=`<button class="bigBtn" onclick="openInspect({review_status:'approved'})">${s.approved_master_pool}</button><div class="muted">累计通过图片 · 点击检查</div><div class="species"><button class="pill pillBtn good" onclick="openInspect({review_status:'approved',new_since_latest:'true'})">本轮新增通过 ${s.new_approved_since_latest_dataset}</button><button class="pill pillBtn" onclick="openSpecies('active')">已启用鱼种 ${s.active_species}</button><button class="pill pillBtn warn" onclick="openSpecies('candidate')">候选鱼种 ${s.candidate_species}</button><button class="pill pillBtn" onclick="jumpLatest()">最新版本 ${esc(s.latest_dataset||'暂无')}</button></div><div class="species" style="margin-top:14px">${(s.approved_species||[]).map(x=>`<button class="pill pillBtn" onclick='openInspect({review_status:"approved",species:${JSON.stringify(x.species)}})'>${esc(x.species)} ${x.count}</button>`).join('')}</div>`;if(!document.getElementById('parent').value&&s.latest_dataset)document.getElementById('parent').placeholder=`自动继承：${s.latest_dataset}`;document.getElementById('datasets').innerHTML=d.map(x=>`<tr><td><b>${esc(x.dataset_version)}</b><div class="uri">${esc(x.manifest_uri||'')}</div></td><td>${x.train_count+x.val_count+x.test_count}</td><td>${x.species_count}</td><td>${x.train_count}</td><td>${x.val_count}</td><td>${x.test_count}</td><td><span class="pill">${esc(modeName(x.selection_mode))}</span></td><td><span class="pill good">${esc(datasetStatus(x.status))}</span> <button class="mini" onclick="finalizeVersion('${esc(x.dataset_version)}')">校验追溯</button></td></tr>`).join('')||'<tr><td colspan="8" class="muted">还没有冻结任何数据集版本</td></tr>'}catch(e){msg(e.message,true)}}
+
+async function previewFreeze(){const p=payload();document.body.classList.add('spinner');msg('正在计算冻结预览，不会写入数据 …');try{const d=await api('/api/dataset-freeze/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});document.getElementById('pvTotal').textContent=d.image_count;document.getElementById('pvSpecies').textContent=d.species_count;document.getElementById('pvTrain').textContent=d.split_counts?.train||0;document.getElementById('pvRest').textContent=`${d.split_counts?.val||0} / ${d.split_counts?.test||0}`;document.getElementById('pvSpeciesList').innerHTML=Object.entries(d.species_counts||{}).sort((a,b)=>b[1]-a[1]).map(([name,count])=>`<span class="pill">${esc(name)} ${count}</span>`).join('');const q=d.excluded_quality_counts||{};const sp=d.excluded_species_counts||{};document.getElementById('pvExcluded').textContent=`通过池 ${d.approved_master_pool_count} 张；排除：无鱼 ${q.no_fish||0}、多鱼 ${q.multi_fish||0}、近重复 ${q.near_duplicate||0}、完全重复 ${q.exact_duplicate||0}、非启用鱼种 ${Object.values(sp).reduce((a,b)=>a+b,0)}。`;document.getElementById('preview').style.display='block';previewSignature=signature(p);document.getElementById('freezeBtn').disabled=d.image_count<=0;msg(`预览完成：${d.image_count} 张可进入 ${p.dataset_version}`)}catch(e){invalidate();msg(e.message,true)}finally{document.body.classList.remove('spinner')}}
+
+async function finalizeVersion(version){document.body.classList.add('spinner');try{const d=await api('/api/dataset-freeze/'+encodeURIComponent(version)+'/finalize',{method:'POST'});msg(`追溯校验完成：${version}\nDataset Items：${d.item_count}\n清单：${d.manifest_uri}\n报告：${d.report_uri}`)}catch(e){msg(e.message,true)}finally{document.body.classList.remove('spinner')}}
+
+async function freeze(){const p=payload();if(previewSignature!==signature(p)){msg('配置已变化，请重新生成预览。',true);return}if(!confirm(`确认冻结 ${p.dataset_version}？\n冻结后该版本不可修改。`))return;document.body.classList.add('spinner');msg('正在冻结 Dataset，并写入 GCS …');try{const d=await api('/api/datasets/freeze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});let f=null;try{f=await api('/api/dataset-freeze/'+encodeURIComponent(p.dataset_version)+'/finalize',{method:'POST'})}catch(e){msg(`数据集已冻结，但追溯登记需要重试：${e.message}`,true);await load();return}msg(`数据集已冻结：${d.dataset_version}\n图片：${d.image_count}\n鱼种：${d.species_count}\n训练 / 验证 / 测试：${d.split_counts?.train||0} / ${d.split_counts?.val||0} / ${d.split_counts?.test||0}\n追溯记录：${f.item_count}\nManifest：${f.manifest_uri}`);invalidate();await load()}catch(e){msg(e.message,true)}finally{document.body.classList.remove('spinner')}}
 load();
 </script>
 </body>

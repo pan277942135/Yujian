@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Offline Dataset Freeze V0.1 smoke test.
 
-Runs against SQLite and never calls GCS/Vision. It exercises the same
-canonical preview plan that the production freeze endpoint uses.
+Runs against SQLite and never calls GCS/Vision. It validates preview selection,
+stable group splitting, DatasetItem schema registration, and FastAPI routes.
 """
 
 import os
@@ -15,10 +15,12 @@ if str(ROOT) not in sys.path:
 
 os.environ.setdefault("REGISTRY_DB_URL", "sqlite:///:memory:")
 
+from app.entry import app  # noqa: E402
+from app.dataset_api import DatasetFreezePreviewRequest, build_preview  # noqa: E402
+from app.dataset_models import DatasetItem  # noqa: E402
 from app.db import Base, SessionLocal, init_db  # noqa: E402
 from app.dedupe import ImageFingerprint  # noqa: E402
-from app.entry import app  # noqa: E402
-from app.flywheel import ensure_species_catalog, preview_cumulative_dataset  # noqa: E402
+from app.flywheel import ensure_species_catalog  # noqa: E402
 from app.models import Batch, ImageAsset  # noqa: E402
 from app.presence import FishPresenceResult  # noqa: E402
 
@@ -41,8 +43,8 @@ def add_image(db, batch_id: str, image_id: str, species: str, status: str = "app
 
 def main() -> None:
     init_db()
-    assert "datasets" in Base.metadata.tables
-    assert "dataset_items" not in Base.metadata.tables
+    assert "dataset_items" in Base.metadata.tables
+    assert DatasetItem.__tablename__ == "dataset_items"
 
     db = SessionLocal()
     try:
@@ -91,24 +93,24 @@ def main() -> None:
         )
         db.commit()
 
-        first = preview_cumulative_dataset(db, dataset_version="DS_M1_smoke", seed=7, train=0.70, val=0.15)
-        second = preview_cumulative_dataset(db, dataset_version="DS_M1_smoke", seed=7, train=0.70, val=0.15)
+        payload = DatasetFreezePreviewRequest(dataset_version="DS_M1_smoke", seed=7, train=0.70, val=0.15)
+        first = build_preview(db, payload)
+        second = build_preview(db, payload)
         assert first == second, (first, second)
         assert first["approved_master_pool_count"] == 5, first
-        assert first["eligible_images"] == 2, first
+        assert first["image_count"] == 2, first
         assert first["species_count"] == 2, first
         assert first["species_counts"] == {"鲫鱼": 1, "鲤鱼": 1}, first
-        assert first["excluded"]["multi_fish"] == 1, first
-        assert first["excluded"]["no_fish"] == 1, first
-        assert first["excluded"]["near_duplicate"] == 1, first
+        assert first["excluded_quality_counts"].get("multi_fish") == 1, first
+        assert first["excluded_quality_counts"].get("no_fish") == 1, first
+        assert first["excluded_quality_counts"].get("near_duplicate") == 1, first
+        assert sum(first["split_counts"].values()) == 2, first
 
         paths = app.openapi()["paths"]
-        assert "/datasets" in paths
-        assert "/api/datasets" in paths
-        assert "/api/datasets/summary" in paths
-        assert "/api/datasets/freeze/preview" in paths
         assert "/api/datasets/freeze" in paths
-        assert "/api/dataset-freeze/preview" not in paths
+        assert "/api/dataset-freeze/preview" in paths
+        assert "/api/dataset-freeze/{dataset_version}/finalize" in paths
+        assert "/api/dataset-freeze/{dataset_version}/items" in paths
         print("Dataset Freeze smoke OK", first)
     finally:
         db.close()

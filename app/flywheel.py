@@ -6,7 +6,6 @@ import io
 import json
 from collections import Counter
 from datetime import datetime, timezone
-from dataclasses import dataclass
 
 from google.cloud import storage
 from sqlalchemy import func, select
@@ -32,9 +31,6 @@ INITIAL_SPECIES = [
 
 VALID_SPECIES_STATUS = {"candidate", "active", "retired"}
 VALID_FEEDBACK_TYPES = {"confirmed", "corrected", "unknown", "new_species_candidate"}
-DATASET_SPLITS = ("train", "val", "test")
-ELIGIBLE_PRESENCE_STATUSES = {"single_fish", "uncertain", "not_scanned"}
-MIN_SAMPLES_PER_SPECIES_WARNING = 5
 
 
 def utcnow() -> datetime:
@@ -274,355 +270,15 @@ def _load_parent_class_map(bucket: storage.Bucket, parent: DatasetVersion | None
     uri = parent.class_map_uri
     body = uri[5:] if uri.startswith("gs://") else ""
     if not body or "/" not in body:
-        raise ValueError(f"invalid parent class map URI: {uri}")
+        return []
     bucket_name, object_name = body.split("/", 1)
     if bucket_name != bucket.name:
-        raise ValueError(f"parent class map is in a different bucket: {uri}")
+        return []
     blob = bucket.blob(object_name)
     if not blob.exists():
-        raise ValueError(f"parent class map not found: {uri}")
+        return []
     doc = json.loads(blob.download_as_text(encoding="utf-8"))
     return list(doc.get("classes") or [])
-
-
-@dataclass(frozen=True)
-class DatasetFreezePlan:
-    """The complete immutable snapshot plan shared by preview and freeze."""
-
-    dataset_version: str
-    parent_version: str | None
-    git_commit: str
-    seed: int
-    train: float
-    val: float
-    created_at: datetime
-    approved_master_pool_count: int
-    rows: tuple[dict, ...]
-    class_map: dict
-    species_counts: dict[str, int]
-    split_counts: dict[str, int]
-    excluded: dict[str, int]
-    excluded_species_counts: dict[str, int]
-    warnings: tuple[dict, ...]
-
-
-def _validate_freeze_inputs(dataset_version: str, train: float, val: float) -> None:
-    if not dataset_version.startswith("DS_"):
-        raise ValueError("dataset_version must start with DS_")
-    if not (0 < train < 1 and 0 <= val < 1 and train + val < 1):
-        raise ValueError("invalid split ratios")
-
-
-def _resolve_parent(db: Session, parent_version: str | None) -> tuple[DatasetVersion | None, str | None]:
-    if parent_version:
-        parent = db.get(DatasetVersion, parent_version)
-        if not parent:
-            raise ValueError(f"parent dataset not found: {parent_version}")
-        return parent, parent_version
-    parent = db.scalar(select(DatasetVersion).order_by(DatasetVersion.created_at.desc()).limit(1))
-    return parent, parent.dataset_version if parent else None
-
-
-def _catalog_class_row(row: SpeciesCatalog, class_index: int) -> dict:
-    return {
-        "class_index": class_index,
-        "species_key": row.species_key,
-        "common_name_zh": row.common_name_zh,
-        "common_name_en": row.common_name_en,
-        "catalog_order": row.catalog_order,
-        "status": row.status,
-    }
-
-
-def _build_class_map(
-    catalog_rows: list[SpeciesCatalog],
-    used_species_keys: set[str],
-    parent_classes: list[dict],
-    *,
-    dataset_version: str,
-    parent_version: str | None,
-) -> dict:
-    """Preserve every parent index and append newly used active species."""
-
-    catalog_by_key = {row.species_key: row for row in catalog_rows}
-    classes: list[dict] = []
-    seen_keys: set[str] = set()
-    seen_indices: set[int] = set()
-
-    for item in sorted(parent_classes, key=lambda x: int(x.get("class_index", 0))):
-        key = str(item.get("species_key") or "").strip()
-        if not key or key in seen_keys:
-            continue
-        try:
-            class_index = int(item.get("class_index"))
-        except (TypeError, ValueError):
-            class_index = max(seen_indices, default=-1) + 1
-        if class_index in seen_indices:
-            class_index = max(seen_indices, default=-1) + 1
-        catalog = catalog_by_key.get(key)
-        if catalog:
-            classes.append(_catalog_class_row(catalog, class_index))
-        else:
-            # Keep a historical class even if its catalog row was retired or migrated.
-            preserved = dict(item)
-            preserved["class_index"] = class_index
-            preserved["species_key"] = key
-            classes.append(preserved)
-        seen_keys.add(key)
-        seen_indices.add(class_index)
-
-    next_index = max(seen_indices, default=-1) + 1
-    for row in catalog_rows:
-        if row.status != "active" or row.species_key not in used_species_keys or row.species_key in seen_keys:
-            continue
-        classes.append(_catalog_class_row(row, next_index))
-        seen_keys.add(row.species_key)
-        seen_indices.add(next_index)
-        next_index += 1
-
-    classes.sort(key=lambda x: int(x.get("class_index", 0)))
-    return {
-        "dataset_version": dataset_version,
-        "parent_version": parent_version,
-        "classes": classes,
-    }
-
-
-def _dataset_group_key(image: ImageAsset, duplicate_group: str) -> str:
-    group = (image.group_id or "").strip()
-    if group:
-        return f"group:{group}"
-    if duplicate_group:
-        return f"duplicate:{duplicate_group}"
-    return f"image:{image.batch_id}:{image.image_id}"
-
-
-def _empty_exclusions() -> dict[str, int]:
-    return {
-        "no_fish": 0,
-        "multi_fish": 0,
-        "near_duplicate": 0,
-        "exact_duplicate": 0,
-        "inactive_species": 0,
-        "presence_error": 0,
-    }
-
-
-def _prepare_dataset_freeze(
-    db: Session,
-    *,
-    dataset_version: str,
-    git_commit: str,
-    parent_version: str | None = None,
-    seed: int = 20260826,
-    train: float = 0.70,
-    val: float = 0.15,
-    bucket: storage.Bucket | None = None,
-) -> DatasetFreezePlan:
-    """Build the one canonical snapshot plan used by both API operations."""
-
-    ensure_species_catalog(db)
-    _validate_freeze_inputs(dataset_version, train, val)
-    if db.get(DatasetVersion, dataset_version):
-        raise ValueError(f"dataset already registered: {dataset_version}")
-
-    parent, resolved_parent_version = _resolve_parent(db, parent_version)
-    if parent and parent.class_map_uri and bucket is None:
-        raise ValueError("a GCS bucket is required to read the parent class map")
-
-    catalog_rows = db.scalars(select(SpeciesCatalog).order_by(SpeciesCatalog.catalog_order)).all()
-    catalog_by_identity = {
-        identity: row
-        for row in catalog_rows
-        for identity in (row.species_key, row.common_name_zh)
-    }
-    images = db.scalars(
-        select(ImageAsset).where(ImageAsset.review_status == "approved").order_by(ImageAsset.batch_id, ImageAsset.id)
-    ).all()
-    image_ids = [image.id for image in images]
-    fingerprints = {
-        row.image_asset_id: row
-        for row in db.scalars(select(ImageFingerprint).where(ImageFingerprint.image_asset_id.in_(image_ids))).all()
-    } if image_ids else {}
-    presences = {
-        row.image_asset_id: row
-        for row in db.scalars(select(FishPresenceResult).where(FishPresenceResult.image_asset_id.in_(image_ids))).all()
-    } if image_ids else {}
-
-    created_at = utcnow()
-    excluded = _empty_exclusions()
-    excluded_species: Counter[str] = Counter()
-    seen: set[str] = set()
-    eligible: list[tuple[ImageAsset, SpeciesCatalog, str, str]] = []
-    for image in images:
-        fingerprint = fingerprints.get(image.id)
-        presence_status = effective_status(presences.get(image.id))
-        if fingerprint and fingerprint.duplicate_group and not fingerprint.is_representative:
-            excluded["near_duplicate"] += 1
-            continue
-        if presence_status == "multi_fish":
-            excluded["multi_fish"] += 1
-            continue
-        if presence_status == "no_fish":
-            excluded["no_fish"] += 1
-            continue
-        if presence_status not in ELIGIBLE_PRESENCE_STATUSES:
-            excluded["presence_error"] += 1
-            continue
-
-        unique_key = (fingerprint.sha256 if fingerprint else "") or image.gcs_uri
-        if unique_key in seen:
-            excluded["exact_duplicate"] += 1
-            continue
-        seen.add(unique_key)
-
-        truth_name = (image.truth_species or image.claimed_species or "").strip()
-        catalog = catalog_by_identity.get(truth_name)
-        if not catalog or catalog.status != "active":
-            excluded["inactive_species"] += 1
-            excluded_species[truth_name or "unknown"] += 1
-            continue
-        duplicate_group = fingerprint.duplicate_group if fingerprint and fingerprint.duplicate_group else ""
-        eligible.append((image, catalog, presence_status, duplicate_group))
-
-    used_species_keys = {catalog.species_key for _, catalog, _, _ in eligible}
-    parent_classes = _load_parent_class_map(bucket, parent) if parent and parent.class_map_uri else []
-    class_map = _build_class_map(
-        catalog_rows,
-        used_species_keys,
-        parent_classes,
-        dataset_version=dataset_version,
-        parent_version=resolved_parent_version,
-    )
-    class_index = {item["species_key"]: item["class_index"] for item in class_map["classes"]}
-
-    frozen: list[dict] = []
-    for image, catalog, presence_status, duplicate_group in eligible:
-        group_id = (image.group_id or "").strip()
-        frozen.append({
-            "dataset_version": dataset_version,
-            "batch_id": image.batch_id,
-            "image_id": image.image_id,
-            "file_name": image.file_name,
-            "gcs_uri": image.gcs_uri,
-            "object_name": image.object_name,
-            "source_url": image.source_url or "",
-            "source_platform": image.source_platform or "",
-            "claimed_species": image.claimed_species or "",
-            "truth_species": image.truth_species or "",
-            "species_key": catalog.species_key,
-            "species": catalog.common_name_zh,
-            "class_index": class_index[catalog.species_key],
-            "truth_status": image.truth_status,
-            "review_status": image.review_status,
-            "presence_status": presence_status,
-            "duplicate_group": duplicate_group,
-            "group_id": group_id,
-            "split": _choose_split(_dataset_group_key(image, duplicate_group), seed, train, val),
-        })
-
-    species_counts = Counter(row["species"] for row in frozen)
-    split_counts = Counter(row["split"] for row in frozen)
-    warnings = tuple(
-        {
-            "code": "few_samples",
-            "species_key": item.get("species_key"),
-            "species": item.get("common_name_zh") or item.get("species_key"),
-            "sample_count": species_counts.get(item.get("common_name_zh"), 0),
-            "threshold": MIN_SAMPLES_PER_SPECIES_WARNING,
-            "message": f"{item.get('common_name_zh') or item.get('species_key')} 样本数较少，当前为 {species_counts.get(item.get('common_name_zh'), 0)} 张。",
-        }
-        for item in class_map["classes"]
-        if species_counts.get(item.get("common_name_zh"), 0) < MIN_SAMPLES_PER_SPECIES_WARNING
-    )
-    return DatasetFreezePlan(
-        dataset_version=dataset_version,
-        parent_version=resolved_parent_version,
-        git_commit=git_commit or "unknown",
-        seed=seed,
-        train=train,
-        val=val,
-        created_at=created_at,
-        approved_master_pool_count=len(images),
-        rows=tuple(frozen),
-        class_map=class_map,
-        species_counts=dict(species_counts),
-        split_counts={name: split_counts.get(name, 0) for name in DATASET_SPLITS},
-        excluded=excluded,
-        excluded_species_counts=dict(excluded_species),
-        warnings=warnings,
-    )
-
-
-def dataset_freeze_preview(plan: DatasetFreezePlan) -> dict:
-    """Serialize a freeze plan for the preview API without writing GCS or DB."""
-
-    distribution = [
-        {
-            "species_key": item.get("species_key"),
-            "species": item.get("common_name_zh"),
-            "count": plan.species_counts.get(item.get("common_name_zh"), 0),
-        }
-        for item in plan.class_map["classes"]
-        if plan.species_counts.get(item.get("common_name_zh"), 0)
-    ]
-    return {
-        "dataset_version": plan.dataset_version,
-        "parent_version": plan.parent_version,
-        "eligible_images": len(plan.rows),
-        "image_count": len(plan.rows),
-        "approved_master_pool_count": plan.approved_master_pool_count,
-        "species_count": len(plan.class_map["classes"]),
-        "species_distribution": distribution,
-        "species_counts": plan.species_counts,
-        "train_count": plan.split_counts["train"],
-        "val_count": plan.split_counts["val"],
-        "test_count": plan.split_counts["test"],
-        "split_counts": plan.split_counts,
-        "excluded": plan.excluded,
-        "excluded_quality_counts": {
-            key: plan.excluded[key]
-            for key in ("no_fish", "multi_fish", "near_duplicate", "exact_duplicate", "presence_error")
-        },
-        "excluded_species_counts": plan.excluded_species_counts,
-        "class_map": plan.class_map,
-        "warnings": list(plan.warnings),
-        "selection_mode": "ALL_APPROVED_ACTIVE_SPECIES",
-        "train_ratio": plan.train,
-        "val_ratio": plan.val,
-        "test_ratio": round(1.0 - plan.train - plan.val, 6),
-    }
-
-
-def preview_cumulative_dataset(
-    db: Session,
-    *,
-    dataset_version: str,
-    git_commit: str = "unknown",
-    parent_version: str | None = None,
-    seed: int = 20260826,
-    train: float = 0.70,
-    val: float = 0.15,
-    bucket_name: str | None = None,
-) -> dict:
-    """Build the canonical preview without writing production GCS or DB state."""
-
-    ensure_species_catalog(db)
-    parent, _ = _resolve_parent(db, parent_version)
-    bucket = None
-    if parent and parent.class_map_uri:
-        bucket = storage.Client().bucket(bucket_name or get_bucket_name())
-    plan = _prepare_dataset_freeze(
-        db,
-        dataset_version=dataset_version,
-        parent_version=parent_version,
-        git_commit=git_commit,
-        seed=seed,
-        train=train,
-        val=val,
-        bucket=bucket,
-    )
-    return dataset_freeze_preview(plan)
 
 
 def freeze_cumulative_dataset(
@@ -643,9 +299,22 @@ def freeze_cumulative_dataset(
     are excluded from the immutable Dataset snapshot.
     """
     ensure_species_catalog(db)
+    bucket_name = bucket_name or get_bucket_name()
+    if not dataset_version.startswith("DS_"):
+        raise ValueError("dataset_version must start with DS_")
+    if not (0 < train < 1 and 0 <= val < 1 and train + val < 1):
+        raise ValueError("invalid split ratios")
     if db.get(DatasetVersion, dataset_version):
         raise ValueError(f"dataset already registered: {dataset_version}")
-    bucket_name = bucket_name or get_bucket_name()
+
+    if parent_version:
+        parent = db.get(DatasetVersion, parent_version)
+        if not parent:
+            raise ValueError(f"parent dataset not found: {parent_version}")
+    else:
+        parent = db.scalar(select(DatasetVersion).order_by(DatasetVersion.created_at.desc()).limit(1))
+        parent_version = parent.dataset_version if parent else None
+
     client = storage.Client()
     bucket = client.bucket(bucket_name)
     out_prefix = f"datasets/{dataset_version}/"
@@ -653,43 +322,156 @@ def freeze_cumulative_dataset(
     if marker.exists(client):
         raise ValueError(f"dataset already exists in GCS: gs://{bucket_name}/{out_prefix}")
 
-    plan = _prepare_dataset_freeze(
-        db,
-        dataset_version=dataset_version,
-        parent_version=parent_version,
-        git_commit=git_commit,
-        seed=seed,
-        train=train,
-        val=val,
-        bucket=bucket,
-    )
-    if not plan.rows:
-        if not plan.approved_master_pool_count:
-            raise ValueError("Approved Master Pool is empty")
+    catalog_rows = db.scalars(select(SpeciesCatalog).order_by(SpeciesCatalog.catalog_order)).all()
+    active_by_name = {row.common_name_zh: row for row in catalog_rows if row.status == "active"}
+    images = db.scalars(
+        select(ImageAsset).where(ImageAsset.review_status == "approved").order_by(ImageAsset.batch_id, ImageAsset.id)
+    ).all()
+    if not images:
+        raise ValueError("Approved Master Pool is empty")
+
+    image_ids = [image.id for image in images]
+    fingerprints = {
+        row.image_asset_id: row
+        for row in db.scalars(select(ImageFingerprint).where(ImageFingerprint.image_asset_id.in_(image_ids))).all()
+    }
+    presences = {
+        row.image_asset_id: row
+        for row in db.scalars(select(FishPresenceResult).where(FishPresenceResult.image_asset_id.in_(image_ids))).all()
+    }
+
+    cutoff = utcnow()
+    seen: set[str] = set()
+    eligible: list[tuple[ImageAsset, SpeciesCatalog, str, str]] = []
+    excluded_species = Counter()
+    excluded_quality = Counter()
+    for image in images:
+        fp = fingerprints.get(image.id)
+        presence = presences.get(image.id)
+        presence_status = effective_status(presence)
+        if fp and fp.duplicate_group and not fp.is_representative:
+            excluded_quality["near_duplicate"] += 1
+            continue
+        if presence_status == "multi_fish":
+            excluded_quality["multi_fish"] += 1
+            continue
+        if presence_status == "no_fish":
+            excluded_quality["no_fish"] += 1
+            continue
+
+        unique_key = fp.sha256 if fp else image.gcs_uri
+        if unique_key in seen:
+            excluded_quality["exact_duplicate"] += 1
+            continue
+        seen.add(unique_key)
+
+        truth_name = (image.truth_species or image.claimed_species or "").strip()
+        catalog = active_by_name.get(truth_name)
+        if not catalog:
+            excluded_species[truth_name or "unknown"] += 1
+            continue
+        eligible.append((image, catalog, presence_status, fp.duplicate_group if fp and fp.duplicate_group else ""))
+    if not eligible:
         raise ValueError("no approved images remain after active-species and P0 quality filters")
 
-    csv_buf = io.StringIO()
-    writer = csv.DictWriter(csv_buf, fieldnames=list(plan.rows[0].keys()))
-    writer.writeheader()
-    writer.writerows(plan.rows)
-    manifest_uri = f"gs://{bucket_name}/{out_prefix}dataset_manifest.csv"
-    bucket.blob(out_prefix + "dataset_manifest.csv").upload_from_string(
-        csv_buf.getvalue(), content_type="text/csv", if_generation_match=0
-    )
+    used_keys = {catalog.species_key for _, catalog, _, _ in eligible}
+    parent_classes = _load_parent_class_map(bucket, parent)
+    class_rows: list[dict] = []
+    used_parent_keys: set[str] = set()
+    for item in sorted(parent_classes, key=lambda x: int(x.get("class_index", 0))):
+        key = item.get("species_key")
+        if not key:
+            continue
+        row = next((r for r in catalog_rows if r.species_key == key), None)
+        if not row:
+            continue
+        class_rows.append({
+            "class_index": len(class_rows),
+            "species_key": row.species_key,
+            "common_name_zh": row.common_name_zh,
+            "common_name_en": row.common_name_en,
+            "catalog_order": row.catalog_order,
+            "status": row.status,
+        })
+        used_parent_keys.add(key)
 
+    for row in catalog_rows:
+        if row.species_key not in used_keys or row.species_key in used_parent_keys:
+            continue
+        class_rows.append({
+            "class_index": len(class_rows),
+            "species_key": row.species_key,
+            "common_name_zh": row.common_name_zh,
+            "common_name_en": row.common_name_en,
+            "catalog_order": row.catalog_order,
+            "status": row.status,
+        })
+    class_index = {row["species_key"]: row["class_index"] for row in class_rows}
+
+    frozen: list[dict] = []
+    for image, catalog, presence_status, duplicate_group in eligible:
+        group = image.group_id or duplicate_group or f"{image.batch_id}:{image.image_id}"
+        frozen.append({
+            "dataset_version": dataset_version,
+            "batch_id": image.batch_id,
+            "image_id": image.image_id,
+            "file_name": image.file_name,
+            "gcs_uri": image.gcs_uri,
+            "object_name": image.object_name,
+            "source_url": image.source_url or "",
+            "source_platform": image.source_platform or "",
+            "claimed_species": image.claimed_species or "",
+            "truth_species": image.truth_species or "",
+            "species_key": catalog.species_key,
+            "species": catalog.common_name_zh,
+            "class_index": class_index[catalog.species_key],
+            "truth_status": image.truth_status,
+            "review_status": image.review_status,
+            "presence_status": presence_status,
+            "duplicate_group": duplicate_group,
+            "group_id": image.group_id or "",
+            "split": _choose_split(group, seed, train, val),
+        })
+
+    csv_buf = io.StringIO()
+    writer = csv.DictWriter(csv_buf, fieldnames=list(frozen[0].keys()))
+    writer.writeheader()
+    writer.writerows(frozen)
+    manifest_uri = f"gs://{bucket_name}/{out_prefix}dataset_manifest.csv"
+    bucket.blob(out_prefix + "dataset_manifest.csv").upload_from_string(csv_buf.getvalue(), content_type="text/csv", if_generation_match=0)
+
+    class_map_doc = {
+        "dataset_version": dataset_version,
+        "parent_version": parent_version,
+        "created_at": cutoff.isoformat(),
+        "classes": class_rows,
+    }
     class_map_uri = f"gs://{bucket_name}/{out_prefix}class_map.json"
     bucket.blob(out_prefix + "class_map.json").upload_from_string(
-        json.dumps(plan.class_map, ensure_ascii=False, indent=2),
+        json.dumps(class_map_doc, ensure_ascii=False, indent=2),
         content_type="application/json",
         if_generation_match=0,
     )
 
+    split_counts = Counter(row["split"] for row in frozen)
+    species_counts = Counter(row["species"] for row in frozen)
     meta = {
-        **dataset_freeze_preview(plan),
-        "created_at": plan.created_at.isoformat(),
-        "source_cutoff_at": plan.created_at.isoformat(),
-        "git_commit": plan.git_commit,
-        "seed": plan.seed,
+        "dataset_version": dataset_version,
+        "parent_version": parent_version,
+        "created_at": cutoff.isoformat(),
+        "source_cutoff_at": cutoff.isoformat(),
+        "selection_mode": "ALL_APPROVED",
+        "quality_filters": ["exclude_nonrepresentative_duplicates", "exclude_multi_fish", "exclude_no_fish"],
+        "git_commit": git_commit or "unknown",
+        "seed": seed,
+        "approved_master_pool_count": len(images),
+        "image_count": len(frozen),
+        "excluded_non_active_species_count": sum(excluded_species.values()),
+        "excluded_species_counts": dict(excluded_species),
+        "excluded_quality_counts": dict(excluded_quality),
+        "split_counts": dict(split_counts),
+        "species_counts": dict(species_counts),
+        "species_count": len(class_rows),
         "manifest_uri": manifest_uri,
         "class_map_uri": class_map_uri,
         "immutable": True,
@@ -698,16 +480,16 @@ def freeze_cumulative_dataset(
 
     db.add(DatasetVersion(
         dataset_version=dataset_version,
-        parent_version=plan.parent_version,
+        parent_version=parent_version,
         manifest_uri=manifest_uri,
         class_map_uri=class_map_uri,
-        train_count=plan.split_counts["train"],
-        val_count=plan.split_counts["val"],
-        test_count=plan.split_counts["test"],
-        species_count=len(plan.class_map["classes"]),
-        git_commit=plan.git_commit,
-        selection_mode="ALL_APPROVED_ACTIVE_SPECIES",
-        source_cutoff_at=plan.created_at,
+        train_count=split_counts.get("train", 0),
+        val_count=split_counts.get("val", 0),
+        test_count=split_counts.get("test", 0),
+        species_count=len(class_rows),
+        git_commit=git_commit or "unknown",
+        selection_mode="ALL_APPROVED",
+        source_cutoff_at=cutoff,
         status="FROZEN",
     ))
     db.commit()

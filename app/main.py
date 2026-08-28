@@ -23,7 +23,6 @@ from app.flywheel import (
     freeze_cumulative_dataset,
     list_feedback,
     list_species,
-    preview_cumulative_dataset,
     record_feedback,
     set_species_status,
     species_names,
@@ -436,27 +435,9 @@ def datasets(db: Session = Depends(get_db)):
             "source_cutoff_at": row.source_cutoff_at.isoformat() if row.source_cutoff_at else None,
             "git_commit": row.git_commit,
             "status": row.status,
-            "inspect_url": "/inspect?review_status=approved",
         }
         for row in rows
     ]
-
-
-@app.post("/api/datasets/freeze/preview")
-def dataset_freeze_preview(payload: DatasetFreeze, db: Session = Depends(get_db)):
-    try:
-        return preview_cumulative_dataset(
-            db,
-            dataset_version=payload.dataset_version,
-            parent_version=payload.parent_version,
-            git_commit=payload.git_commit,
-            seed=payload.seed,
-            train=payload.train,
-            val=payload.val,
-        )
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/datasets/freeze")

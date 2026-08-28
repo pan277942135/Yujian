@@ -222,14 +222,6 @@ def classify_presence(objects: list[dict], labels: list[dict]) -> dict:
 def effective_status(row: FishPresenceResult | None) -> str:
     if not row:
         return "not_scanned"
-    if row.evidence_json:
-        try:
-            evidence = json.loads(row.evidence_json)
-        except Exception:
-            evidence = {}
-        override = evidence.get("human_override") if isinstance(evidence, dict) else None
-        if override in VALID_PRESENCE_STATUSES:
-            return override
     if row.status == "fish_present":
         if (row.fish_count or 0) >= 2:
             return "multi_fish"
