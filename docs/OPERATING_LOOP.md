@@ -24,9 +24,10 @@
    - Export reviewed labels to `annotations/cvat/<batch_id>/`.
 
 4. **Freeze Dataset**
-   - Generate immutable `DS_*` version using `scripts/freeze_dataset.py`.
-   - Split by `group_id`, `capture_event_id`, or `event_id`; never split the same event across train/val/test.
-   - Save `dataset_manifest.csv` + `dataset.json` to `datasets/<dataset_version>/`.
+   - Open `/datasets`, generate a preview, verify eligibility, species distribution, exclusions, parent class map and warnings, then confirm the freeze.
+   - Only active Species Catalog entries are eligible. Explicit no-fish, multi-fish and non-representative near duplicates are excluded; single-fish, uncertain and not-scanned images remain eligible.
+   - Split by the canonical group key; never split the same catch/event/group across train/val/test.
+   - Save only `dataset_manifest.csv`, `class_map.json` and `dataset.json` to `datasets/<dataset_version>/`.
    - Never edit an existing dataset version. Create the next version instead.
 
 5. **Register Training Run**

@@ -82,7 +82,7 @@ N = Needs Review
 
 `DS_M1_v0.1`、`DS_M1_v0.2` 等都是 Master Pool 在不同时间点的快照，旧版本永不覆盖。
 
-每个 Dataset 同时冻结：
+每个 Dataset 同时冻结（不复制训练图片，manifest 指向已有 immutable GCS object）：
 
 ```text
 dataset_manifest.csv

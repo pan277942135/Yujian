@@ -40,9 +40,8 @@ gs://<bucket>/
 │   └── review_manifest.csv
 ├── annotations/cvat/<batch_id>/
 ├── datasets/<dataset_version>/
-│   ├── manifest.csv
-│   ├── images/{train,val,test}/
-│   ├── labels/{train,val,test}/
+│   ├── dataset_manifest.csv
+│   ├── class_map.json
 │   └── dataset.json
 ├── gold/<gold_version>/
 ├── models/<model_version>/
@@ -66,9 +65,9 @@ gs://<bucket>/
 状态：`INGESTED -> CLEANING -> REVIEW -> ANNOTATION -> READY_FOR_DATASET -> ARCHIVED`。
 
 ### Dataset Version
-由一个或多个通过审核/标注的 Batch 冻结产生。
+由 Approved Master Pool 中符合 active Species Catalog 与质量规则的图片冻结产生。
 
-必填：`dataset_version`, `parent_version`, `batch_ids`, `train_count`, `val_count`, `test_count`, `manifest_uri`, `git_commit`。
+必填：`dataset_version`, `parent_version`, `train_count`, `val_count`, `test_count`, `species_count`, `manifest_uri`, `class_map_uri`, `git_commit`。
 
 ### Training Run
 每次训练都是独立 Run。

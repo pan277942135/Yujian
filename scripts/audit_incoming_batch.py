@@ -11,9 +11,6 @@ from google.api_core.retry import Retry
 from google.cloud import storage
 
 IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp'}
-TARGET_SPECIES = {
-    '草鱼', '鳙鱼', '白鲢', '鲤鱼', '鲫鱼', '加州鲈', '黑鱼', '黄骨鱼', '青鱼'
-}
 REQUIRED_COLUMNS = {'image_id', 'file_name', 'claimed_species'}
 DOWNLOAD_RETRY = Retry(initial=1.0, maximum=20.0, multiplier=2.0, deadline=600.0)
 
@@ -88,9 +85,6 @@ def main():
             reasons.append('missing_file_name')
         if not species:
             reasons.append('missing_claimed_species')
-        elif species not in TARGET_SPECIES:
-            reasons.append('non_target_or_unknown_species')
-
         if file_name in rel_blob:
             blob = rel_blob[file_name]
         elif file_name:
@@ -125,7 +119,7 @@ def main():
         }
         if any(r in hard_reject for r in reasons):
             status = 'AUTO_REJECT'
-        elif any(r in {'missing_claimed_species', 'non_target_or_unknown_species', 'duplicate_source_url'} for r in reasons):
+        elif any(r in {'missing_claimed_species', 'duplicate_source_url'} for r in reasons):
             status = 'NEEDS_REVIEW'
 
         resolved.append({
