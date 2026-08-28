@@ -56,6 +56,92 @@ def _parse_gs_uri(uri: str) -> tuple[str, str]:
     return tuple(body.split("/", 1))  # type: ignore[return-value]
 
 
+def _download_json(client: storage.Client, uri: str) -> dict:
+    bucket_name, object_name = _parse_gs_uri(uri)
+    text = client.bucket(bucket_name).blob(object_name).download_as_text(encoding="utf-8")
+    return json.loads(text)
+
+
+def _enrich_metrics_diagnostics(report: dict, class_map_doc: dict) -> dict:
+    classes = sorted(
+        list(class_map_doc.get("classes") or []),
+        key=lambda row: int(row.get("class_index", 0)),
+    )
+    report["classes"] = [
+        {
+            "class_index": int(row.get("class_index", 0)),
+            "species_key": row.get("species_key"),
+            "common_name_zh": row.get("common_name_zh"),
+            "common_name_en": row.get("common_name_en"),
+        }
+        for row in classes
+    ]
+
+    split_counts = report.get("per_class_split_counts") or {}
+    warnings: list[dict] = []
+    for row in report["classes"]:
+        idx = int(row["class_index"])
+        counts = split_counts.get(str(idx), split_counts.get(idx, {})) or {}
+        train_count = int(counts.get("train", 0) or 0)
+        val_count = int(counts.get("val", 0) or 0)
+        test_count = int(counts.get("test", 0) or 0)
+        name = row.get("common_name_zh") or row.get("species_key") or f"Class {idx}"
+
+        if train_count == 0:
+            warnings.append({
+                "severity": "critical",
+                "kind": "train_zero",
+                "class_index": idx,
+                "species": name,
+                "message": f"{name}：Train 0 张，无法训练该类",
+            })
+        elif train_count < 10:
+            warnings.append({
+                "severity": "warning",
+                "kind": "train_low",
+                "class_index": idx,
+                "species": name,
+                "message": f"{name}：Train 仅 {train_count} 张，训练样本偏少",
+            })
+
+        if val_count == 0:
+            warnings.append({
+                "severity": "critical",
+                "kind": "val_zero",
+                "class_index": idx,
+                "species": name,
+                "message": f"{name}：Validation 0 张，无法监控该类泛化",
+            })
+        elif val_count < 3:
+            warnings.append({
+                "severity": "warning",
+                "kind": "val_low",
+                "class_index": idx,
+                "species": name,
+                "message": f"{name}：Validation 仅 {val_count} 张，指标波动较大",
+            })
+
+        if test_count == 0:
+            warnings.append({
+                "severity": "critical",
+                "kind": "test_zero",
+                "class_index": idx,
+                "species": name,
+                "message": f"{name}：Test 0 张，最终指标没有评估该类",
+            })
+        elif test_count < 3:
+            warnings.append({
+                "severity": "warning",
+                "kind": "test_low",
+                "class_index": idx,
+                "species": name,
+                "message": f"{name}：Test 仅 {test_count} 张，最终指标可信度较低",
+            })
+
+    report["evaluation_warnings"] = warnings
+    return report
+
+
 def _names(payload: TrainingCreate) -> tuple[str, str]:
     suffix = payload.dataset_version.removeprefix("DS_")
     stamp = utcnow().strftime("%Y%m%d_%H%M%S")
@@ -232,9 +318,16 @@ def training_run_metrics(run_id: str, db: Session = Depends(get_db)):
     if row.status != "COMPLETED" or not row.metrics_uri:
         raise HTTPException(status_code=409, detail="训练尚未完成，暂无指标")
     try:
-        bucket_name, object_name = _parse_gs_uri(row.metrics_uri)
-        text = storage.Client().bucket(bucket_name).blob(object_name).download_as_text(encoding="utf-8")
-        return json.loads(text)
+        client = storage.Client()
+        report = _download_json(client, row.metrics_uri)
+        dataset = db.get(DatasetVersion, row.dataset_version)
+        if dataset and dataset.class_map_uri:
+            try:
+                class_map_doc = _download_json(client, dataset.class_map_uri)
+                report = _enrich_metrics_diagnostics(report, class_map_doc)
+            except Exception as exc:
+                report["diagnostics_error"] = f"读取 Dataset class map 失败：{exc}"
+        return report
     except HTTPException:
         raise
     except Exception as exc:
