@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>模型实测 · 渔见 AI</title>
+  <style>
+    *{box-sizing:border-box}body{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f6f7f8;color:#171717}header{background:#fff;border-bottom:1px solid #e5e7eb;padding:14px 24px;display:flex;gap:22px;align-items:center;position:sticky;top:0;z-index:10;overflow:auto;white-space:nowrap}header a{text-decoration:none;color:#111827;font-weight:650}header a.active{color:#2563eb}main{max-width:1220px;margin:0 auto;padding:24px}.muted{color:#6b7280}.section{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin-top:18px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.row{display:grid;grid-template-columns:150px 1fr;gap:10px;align-items:center;margin:10px 0}input,select,button{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:9px;background:#fff}button{cursor:pointer;font-weight:650}.primary{background:#111827;color:#fff;border-color:#111827}.goodBtn{background:#047857;color:#fff;border-color:#047857}.badBtn{background:#be123c;color:#fff;border-color:#be123c}.ghost{background:#fff}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}.banner{display:none;white-space:pre-wrap;padding:12px;border-radius:10px;background:#eef2ff;margin-top:12px}.tabs{display:flex;gap:8px;margin-top:18px}.tab{border-radius:999px;padding:9px 16px}.tab.active{background:#111827;color:#fff}.mode{display:none}.mode.active{display:block}.previewBox{min-height:300px;border:1px dashed #cbd5e1;border-radius:12px;background:#f8fafc;display:grid;place-items:center;overflow:hidden}.previewBox img{display:block;max-width:100%;max-height:420px;object-fit:contain}.result{display:none}.result.show{display:block}.heroPrediction{padding:18px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px}.heroPrediction b{font-size:30px}.confidence{font-size:20px;margin-left:8px}.topRow{display:grid;grid-template-columns:100px 1fr 70px;gap:10px;align-items:center;margin:10px 0}.bar{height:9px;background:#e5e7eb;border-radius:999px;overflow:hidden}.bar span{display:block;height:100%;background:#111827}.warnBox{padding:10px 12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;margin-top:12px}.goodBox{padding:10px 12px;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;margin-top:12px}.metricGrid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:12px}.metric{padding:12px;border:1px solid #e5e7eb;background:#f9fafb;border-radius:10px}.metric b{display:block;font-size:23px;margin-top:4px}.progress{height:8px;border-radius:999px;background:#e5e7eb;overflow:hidden;margin-top:12px}.progress span{display:block;height:100%;background:#111827}.tableWrap{overflow:auto;margin-top:12px;border:1px solid #e5e7eb;border-radius:10px}table{width:100%;border-collapse:collapse;min-width:1050px}th,td{padding:9px 8px;border-bottom:1px solid #eee;font-size:13px;text-align:left;vertical-align:middle}th{color:#6b7280;background:#fafafa;position:sticky;top:0}.thumb{width:70px;height:54px;object-fit:cover;border-radius:7px;background:#eee}.pill{display:inline-block;padding:3px 7px;border-radius:999px;font-size:11px;background:#f3f4f6}.pill.good{background:#ecfdf5}.pill.bad{background:#fff1f2}.pill.warn{background:#fff7ed}.top3mini{white-space:nowrap;max-width:330px;overflow:hidden;text-overflow:ellipsis}.smallBtn{padding:6px 8px;font-size:12px}.statusText{font-size:12px}.note{font-size:12px;color:#6b7280;margin-top:8px}.spinner{opacity:.55;pointer-events:none}@media(max-width:850px){main{padding:16px}.grid{grid-template-columns:1fr}.row{grid-template-columns:1fr}.metricGrid{grid-template-columns:1fr 1fr}.previewBox{min-height:220px}}
+  </style>
+</head>
+<body>
+<header><a href="/">总览</a><a href="/batches">数据批次</a><a href="/review/bulk">快速审核</a><a href="/review">单张审核</a><a href="/species">鱼种管理</a><a href="/feedback">用户反馈</a><a href="/datasets">数据集</a><a href="/training">模型训练</a><a class="active" href="/inference">模型实测</a></header>
+<main>
+  <h1>模型实测</h1>
+  <div class="muted">用训练集之外的真实鱼获照片验证模型。实测图片会保存到 GCS；确认或纠错后可直接进入用户反馈 → Review → 下一版 Dataset 的数据飞轮。</div>
+  <div id="banner" class="banner"></div>
+
+  <div class="section">
+    <div class="row"><label><b>测试模型</b></label><select id="model"></select></div>
+    <div id="modelMeta" class="muted"></div>
+  </div>
+
+  <div class="tabs">
+    <button id="singleTab" class="tab active" onclick="switchMode('single')">单张测试</button>
+    <button id="batchTab" class="tab" onclick="switchMode('batch')">批量测试</button>
+  </div>
+
+  <div id="singleMode" class="mode active">
+    <div class="grid">
+      <div class="section">
+        <h2>上传真实鱼获照片</h2>
+        <input id="singleFile" type="file" accept="image/jpeg,image/png,image/webp" onchange="singleSelected()" />
+        <div id="singlePreview" class="previewBox" style="margin-top:12px"><span class="muted">选择一张训练集之外的真实照片</span></div>
+        <div class="actions"><button id="singleRun" class="primary" onclick="runSingle()">开始识别</button></div>
+      </div>
+      <div class="section">
+        <h2>识别结果</h2>
+        <div id="singleEmpty" class="muted">上传图片后显示 Top-1 / Top-3、置信度与推理耗时。</div>
+        <div id="singleResult" class="result">
+          <div class="heroPrediction"><span class="muted">Top-1</span><div><b id="singleTop1">-</b><span id="singleConfidence" class="confidence">-</span></div><div id="singleLatency" class="muted"></div></div>
+          <div id="singleConfidenceFlag"></div>
+          <h3>Top-3</h3>
+          <div id="singleTop3"></div>
+          <div class="actions"><button class="goodBtn" onclick="confirmSingle()">✓ 结果正确</button><button class="badBtn" onclick="showCorrection()">✕ 结果错误</button><button class="ghost" onclick="unknownSingle()">无法判断</button></div>
+          <div id="singleCorrection" style="display:none;margin-top:14px">
+            <div class="row"><label>真实鱼种</label><select id="singleTruth"></select></div>
+            <button class="badBtn" onclick="correctSingle()">保存纠错 / Hard Case</button>
+          </div>
+          <div id="singleFeedbackState" class="note"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="batchMode" class="mode">
+    <div class="section">
+      <h2>批量真实图片测试</h2>
+      <div class="muted">一次可选择最多 50 张。页面会自动拆成单张请求逐个推理，避免 Cloud Run 大请求限制；失败图片不会阻断整批。</div>
+      <input id="batchFiles" type="file" accept="image/jpeg,image/png,image/webp" multiple />
+      <div class="actions"><button id="batchRun" class="primary" onclick="runBatch()">开始批量识别</button><button onclick="clearBatch()">清空</button><button id="batchFeedbackBtn" onclick="saveBatchFeedback()" disabled>保存已标注反馈</button></div>
+      <div class="progress"><span id="batchProgress" style="width:0%"></span></div>
+      <div id="batchProgressText" class="note">尚未开始</div>
+    </div>
+
+    <div class="section">
+      <h2>批量汇总</h2>
+      <div class="metricGrid">
+        <div class="metric"><span class="muted">已完成</span><b id="bDone">0</b></div>
+        <div class="metric"><span class="muted">已标注</span><b id="bEvaluated">0</b></div>
+        <div class="metric"><span class="muted">Top-1</span><b id="bTop1">-</b></div>
+        <div class="metric"><span class="muted">Top-3</span><b id="bTop3">-</b></div>
+        <div class="metric"><span class="muted">低置信度</span><b id="bLow">0</b></div>
+      </div>
+      <div class="note">Top-1 / Top-3 只对你已经选择“真实鱼种”的行计算；未标注图片不会混入准确率。</div>
+    </div>
+
+    <div class="section">
+      <h2>逐张结果</h2>
+      <div class="tableWrap">
+        <table>
+          <thead><tr><th>图片</th><th>文件</th><th>Top-1</th><th>置信度</th><th>Top-3</th><th>真实鱼种</th><th>判断</th><th>反馈</th></tr></thead>
+          <tbody id="batchRows"><tr><td colspan="8" class="muted">暂无批量结果</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</main>
+<script>
+let models=[];
+let species=[];
+let singleResult=null;
+let singlePreviewUrl=null;
+let batchRows=[];
+let batchCursor=0;
+
+function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function pct(v){return Number.isFinite(Number(v))?(Number(v)*100).toFixed(1)+'%':'-'}
+function showBanner(msg,bad=false){const el=document.getElementById('banner');el.style.display='block';el.style.background=bad?'#fff1f2':'#eef2ff';el.textContent=msg}
+async function jsonApi(url,opts={}){const r=await fetch(url,opts);let data={};try{data=await r.json()}catch{}if(!r.ok)throw new Error(data.detail||`HTTP ${r.status}`);return data}
+function selectedModel(){return document.getElementById('model').value}
+function truthOptions(value=''){return `<option value="">请选择真实鱼种</option>`+species.map(s=>`<option value="${esc(s.common_name_zh)}" ${s.common_name_zh===value?'selected':''}>${esc(s.common_name_zh)}</option>`).join('')}
+
+async function loadBase(){
+  try{
+    [models,species]=await Promise.all([jsonApi('/api/inference/models'),jsonApi('/api/species?status=active')]);
+    const select=document.getElementById('model');
+    select.innerHTML=models.map(m=>`<option value="${esc(m.model_version)}">${esc(m.model_version)} · ${esc(m.status)}</option>`).join('');
+    select.onchange=updateModelMeta;
+    document.getElementById('singleTruth').innerHTML=truthOptions();
+    updateModelMeta();
+    if(!models.length){showBanner('暂无可实测模型，请先完成模型训练。',true)}
+  }catch(e){showBanner(e.message,true)}
+}
+function updateModelMeta(){const m=models.find(x=>x.model_version===selectedModel());document.getElementById('modelMeta').textContent=m?`Run ${m.run_id} · Dataset ${m.dataset_version} · ${m.status}`:''}
+function switchMode(mode){document.getElementById('singleMode').classList.toggle('active',mode==='single');document.getElementById('batchMode').classList.toggle('active',mode==='batch');document.getElementById('singleTab').classList.toggle('active',mode==='single');document.getElementById('batchTab').classList.toggle('active',mode==='batch')}
+
+function singleSelected(){
+  const file=document.getElementById('singleFile').files[0];
+  if(singlePreviewUrl)URL.revokeObjectURL(singlePreviewUrl);
+  const box=document.getElementById('singlePreview');
+  singleResult=null;document.getElementById('singleResult').classList.remove('show');document.getElementById('singleEmpty').style.display='block';
+  if(!file){box.innerHTML='<span class="muted">选择一张训练集之外的真实照片</span>';return}
+  singlePreviewUrl=URL.createObjectURL(file);box.innerHTML=`<img src="${singlePreviewUrl}" alt="preview">`;
+}
+async function uploadOne(file){
+  const fd=new FormData();fd.append('model_version',selectedModel());fd.append('file',file,file.name);
+  return jsonApi('/api/inference/predict',{method:'POST',body:fd});
+}
+async function runSingle(){
+  const file=document.getElementById('singleFile').files[0];
+  if(!file){showBanner('请先选择一张图片。',true);return}
+  if(!selectedModel()){showBanner('请先选择模型。',true);return}
+  const btn=document.getElementById('singleRun');btn.disabled=true;btn.textContent='识别中…';
+  try{singleResult=await uploadOne(file);renderSingle(singleResult)}catch(e){showBanner(e.message,true)}finally{btn.disabled=false;btn.textContent='开始识别'}
+}
+function renderSingle(r){
+  document.getElementById('singleEmpty').style.display='none';document.getElementById('singleResult').classList.add('show');
+  document.getElementById('singleTop1').textContent=r.top1.species;document.getElementById('singleConfidence').textContent=pct(r.top1.confidence);document.getElementById('singleLatency').textContent=`推理 ${r.latency_ms} ms · 输入 ${r.input.width}×${r.input.height} · 模型输入 ${r.image_size}×${r.image_size}`;
+  document.getElementById('singleTop3').innerHTML=r.top3.map(p=>`<div class="topRow"><b>${esc(p.species)}</b><div class="bar"><span style="width:${Math.max(1,p.confidence*100)}%"></span></div><span>${pct(p.confidence)}</span></div>`).join('');
+  document.getElementById('singleConfidenceFlag').innerHTML=r.low_confidence?`<div class="warnBox">低置信度：Top-1 低于 ${pct(r.low_confidence_threshold)}，建议重点复核。</div>`:`<div class="goodBox">Top-1 置信度高于当前低置信度阈值 ${pct(r.low_confidence_threshold)}。</div>`;
+  document.getElementById('singleCorrection').style.display='none';document.getElementById('singleFeedbackState').textContent='';document.getElementById('singleTruth').value='';
+}
+function feedbackPayload(result,type,truth=null){return {source_event_id:result.inference_id,feedback_type:type,source:'console_inference_test',image_gcs_uri:result.image_gcs_uri,model_version:result.model_version,predicted_species:result.top1.species,confidence:result.top1.confidence,corrected_species:truth,user_note:`inference_v1 top3=${result.top3.map(x=>x.species+':'+x.confidence).join('|')}`}}
+async function saveFeedback(result,type,truth=null){return jsonApi('/api/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(feedbackPayload(result,type,truth))})}
+async function confirmSingle(){if(!singleResult)return;try{await saveFeedback(singleResult,'confirmed');document.getElementById('singleFeedbackState').textContent='已保存：结果确认正确，将进入 Feedback 数据飞轮。'}catch(e){showBanner(e.message,true)}}
+function showCorrection(){if(!singleResult)return;document.getElementById('singleCorrection').style.display='block'}
+async function correctSingle(){if(!singleResult)return;const truth=document.getElementById('singleTruth').value;if(!truth){showBanner('请选择真实鱼种。',true);return}try{await saveFeedback(singleResult,'corrected',truth);document.getElementById('singleFeedbackState').textContent=`已保存 Hard Case：${singleResult.top1.species} → 真实 ${truth}`;}catch(e){showBanner(e.message,true)}}
+async function unknownSingle(){if(!singleResult)return;try{await saveFeedback(singleResult,'unknown');document.getElementById('singleFeedbackState').textContent='已保存：暂时无法确认真实鱼种。'}catch(e){showBanner(e.message,true)}}
+
+function clearBatch(){batchRows.forEach(r=>{if(r.preview)URL.revokeObjectURL(r.preview)});batchRows=[];batchCursor=0;document.getElementById('batchFiles').value='';renderBatch();updateBatchSummary();document.getElementById('batchProgress').style.width='0%';document.getElementById('batchProgressText').textContent='尚未开始'}
+async function runBatch(){
+  const files=Array.from(document.getElementById('batchFiles').files||[]);
+  if(!files.length){showBanner('请选择批量测试图片。',true);return}
+  if(files.length>50){showBanner('页面 V1 一次最多选择 50 张图片。',true);return}
+  if(!selectedModel()){showBanner('请先选择模型。',true);return}
+  clearBatch();document.getElementById('batchFiles').files;
+  // clearBatch resets the file input, so reconstruct rows from the local File objects captured above.
+  batchRows=files.map((file,i)=>({index:i,file,preview:URL.createObjectURL(file),state:'waiting',result:null,error:null,truth:'',feedbackSaved:false}));
+  batchCursor=0;renderBatch();
+  const btn=document.getElementById('batchRun');btn.disabled=true;btn.textContent='批量识别中…';
+  try{await Promise.all([batchWorker(),batchWorker()])}finally{btn.disabled=false;btn.textContent='开始批量识别';updateBatchSummary();document.getElementById('batchFeedbackBtn').disabled=!batchRows.some(r=>r.result&&r.truth&&!r.feedbackSaved)}
+}
+async function batchWorker(){
+  while(true){
+    const i=batchCursor++;if(i>=batchRows.length)return;const row=batchRows[i];row.state='running';renderBatchRow(i);updateBatchProgress();
+    try{row.result=await uploadOne(row.file);row.state='done'}catch(e){row.error=e.message;row.state='error'}
+    renderBatchRow(i);updateBatchProgress();updateBatchSummary();
+  }
+}
+function rowHtml(r){
+  const top1=r.result?.top1;const top3=r.result?.top3||[];const evalState=r.truth&&r.result?(r.truth===top1.species?'正确':'错误'):'-';
+  const pill=r.state==='done'?'<span class="pill good">完成</span>':r.state==='error'?'<span class="pill bad">失败</span>':r.state==='running'?'<span class="pill warn">识别中</span>':'<span class="pill">等待</span>';
+  const truthSelect=r.result?`<select onchange="setBatchTruth(${r.index},this.value)">${truthOptions(r.truth)}</select>`:'-';
+  const feedback=r.feedbackSaved?'<span class="pill good">已保存</span>':(r.result&&r.truth?`<button class="smallBtn" onclick="saveOneBatchFeedback(${r.index})">保存</button>`:'-');
+  return `<td><img class="thumb" src="${r.preview}"></td><td>${esc(r.file.name)}<div class="statusText">${pill}${r.error?` ${esc(r.error)}`:''}</div></td><td><b>${esc(top1?.species||'-')}</b></td><td>${top1?pct(top1.confidence):'-'}${r.result?.low_confidence?' <span class="pill warn">低</span>':''}</td><td class="top3mini">${top3.map(x=>`${esc(x.species)} ${pct(x.confidence)}`).join(' / ')||'-'}</td><td>${truthSelect}</td><td>${evalState==='正确'?'<span class="pill good">正确</span>':evalState==='错误'?'<span class="pill bad">错误</span>':'-'}</td><td>${feedback}</td>`;
+}
+function renderBatch(){const body=document.getElementById('batchRows');if(!batchRows.length){body.innerHTML='<tr><td colspan="8" class="muted">暂无批量结果</td></tr>';return}body.innerHTML=batchRows.map(r=>`<tr id="batchRow${r.index}">${rowHtml(r)}</tr>`).join('')}
+function renderBatchRow(i){const tr=document.getElementById(`batchRow${i}`);if(tr)tr.innerHTML=rowHtml(batchRows[i])}
+function setBatchTruth(i,value){batchRows[i].truth=value;batchRows[i].feedbackSaved=false;renderBatchRow(i);updateBatchSummary();document.getElementById('batchFeedbackBtn').disabled=!batchRows.some(r=>r.result&&r.truth&&!r.feedbackSaved)}
+function updateBatchProgress(){const finished=batchRows.filter(r=>r.state==='done'||r.state==='error').length;const total=batchRows.length;const p=total?finished/total*100:0;document.getElementById('batchProgress').style.width=p+'%';document.getElementById('batchProgressText').textContent=`${finished} / ${total} 已完成`}
+function updateBatchSummary(){
+  const done=batchRows.filter(r=>r.result);const evaluated=done.filter(r=>r.truth);const top1=evaluated.filter(r=>r.truth===r.result.top1.species).length;const top3=evaluated.filter(r=>r.result.top3.some(p=>p.species===r.truth)).length;const low=done.filter(r=>r.result.low_confidence).length;
+  document.getElementById('bDone').textContent=done.length;document.getElementById('bEvaluated').textContent=evaluated.length;document.getElementById('bTop1').textContent=evaluated.length?pct(top1/evaluated.length):'-';document.getElementById('bTop3').textContent=evaluated.length?pct(top3/evaluated.length):'-';document.getElementById('bLow').textContent=low;
+}
+async function saveOneBatchFeedback(i){const r=batchRows[i];if(!r.result||!r.truth)return;try{const type=r.truth===r.result.top1.species?'confirmed':'corrected';await saveFeedback(r.result,type,type==='corrected'?r.truth:null);r.feedbackSaved=true;renderBatchRow(i);document.getElementById('batchFeedbackBtn').disabled=!batchRows.some(x=>x.result&&x.truth&&!x.feedbackSaved)}catch(e){showBanner(e.message,true)}}
+async function saveBatchFeedback(){const targets=batchRows.filter(r=>r.result&&r.truth&&!r.feedbackSaved);if(!targets.length)return;const btn=document.getElementById('batchFeedbackBtn');btn.disabled=true;btn.textContent='保存中…';for(const r of targets){await saveOneBatchFeedback(r.index)}btn.textContent='保存已标注反馈';btn.disabled=!batchRows.some(r=>r.result&&r.truth&&!r.feedbackSaved)}
+
+loadBase();
+</script>
+</body>
+</html>

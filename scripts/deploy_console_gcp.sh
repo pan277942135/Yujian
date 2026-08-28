@@ -132,11 +132,11 @@ gcloud run deploy "$SERVICE" \
   --source . \
   --service-account "$RUNTIME_SA" \
   --add-cloudsql-instances "$CONNECTION_NAME" \
-  --set-env-vars="GCS_BUCKET=${BUCKET},CLOUD_SQL_CONNECTION_NAME=${CONNECTION_NAME},DB_USER=${DB_USER},DB_NAME=${DB_NAME},APP_GIT_COMMIT=${GIT_SHA},CONSOLE_COOKIE_SECURE=1,GCP_PROJECT_ID=${PROJECT_ID},GCP_REGION=${REGION},TRAINING_JOB_NAME=${TRAINING_JOB_NAME}" \
+  --set-env-vars="GCS_BUCKET=${BUCKET},CLOUD_SQL_CONNECTION_NAME=${CONNECTION_NAME},DB_USER=${DB_USER},DB_NAME=${DB_NAME},APP_GIT_COMMIT=${GIT_SHA},CONSOLE_COOKIE_SECURE=1,GCP_PROJECT_ID=${PROJECT_ID},GCP_REGION=${REGION},TRAINING_JOB_NAME=${TRAINING_JOB_NAME},INFERENCE_TORCH_THREADS=1,INFERENCE_LOW_CONFIDENCE_THRESHOLD=0.55" \
   --set-secrets="DB_PASSWORD=${DB_SECRET}:latest,CONSOLE_ACCESS_KEY=${CONSOLE_SECRET}:latest" \
   --cpu=1 \
-  --memory=1Gi \
-  --concurrency=20 \
+  --memory=2Gi \
+  --concurrency=8 \
   --min-instances=0 \
   --max-instances=2 \
   --timeout=900 \
@@ -178,8 +178,8 @@ Retrieve the Console access key when needed:
     --secret=${CONSOLE_SECRET} \\
     --project=${PROJECT_ID}
 
-日常操作：总览 -> 数据批次 -> 鱼体检测 -> 人工审核 -> 鱼种管理 -> 用户反馈 -> 数据集 -> 模型训练
+日常操作：总览 -> 数据批次 -> 鱼体检测 -> 人工审核 -> 鱼种管理 -> 用户反馈 -> 数据集 -> 模型训练 -> 模型实测
 
-Cloud Shell is no longer required for normal daily data / training operations.
+Cloud Shell is no longer required for normal daily data / training / inference-test operations.
 ============================================================
 EOF
