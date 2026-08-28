@@ -14,7 +14,9 @@ from sqlalchemy.orm import Session
 
 from app.dataset_models import DatasetItem
 from app.db import get_db
+from app.data_policy import UNCONFIRMED_TRUTH
 from app.dedupe import ImageFingerprint
+from app.freeze_policy import select_freeze_candidates
 from app.factory import get_bucket_name
 from app.flywheel import ensure_species_catalog
 from app.models import DatasetVersion, ImageAsset, SpeciesCatalog
@@ -53,94 +55,58 @@ def _choose_split(key: str, seed: int, train: float, val: float) -> str:
 
 
 def build_preview(db: Session, payload: DatasetFreezePreviewRequest) -> dict:
-    """Preview the same P0 quality policy used by freeze_cumulative_dataset, without GCS writes."""
+    """Preview the exact canonical selection used by formal Freeze."""
     _validate(payload)
     ensure_species_catalog(db)
 
-    if payload.parent_version and not db.get(DatasetVersion, payload.parent_version):
-        raise ValueError(f"父版本不存在：{payload.parent_version}")
+    if payload.parent_version:
+        parent = db.get(DatasetVersion, payload.parent_version)
+        if not parent:
+            raise ValueError(f"父版本不存在：{payload.parent_version}")
+    else:
+        parent = db.scalar(select(DatasetVersion).order_by(DatasetVersion.created_at.desc()).limit(1))
+    parent_version = parent.dataset_version if parent else None
 
-    catalog_rows = db.scalars(select(SpeciesCatalog).order_by(SpeciesCatalog.catalog_order)).all()
-    active_by_name = {row.common_name_zh: row for row in catalog_rows if row.status == "active"}
-    images = db.scalars(
-        select(ImageAsset)
-        .where(ImageAsset.review_status == "approved")
-        .order_by(ImageAsset.batch_id, ImageAsset.id)
-    ).all()
-
-    if not images:
-        return {
-            "dataset_version": payload.dataset_version,
-            "approved_master_pool_count": 0,
-            "image_count": 0,
-            "species_count": 0,
-            "species_counts": {},
-            "split_counts": {"train": 0, "val": 0, "test": 0},
-            "excluded_quality_counts": {},
-            "excluded_species_counts": {},
-            "selection_mode": "ALL_APPROVED",
-        }
-
-    image_ids = [image.id for image in images]
-    fingerprints = {
-        row.image_asset_id: row
-        for row in db.scalars(select(ImageFingerprint).where(ImageFingerprint.image_asset_id.in_(image_ids))).all()
+    policy = select_freeze_candidates(db, seed=payload.seed, train=payload.train, val=payload.val)
+    selected = policy["selected"]
+    species_counts: Counter[str] = Counter(item["catalog"].common_name_zh for item in selected)
+    split_counts: Counter[str] = Counter(item["split"] for item in selected)
+    active_keys = sorted(row.species_key for row in policy["catalog_rows"] if row.status == "active")
+    snapshot = {
+        "dataset_version": payload.dataset_version,
+        "parent_version": parent_version,
+        "seed": payload.seed,
+        "train": payload.train,
+        "val": payload.val,
+        "active_species_keys": active_keys,
+        "items": sorted(
+            [
+                [
+                    item["image"].batch_id,
+                    item["image"].image_id,
+                    item["catalog"].species_key,
+                    item["split"],
+                ]
+                for item in selected
+            ]
+        ),
     }
-    presences = {
-        row.image_asset_id: row
-        for row in db.scalars(select(FishPresenceResult).where(FishPresenceResult.image_asset_id.in_(image_ids))).all()
-    }
+    selection_hash = hashlib.sha256(
+        json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
-    seen: set[str] = set()
-    species_counts: Counter[str] = Counter()
-    split_counts: Counter[str] = Counter()
-    excluded_quality: Counter[str] = Counter()
-    excluded_species: Counter[str] = Counter()
-
-    for image in images:
-        fp = fingerprints.get(image.id)
-        presence = presences.get(image.id)
-        presence_status = effective_status(presence)
-
-        if fp and fp.duplicate_group and not fp.is_representative:
-            excluded_quality["near_duplicate"] += 1
-            continue
-        if presence_status == "multi_fish":
-            excluded_quality["multi_fish"] += 1
-            continue
-        if presence_status == "no_fish":
-            excluded_quality["no_fish"] += 1
-            continue
-
-        unique_key = fp.sha256 if fp else image.gcs_uri
-        if unique_key in seen:
-            excluded_quality["exact_duplicate"] += 1
-            continue
-        seen.add(unique_key)
-
-        truth_name = (image.truth_species or image.claimed_species or "").strip()
-        catalog = active_by_name.get(truth_name)
-        if not catalog:
-            excluded_species[truth_name or "unknown"] += 1
-            continue
-
-        duplicate_group = fp.duplicate_group if fp and fp.duplicate_group else ""
-        group = image.group_id or duplicate_group or f"{image.batch_id}:{image.image_id}"
-        split = _choose_split(group, payload.seed, payload.train, payload.val)
-        species_counts[catalog.common_name_zh] += 1
-        split_counts[split] += 1
-
-    image_count = sum(split_counts.values())
     return {
         "dataset_version": payload.dataset_version,
-        "approved_master_pool_count": len(images),
-        "image_count": image_count,
+        "parent_version": parent_version,
+        "approved_master_pool_count": policy["approved_master_pool_count"],
+        "image_count": len(selected),
         "species_count": len(species_counts),
         "species_counts": dict(species_counts),
         "split_counts": {name: split_counts.get(name, 0) for name in ("train", "val", "test")},
-        "excluded_quality_counts": dict(excluded_quality),
-        "excluded_species_counts": dict(excluded_species),
-        "selection_mode": "ALL_APPROVED",
+        "excluded_quality_counts": dict(policy["excluded_quality"]),
+        "excluded_species_counts": dict(policy["excluded_species"]),
+        "selection_mode": "ALL_APPROVED_VERIFIED_TRUTH",
+        "selection_hash": selection_hash,
         "train_ratio": payload.train,
         "val_ratio": payload.val,
         "test_ratio": round(1.0 - payload.train - payload.val, 6),
@@ -157,7 +123,7 @@ def _parse_gs_uri(uri: str) -> tuple[str, str]:
 
 
 def finalize_dataset_lineage(db: Session, dataset_version: str) -> dict:
-    """Idempotently materialize DatasetItem lineage and freeze_report.json after a freeze."""
+    """Idempotently materialize immutable lineage strictly from the frozen manifest."""
     dataset = db.get(DatasetVersion, dataset_version)
     if not dataset:
         raise ValueError("数据集版本不存在，请先完成冻结")
@@ -179,12 +145,14 @@ def finalize_dataset_lineage(db: Session, dataset_version: str) -> dict:
     for item in rows:
         batch_id = (item.get("batch_id") or "").strip()
         image_id = (item.get("image_id") or "").strip()
-        if not batch_id or not image_id:
+        frozen_gcs_uri = (item.get("gcs_uri") or "").strip()
+        species_key = (item.get("species_key") or "").strip()
+        species_name = (item.get("species") or "").strip()
+        split = (item.get("split") or "").strip()
+        if not batch_id or not image_id or not frozen_gcs_uri or not species_key or not species_name or not split:
             missing += 1
             continue
-        image = db.scalar(
-            select(ImageAsset).where(ImageAsset.batch_id == batch_id, ImageAsset.image_id == image_id)
-        )
+        image = db.scalar(select(ImageAsset).where(ImageAsset.batch_id == batch_id, ImageAsset.image_id == image_id))
         if not image:
             missing += 1
             continue
@@ -201,22 +169,32 @@ def finalize_dataset_lineage(db: Session, dataset_version: str) -> dict:
 
         existing.batch_id = batch_id
         existing.image_id = image_id
-        existing.gcs_uri = image.gcs_uri
-        existing.species_key = (item.get("species_key") or "unknown").strip() or "unknown"
-        existing.species_name = (item.get("species") or item.get("truth_species") or image.truth_species or image.claimed_species or "unknown").strip()
+        existing.gcs_uri = frozen_gcs_uri
+        existing.species_key = species_key
+        existing.species_name = species_name
         existing.class_index = int(item.get("class_index") or 0)
-        existing.split = (item.get("split") or "train").strip()
+        existing.split = split
         existing.presence_status = (item.get("presence_status") or "").strip() or None
         existing.duplicate_group = (item.get("duplicate_group") or "").strip() or None
-        existing.group_id = (item.get("group_id") or image.group_id or "").strip() or None
+        existing.group_id = (item.get("group_id") or "").strip() or None
         synced += 1
 
+    if missing:
+        raise ValueError(f"追溯物化失败：manifest 有 {missing} 行缺失必要字段或源 ImageAsset")
+    db.flush()
+    item_count = db.scalar(
+        select(func.count()).select_from(DatasetItem).where(DatasetItem.dataset_version == dataset_version)
+    ) or 0
+    if item_count != len(rows):
+        raise ValueError(f"追溯数量不一致：manifest={len(rows)}, dataset_items={item_count}")
     db.commit()
 
     prefix = object_name.rsplit("/", 1)[0] + "/"
     dataset_meta_blob = bucket.blob(prefix + "dataset.json")
     report_blob = bucket.blob(prefix + "freeze_report.json")
-    if dataset_meta_blob.exists(client) and not report_blob.exists(client):
+    if not dataset_meta_blob.exists(client):
+        raise ValueError("dataset.json 缺失")
+    if not report_blob.exists(client):
         report_blob.upload_from_string(
             dataset_meta_blob.download_as_text(encoding="utf-8"),
             content_type="application/json",
@@ -226,11 +204,9 @@ def finalize_dataset_lineage(db: Session, dataset_version: str) -> dict:
     return {
         "dataset_version": dataset_version,
         "status": dataset.status,
-        "item_count": db.scalar(
-            select(func.count()).select_from(DatasetItem).where(DatasetItem.dataset_version == dataset_version)
-        ) or 0,
+        "item_count": item_count,
         "synced": synced,
-        "missing": missing,
+        "missing": 0,
         "manifest_uri": dataset.manifest_uri,
         "class_map_uri": dataset.class_map_uri,
         "report_uri": f"gs://{bucket_name}/{prefix}freeze_report.json",
@@ -252,6 +228,78 @@ def finalize(dataset_version: str, db: Session = Depends(get_db)):
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{dataset_version}/audit")
+def audit_dataset(dataset_version: str, db: Session = Depends(get_db)):
+    dataset = db.get(DatasetVersion, dataset_version)
+    if not dataset:
+        raise HTTPException(status_code=404, detail="数据集版本不存在")
+    bucket_name, object_name = _parse_gs_uri(dataset.manifest_uri)
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(object_name)
+    if not blob.exists(client):
+        raise HTTPException(status_code=400, detail="dataset manifest 不存在")
+    rows = list(csv.DictReader(io.StringIO(blob.download_as_text(encoding="utf-8"))))
+
+    truth_empty = 0
+    species_truth_mismatch = 0
+    bad_presence = 0
+    inactive_species = 0
+    missing_source = 0
+    current_nonrepresentative_duplicates = 0
+    active_names = {
+        row.common_name_zh
+        for row in db.scalars(select(SpeciesCatalog).where(SpeciesCatalog.status == "active")).all()
+    }
+    for item in rows:
+        truth = (item.get("truth_species") or "").strip()
+        species = (item.get("species") or "").strip()
+        if not truth:
+            truth_empty += 1
+        if species != truth:
+            species_truth_mismatch += 1
+        if (item.get("presence_status") or "").strip() in {"no_fish", "multi_fish"}:
+            bad_presence += 1
+        if species not in active_names:
+            inactive_species += 1
+        image = db.scalar(
+            select(ImageAsset).where(
+                ImageAsset.batch_id == (item.get("batch_id") or "").strip(),
+                ImageAsset.image_id == (item.get("image_id") or "").strip(),
+            )
+        )
+        if not image:
+            missing_source += 1
+            continue
+        fp = db.scalar(select(ImageFingerprint).where(ImageFingerprint.image_asset_id == image.id))
+        if fp and fp.duplicate_group and not fp.is_representative:
+            current_nonrepresentative_duplicates += 1
+
+    lineage_item_count = db.scalar(
+        select(func.count()).select_from(DatasetItem).where(DatasetItem.dataset_version == dataset_version)
+    ) or 0
+    checks = {
+        "manifest_rows": len(rows),
+        "lineage_item_count": lineage_item_count,
+        "truth_species_empty": truth_empty,
+        "species_truth_mismatch": species_truth_mismatch,
+        "bad_presence": bad_presence,
+        "inactive_species": inactive_species,
+        "missing_source": missing_source,
+        "current_nonrepresentative_duplicates": current_nonrepresentative_duplicates,
+    }
+    passed = (
+        lineage_item_count == len(rows)
+        and truth_empty == 0
+        and species_truth_mismatch == 0
+        and bad_presence == 0
+        and inactive_species == 0
+        and missing_source == 0
+        and current_nonrepresentative_duplicates == 0
+    )
+    return {"dataset_version": dataset_version, "passed": passed, "checks": checks}
 
 
 @router.get("/{dataset_version}")

@@ -11,7 +11,9 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
+from app.data_policy import truth_filter_clause
 from app.db import get_db
+from app.dedupe import ImageFingerprint
 from app.models import DatasetVersion, ImageAsset, ReviewEvent
 from app.presence import (
     PRESENCE_MODEL_VERSION,
@@ -103,7 +105,7 @@ def inspect_images(
     if statuses:
         stmt = stmt.where(ImageAsset.review_status.in_(statuses))
     if species:
-        stmt = stmt.where(or_(ImageAsset.truth_species == species, ImageAsset.claimed_species == species))
+        stmt = stmt.where(truth_filter_clause(species))
     if new_since_latest:
         latest = db.scalar(select(DatasetVersion).order_by(DatasetVersion.created_at.desc()).limit(1))
         if latest and latest.source_cutoff_at:
@@ -120,10 +122,15 @@ def inspect_images(
     images = db.scalars(stmt.order_by(ImageAsset.batch_id, ImageAsset.id)).all()
     image_ids = [x.id for x in images]
     presence_map = {}
+    duplicate_map = {}
     if image_ids:
         presence_map = {
             row.image_asset_id: row
             for row in db.scalars(select(FishPresenceResult).where(FishPresenceResult.image_asset_id.in_(image_ids))).all()
+        }
+        duplicate_map = {
+            row.image_asset_id: row
+            for row in db.scalars(select(ImageFingerprint).where(ImageFingerprint.image_asset_id.in_(image_ids))).all()
         }
 
     filtered = []
@@ -131,16 +138,22 @@ def inspect_images(
         p = _presence_meta(presence_map.get(image.id))
         if presence and p["status"] != presence:
             continue
+        fp = duplicate_map.get(image.id)
         filtered.append(
             {
                 "batch_id": image.batch_id,
                 "image_id": image.image_id,
                 "media_url": f"/media/{image.batch_id}/{image.image_id}",
                 "claimed_species": image.claimed_species,
-                "truth_species": image.truth_species or image.claimed_species,
+                "truth_species": image.truth_species,
                 "review_status": image.review_status,
                 "notes": image.notes or "",
                 "presence": p,
+                "duplicate": {
+                    "group": fp.duplicate_group if fp else None,
+                    "is_duplicate": bool(fp and fp.duplicate_group and not fp.is_representative),
+                    "kind": fp.duplicate_kind if fp else None,
+                },
             }
         )
 

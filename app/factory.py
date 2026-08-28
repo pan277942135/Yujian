@@ -423,6 +423,10 @@ def sync_batch_registry(db: Session, batch_id: str, bucket_name: str | None = No
             }.get(auto_status, manifest_review)
 
         claimed_species = (row.get("claimed_species") or row.get("species") or row.get("class_name") or "").strip() or None
+        truth_species = (row.get("truth_species") or row.get("species_truth") or "").strip() or None
+        # An external manifest may claim a review result, but approved is only valid with explicit Ground Truth.
+        if manifest_review == "approved" and not truth_species:
+            manifest_review = "pending"
         notes = row.get("notes") or ""
         if audit.get("auto_reasons"):
             auto_note = f"[auto_v1:{audit.get('auto_status')}] {audit.get('auto_reasons')}"
@@ -434,6 +438,7 @@ def sync_batch_registry(db: Session, batch_id: str, bucket_name: str | None = No
             "source_url": row.get("source_url") or row.get("url"),
             "source_platform": row.get("source_platform") or row.get("platform"),
             "claimed_species": claimed_species,
+            "truth_species": truth_species,
             "scene": row.get("scene"),
             "lighting": row.get("lighting"),
             "quality": row.get("image_quality") or row.get("quality") or row.get("quality_score"),
@@ -451,7 +456,7 @@ def sync_batch_registry(db: Session, batch_id: str, bucket_name: str | None = No
                     batch_id=batch_id,
                     image_id=image_id,
                     review_status=manifest_review,
-                    truth_status="LIKELY_CORRECT" if manifest_review == "approved" else "UNCERTAIN",
+                    truth_status="LIKELY_CORRECT" if manifest_review == "approved" and truth_species else "UNCERTAIN",
                     **values,
                 )
             )
@@ -483,21 +488,19 @@ def choose_split(key: str, seed: int, train: float, val: float) -> str:
 
 
 def approved_summary(db: Session) -> dict:
+    truth = func.nullif(func.trim(ImageAsset.truth_species), "")
     rows = db.execute(
-        select(
-            ImageAsset.batch_id,
-            func.coalesce(ImageAsset.truth_species, ImageAsset.claimed_species, "unknown"),
-            func.count(),
-        )
+        select(ImageAsset.batch_id, truth, func.count())
         .where(ImageAsset.review_status == "approved")
-        .group_by(ImageAsset.batch_id, func.coalesce(ImageAsset.truth_species, ImageAsset.claimed_species, "unknown"))
+        .group_by(ImageAsset.batch_id, truth)
     ).all()
     batches: dict[str, dict] = {}
     total = 0
     for batch_id, species, count in rows:
+        name = species or "未确认真实鱼种"
         entry = batches.setdefault(batch_id, {"batch_id": batch_id, "approved": 0, "species": {}})
         entry["approved"] += count
-        entry["species"][species] = count
+        entry["species"][name] = count
         total += count
     return {"total_approved": total, "batches": list(batches.values())}
 
@@ -531,6 +534,7 @@ def freeze_dataset(
     parent_version: str | None = None,
     bucket_name: str | None = None,
 ) -> dict:
+    raise RuntimeError("Legacy factory.freeze_dataset is disabled; use POST /api/dataset-freeze/preview then POST /api/datasets/freeze")
     bucket_name = bucket_name or get_bucket_name()
     if not dataset_version.startswith("DS_"):
         raise ValueError("dataset_version must start with DS_")

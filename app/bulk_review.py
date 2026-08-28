@@ -11,6 +11,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
+from app.data_policy import mark_feedback_reviewed, review_group_clause, review_group_name, valid_truth_for_image
 from app.db import get_db
 from app.dedupe import ImageFingerprint
 from app.flywheel import species_names
@@ -21,7 +22,7 @@ router = APIRouter(tags=["bulk-review"])
 templates = Jinja2Templates(directory="app/templates")
 
 PENDING_STATUSES = {"pending", "needs_review", "hard_case"}
-PUBLIC_REVIEW_STATUSES = {"approved", "rejected", "pending"}
+PUBLIC_REVIEW_STATUSES = {"approved", "rejected", "pending", "needs_review", "hard_case"}
 
 
 def utcnow() -> datetime:
@@ -51,7 +52,7 @@ def _status_filter(status: str | None) -> set[str] | None:
 
 
 def _image_species(image: ImageAsset) -> str:
-    return (image.truth_species or image.claimed_species or "未标注").strip() or "未标注"
+    return review_group_name(image)
 
 
 def _presence_dict(row: FishPresenceResult | None) -> dict:
@@ -123,7 +124,7 @@ def api_bulk_images(
     if statuses:
         stmt = stmt.where(ImageAsset.review_status.in_(statuses))
     if species:
-        stmt = stmt.where(or_(ImageAsset.truth_species == species, ImageAsset.claimed_species == species))
+        stmt = stmt.where(review_group_clause(species))
     images = db.scalars(stmt.order_by(ImageAsset.id)).all()
 
     image_ids = [x.id for x in images]
@@ -150,7 +151,7 @@ def api_bulk_images(
                 "image_id": image.image_id,
                 "media_url": f"/media/{image.batch_id}/{image.image_id}",
                 "claimed_species": image.claimed_species,
-                "truth_species": image.truth_species or image.claimed_species,
+                "truth_species": image.truth_species,
                 "review_status": image.review_status,
                 "notes": image.notes or "",
                 "presence": p,
@@ -166,7 +167,6 @@ def api_bulk_images(
 def api_bulk_apply(payload: BulkReviewApply, db: Session = Depends(get_db)):
     if not db.get(Batch, payload.batch_id):
         raise HTTPException(status_code=404, detail="batch not found")
-    valid_species = set(species_names(db, include_candidates=True))
     changed = 0
     for item in payload.items:
         if item.review_status not in PUBLIC_REVIEW_STATUSES:
@@ -176,20 +176,30 @@ def api_bulk_apply(payload: BulkReviewApply, db: Session = Depends(get_db)):
         )
         if not image:
             raise HTTPException(status_code=404, detail=f"image not found: {item.image_id}")
-        truth = (item.truth_species or image.truth_species or image.claimed_species or "").strip()
-        if truth and truth not in valid_species:
-            raise HTTPException(status_code=400, detail=f"unknown species: {truth}")
+
+        if "truth_species" in item.model_fields_set:
+            truth = (item.truth_species or "").strip()
+        else:
+            truth = (image.truth_species or "").strip()
+        if truth and not valid_truth_for_image(db, image, truth):
+            raise HTTPException(status_code=400, detail=f"不可分配真实鱼种: {truth}")
+        if item.review_status == "approved" and not truth:
+            raise HTTPException(status_code=400, detail=f"{item.image_id}: 通过前必须确认真实鱼种")
+
         before = {
             "review_status": image.review_status,
             "truth_species": image.truth_species,
+            "truth_status": image.truth_status,
             "notes": image.notes,
         }
         image.review_status = item.review_status
         image.truth_species = truth or None
+        image.truth_status = "LIKELY_CORRECT" if item.review_status == "approved" and truth else ("UNCERTAIN" if not truth else image.truth_status)
         if item.notes is not None:
             image.notes = item.notes
         image.reviewed_by = "批量审核"
         image.reviewed_at = utcnow()
+        mark_feedback_reviewed(db, image)
         db.add(
             ReviewEvent(
                 image_asset_id=image.id,
@@ -200,6 +210,7 @@ def api_bulk_apply(payload: BulkReviewApply, db: Session = Depends(get_db)):
                     {
                         "review_status": image.review_status,
                         "truth_species": image.truth_species,
+                        "truth_status": image.truth_status,
                         "notes": image.notes,
                     },
                     ensure_ascii=False,

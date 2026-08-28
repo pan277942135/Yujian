@@ -63,7 +63,7 @@ def main() -> None:
         db.flush()
 
         single = add_image(db, batch_id, "IMG_SINGLE", "鲫鱼")
-        add_image(db, batch_id, "IMG_UNSCANNED", "鲤鱼")
+        unscanned = add_image(db, batch_id, "IMG_UNSCANNED", "鲤鱼")
         multi = add_image(db, batch_id, "IMG_MULTI", "草鱼")
         duplicate = add_image(db, batch_id, "IMG_DUP", "黑鱼")
         no_fish = add_image(db, batch_id, "IMG_NO_FISH", "黄骨鱼")
@@ -72,9 +72,55 @@ def main() -> None:
         db.add_all(
             [
                 FishPresenceResult(image_asset_id=single.id, batch_id=batch_id, status="single_fish", fish_count=1),
+                FishPresenceResult(image_asset_id=unscanned.id, batch_id=batch_id, status="single_fish", fish_count=1),
                 FishPresenceResult(image_asset_id=multi.id, batch_id=batch_id, status="multi_fish", fish_count=2),
                 FishPresenceResult(image_asset_id=no_fish.id, batch_id=batch_id, status="no_fish", fish_count=0),
+                FishPresenceResult(image_asset_id=duplicate.id, batch_id=batch_id, status="single_fish", fish_count=1),
                 FishPresenceResult(image_asset_id=pending.id, batch_id=batch_id, status="single_fish", fish_count=1),
+                ImageFingerprint(
+                    image_asset_id=single.id,
+                    batch_id=batch_id,
+                    sha256="a" * 64,
+                    phash_json="[]",
+                    dhash="0" * 16,
+                    crop_hash="",
+                    histogram_json="[]",
+                    width=100,
+                    height=100,
+                ),
+                ImageFingerprint(
+                    image_asset_id=unscanned.id,
+                    batch_id=batch_id,
+                    sha256="b" * 64,
+                    phash_json="[]",
+                    dhash="0" * 16,
+                    crop_hash="",
+                    histogram_json="[]",
+                    width=100,
+                    height=100,
+                ),
+                ImageFingerprint(
+                    image_asset_id=multi.id,
+                    batch_id=batch_id,
+                    sha256="c" * 64,
+                    phash_json="[]",
+                    dhash="0" * 16,
+                    crop_hash="",
+                    histogram_json="[]",
+                    width=100,
+                    height=100,
+                ),
+                ImageFingerprint(
+                    image_asset_id=no_fish.id,
+                    batch_id=batch_id,
+                    sha256="e" * 64,
+                    phash_json="[]",
+                    dhash="0" * 16,
+                    crop_hash="",
+                    histogram_json="[]",
+                    width=100,
+                    height=100,
+                ),
                 ImageFingerprint(
                     image_asset_id=duplicate.id,
                     batch_id=batch_id,
