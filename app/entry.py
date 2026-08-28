@@ -5,6 +5,7 @@ from app.bulk_review import router as bulk_review_router
 from app.inspect import router as inspect_router
 from app.dataset_api import router as dataset_freeze_router
 from app.training_api import router as training_router
+from app.inference_api import router as inference_router
 
 app.include_router(presence_router)
 app.include_router(dedupe_router)
@@ -12,3 +13,4 @@ app.include_router(bulk_review_router)
 app.include_router(inspect_router)
 app.include_router(dataset_freeze_router)
 app.include_router(training_router)
+app.include_router(inference_router)
