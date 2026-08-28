@@ -41,6 +41,8 @@ jobs:
         env:
           REGISTRY_DB_URL: 'sqlite:///:memory:'
         run: python scripts/smoke_business_state.py
+      - name: Run quick-review batch truth species UI smoke test
+        run: python scripts/smoke_bulk_species_ui.py
       - name: Run classifier training API smoke test
         env:
           REGISTRY_DB_URL: 'sqlite:///:memory:'
