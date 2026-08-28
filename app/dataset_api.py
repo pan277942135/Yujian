@@ -78,6 +78,7 @@ def build_preview(db: Session, payload: DatasetFreezePreviewRequest) -> dict:
         "seed": payload.seed,
         "train": payload.train,
         "val": payload.val,
+        "split_strategy": policy.get("split_strategy"),
         "active_species_keys": active_keys,
         "items": sorted(
             [
@@ -103,6 +104,12 @@ def build_preview(db: Session, payload: DatasetFreezePreviewRequest) -> dict:
         "species_count": len(species_counts),
         "species_counts": dict(species_counts),
         "split_counts": {name: split_counts.get(name, 0) for name in ("train", "val", "test")},
+        "split_strategy": policy.get("split_strategy"),
+        "split_group_count": policy.get("split_group_count", 0),
+        "per_species_split_counts": policy.get("per_species_split_counts", {}),
+        "split_warnings": policy.get("split_warnings", []),
+        "split_blockers": policy.get("split_blockers", []),
+        "freeze_ready": not bool(policy.get("split_blockers")),
         "excluded_quality_counts": dict(policy["excluded_quality"]),
         "excluded_species_counts": dict(policy["excluded_species"]),
         "selection_mode": "ALL_APPROVED_VERIFIED_TRUTH",
@@ -249,17 +256,22 @@ def audit_dataset(dataset_version: str, db: Session = Depends(get_db)):
     inactive_species = 0
     missing_source = 0
     current_nonrepresentative_duplicates = 0
+    split_zero_coverage = 0
     active_names = {
         row.common_name_zh
         for row in db.scalars(select(SpeciesCatalog).where(SpeciesCatalog.status == "active")).all()
     }
+    species_splits: dict[str, Counter[str]] = {}
     for item in rows:
         truth = (item.get("truth_species") or "").strip()
         species = (item.get("species") or "").strip()
+        split = (item.get("split") or "").strip()
         if not truth:
             truth_empty += 1
         if species != truth:
             species_truth_mismatch += 1
+        if species:
+            species_splits.setdefault(species, Counter())[split] += 1
         if (item.get("presence_status") or "").strip() in {"no_fish", "multi_fish"}:
             bad_presence += 1
         if species not in active_names:
@@ -277,6 +289,10 @@ def audit_dataset(dataset_version: str, db: Session = Depends(get_db)):
         if fp and fp.duplicate_group and not fp.is_representative:
             current_nonrepresentative_duplicates += 1
 
+    for species, counts in species_splits.items():
+        if any(counts.get(split, 0) == 0 for split in ("train", "val", "test")):
+            split_zero_coverage += 1
+
     lineage_item_count = db.scalar(
         select(func.count()).select_from(DatasetItem).where(DatasetItem.dataset_version == dataset_version)
     ) or 0
@@ -289,6 +305,7 @@ def audit_dataset(dataset_version: str, db: Session = Depends(get_db)):
         "inactive_species": inactive_species,
         "missing_source": missing_source,
         "current_nonrepresentative_duplicates": current_nonrepresentative_duplicates,
+        "species_with_zero_split_coverage": split_zero_coverage,
     }
     passed = (
         lineage_item_count == len(rows)
@@ -298,6 +315,7 @@ def audit_dataset(dataset_version: str, db: Session = Depends(get_db)):
         and inactive_species == 0
         and missing_source == 0
         and current_nonrepresentative_duplicates == 0
+        and split_zero_coverage == 0
     )
     return {"dataset_version": dataset_version, "passed": passed, "checks": checks}
 
