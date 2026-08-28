@@ -5,43 +5,46 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>数据集 · 渔见 AI</title>
   <style>
-    body{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f6f7f8;color:#171717}header{background:#fff;border-bottom:1px solid #e5e7eb;padding:14px 24px;display:flex;gap:22px;align-items:center;position:sticky;top:0;z-index:3}header a{text-decoration:none;color:#111827;font-weight:650}main{max-width:1180px;margin:0 auto;padding:24px}.muted{color:#6b7280}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.section{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin-top:18px}input,button{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:9px;background:#fff}button{cursor:pointer;font-weight:650}.primary{background:#111827;color:#fff}.secondary{background:#fff}.primary:disabled{opacity:.45;cursor:not-allowed}.row{display:grid;grid-template-columns:150px 1fr;gap:10px;align-items:center;margin:10px 0}.species{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.pill{display:inline-block;padding:3px 8px;border-radius:999px;background:#f3f4f6;font-size:12px}.pillBtn{cursor:pointer;border:0}.pillBtn:hover{text-decoration:underline;text-underline-offset:2px;box-shadow:0 0 0 2px rgba(15,23,42,.07)}.good{background:#ecfdf5}.warn{background:#fff7ed}.bad{background:#fff1f2}.bigBtn{border:0;padding:0;background:transparent;font-size:34px;font-weight:750;cursor:pointer;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:4px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid #eee;font-size:13px}th{color:#6b7280}.banner{display:none;white-space:pre-wrap;padding:12px;border-radius:10px;background:#eef2ff;margin-top:12px}.spinner{opacity:.6;pointer-events:none}.rule{border-left:4px solid #111827;padding:10px 12px;background:#f9fafb;border-radius:0 8px 8px 0;margin-top:14px}.preview{display:none;margin-top:14px;border:1px solid #dbeafe;background:#eff6ff;border-radius:12px;padding:14px}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:12px 0}.metric{background:#fff;border:1px solid #dbeafe;border-radius:10px;padding:12px}.metric b{display:block;font-size:24px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}.mini{font-size:12px;padding:5px 8px}.uri{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;max-width:260px;word-break:break-all}@media(max-width:850px){.grid{grid-template-columns:1fr}.metrics{grid-template-columns:1fr 1fr}.section{overflow:auto}}
+    *{box-sizing:border-box}body{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f6f7f8;color:#171717}header{background:#fff;border-bottom:1px solid #e5e7eb;padding:14px 24px;display:flex;gap:22px;align-items:center;position:sticky;top:0;z-index:3;overflow:auto;white-space:nowrap}header a{text-decoration:none;color:#111827;font-weight:650}header a.active{color:#2563eb}main{max-width:1220px;margin:0 auto;padding:24px}.muted{color:#6b7280}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.section{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin-top:18px}input,button{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:9px;background:#fff}button{cursor:pointer;font-weight:650}.primary{background:#111827;color:#fff;border-color:#111827}.secondary{background:#fff}.primary:disabled{opacity:.4;cursor:not-allowed}.row{display:grid;grid-template-columns:150px 1fr;gap:10px;align-items:center;margin:10px 0}.species{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.pill{display:inline-block;padding:3px 8px;border-radius:999px;background:#f3f4f6;font-size:12px}.pillBtn{cursor:pointer;border:0}.good{background:#ecfdf5}.warn{background:#fff7ed}.bad{background:#fff1f2}.bigBtn{border:0;padding:0;background:transparent;font-size:34px;font-weight:750;cursor:pointer;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:4px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px 8px;border-bottom:1px solid #eee;font-size:13px;vertical-align:top}th{color:#6b7280}.banner{display:none;white-space:pre-wrap;padding:12px;border-radius:10px;background:#eef2ff;margin-top:12px}.spinner{opacity:.6;pointer-events:none}.rule{border-left:4px solid #111827;padding:10px 12px;background:#f9fafb;border-radius:0 8px 8px 0;margin-top:14px}.preview{display:none;margin-top:14px;border:1px solid #dbeafe;background:#eff6ff;border-radius:12px;padding:14px}.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:12px 0}.metric{background:#fff;border:1px solid #dbeafe;border-radius:10px;padding:12px}.metric b{display:block;font-size:24px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}.mini{font-size:12px;padding:5px 8px}.uri{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;max-width:260px;word-break:break-all}.gate{padding:12px;border-radius:10px;margin:12px 0}.gate.good{border:1px solid #a7f3d0}.gate.bad{border:1px solid #fecdd3}.diag{overflow:auto;border:1px solid #dbeafe;border-radius:10px;background:#fff;margin-top:10px}.diag table{min-width:720px}.alert{padding:8px 10px;border-radius:8px;margin-top:7px;font-size:13px}.alert.bad{background:#fff1f2}.alert.warn{background:#fff7ed}.note{font-size:12px;color:#6b7280;margin-top:8px}@media(max-width:850px){main{padding:16px}.grid{grid-template-columns:1fr}.metrics{grid-template-columns:1fr 1fr}.section{overflow:auto}.row{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
-<header><a href="/">总览</a><a href="/batches">数据批次</a><a href="/review/bulk">快速审核</a><a href="/review">单张审核</a><a href="/species">鱼种管理</a><a href="/feedback">用户反馈</a><a href="/datasets">数据集</a><a href="/training">模型训练</a></header>
+<header><a href="/">总览</a><a href="/batches">数据批次</a><a href="/review/bulk">快速审核</a><a href="/review">单张审核</a><a href="/species">鱼种管理</a><a href="/feedback">用户反馈</a><a class="active" href="/datasets">数据集</a><a href="/training">模型训练</a><a href="/inference">模型实测</a></header>
 <main>
   <h1>Dataset Freeze · 数据集版本</h1>
-  <div class="muted">先预览，再冻结。冻结版本不可修改；后续新增或纠正数据通过创建新版本进入下一轮训练。</div>
+  <div class="muted">v0.3 起使用确定性按鱼种分层 + group 隔离切分。先预览 Split Gate，再冻结；冻结版本不可修改。</div>
   <div id="banner" class="banner"></div>
 
   <div class="grid">
     <div class="section">
       <h2>累计人工通过池</h2>
       <div id="summary"></div>
-      <div class="rule"><b>当前分类模型冻结规则</b><br><span class="muted">从全部“通过”图片中，仅选择已确认真实鱼种、已完成鱼体检测和去重检查的数据；排除无鱼、多鱼、重复及非启用鱼种。人工在机器结果之后重新通过可作为最终裁决。同一鱼获组使用同一 split，避免跨训练/验证/测试泄漏。</span></div>
+      <div class="rule"><b>当前冻结规则</b><br><span class="muted">仅使用已确认真实鱼种、已完成鱼体检测与去重的数据；排除无鱼、多鱼、非代表重复及非启用鱼种。同一鱼获 group 固定在同一个 split，避免数据泄漏。每个实际进入数据集的鱼种必须同时覆盖 Train / Val / Test。</span></div>
     </div>
 
     <div class="section">
       <h2>创建 Dataset Freeze</h2>
-      <div class="row"><label>数据集版本</label><input id="version" value="DS_M1_v0.1"></div>
+      <div class="row"><label>数据集版本</label><input id="version" value="DS_M1_v0.3"></div>
       <div class="row"><label>父版本</label><input id="parent" placeholder="留空则自动继承最新版本"></div>
-      <div class="row"><label>代码版本</label><input id="git" placeholder="留空则记录 unknown"></div>
       <div class="row"><label>随机种子</label><input id="seed" type="number" value="20260826"></div>
       <div class="row"><label>训练集比例</label><input id="train" type="number" step="0.01" value="0.70"></div>
       <div class="row"><label>验证集比例</label><input id="val" type="number" step="0.01" value="0.15"></div>
-      <div class="actions"><button class="secondary" onclick="previewFreeze()">生成预览</button><button id="freezeBtn" class="primary" onclick="freeze()" disabled>确认冻结</button></div>
-      <div class="muted" style="margin-top:9px">确认冻结后会生成 dataset_manifest.csv、class_map.json、dataset.json、freeze_report.json，并登记每张图片的数据集追溯关系。</div>
+      <div class="actions"><button class="secondary" onclick="previewFreeze()">生成 v0.3 预览</button><button id="freezeBtn" class="primary" onclick="freeze()" disabled>确认冻结</button></div>
+      <div class="muted" style="margin-top:9px">正式 Freeze 会重新计算同一份选择并校验 preview_hash；任何 Split Gate blocker 都会拒绝冻结。</div>
 
       <div id="preview" class="preview">
-        <b>冻结预览</b>
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap"><b>冻结预览</b><span id="pvGatePill" class="pill">尚未计算</span></div>
         <div class="metrics">
           <div class="metric"><span class="muted">可训练图片</span><b id="pvTotal">0</b></div>
           <div class="metric"><span class="muted">鱼种</span><b id="pvSpecies">0</b></div>
-          <div class="metric"><span class="muted">训练集</span><b id="pvTrain">0</b></div>
-          <div class="metric"><span class="muted">验证 / 测试</span><b id="pvRest">0 / 0</b></div>
+          <div class="metric"><span class="muted">Train</span><b id="pvTrain">0</b></div>
+          <div class="metric"><span class="muted">Val</span><b id="pvVal">0</b></div>
+          <div class="metric"><span class="muted">Test</span><b id="pvTest">0</b></div>
         </div>
-        <div id="pvSpeciesList" class="species"></div>
+        <div id="pvStrategy" class="muted"></div>
+        <div id="pvGate" class="gate"></div>
+        <div class="diag"><table><thead><tr><th>鱼种</th><th>总数</th><th>独立 group</th><th>Train</th><th>Val</th><th>Test</th><th>目标</th></tr></thead><tbody id="pvSplitRows"></tbody></table></div>
+        <div id="pvAlerts"></div>
         <div id="pvExcluded" class="muted" style="margin-top:10px"></div>
       </div>
     </div>
@@ -49,31 +52,82 @@
 
   <div class="section" id="frozen">
     <h2>已冻结版本</h2>
-    <table><thead><tr><th>版本</th><th>图片</th><th>鱼种</th><th>训练</th><th>验证</th><th>测试</th><th>规则</th><th>状态 / 操作</th></tr></thead><tbody id="datasets"></tbody></table>
+    <table><thead><tr><th>版本</th><th>图片</th><th>鱼种</th><th>Train</th><th>Val</th><th>Test</th><th>规则</th><th>状态 / 操作</th></tr></thead><tbody id="datasets"></tbody></table>
   </div>
 </main>
 <script>
-let previewSignature='',previewHash='';
-function esc(v){return (v??'').toString().replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+let previewSignature='',previewHash='',previewReady=false;
+function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function msg(t,err=false){const b=document.getElementById('banner');b.style.display='block';b.style.background=err?'#fff1f2':'#eef2ff';b.textContent=t}
 async function api(url,opts){const r=await fetch(url,opts);const text=await r.text();let d;try{d=JSON.parse(text)}catch{d=text}if(!r.ok)throw new Error(d.detail||text);return d}
-function modeName(v){return ({ALL_APPROVED:'全部已通过数据'})[v]||v||'-'}function datasetStatus(v){return ({FROZEN:'已冻结'})[v]||v||'-'}
+function modeName(v){return ({ALL_APPROVED:'全部已通过数据',ALL_APPROVED_VERIFIED_TRUTH:'已通过 + 已确认 Ground Truth'})[v]||v||'-'}
+function datasetStatus(v){return ({FROZEN:'已冻结'})[v]||v||'-'}
 function openInspect(params={}){const p=new URLSearchParams(params);window.open('/inspect?'+p.toString(),'yujian-data-inspect')}
 function openSpecies(status){window.open('/species?status='+encodeURIComponent(status),'yujian-species')}
 function jumpLatest(){document.getElementById('frozen').scrollIntoView({behavior:'smooth'})}
 function goTraining(version){window.location.href='/training?dataset='+encodeURIComponent(version)}
-function payload(){return {dataset_version:document.getElementById('version').value.trim(),parent_version:document.getElementById('parent').value.trim()||null,git_commit:document.getElementById('git').value.trim()||'unknown',seed:Number(document.getElementById('seed').value),train:Number(document.getElementById('train').value),val:Number(document.getElementById('val').value)}}
+function payload(){return {dataset_version:document.getElementById('version').value.trim(),parent_version:document.getElementById('parent').value.trim()||null,git_commit:'server-deployed-sha',seed:Number(document.getElementById('seed').value),train:Number(document.getElementById('train').value),val:Number(document.getElementById('val').value)}}
 function signature(p){return JSON.stringify({dataset_version:p.dataset_version,parent_version:p.parent_version,seed:p.seed,train:p.train,val:p.val})}
-function invalidate(){previewSignature='';previewHash='';document.getElementById('freezeBtn').disabled=true;document.getElementById('preview').style.display='none'}
+function invalidate(){previewSignature='';previewHash='';previewReady=false;document.getElementById('freezeBtn').disabled=true;document.getElementById('preview').style.display='none'}
 ['version','parent','seed','train','val'].forEach(id=>document.getElementById(id).addEventListener('input',invalidate));
 
-async function load(){try{const [s,d]=await Promise.all([api('/api/datasets/summary'),api('/api/datasets')]);document.getElementById('summary').innerHTML=`<button class="bigBtn" onclick="openInspect({review_status:'approved'})">${s.approved_master_pool}</button><div class="muted">累计通过图片 · 点击检查</div><div class="species"><button class="pill pillBtn good" onclick="openInspect({review_status:'approved',new_since_latest:'true'})">本轮新增通过 ${s.new_approved_since_latest_dataset}</button><button class="pill pillBtn" onclick="openSpecies('active')">已启用鱼种 ${s.active_species}</button><button class="pill pillBtn warn" onclick="openSpecies('candidate')">候选鱼种 ${s.candidate_species}</button><button class="pill pillBtn" onclick="jumpLatest()">最新版本 ${esc(s.latest_dataset||'暂无')}</button></div><div class="species" style="margin-top:14px">${(s.approved_species||[]).map(x=>`<button class="pill pillBtn" onclick='openInspect({review_status:"approved",species:${JSON.stringify(x.species)}})'>${esc(x.species)} ${x.count}</button>`).join('')}</div>`;if(!document.getElementById('parent').value&&s.latest_dataset)document.getElementById('parent').placeholder=`自动继承：${s.latest_dataset}`;document.getElementById('datasets').innerHTML=d.map(x=>`<tr><td><b>${esc(x.dataset_version)}</b><div class="uri">${esc(x.manifest_uri||'')}</div></td><td>${x.train_count+x.val_count+x.test_count}</td><td>${x.species_count}</td><td>${x.train_count}</td><td>${x.val_count}</td><td>${x.test_count}</td><td><span class="pill">${esc(modeName(x.selection_mode))}</span></td><td><span class="pill good">${esc(datasetStatus(x.status))}</span> <button class="mini" onclick="finalizeVersion('${esc(x.dataset_version)}')">校验追溯</button> <button class="mini primary" onclick="goTraining('${esc(x.dataset_version)}')">去训练</button></td></tr>`).join('')||'<tr><td colspan="8" class="muted">还没有冻结任何数据集版本</td></tr>'}catch(e){msg(e.message,true)}}
+async function load(){
+  try{
+    const [s,d]=await Promise.all([api('/api/datasets/summary'),api('/api/datasets')]);
+    document.getElementById('summary').innerHTML=`<button class="bigBtn" onclick="openInspect({review_status:'approved'})">${s.approved_master_pool}</button><div class="muted">累计通过图片 · 点击检查</div><div class="species"><button class="pill pillBtn good" onclick="openInspect({review_status:'approved',new_since_latest:'true'})">本轮新增通过 ${s.new_approved_since_latest_dataset}</button><button class="pill pillBtn" onclick="openSpecies('active')">已启用鱼种 ${s.active_species}</button><button class="pill pillBtn warn" onclick="openSpecies('candidate')">候选鱼种 ${s.candidate_species}</button><button class="pill pillBtn" onclick="jumpLatest()">最新版本 ${esc(s.latest_dataset||'暂无')}</button></div><div class="species" style="margin-top:14px">${(s.approved_species||[]).map(x=>`<button class="pill pillBtn" onclick='openInspect({review_status:"approved",species:${JSON.stringify(x.species)}})'>${esc(x.species)} ${x.count}</button>`).join('')}</div>`;
+    if(!document.getElementById('parent').value&&s.latest_dataset)document.getElementById('parent').placeholder=`自动继承：${s.latest_dataset}`;
+    document.getElementById('datasets').innerHTML=d.map(x=>`<tr><td><b>${esc(x.dataset_version)}</b><div class="uri">${esc(x.manifest_uri||'')}</div></td><td>${x.train_count+x.val_count+x.test_count}</td><td>${x.species_count}</td><td>${x.train_count}</td><td>${x.val_count}</td><td>${x.test_count}</td><td><span class="pill">${esc(modeName(x.selection_mode))}</span></td><td><span class="pill good">${esc(datasetStatus(x.status))}</span> <button class="mini" onclick="finalizeVersion('${esc(x.dataset_version)}')">校验追溯</button> <button class="mini" onclick="auditVersion('${esc(x.dataset_version)}')">Audit</button> <button class="mini primary" onclick="goTraining('${esc(x.dataset_version)}')">去训练</button></td></tr>`).join('')||'<tr><td colspan="8" class="muted">还没有冻结任何数据集版本</td></tr>';
+  }catch(e){msg(e.message,true)}
+}
 
-async function previewFreeze(){const p=payload();document.body.classList.add('spinner');msg('正在计算冻结预览，不会写入数据 …');try{const d=await api('/api/dataset-freeze/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});document.getElementById('pvTotal').textContent=d.image_count;document.getElementById('pvSpecies').textContent=d.species_count;document.getElementById('pvTrain').textContent=d.split_counts?.train||0;document.getElementById('pvRest').textContent=`${d.split_counts?.val||0} / ${d.split_counts?.test||0}`;document.getElementById('pvSpeciesList').innerHTML=Object.entries(d.species_counts||{}).sort((a,b)=>b[1]-a[1]).map(([name,count])=>`<span class="pill">${esc(name)} ${count}</span>`).join('');const q=d.excluded_quality_counts||{};const sp=d.excluded_species_counts||{};document.getElementById('pvExcluded').textContent=`通过池 ${d.approved_master_pool_count} 张；排除：未确认真实鱼种 ${sp['未确认真实鱼种']||0}、未鱼体检测 ${q.presence_not_scanned||0}、未去重检测 ${q.dedupe_not_scanned||0}、无鱼 ${q.no_fish||0}、多鱼 ${q.multi_fish||0}、近重复 ${q.near_duplicate||0}、完全重复 ${q.exact_duplicate||0}、其他非启用鱼种 ${Object.entries(sp).filter(([k])=>k!=='未确认真实鱼种').reduce((a,[,v])=>a+v,0)}。`;document.getElementById('preview').style.display='block';previewSignature=signature(p);previewHash=d.selection_hash||'';document.getElementById('freezeBtn').disabled=d.image_count<=0||!previewHash;msg(`预览完成：${d.image_count} 张可进入 ${p.dataset_version}`)}catch(e){invalidate();msg(e.message,true)}finally{document.body.classList.remove('spinner')}}
+function renderSplitPreview(d){
+  document.getElementById('pvTotal').textContent=d.image_count||0;
+  document.getElementById('pvSpecies').textContent=d.species_count||0;
+  document.getElementById('pvTrain').textContent=d.split_counts?.train||0;
+  document.getElementById('pvVal').textContent=d.split_counts?.val||0;
+  document.getElementById('pvTest').textContent=d.split_counts?.test||0;
+  document.getElementById('pvStrategy').textContent=`Split Strategy：${d.split_strategy||'-'} · 独立 group：${d.split_group_count||0}`;
+
+  const blockers=d.split_blockers||[];
+  const warnings=d.split_warnings||[];
+  const gate=document.getElementById('pvGate');
+  const pill=document.getElementById('pvGatePill');
+  if(d.freeze_ready){gate.className='gate good';gate.innerHTML='<b>✓ Split Gate PASS</b><div class="muted">所有进入数据集的鱼种均覆盖 Train / Val / Test，可以 Freeze。</div>';pill.className='pill good';pill.textContent='Freeze Ready'}
+  else{gate.className='gate bad';gate.innerHTML=`<b>✕ Split Gate BLOCK</b><div class="muted">存在 ${blockers.length} 项阻断，请先补数据或修正 group 后重新预览。</div>`;pill.className='pill bad';pill.textContent='Blocked'}
+
+  const rows=Object.entries(d.per_species_split_counts||{}).sort((a,b)=>a[0].localeCompare(b[0],'zh-CN'));
+  document.getElementById('pvSplitRows').innerHTML=rows.map(([name,x])=>{const low=x.train<10||x.val<3||x.test<3;return `<tr><td><b>${esc(name)}</b></td><td>${x.total}</td><td>${x.group_count}</td><td>${x.train}</td><td>${x.val}</td><td>${x.test}</td><td class="muted">${x.target?.train??'-'} / ${x.target?.val??'-'} / ${x.target?.test??'-'} ${low?'<span class="pill warn">关注</span>':''}</td></tr>`}).join('')||'<tr><td colspan="7" class="muted">暂无可进入冻结的数据</td></tr>';
+
+  document.getElementById('pvAlerts').innerHTML=[...blockers.map(x=>`<div class="alert bad"><b>BLOCK · ${esc(x.species)}</b>：${esc(x.message)}</div>`),...warnings.map(x=>`<div class="alert warn"><b>WARNING · ${esc(x.species)}</b>：${esc(x.message)}</div>`)].join('')||'<div class="note">未发现 split warning。</div>';
+  const q=d.excluded_quality_counts||{},sp=d.excluded_species_counts||{};
+  document.getElementById('pvExcluded').textContent=`通过池 ${d.approved_master_pool_count} 张；排除：未确认真实鱼种 ${sp['未确认真实鱼种']||0}、未鱼体检测 ${q.presence_not_scanned||0}、未去重检测 ${q.dedupe_not_scanned||0}、无鱼 ${q.no_fish||0}、多鱼 ${q.multi_fish||0}、近重复 ${q.near_duplicate||0}、完全重复 ${q.exact_duplicate||0}、其他非启用鱼种 ${Object.entries(sp).filter(([k])=>k!=='未确认真实鱼种').reduce((a,[,v])=>a+Number(v||0),0)}。`;
+}
+
+async function previewFreeze(){
+  const p=payload();document.body.classList.add('spinner');msg('正在计算 v0.3 冻结预览，不会写入数据 …');
+  try{
+    const d=await api('/api/dataset-freeze/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});
+    renderSplitPreview(d);document.getElementById('preview').style.display='block';previewSignature=signature(p);previewHash=d.selection_hash||'';previewReady=Boolean(d.freeze_ready);document.getElementById('freezeBtn').disabled=!previewReady||d.image_count<=0||!previewHash;
+    msg(d.freeze_ready?`预览完成：${d.image_count} 张，Split Gate PASS，可以冻结 ${p.dataset_version}`:`预览完成，但 Split Gate 未通过：${(d.split_blockers||[]).length} 项 blocker`,!d.freeze_ready);
+  }catch(e){invalidate();msg(e.message,true)}finally{document.body.classList.remove('spinner')}
+}
 
 async function finalizeVersion(version){document.body.classList.add('spinner');try{const d=await api('/api/dataset-freeze/'+encodeURIComponent(version)+'/finalize',{method:'POST'});msg(`追溯校验完成：${version}\nDataset Items：${d.item_count}\n清单：${d.manifest_uri}\n报告：${d.report_uri}`)}catch(e){msg(e.message,true)}finally{document.body.classList.remove('spinner')}}
+async function auditVersion(version){document.body.classList.add('spinner');try{const d=await api('/api/dataset-freeze/'+encodeURIComponent(version)+'/audit');msg(`${version} Audit：${d.passed?'PASS':'FAIL'}\n`+JSON.stringify(d.checks,null,2),!d.passed)}catch(e){msg(e.message,true)}finally{document.body.classList.remove('spinner')}}
 
-async function freeze(){const p=payload();if(previewSignature!==signature(p)||!previewHash){msg('配置或数据已变化，请重新生成预览。',true);return}p.preview_hash=previewHashif(!confirm(`确认冻结 ${p.dataset_version}？\n冻结后该版本不可修改。`))return;document.body.classList.add('spinner');msg('正在冻结 Dataset，并写入 GCS …');try{const d=await api('/api/datasets/freeze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});let f=null;try{f=await api('/api/dataset-freeze/'+encodeURIComponent(p.dataset_version)+'/finalize',{method:'POST'})}catch(e){msg(`数据集已冻结，但追溯登记需要重试：${e.message}`,true);await load();return}msg(`数据集已冻结：${d.dataset_version}\n图片：${d.image_count}\n鱼种：${d.species_count}\n训练 / 验证 / 测试：${d.split_counts?.train||0} / ${d.split_counts?.val||0} / ${d.split_counts?.test||0}\n追溯记录：${f.item_count}\nManifest：${f.manifest_uri}\n\n下一步：点击下方“去训练”启动第一次鱼种分类模型。`);invalidate();await load()}catch(e){msg(e.message,true)}finally{document.body.classList.remove('spinner')}}
+async function freeze(){
+  const p=payload();
+  if(previewSignature!==signature(p)||!previewHash||!previewReady){msg('当前预览未通过 Split Gate，或配置已变化，请重新生成预览。',true);return}
+  p.preview_hash=previewHash;
+  if(!confirm(`确认冻结 ${p.dataset_version}？\n冻结后该版本不可修改。`))return;
+  document.body.classList.add('spinner');msg('正在冻结 Dataset，并写入 GCS …');
+  try{
+    const d=await api('/api/datasets/freeze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});
+    let f=null;
+    try{f=await api('/api/dataset-freeze/'+encodeURIComponent(p.dataset_version)+'/finalize',{method:'POST'})}catch(e){msg(`数据集已冻结，但追溯登记需要重试：${e.message}`,true);await load();return}
+    msg(`数据集已冻结：${d.dataset_version}\n图片：${d.image_count}\n鱼种：${d.species_count}\nTrain / Val / Test：${d.split_counts?.train||0} / ${d.split_counts?.val||0} / ${d.split_counts?.test||0}\n追溯记录：${f.item_count}\nManifest：${f.manifest_uri}\n\n下一步：执行 Audit PASS 后再进入模型训练。`);invalidate();await load();
+  }catch(e){msg(e.message,true)}finally{document.body.classList.remove('spinner')}
+}
 load();
 </script>
 </body>
