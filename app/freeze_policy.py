@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-from collections import Counter
+import math
+from collections import Counter, defaultdict
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -11,6 +12,9 @@ from app.dedupe import ImageFingerprint
 from app.models import ImageAsset, SpeciesCatalog
 from app.presence import FishPresenceResult, effective_status
 
+SPLITS = ("train", "val", "test")
+SPLIT_STRATEGY = "DETERMINISTIC_STRATIFIED_GROUP_V1"
+
 
 def stable_fraction(value: str, seed: int) -> float:
     digest = hashlib.sha256(f"{seed}:{value}".encode("utf-8")).digest()
@@ -18,12 +22,231 @@ def stable_fraction(value: str, seed: int) -> float:
 
 
 def choose_split(key: str, seed: int, train: float, val: float) -> str:
+    """Legacy deterministic hash split helper retained for compatibility/tests."""
     p = stable_fraction(key, seed)
     if p < train:
         return "train"
     if p < train + val:
         return "val"
     return "test"
+
+
+def _target_split_counts(total: int, train: float, val: float) -> dict[str, int]:
+    """Largest-remainder targets with one sample per split whenever total >= 3."""
+    ratios = {"train": train, "val": val, "test": 1.0 - train - val}
+    raw = {name: total * ratio for name, ratio in ratios.items()}
+    counts = {name: int(math.floor(value)) for name, value in raw.items()}
+    remaining = total - sum(counts.values())
+    order = sorted(SPLITS, key=lambda name: (-(raw[name] - counts[name]), SPLITS.index(name)))
+    for name in order[:remaining]:
+        counts[name] += 1
+
+    if total >= 3:
+        for missing in [name for name in SPLITS if counts[name] == 0]:
+            donors = [name for name in SPLITS if counts[name] > 1]
+            if not donors:
+                break
+            donor = max(donors, key=lambda name: (counts[name], ratios[name], -SPLITS.index(name)))
+            counts[donor] -= 1
+            counts[missing] += 1
+    return counts
+
+
+def _group_composition(items: list[dict]) -> Counter[str]:
+    return Counter(item["catalog"].species_key for item in items)
+
+
+def _deviation_cost(
+    current: dict[str, Counter[str]],
+    targets: dict[str, dict[str, int]],
+) -> float:
+    cost = 0.0
+    for species_key, target in targets.items():
+        for split in SPLITS:
+            denom = max(1, target[split])
+            diff = current[species_key][split] - target[split]
+            cost += (diff * diff) / denom
+    return cost
+
+
+def _assign_stratified_group_splits(
+    selected: list[dict],
+    *,
+    seed: int,
+    train: float,
+    val: float,
+) -> dict:
+    """Assign whole groups to splits while balancing every species deterministically.
+
+    Group integrity is preserved to reduce train/val/test leakage. The assignment is
+    deterministic for a fixed candidate set + seed. If group structure makes three-way
+    coverage impossible for any represented species, the preview reports blockers and
+    formal Freeze must not proceed.
+    """
+    groups: dict[str, list[dict]] = defaultdict(list)
+    species_totals: Counter[str] = Counter()
+    species_group_keys: dict[str, set[str]] = defaultdict(set)
+    species_names: dict[str, str] = {}
+
+    for item in selected:
+        group_key = item["group_key"]
+        groups[group_key].append(item)
+        species_key = item["catalog"].species_key
+        species_totals[species_key] += 1
+        species_group_keys[species_key].add(group_key)
+        species_names[species_key] = item["catalog"].common_name_zh
+
+    targets = {
+        species_key: _target_split_counts(total, train, val)
+        for species_key, total in species_totals.items()
+    }
+    current: dict[str, Counter[str]] = {key: Counter() for key in species_totals}
+    assignment: dict[str, str] = {}
+
+    # Larger / mixed groups are placed first because they constrain the solution most.
+    group_order = sorted(
+        groups,
+        key=lambda key: (
+            -len(groups[key]),
+            -len(_group_composition(groups[key])),
+            stable_fraction(f"group-order:{key}", seed),
+            key,
+        ),
+    )
+
+    for group_key in group_order:
+        composition = _group_composition(groups[group_key])
+        candidates = []
+        for split in SPLITS:
+            need_score = 0.0
+            overflow = 0.0
+            for species_key, count in composition.items():
+                target = targets[species_key][split]
+                before = current[species_key][split]
+                need_score += count * (target - before) / max(1, target)
+                overflow += max(0, before + count - target) / max(1, target)
+            score = need_score - 0.35 * overflow
+            tie = stable_fraction(f"place:{group_key}:{split}", seed)
+            candidates.append((score, -tie, -SPLITS.index(split), split))
+        chosen = max(candidates)[-1]
+        assignment[group_key] = chosen
+        for species_key, count in composition.items():
+            current[species_key][chosen] += count
+
+    # Repair any zero-coverage species/split by moving a whole group when doing so does
+    # not create a new zero in its donor split for any species carried by that group.
+    for _ in range(max(1, len(groups) * 3)):
+        missing = [
+            (species_key, split)
+            for species_key in sorted(species_totals)
+            for split in SPLITS
+            if current[species_key][split] == 0
+        ]
+        if not missing:
+            break
+        moved = False
+        baseline_cost = _deviation_cost(current, targets)
+        for species_key, wanted_split in missing:
+            options = []
+            for group_key in sorted(species_group_keys[species_key]):
+                donor = assignment[group_key]
+                if donor == wanted_split:
+                    continue
+                composition = _group_composition(groups[group_key])
+                # Preserve at least one item in the donor split for every affected class.
+                if any(current[key][donor] - count <= 0 for key, count in composition.items()):
+                    continue
+
+                for key, count in composition.items():
+                    current[key][donor] -= count
+                    current[key][wanted_split] += count
+                new_cost = _deviation_cost(current, targets)
+                for key, count in composition.items():
+                    current[key][wanted_split] -= count
+                    current[key][donor] += count
+
+                options.append(
+                    (
+                        new_cost - baseline_cost,
+                        stable_fraction(f"repair:{species_key}:{wanted_split}:{group_key}", seed),
+                        group_key,
+                        donor,
+                    )
+                )
+            if not options:
+                continue
+            _delta, _tie, group_key, donor = min(options)
+            composition = _group_composition(groups[group_key])
+            assignment[group_key] = wanted_split
+            for key, count in composition.items():
+                current[key][donor] -= count
+                current[key][wanted_split] += count
+            moved = True
+            break
+        if not moved:
+            break
+
+    blockers: list[dict] = []
+    warnings: list[dict] = []
+    per_species: dict[str, dict] = {}
+    for species_key in sorted(species_totals, key=lambda key: species_names[key]):
+        name = species_names[species_key]
+        counts = {split: int(current[species_key][split]) for split in SPLITS}
+        total = int(species_totals[species_key])
+        group_count = len(species_group_keys[species_key])
+        per_species[name] = {
+            "species_key": species_key,
+            "total": total,
+            "group_count": group_count,
+            **counts,
+            "target": targets[species_key],
+        }
+
+        if total < 3:
+            blockers.append(
+                {
+                    "species": name,
+                    "code": "TOO_FEW_SAMPLES_FOR_THREE_WAY_SPLIT",
+                    "message": f"{name} 仅 {total} 张，无法同时覆盖 Train/Val/Test",
+                }
+            )
+        elif group_count < 3:
+            blockers.append(
+                {
+                    "species": name,
+                    "code": "TOO_FEW_GROUPS_FOR_THREE_WAY_SPLIT",
+                    "message": f"{name} 仅 {group_count} 个独立 group，保持 group 隔离时无法稳定三路切分",
+                }
+            )
+
+        for split in SPLITS:
+            if counts[split] == 0:
+                blockers.append(
+                    {
+                        "species": name,
+                        "code": f"ZERO_{split.upper()}_COVERAGE",
+                        "message": f"{name} 的 {split} 样本为 0，禁止 Freeze",
+                    }
+                )
+
+        if 0 < counts["train"] < 10:
+            warnings.append({"species": name, "code": "LOW_TRAIN", "message": f"{name} Train 仅 {counts['train']} 张（<10）"})
+        if 0 < counts["val"] < 3:
+            warnings.append({"species": name, "code": "LOW_VAL", "message": f"{name} Val 仅 {counts['val']} 张（<3）"})
+        if 0 < counts["test"] < 3:
+            warnings.append({"species": name, "code": "LOW_TEST", "message": f"{name} Test 仅 {counts['test']} 张（<3）"})
+
+    for item in selected:
+        item["split"] = assignment[item["group_key"]]
+
+    return {
+        "strategy": SPLIT_STRATEGY,
+        "targets": targets,
+        "per_species": per_species,
+        "warnings": warnings,
+        "blockers": blockers,
+        "group_count": len(groups),
+    }
 
 
 def select_freeze_candidates(db: Session, *, seed: int, train: float, val: float) -> dict:
@@ -41,6 +264,11 @@ def select_freeze_candidates(db: Session, *, seed: int, train: float, val: float
             "catalog_rows": catalog_rows,
             "excluded_quality": Counter(),
             "excluded_species": Counter(),
+            "split_strategy": SPLIT_STRATEGY,
+            "per_species_split_counts": {},
+            "split_warnings": [],
+            "split_blockers": [],
+            "split_group_count": 0,
         }
 
     image_ids = [image.id for image in images]
@@ -97,16 +325,24 @@ def select_freeze_candidates(db: Session, *, seed: int, train: float, val: float
             continue
 
         duplicate_group = fp.duplicate_group or ""
-        group = image.group_id or duplicate_group or f"{image.batch_id}:{image.image_id}"
+        group_key = image.group_id or duplicate_group or f"{image.batch_id}:{image.image_id}"
         selected.append(
             {
                 "image": image,
                 "catalog": catalog,
                 "presence_status": presence_status,
                 "duplicate_group": duplicate_group,
-                "split": choose_split(group, seed, train, val),
+                "group_key": group_key,
             }
         )
+
+    split = _assign_stratified_group_splits(selected, seed=seed, train=train, val=val) if selected else {
+        "strategy": SPLIT_STRATEGY,
+        "per_species": {},
+        "warnings": [],
+        "blockers": [],
+        "group_count": 0,
+    }
 
     return {
         "approved_master_pool_count": len(images),
@@ -114,4 +350,9 @@ def select_freeze_candidates(db: Session, *, seed: int, train: float, val: float
         "catalog_rows": catalog_rows,
         "excluded_quality": excluded_quality,
         "excluded_species": excluded_species,
+        "split_strategy": split["strategy"],
+        "per_species_split_counts": split["per_species"],
+        "split_warnings": split["warnings"],
+        "split_blockers": split["blockers"],
+        "split_group_count": split["group_count"],
     }
