@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.factory import IMAGE_EXTS, audit_incoming_batch, get_bucket_name
 from app.flywheel import species_names
+from app.species_alias import normalize_species_name
+from app.species_policy import ensure_target_species
 
 
 def _audit_reports(client: storage.Client, bucket_name: str) -> dict[str, dict]:
@@ -71,14 +73,15 @@ def audit_with_species_catalog(
     source: str,
     bucket_name: str | None = None,
 ) -> dict:
-    """Run deterministic audit, then recognize newly-activated Catalog species.
+    """Run deterministic audit and recognize canonical species + safe aliases.
 
-    The low-level audit intentionally remains conservative. This Console adapter
-    upgrades rows whose *only* problem is the old fixed target-species list when
-    their claimed species is now active/candidate in Species Catalog.
+    Raw claimed_species remains untouched for provenance. Safe regional/common aliases
+    are normalized only for catalog recognition; ambiguous search-only aliases remain
+    needs-review and are never promoted into Ground Truth.
     """
     bucket_name = bucket_name or get_bucket_name()
     report = audit_incoming_batch(incoming_prefix, batch_id, source, bucket_name)
+    ensure_target_species(db)
     accepted_names = set(species_names(db, include_candidates=True))
     client = storage.Client()
     bucket = client.bucket(bucket_name)
@@ -88,14 +91,19 @@ def audit_with_species_catalog(
 
     rows = list(csv.DictReader(io.StringIO(queue_blob.download_as_text(encoding="utf-8-sig"))))
     changed = 0
+    aliases_recognized = 0
     for row in rows:
         if row.get("auto_status") != "NEEDS_REVIEW":
             continue
         reasons = [x for x in (row.get("auto_reasons") or "").split(";") if x]
-        if row.get("claimed_species") in accepted_names and set(reasons) <= {"non_target_or_unknown_species", "resolved_by_basename"}:
+        raw_claimed = (row.get("claimed_species") or "").strip()
+        normalized = normalize_species_name(raw_claimed)
+        if normalized in accepted_names and set(reasons) <= {"non_target_or_unknown_species", "resolved_by_basename"}:
             row["auto_status"] = "CANDIDATE"
             row["auto_reasons"] = ";".join(x for x in reasons if x != "non_target_or_unknown_species")
             changed += 1
+            if normalized and normalized != raw_claimed:
+                aliases_recognized += 1
 
     if changed:
         buf = io.StringIO()
@@ -109,6 +117,7 @@ def audit_with_species_catalog(
             counts[status] = counts.get(status, 0) + 1
         report["status_counts"] = counts
         report["catalog_species_upgraded"] = changed
+        report["alias_species_recognized"] = aliases_recognized
         report_blob = bucket.blob(f"cleaning/{batch_id}/auto_v1/audit_report.json")
         report_blob.upload_from_string(json.dumps(report, ensure_ascii=False, indent=2), content_type="application/json")
     return report
