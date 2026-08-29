@@ -42,17 +42,24 @@ for role in roles/run.sourceDeveloper roles/serviceusage.serviceUsageConsumer; d
     --condition=None >/dev/null
 done
 
+# The deployer must be able to attach the existing Cloud Run runtime identity.
 gcloud iam service-accounts add-iam-policy-binding "$RUNTIME_SA" \
   --project "$PROJECT_ID" \
   --member="serviceAccount:${DEPLOY_SA}" \
   --role="roles/iam.serviceAccountUser" >/dev/null
 
-# Cloud Run source deploy uses Cloud Build. Current Cloud Run guidance requires
-# the build service account to have roles/run.builder.
+# `gcloud run deploy --source` submits a Cloud Build using BUILD_SA. Google Cloud
+# requires two independent permissions: BUILD_SA needs roles/run.builder on the
+# project, and the deployer needs iam.serviceAccounts.actAs on that build identity.
 gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:${BUILD_SA}" \
   --role="roles/run.builder" \
   --condition=None >/dev/null
+
+gcloud iam service-accounts add-iam-policy-binding "$BUILD_SA" \
+  --project "$PROJECT_ID" \
+  --member="serviceAccount:${DEPLOY_SA}" \
+  --role="roles/iam.serviceAccountUser" >/dev/null
 
 log "Ensure Workload Identity Pool"
 if ! gcloud iam workload-identity-pools describe "$POOL_ID" \
@@ -113,6 +120,7 @@ Repository: ${GITHUB_REPOSITORY}
 Provider: ${PROVIDER_RESOURCE}
 Deploy service account: ${DEPLOY_SA}
 Runtime service account: ${RUNTIME_SA}
+Build service account: ${BUILD_SA}
 
 No long-lived Google Cloud JSON key is required.
 
