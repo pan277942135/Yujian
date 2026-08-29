@@ -1,0 +1,5 @@
+# Explicit source-upload exclusions for gcloud run deploy --source .
+.gcloudignore
+.git
+.gitignore
+#!include:.gitignore
