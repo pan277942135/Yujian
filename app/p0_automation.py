@@ -13,7 +13,7 @@ from app.db import SessionLocal, get_db
 from app.feedback_pipeline import materialize_feedback_batch
 from app.freeze_policy import select_freeze_candidates
 from app.models import FeedbackEvent
-from app.species_alias import alias_resolution, normalize_species_name
+from app.species_alias import alias_resolution
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/automation", tags=["p0-automation"])
@@ -155,19 +155,20 @@ def install_feedback_automation(app) -> None:
         alias_changes: list[dict] = []
 
         if is_feedback_post:
+            raw_body = await request.body()
+            body_for_downstream = raw_body
             try:
-                raw_body = await request.body()
                 payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
                 normalized, alias_changes = normalize_feedback_payload(payload)
                 if alias_changes:
-                    new_body = json.dumps(normalized, ensure_ascii=False).encode("utf-8")
-
-                    async def receive():
-                        return {"type": "http.request", "body": new_body, "more_body": False}
-
-                    request._receive = receive  # Starlette request body override for downstream Pydantic parsing.
+                    body_for_downstream = json.dumps(normalized, ensure_ascii=False).encode("utf-8")
             except Exception:
                 logger.exception("feedback alias normalization failed; forwarding original request")
+
+            async def receive():
+                return {"type": "http.request", "body": body_for_downstream, "more_body": False}
+
+            request._receive = receive  # Replay consumed body for downstream Pydantic parsing.
 
         response = await call_next(request)
 
