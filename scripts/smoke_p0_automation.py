@@ -14,8 +14,12 @@ os.environ.setdefault("REGISTRY_DB_URL", "sqlite:///:memory:")
 os.environ.setdefault("FEEDBACK_AUTO_BATCH_THRESHOLD", "20")
 os.environ.setdefault("FEEDBACK_AUTO_BATCH_SIZE", "20")
 
+from sqlalchemy import select  # noqa: E402
+
 from app.db import SessionLocal, init_db  # noqa: E402
 from app.entry import app  # noqa: E402
+from app.flywheel import record_feedback  # noqa: E402
+from app.models import FeedbackEvent, SpeciesCatalog  # noqa: E402
 from app.p0_automation import (  # noqa: E402
     build_dataset_readiness,
     feedback_auto_batch_id,
@@ -54,6 +58,24 @@ def main() -> None:
     db = SessionLocal()
     try:
         ensure_target_species(db)
+
+        # The normalized correction must resolve to the existing canonical species,
+        # not create a duplicate candidate named 桂鱼.
+        feedback = record_feedback(
+            db,
+            source_event_id="P0_ALIAS_SMOKE_001",
+            feedback_type="corrected",
+            source="smoke",
+            predicted_species=normalized["predicted_species"],
+            corrected_species=normalized["corrected_species"],
+            user_note=normalized["user_note"],
+        )
+        assert feedback["feedback_type"] == "corrected"
+        assert feedback["corrected_species"] == "鳜鱼"
+        assert db.scalar(select(SpeciesCatalog).where(SpeciesCatalog.common_name_zh == "桂鱼")) is None
+        stored = db.scalar(select(FeedbackEvent).where(FeedbackEvent.source_event_id == "P0_ALIAS_SMOKE_001"))
+        assert stored is not None and "corrected_species_raw=桂鱼->鳜鱼" in (stored.user_note or "")
+
         status = maybe_auto_materialize_feedback(db)
         assert status["triggered"] is False
         assert status["eligible"] == 0
@@ -82,6 +104,9 @@ def main() -> None:
         "直接进入“快速审核”",
     ):
         assert token in batches_html, token
+
+    middleware_text = (ROOT / "app/p0_automation.py").read_text(encoding="utf-8")
+    assert "Replay consumed body for downstream Pydantic parsing" in middleware_text
 
     print("P0 automation smoke OK", {"readiness_disabled": readiness["training_disabled_species_count"]})
 
