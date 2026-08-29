@@ -126,28 +126,38 @@ def main():
         db.refresh(pending2)
         assert pending2.truth_species is None and pending2.review_status == "hard_case"
 
-        # Freeze Preview requires QA scans and verified truth.
+        # Freeze Preview requires QA scans and verified truth. This tiny fixture is
+        # intentionally below the default training thresholds, so no class is enabled.
         preview1 = build_preview(db, DatasetFreezePreviewRequest(dataset_version="DS_P0", seed=7, train=0.7, val=0.15))
         assert preview1["excluded_species_counts"].get("未确认真实鱼种") == 1, preview1
         assert preview1["excluded_quality_counts"].get("dedupe_not_scanned") == 1, preview1
         assert preview1["excluded_quality_counts"].get("no_fish") == 1, preview1
         assert preview1["excluded_quality_counts"].get("near_duplicate") == 1, preview1
+        assert preview1["image_count"] == 0 and not preview1["freeze_ready"], preview1
 
-        # Human re-approval after machine result overrides no-fish / near-duplicate machine gate.
+        # Human re-approval after machine result overrides no-fish / near-duplicate
+        # quality gates. The images become eligible for counting, but the classes still
+        # remain default-disabled because this tiny fixture is below training thresholds.
         nofish.reviewed_at = p_nofish.updated_at + timedelta(seconds=1)
         nofish.reviewed_by = "人工复核"
         duplicate.reviewed_at = fp_dup.updated_at + timedelta(seconds=1)
         duplicate.reviewed_by = "人工复核"
         db.commit()
         preview2 = build_preview(db, DatasetFreezePreviewRequest(dataset_version="DS_P0", seed=7, train=0.7, val=0.15))
-        assert preview2["image_count"] == preview1["image_count"] + 2, (preview1, preview2)
+        assert preview2["image_count"] == 0, preview2
+        assert preview2["excluded_quality_counts"].get("no_fish", 0) == 0, preview2
+        assert preview2["excluded_quality_counts"].get("near_duplicate", 0) == 0, preview2
+        assert preview2["excluded_quality_counts"].get("dedupe_not_scanned") == 1, preview2
 
-        # Snapshot hash changes when truth changes.
+        # A truth edit that does not change the trainable class set is allowed to keep
+        # the same selection hash: preview_hash protects the exact frozen selection,
+        # not unrelated low-data rows that are excluded from this training snapshot.
         old_hash = preview2["selection_hash"]
         yellow.truth_species = "黑鱼"
         db.commit()
         preview3 = build_preview(db, DatasetFreezePreviewRequest(dataset_version="DS_P0", seed=7, train=0.7, val=0.15))
-        assert preview3["selection_hash"] != old_hash
+        assert preview3["selection_hash"] == old_hash, (preview2, preview3)
+        assert preview3["image_count"] == 0 and not preview3["freeze_ready"], preview3
 
         # Retired historical truth may be preserved but not newly assigned.
         other = db.get(SpeciesCatalog, "other_freshwater_fish")

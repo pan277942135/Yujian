@@ -7,6 +7,8 @@ from app.dataset_api import router as dataset_freeze_router
 from app.training_api import router as training_router, templates as training_templates
 from app.inference_api import router as inference_router, templates as inference_templates
 from app.unified_nav import install_unified_nav
+from app.db import SessionLocal
+from app.species_policy import ensure_target_species
 
 
 for template_engine in (
@@ -17,6 +19,16 @@ for template_engine in (
     inference_templates,
 ):
     install_unified_nav(template_engine)
+
+
+@app.on_event("startup")
+def seed_target_species_catalog() -> None:
+    db = SessionLocal()
+    try:
+        ensure_target_species(db)
+    finally:
+        db.close()
+
 
 app.include_router(presence_router)
 app.include_router(dedupe_router)
