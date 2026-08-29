@@ -55,19 +55,22 @@ def main() -> None:
             "HEALTH_REVISION",
         ],
     )
-    require_text(
-        "scripts/bootstrap_github_wif.sh",
-        [
-            "workload-identity-pools",
-            "roles/run.sourceDeveloper",
-            "roles/serviceusage.serviceUsageConsumer",
-            "roles/iam.serviceAccountUser",
-            "roles/run.builder",
-            "roles/iam.workloadIdentityUser",
-            "assertion.repository",
-            "assertion.ref=='refs/heads/main'",
-        ],
-    )
+    bootstrap = (ROOT / "scripts/bootstrap_github_wif.sh").read_text(encoding="utf-8")
+    for token in (
+        "workload-identity-pools",
+        "roles/run.sourceDeveloper",
+        "roles/serviceusage.serviceUsageConsumer",
+        "roles/run.builder",
+        "roles/iam.workloadIdentityUser",
+        "assertion.repository",
+        "assertion.ref=='refs/heads/main'",
+        'gcloud iam service-accounts add-iam-policy-binding "$BUILD_SA"',
+        '--member="serviceAccount:${DEPLOY_SA}"',
+        '--role="roles/iam.serviceAccountUser"',
+    ):
+        assert token in bootstrap, f"bootstrap_github_wif.sh missing {token!r}"
+    assert bootstrap.count('roles/iam.serviceAccountUser') >= 2, "runtime and build identities both require deployer actAs"
+
     for path in (".gitignore", ".gcloudignore", ".dockerignore"):
         require_text(path, ["gha-creds-*.json"])
 
