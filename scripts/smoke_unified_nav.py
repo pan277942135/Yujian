@@ -55,8 +55,10 @@ def main_test() -> None:
         assert isinstance(engine.env.loader, UnifiedNavLoader), type(engine.env.loader)
 
     loader = main.templates.env.loader
+    rendered_sources: dict[str, str] = {}
     for template_name in TEMPLATES:
         source, _filename, _uptodate = loader.get_source(main.templates.env, template_name)
+        rendered_sources[template_name] = source
         assert source.count('class="app-nav"') == 1, template_name
         positions = []
         for href, label in EXPECTED_LINKS:
@@ -67,7 +69,13 @@ def main_test() -> None:
         assert positions == sorted(positions), (template_name, positions)
         assert "aria-current=\"page\"" in source, template_name
 
+    review_source = rendered_sources["review.html"]
+    assert 'class="filters"' in review_source, "single-review filters were removed by unified nav"
+    for control_id in ["status", "batch", "species", "q"]:
+        assert f'id="{control_id}"' in review_source, ("review.html", control_id)
+
     print("Unified top navigation smoke OK", len(TEMPLATES), "templates", len(EXPECTED_LINKS), "items")
+    print("Single-review header controls preserved", "status batch species q")
 
 
 if __name__ == "__main__":
