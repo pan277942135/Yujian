@@ -1,0 +1,8 @@
+# Google GitHub Actions creates short-lived credential files in the workspace.
+# They must never be committed or uploaded as build context.
+gha-creds-*.json
+
+__pycache__/
+*.py[cod]
+.venv/
+.env
