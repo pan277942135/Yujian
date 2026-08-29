@@ -11,6 +11,7 @@ from app.data_policy import UNCONFIRMED_TRUTH, human_approval_overrides, normali
 from app.dedupe import ImageFingerprint
 from app.models import ImageAsset, SpeciesCatalog
 from app.presence import FishPresenceResult, effective_status
+from app.species_policy import ensure_target_species, training_eligibility, training_thresholds
 
 SPLITS = ("train", "val", "test")
 SPLIT_STRATEGY = "DETERMINISTIC_STRATIFIED_GROUP_V1"
@@ -209,6 +210,108 @@ def _assign_stratified_group_splits(selected: list[dict], *, seed: int, train: f
     }
 
 
+def _empty_split() -> dict:
+    return {
+        "strategy": SPLIT_STRATEGY,
+        "targets": {},
+        "per_species": {},
+        "warnings": [],
+        "blockers": [],
+        "group_count": 0,
+    }
+
+
+def _training_gate(
+    selected: list[dict],
+    catalog_rows: list[SpeciesCatalog],
+    *,
+    seed: int,
+    train: float,
+    val: float,
+) -> tuple[list[dict], dict, list[dict], list[dict]]:
+    """Remove low-data active species without blocking mature classes.
+
+    Eligibility is recalculated after each removal because group-aware stratified
+    assignment can shift when a class disappears. The loop stops only when every
+    remaining class satisfies the default training thresholds.
+    """
+    active_rows = [row for row in catalog_rows if row.status == "active"]
+    active_by_key = {row.species_key: row for row in active_rows}
+    remaining = list(selected)
+    disabled_by_key: dict[str, dict] = {}
+
+    while remaining:
+        split = _assign_stratified_group_splits(remaining, seed=seed, train=train, val=val)
+        per_by_key = {row["species_key"]: row for row in split["per_species"].values()}
+        eligible_keys: set[str] = set()
+        newly_disabled: list[str] = []
+
+        for row in active_rows:
+            counts = per_by_key.get(
+                row.species_key,
+                {
+                    "species_key": row.species_key,
+                    "total": 0,
+                    "group_count": 0,
+                    "train": 0,
+                    "val": 0,
+                    "test": 0,
+                    "target": {"train": 0, "val": 0, "test": 0},
+                },
+            )
+            enabled, reasons = training_eligibility(counts, is_other=bool(row.is_other))
+            if enabled:
+                eligible_keys.add(row.species_key)
+            else:
+                if row.species_key not in disabled_by_key:
+                    disabled_by_key[row.species_key] = {
+                        "species": row.common_name_zh,
+                        "species_key": row.species_key,
+                        "training_enabled": False,
+                        "reasons": reasons,
+                        **counts,
+                    }
+                if row.species_key in {item["catalog"].species_key for item in remaining}:
+                    newly_disabled.append(row.species_key)
+
+        if not newly_disabled:
+            enabled_rows = [
+                {
+                    "species": active_by_key[key].common_name_zh,
+                    "species_key": key,
+                    "training_enabled": True,
+                    **per_by_key[key],
+                }
+                for key in sorted(eligible_keys)
+                if key in per_by_key
+            ]
+            return remaining, split, enabled_rows, sorted(disabled_by_key.values(), key=lambda x: x["species"])
+
+        remaining = [item for item in remaining if item["catalog"].species_key not in set(newly_disabled)]
+
+    # Report all active species as disabled when none can satisfy the gate.
+    for row in active_rows:
+        if row.species_key not in disabled_by_key:
+            counts = {
+                "species_key": row.species_key,
+                "total": 0,
+                "group_count": 0,
+                "train": 0,
+                "val": 0,
+                "test": 0,
+                "target": {"train": 0, "val": 0, "test": 0},
+            }
+            _enabled, reasons = training_eligibility(counts, is_other=bool(row.is_other))
+            disabled_by_key[row.species_key] = {
+                "species": row.common_name_zh,
+                "species_key": row.species_key,
+                "training_enabled": False,
+                "reasons": reasons,
+                **counts,
+            }
+    return [], _empty_split(), [], sorted(disabled_by_key.values(), key=lambda x: x["species"])
+
+
 def select_freeze_candidates(
     db: Session,
     *,
@@ -217,6 +320,7 @@ def select_freeze_candidates(
     val: float,
     allow_split_blockers: bool = False,
 ) -> dict:
+    ensure_target_species(db)
     catalog_rows = db.scalars(select(SpeciesCatalog).order_by(SpeciesCatalog.catalog_order)).all()
     active_by_name = {row.common_name_zh: row for row in catalog_rows if row.status == "active"}
     images = db.scalars(
@@ -225,6 +329,13 @@ def select_freeze_candidates(
         .order_by(ImageAsset.batch_id, ImageAsset.id)
     ).all()
     if not images:
+        disabled = []
+        for row in catalog_rows:
+            if row.status != "active":
+                continue
+            counts = {"total": 0, "group_count": 0, "train": 0, "val": 0, "test": 0}
+            _enabled, reasons = training_eligibility(counts, is_other=bool(row.is_other))
+            disabled.append({"species": row.common_name_zh, "species_key": row.species_key, "training_enabled": False, "reasons": reasons, **counts})
         return {
             "approved_master_pool_count": 0,
             "selected": [],
@@ -234,8 +345,11 @@ def select_freeze_candidates(
             "split_strategy": SPLIT_STRATEGY,
             "per_species_split_counts": {},
             "split_warnings": [],
-            "split_blockers": [],
+            "split_blockers": [{"species": "系统", "code": "NO_TRAINING_ELIGIBLE_SPECIES", "message": "没有满足默认训练门槛的鱼种"}],
             "split_group_count": 0,
+            "training_thresholds": training_thresholds(),
+            "training_enabled_species": [],
+            "training_disabled_species": disabled,
         }
 
     image_ids = [image.id for image in images]
@@ -302,18 +416,22 @@ def select_freeze_candidates(
             }
         )
 
-    split = _assign_stratified_group_splits(selected, seed=seed, train=train, val=val) if selected else {
-        "strategy": SPLIT_STRATEGY,
-        "per_species": {},
-        "warnings": [],
-        "blockers": [],
-        "group_count": 0,
-    }
+    selected, split, training_enabled, training_disabled = _training_gate(
+        selected,
+        catalog_rows,
+        seed=seed,
+        train=train,
+        val=val,
+    )
 
-    if split["blockers"] and not allow_split_blockers:
-        messages = "; ".join(item["message"] for item in split["blockers"][:8])
-        if len(split["blockers"]) > 8:
-            messages += f"; 另有 {len(split['blockers']) - 8} 项"
+    blockers = list(split["blockers"])
+    if not selected:
+        blockers.append({"species": "系统", "code": "NO_TRAINING_ELIGIBLE_SPECIES", "message": "没有满足默认训练门槛的鱼种"})
+
+    if blockers and not allow_split_blockers:
+        messages = "; ".join(item["message"] for item in blockers[:8])
+        if len(blockers) > 8:
+            messages += f"; 另有 {len(blockers) - 8} 项"
         raise ValueError(f"Dataset Split Gate 未通过：{messages}")
 
     return {
@@ -325,6 +443,9 @@ def select_freeze_candidates(
         "split_strategy": split["strategy"],
         "per_species_split_counts": split["per_species"],
         "split_warnings": split["warnings"],
-        "split_blockers": split["blockers"],
+        "split_blockers": blockers,
         "split_group_count": split["group_count"],
+        "training_thresholds": training_thresholds(),
+        "training_enabled_species": training_enabled,
+        "training_disabled_species": training_disabled,
     }
