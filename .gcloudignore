@@ -2,4 +2,5 @@
 .gcloudignore
 .git
 .gitignore
+gha-creds-*.json
 #!include:.gitignore
