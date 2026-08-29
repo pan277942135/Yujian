@@ -53,25 +53,33 @@ if [[ "$DEPLOYED_SHA" != "$GIT_SHA" ]]; then
   exit 1
 fi
 
-log "Online smoke and SHA verification"
-HEALTH_JSON=""
+log "Online basic health smoke"
+BASIC_HEALTH="$(curl --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 30 -fsS "${SERVICE_URL}/health")"
+BASIC_STATUS="$(printf '%s' "$BASIC_HEALTH" | python -c 'import json,sys; print(json.load(sys.stdin).get("status", ""))')"
+if [[ "$BASIC_STATUS" != "ok" ]]; then
+  echo "Basic /health smoke failed: ${BASIC_HEALTH}" >&2
+  exit 1
+fi
+
+log "Online deployment provenance verification"
+DEPLOY_HEALTH=""
 for attempt in $(seq 1 "$HEALTH_ATTEMPTS"); do
-  if HEALTH_JSON="$(curl --connect-timeout 10 --max-time 30 -fsS "${SERVICE_URL}/health" 2>/dev/null)"; then
-    HEALTH_STATUS="$(printf '%s' "$HEALTH_JSON" | python -c 'import json,sys; print(json.load(sys.stdin).get("status", ""))' 2>/dev/null || true)"
-    HEALTH_SHA="$(printf '%s' "$HEALTH_JSON" | python -c 'import json,sys; print(json.load(sys.stdin).get("git_commit", ""))' 2>/dev/null || true)"
-    HEALTH_REVISION="$(printf '%s' "$HEALTH_JSON" | python -c 'import json,sys; print(json.load(sys.stdin).get("revision", ""))' 2>/dev/null || true)"
+  if DEPLOY_HEALTH="$(curl --connect-timeout 10 --max-time 30 -fsS "${SERVICE_URL}/health/deploy" 2>/dev/null)"; then
+    HEALTH_STATUS="$(printf '%s' "$DEPLOY_HEALTH" | python -c 'import json,sys; print(json.load(sys.stdin).get("status", ""))' 2>/dev/null || true)"
+    HEALTH_SHA="$(printf '%s' "$DEPLOY_HEALTH" | python -c 'import json,sys; print(json.load(sys.stdin).get("git_commit", ""))' 2>/dev/null || true)"
+    HEALTH_REVISION="$(printf '%s' "$DEPLOY_HEALTH" | python -c 'import json,sys; print(json.load(sys.stdin).get("revision", ""))' 2>/dev/null || true)"
     if [[ "$HEALTH_STATUS" == "ok" && "$HEALTH_SHA" == "$GIT_SHA" && "$HEALTH_REVISION" == "$REVISION" ]]; then
       break
     fi
   fi
-  HEALTH_JSON=""
+  DEPLOY_HEALTH=""
   if [[ "$attempt" -lt "$HEALTH_ATTEMPTS" ]]; then
     sleep "$HEALTH_DELAY_SECONDS"
   fi
 done
 
-if [[ -z "$HEALTH_JSON" ]]; then
-  echo "Online smoke failed: /health did not report expected SHA/revision" >&2
+if [[ -z "$DEPLOY_HEALTH" ]]; then
+  echo "Online provenance smoke failed: /health/deploy did not report expected SHA/revision" >&2
   echo "Expected SHA: ${GIT_SHA}" >&2
   echo "Expected revision: ${REVISION}" >&2
   exit 1
@@ -80,7 +88,8 @@ fi
 printf 'SERVICE_URL=%s\n' "$SERVICE_URL"
 printf 'REVISION=%s\n' "$REVISION"
 printf 'APP_GIT_COMMIT=%s\n' "$GIT_SHA"
-printf 'HEALTH=%s\n' "$HEALTH_JSON"
+printf 'HEALTH=%s\n' "$BASIC_HEALTH"
+printf 'DEPLOY_HEALTH=%s\n' "$DEPLOY_HEALTH"
 
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   {
