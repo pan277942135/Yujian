@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 COOKIE_NAME = "yujian_console"
+PUBLIC_PATHS = {"/health", "/health/deploy", "/login"}
 
 
 def _configured_key() -> str:
@@ -24,7 +25,7 @@ def install_access_guard(app: FastAPI) -> None:
     @app.middleware("http")
     async def console_access_guard(request: Request, call_next):
         key = _configured_key()
-        if not key or request.url.path in {"/health", "/login"}:
+        if not key or request.url.path in PUBLIC_PATHS:
             return await call_next(request)
 
         ingest_key = _feedback_ingest_key()
