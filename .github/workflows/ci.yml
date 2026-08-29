@@ -20,11 +20,15 @@ jobs:
       - name: Compile Python
         run: python -m compileall app scripts trainer
       - name: Validate deployment shell syntax
-        run: bash -n scripts/deploy_console_gcp.sh && bash -n scripts/deploy_training_gcp.sh
+        run: |
+          bash -n scripts/deploy_console_gcp.sh
+          bash -n scripts/deploy_training_gcp.sh
+          bash -n scripts/bootstrap_github_wif.sh
+          bash -n scripts/deploy_console_runtime.sh
       - name: Import Model Factory Console
         env:
           REGISTRY_DB_URL: 'sqlite:///:memory:'
-        run: python -c "from app.entry import app; from app.db import init_db; init_db(); p=app.openapi()['paths']; print(app.title, app.version); assert '/api/presence/scan' in p; assert '/api/dedupe/scan' in p; assert '/api/bulk-review/apply' in p; assert '/review/bulk' in p; assert '/inspect' in p; assert '/api/inspect/images' in p; assert '/api/inspect/presence/{batch_id}/{image_id}' in p; assert '/api/datasets/freeze' in p; assert '/api/dataset-freeze/preview' in p; assert '/api/dataset-freeze/{dataset_version}/finalize' in p; assert '/api/dataset-freeze/{dataset_version}/items' in p; assert '/api/dataset-freeze/{dataset_version}/audit' in p; assert '/training' in p; assert '/api/training/runs' in p; assert '/api/training/runs/{run_id}/metrics' in p; assert '/api/models' in p; assert '/inference' in p; assert '/api/inference/models' in p; assert '/api/inference/predict' in p; assert '/api/inference/batch' in p"
+        run: python -c "from app.entry import app; from app.db import init_db; init_db(); p=app.openapi()['paths']; print(app.title, app.version); assert '/health/deploy' in p; assert '/api/presence/scan' in p; assert '/api/dedupe/scan' in p; assert '/api/bulk-review/apply' in p; assert '/review/bulk' in p; assert '/inspect' in p; assert '/api/inspect/images' in p; assert '/api/inspect/presence/{batch_id}/{image_id}' in p; assert '/api/datasets/freeze' in p; assert '/api/dataset-freeze/preview' in p; assert '/api/dataset-freeze/{dataset_version}/finalize' in p; assert '/api/dataset-freeze/{dataset_version}/items' in p; assert '/api/dataset-freeze/{dataset_version}/audit' in p; assert '/training' in p; assert '/api/training/runs' in p; assert '/api/training/runs/{run_id}/metrics' in p; assert '/api/models' in p; assert '/inference' in p; assert '/api/inference/models' in p; assert '/api/inference/predict' in p; assert '/api/inference/batch' in p"
       - name: Run unified top navigation smoke test
         env:
           REGISTRY_DB_URL: 'sqlite:///:memory:'
@@ -55,6 +59,10 @@ jobs:
         env:
           REGISTRY_DB_URL: 'sqlite:///:memory:'
         run: python scripts/smoke_inference.py
+      - name: Run UAT deploy config smoke test
+        env:
+          REGISTRY_DB_URL: 'sqlite:///:memory:'
+        run: python scripts/smoke_uat_deploy_config.py
       - name: Validate project config exists
         run: test -f config/project.yaml
       - name: Validate registry schema exists

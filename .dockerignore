@@ -1,0 +1,8 @@
+.git
+.gitignore
+.gcloudignore
+gha-creds-*.json
+__pycache__/
+*.py[cod]
+.venv/
+.env

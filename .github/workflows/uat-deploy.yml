@@ -1,0 +1,126 @@
+name: UAT Deploy
+
+on:
+  workflow_run:
+    workflows:
+      - ci
+    types:
+      - completed
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: yujian-uat-deploy
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: gemini-api-project-503706
+  PROJECT_NUMBER: '571785698442'
+  REGION: asia-east1
+  SERVICE: yujian-model-factory-console
+  WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+  DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      should_deploy: ${{ steps.meta.outputs.should_deploy }}
+      deploy_sha: ${{ steps.meta.outputs.deploy_sha }}
+      stale: ${{ steps.meta.outputs.stale }}
+    steps:
+      - name: Resolve deployment eligibility
+        id: meta
+        env:
+          AUTO_DEPLOY_ENABLED: ${{ vars.YUJIAN_UAT_DEPLOY_ENABLED }}
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
+          DISPATCH_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" == "workflow_run" ]]; then
+            DEPLOY_SHA="$WORKFLOW_SHA"
+            CI_OK=false
+            [[ "$WORKFLOW_CONCLUSION" == "success" ]] && CI_OK=true
+          else
+            DEPLOY_SHA="$DISPATCH_SHA"
+            CI_OK=true
+          fi
+
+          SHOULD_DEPLOY=false
+          if [[ "$AUTO_DEPLOY_ENABLED" == "true" && "$CI_OK" == "true" ]]; then
+            SHOULD_DEPLOY=true
+          fi
+
+          STALE=false
+          LATEST_MAIN="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/main | awk '{print $1}')"
+          if [[ -n "$LATEST_MAIN" && "$DEPLOY_SHA" != "$LATEST_MAIN" ]]; then
+            STALE=true
+          fi
+
+          echo "should_deploy=$SHOULD_DEPLOY" >> "$GITHUB_OUTPUT"
+          echo "deploy_sha=$DEPLOY_SHA" >> "$GITHUB_OUTPUT"
+          echo "stale=$STALE" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### YuJian UAT deploy preflight"
+            echo "- Auto deploy enabled: \`$AUTO_DEPLOY_ENABLED\`"
+            echo "- CI eligible: \`$CI_OK\`"
+            echo "- Deploy SHA: \`$DEPLOY_SHA\`"
+            echo "- Latest main: \`$LATEST_MAIN\`"
+            echo "- Stale run: \`$STALE\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    needs: preflight
+    if: needs.preflight.outputs.should_deploy == 'true' && needs.preflight.outputs.stale != 'true'
+    runs-on: ubuntu-latest
+    environment: uat
+    steps:
+      - name: Checkout exact CI-tested SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preflight.outputs.deploy_sha }}
+          fetch-depth: 1
+
+      - name: Authenticate to Google Cloud with GitHub OIDC/WIF
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          version: '>= 416.0.0'
+
+      - name: Deploy Console runtime only
+        id: deploy
+        env:
+          GIT_SHA: ${{ needs.preflight.outputs.deploy_sha }}
+        run: bash scripts/deploy_console_runtime.sh
+
+      - name: Publish deployment summary
+        env:
+          DEPLOY_SHA: ${{ needs.preflight.outputs.deploy_sha }}
+          SERVICE_URL: ${{ steps.deploy.outputs.service_url }}
+          REVISION: ${{ steps.deploy.outputs.revision }}
+        shell: bash
+        run: |
+          {
+            echo "### YuJian UAT deployed"
+            echo "- SHA: \`$DEPLOY_SHA\`"
+            echo "- Revision: \`$REVISION\`"
+            echo "- URL: $SERVICE_URL"
+            echo "- Online /health SHA verification: **PASS**"
+          } >> "$GITHUB_STEP_SUMMARY"

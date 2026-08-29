@@ -1,3 +1,5 @@
+import os
+
 from app.main import app, templates as main_templates
 from app.presence import router as presence_router
 from app.dedupe import router as dedupe_router
@@ -28,6 +30,18 @@ def seed_target_species_catalog() -> None:
         ensure_target_species(db)
     finally:
         db.close()
+
+
+@app.get("/health/deploy")
+def deployment_health() -> dict:
+    """Public, non-secret deployment provenance for online CD verification."""
+    return {
+        "status": "ok",
+        "version": app.version,
+        "git_commit": os.getenv("APP_GIT_COMMIT", "unknown"),
+        "revision": os.getenv("K_REVISION", "unknown"),
+        "service": os.getenv("K_SERVICE", "unknown"),
+    }
 
 
 app.include_router(presence_router)
