@@ -35,12 +35,13 @@ def main() -> None:
         ".github/workflows/uat-deploy.yml",
         [
             "workflow_run:",
+            "branches:\n      - main",
             "YUJIAN_UAT_DEPLOY_ENABLED",
             "id-token: write",
             "google-github-actions/auth@v3.0.0",
             "google-github-actions/setup-gcloud@v3.0.1",
+            "projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main",
             "scripts/deploy_console_runtime.sh",
-            "123",  # workflow file is non-empty and contains fixed project metadata
         ],
     )
     require_text(
@@ -48,8 +49,10 @@ def main() -> None:
         [
             "--source .",
             "--update-env-vars=\"APP_GIT_COMMIT=${GIT_SHA}\"",
+            "/health",
             "/health/deploy",
             "DEPLOYED_SHA",
+            "HEALTH_REVISION",
         ],
     )
     require_text(
@@ -57,11 +60,16 @@ def main() -> None:
         [
             "workload-identity-pools",
             "roles/run.sourceDeveloper",
+            "roles/serviceusage.serviceUsageConsumer",
+            "roles/iam.serviceAccountUser",
+            "roles/run.builder",
             "roles/iam.workloadIdentityUser",
             "assertion.repository",
             "assertion.ref=='refs/heads/main'",
         ],
     )
+    for path in (".gitignore", ".gcloudignore", ".dockerignore"):
+        require_text(path, ["gha-creds-*.json"])
 
     print("UAT deploy config smoke OK", payload)
 
