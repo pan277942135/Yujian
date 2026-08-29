@@ -2,8 +2,8 @@
 """Offline Dataset Freeze smoke test.
 
 Runs against SQLite and never calls GCS/Vision. It validates canonical selection,
-quality gates, deterministic stratified group splitting, split blockers, DatasetItem
-schema registration, and FastAPI routes.
+quality gates, deterministic stratified group splitting, the default training
+eligibility gate, DatasetItem schema registration, and FastAPI routes.
 """
 
 import os
@@ -23,8 +23,9 @@ from app.db import Base, SessionLocal, init_db  # noqa: E402
 from app.dedupe import ImageFingerprint  # noqa: E402
 from app.flywheel import ensure_species_catalog  # noqa: E402
 from app.freeze_policy import SPLIT_STRATEGY, select_freeze_candidates  # noqa: E402
-from app.models import Batch, ImageAsset  # noqa: E402
+from app.models import Batch, ImageAsset, SpeciesCatalog  # noqa: E402
 from app.presence import FishPresenceResult  # noqa: E402
+from app.species_policy import ensure_target_species, training_thresholds  # noqa: E402
 
 
 def add_image(
@@ -51,7 +52,7 @@ def add_image(
     return row
 
 
-def add_qa(db, image: ImageAsset, *, sha_char: str, presence: str = "single_fish") -> None:
+def add_qa(db, image: ImageAsset, *, presence: str = "single_fish", representative: bool = True) -> None:
     db.add(
         FishPresenceResult(
             image_asset_id=image.id,
@@ -64,13 +65,16 @@ def add_qa(db, image: ImageAsset, *, sha_char: str, presence: str = "single_fish
         ImageFingerprint(
             image_asset_id=image.id,
             batch_id=image.batch_id,
-            sha256=(sha_char * 64)[:64],
+            sha256=f"{image.id:064x}",
             phash_json="[]",
             dhash="0" * 16,
             crop_hash="",
             histogram_json="[]",
             width=100,
             height=100,
+            duplicate_group=None if representative else "DUP_SMOKE",
+            is_representative=representative,
+            duplicate_kind=None if representative else "near",
         )
     )
 
@@ -83,12 +87,24 @@ def main() -> None:
     db = SessionLocal()
     try:
         ensure_species_catalog(db)
+        ensure_target_species(db)
+
+        target_rows = db.query(SpeciesCatalog).filter(SpeciesCatalog.species_key.in_([
+            "grass_carp",
+            "tilapia",
+            "mandarin_fish",
+            "sharpbelly",
+            "redfin_culter",
+        ])).all()
+        assert len(target_rows) == 5, target_rows
+        assert training_thresholds() == {"total": 20, "train": 10, "val": 3, "test": 3, "group_count": 3}
+
         batch_id = "BATCH_DATASET_FREEZE_SMOKE"
         db.add(
             Batch(
                 batch_id=batch_id,
                 source="smoke",
-                image_count=20,
+                image_count=40,
                 manifest_uri="gs://test-bucket/smoke/manifest.csv",
                 raw_uri="gs://test-bucket/smoke/",
                 status="INGESTED",
@@ -96,137 +112,58 @@ def main() -> None:
         )
         db.flush()
 
-        single = add_image(db, batch_id, "IMG_SINGLE", "鲫鱼", group_id="CRUCIAN_G0")
-        unscanned = add_image(db, batch_id, "IMG_UNSCANNED", "鲤鱼", group_id="CARP_G0")
-        multi = add_image(db, batch_id, "IMG_MULTI", "草鱼")
-        duplicate = add_image(db, batch_id, "IMG_DUP", "黑鱼")
-        no_fish = add_image(db, batch_id, "IMG_NO_FISH", "黄骨鱼")
-        pending = add_image(db, batch_id, "IMG_PENDING", "加州鲈", status="pending")
+        # Low-data 鲫鱼: five valid independent samples. It must remain available in
+        # Species Catalog but be default-disabled for training.
+        for idx in range(5):
+            image = add_image(db, batch_id, f"IMG_CRUCIAN_{idx}", "鲫鱼", group_id=f"CRUCIAN_G{idx}")
+            add_qa(db, image)
 
-        db.add_all(
-            [
-                FishPresenceResult(image_asset_id=single.id, batch_id=batch_id, status="single_fish", fish_count=1),
-                FishPresenceResult(image_asset_id=unscanned.id, batch_id=batch_id, status="single_fish", fish_count=1),
-                FishPresenceResult(image_asset_id=multi.id, batch_id=batch_id, status="multi_fish", fish_count=2),
-                FishPresenceResult(image_asset_id=no_fish.id, batch_id=batch_id, status="no_fish", fish_count=0),
-                FishPresenceResult(image_asset_id=duplicate.id, batch_id=batch_id, status="single_fish", fish_count=1),
-                FishPresenceResult(image_asset_id=pending.id, batch_id=batch_id, status="single_fish", fish_count=1),
-                ImageFingerprint(
-                    image_asset_id=single.id,
-                    batch_id=batch_id,
-                    sha256="a" * 64,
-                    phash_json="[]",
-                    dhash="0" * 16,
-                    crop_hash="",
-                    histogram_json="[]",
-                    width=100,
-                    height=100,
-                ),
-                ImageFingerprint(
-                    image_asset_id=unscanned.id,
-                    batch_id=batch_id,
-                    sha256="b" * 64,
-                    phash_json="[]",
-                    dhash="0" * 16,
-                    crop_hash="",
-                    histogram_json="[]",
-                    width=100,
-                    height=100,
-                ),
-                ImageFingerprint(
-                    image_asset_id=multi.id,
-                    batch_id=batch_id,
-                    sha256="c" * 64,
-                    phash_json="[]",
-                    dhash="0" * 16,
-                    crop_hash="",
-                    histogram_json="[]",
-                    width=100,
-                    height=100,
-                ),
-                ImageFingerprint(
-                    image_asset_id=no_fish.id,
-                    batch_id=batch_id,
-                    sha256="e" * 64,
-                    phash_json="[]",
-                    dhash="0" * 16,
-                    crop_hash="",
-                    histogram_json="[]",
-                    width=100,
-                    height=100,
-                ),
-                ImageFingerprint(
-                    image_asset_id=duplicate.id,
-                    batch_id=batch_id,
-                    sha256="d" * 64,
-                    phash_json="[]",
-                    dhash="0" * 16,
-                    crop_hash="",
-                    histogram_json="[]",
-                    width=100,
-                    height=100,
-                    duplicate_group="DUP_SMOKE",
-                    is_representative=False,
-                    duplicate_kind="near",
-                ),
-            ]
-        )
+        # Mature 鲤鱼: twenty valid independent samples. This class should be enabled.
+        for idx in range(20):
+            image = add_image(db, batch_id, f"IMG_CARP_{idx}", "鲤鱼", group_id=f"CARP_G{idx}")
+            add_qa(db, image)
+
+        # Quality exclusions still apply before the training eligibility gate.
+        multi = add_image(db, batch_id, "IMG_MULTI", "草鱼")
+        add_qa(db, multi, presence="multi_fish")
+        no_fish = add_image(db, batch_id, "IMG_NO_FISH", "黄骨鱼")
+        add_qa(db, no_fish, presence="no_fish")
+        duplicate = add_image(db, batch_id, "IMG_DUP", "黑鱼")
+        add_qa(db, duplicate, representative=False)
+        add_image(db, batch_id, "IMG_PENDING", "加州鲈", status="pending")
         db.commit()
 
-        # Preview remains diagnostic even when represented species cannot cover all splits.
-        payload = DatasetFreezePreviewRequest(dataset_version="DS_M1_smoke", seed=7, train=0.70, val=0.15)
+        payload = DatasetFreezePreviewRequest(dataset_version="DS_M1_smoke_v03", seed=7, train=0.70, val=0.15)
         first = build_preview(db, payload)
         second = build_preview(db, payload)
         assert first == second, (first, second)
-        assert first["approved_master_pool_count"] == 5, first
-        assert first["image_count"] == 2, first
-        assert first["species_count"] == 2, first
-        assert first["species_counts"] == {"鲫鱼": 1, "鲤鱼": 1}, first
+        assert first["approved_master_pool_count"] == 28, first
+        assert first["image_count"] == 20, first
+        assert first["species_count"] == 1, first
+        assert first["species_counts"] == {"鲤鱼": 20}, first
         assert first["excluded_quality_counts"].get("multi_fish") == 1, first
         assert first["excluded_quality_counts"].get("no_fish") == 1, first
         assert first["excluded_quality_counts"].get("near_duplicate") == 1, first
-        assert sum(first["split_counts"].values()) == 2, first
         assert first["split_strategy"] == SPLIT_STRATEGY, first
-        assert first["freeze_ready"] is False, first
-        assert first["split_blockers"], first
+        assert first["freeze_ready"] is True, first
+        assert not first["split_blockers"], first
 
-        # Formal selection is strict: the same small pool cannot be frozen.
-        try:
-            select_freeze_candidates(db, seed=7, train=0.70, val=0.15)
-        except ValueError as exc:
-            assert "Dataset Split Gate" in str(exc), exc
-        else:
-            raise AssertionError("formal split gate should reject zero-coverage species")
-
-        # Add four independent groups to each represented species. With five groups per
-        # species the v0.3 stratified splitter must produce non-zero train/val/test.
-        chars = iter("fghijklmnopqrstuvwxyz0123456789")
-        for species, prefix in (("鲫鱼", "CRUCIAN"), ("鲤鱼", "CARP")):
-            for idx in range(1, 5):
-                image = add_image(
-                    db,
-                    batch_id,
-                    f"IMG_{prefix}_{idx}",
-                    species,
-                    group_id=f"{prefix}_G{idx}",
-                )
-                add_qa(db, image, sha_char=next(chars))
-        db.commit()
-
-        ready_payload = DatasetFreezePreviewRequest(dataset_version="DS_M1_smoke_v03", seed=7, train=0.70, val=0.15)
-        ready_a = build_preview(db, ready_payload)
-        ready_b = build_preview(db, ready_payload)
-        assert ready_a == ready_b, (ready_a, ready_b)
-        assert ready_a["freeze_ready"] is True, ready_a
-        assert not ready_a["split_blockers"], ready_a
-        assert ready_a["split_strategy"] == SPLIT_STRATEGY, ready_a
-        assert ready_a["species_counts"] == {"鲫鱼": 5, "鲤鱼": 5}, ready_a
-        for species in ("鲫鱼", "鲤鱼"):
-            split = ready_a["per_species_split_counts"][species]
-            assert split["train"] > 0 and split["val"] > 0 and split["test"] > 0, split
-            assert split["group_count"] == 5, split
+        split = first["per_species_split_counts"]["鲤鱼"]
+        assert split["total"] == 20, split
+        assert split["train"] >= 10, split
+        assert split["val"] >= 3, split
+        assert split["test"] >= 3, split
+        assert split["group_count"] == 20, split
 
         strict = select_freeze_candidates(db, seed=7, train=0.70, val=0.15)
+        assert {item["catalog"].common_name_zh for item in strict["selected"]} == {"鲤鱼"}, strict
+        disabled = {row["species"]: row for row in strict["training_disabled_species"]}
+        assert "鲫鱼" in disabled, disabled
+        assert disabled["鲫鱼"]["total"] == 5, disabled["鲫鱼"]
+        assert any(reason.startswith("总数 5 < 20") for reason in disabled["鲫鱼"]["reasons"]), disabled["鲫鱼"]
+        enabled = {row["species"] for row in strict["training_enabled_species"]}
+        assert "鲤鱼" in enabled, enabled
+
         group_to_split = {}
         for item in strict["selected"]:
             group = item["group_key"]
@@ -238,7 +175,7 @@ def main() -> None:
         assert "/api/dataset-freeze/preview" in paths
         assert "/api/dataset-freeze/{dataset_version}/finalize" in paths
         assert "/api/dataset-freeze/{dataset_version}/items" in paths
-        print("Dataset Freeze smoke OK", ready_a)
+        print("Dataset Freeze + training eligibility smoke OK", first)
     finally:
         db.close()
 
