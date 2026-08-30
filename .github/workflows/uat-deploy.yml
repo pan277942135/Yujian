@@ -83,6 +83,7 @@ jobs:
     needs: preflight
     if: needs.preflight.outputs.should_deploy == 'true' && needs.preflight.outputs.stale != 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     environment: uat
     steps:
       - name: Checkout exact CI-tested SHA
@@ -104,11 +105,66 @@ jobs:
           project_id: ${{ env.PROJECT_ID }}
           version: '>= 416.0.0'
 
-      - name: Deploy Console runtime only
+      - name: Deploy Console runtime and smoke feedback backend
         id: deploy
         env:
           GIT_SHA: ${{ needs.preflight.outputs.deploy_sha }}
         run: bash scripts/deploy_console_runtime.sh
+
+      - name: Checkout Android app main
+        uses: actions/checkout@v4
+        with:
+          repository: pan277942135/Yujian_App
+          ref: main
+          path: android-app
+          fetch-depth: 1
+
+      - name: Verify Android production model asset
+        working-directory: android-app
+        run: python3 scripts/verify_production_model.py
+
+      - name: Set up JDK 17 for Android UAT
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.9 for Android UAT
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Resolve masked Android UAT feedback configuration
+        env:
+          SERVICE_URL: ${{ steps.deploy.outputs.service_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          SERVICE_JSON="$(gcloud run services describe "$SERVICE" \
+            --project "$PROJECT_ID" --region "$REGION" --format=json)"
+          INGEST_KEY="$(printf '%s' "$SERVICE_JSON" | python -c '
+          import json,sys
+          d=json.load(sys.stdin)
+          containers=((d.get("spec") or {}).get("template") or {}).get("spec",{}).get("containers") or []
+          env=(containers[0].get("env") if containers else []) or []
+          print(next((x.get("value","") for x in env if x.get("name")=="FEEDBACK_INGEST_KEY"), ""))
+          ')"
+          if [[ -z "$INGEST_KEY" ]]; then
+            echo "Cloud Run FEEDBACK_INGEST_KEY is not available as a UAT runtime value" >&2
+            exit 1
+          fi
+          echo "::add-mask::$INGEST_KEY"
+          echo "YUJIAN_FEEDBACK_BASE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
+          echo "YUJIAN_FEEDBACK_INGEST_KEY=$INGEST_KEY" >> "$GITHUB_ENV"
+
+      - name: Android API 28 production inference + feedback E2E smoke
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 28
+          arch: x86_64
+          profile: pixel_2
+          disable-animations: true
+          script: cd android-app && gradle :app:connectedDebugAndroidTest --stacktrace
 
       - name: Publish deployment summary
         env:
@@ -118,9 +174,12 @@ jobs:
         shell: bash
         run: |
           {
-            echo "### YuJian UAT deployed"
-            echo "- SHA: \`$DEPLOY_SHA\`"
-            echo "- Revision: \`$REVISION\`"
+            echo "### YuJian UAT deployed + Android E2E"
+            echo "- Backend SHA: \`$DEPLOY_SHA\`"
+            echo "- Backend revision: \`$REVISION\`"
             echo "- URL: $SERVICE_URL"
             echo "- Online /health SHA verification: **PASS**"
+            echo "- Feedback multipart + GCS write/delete + DB reachability: **PASS**"
+            echo "- Android API 28 production TFLite runtime: **PASS**"
+            echo "- Android authenticated feedback transport: **PASS**"
           } >> "$GITHUB_STEP_SUMMARY"
