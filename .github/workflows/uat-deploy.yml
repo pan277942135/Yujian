@@ -140,15 +140,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SERVICE_JSON="$(gcloud run services describe "$SERVICE" \
-            --project "$PROJECT_ID" --region "$REGION" --format=json)"
-          INGEST_KEY="$(printf '%s' "$SERVICE_JSON" | python -c '
-          import json,sys
-          d=json.load(sys.stdin)
-          containers=((d.get("spec") or {}).get("template") or {}).get("spec",{}).get("containers") or []
-          env=(containers[0].get("env") if containers else []) or []
-          print(next((x.get("value","") for x in env if x.get("name")=="FEEDBACK_INGEST_KEY"), ""))
-          ')"
+          SERVICE_JSON="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json)"
+          INGEST_KEY="$(printf '%s' "$SERVICE_JSON" | python -c 'import json,sys; d=json.load(sys.stdin); containers=((d.get("spec") or {}).get("template") or {}).get("spec",{}).get("containers") or []; env=(containers[0].get("env") if containers else []) or []; print(next((x.get("value","") for x in env if x.get("name")=="FEEDBACK_INGEST_KEY"), ""))')"
           if [[ -z "$INGEST_KEY" ]]; then
             echo "Cloud Run FEEDBACK_INGEST_KEY is not available as a UAT runtime value" >&2
             exit 1
