@@ -41,15 +41,16 @@ async def ingest_app_feedback(
     confidence: float | None = Form(default=None),
     corrected_species: str | None = Form(default=None),
     user_note: str | None = Form(default=None),
+    smoke: bool = Form(default=False),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
     """Ingest one App feedback event plus its user-provided catch image.
 
-    This endpoint has write-only feedback semantics. The image is persisted in GCS,
-    while record_feedback keeps the same idempotent source_event_id contract as
-    /api/feedback. Feedback is never promoted directly to training truth; the
-    existing materialize -> Review pipeline remains mandatory.
+    Normal requests persist the image in GCS and create an idempotent FeedbackEvent.
+    ``smoke=true`` is reserved for authenticated UAT deployment checks: it performs
+    the same multipart/image validation, writes a temporary GCS object, verifies DB
+    connectivity, then deletes the object without creating a feedback event.
     """
     event_id = source_event_id.strip()
     if not event_id:
@@ -58,9 +59,10 @@ async def ingest_app_feedback(
     if feedback_kind not in VALID_FEEDBACK_TYPES:
         raise HTTPException(status_code=400, detail=f"invalid feedback_type: {feedback_kind}")
 
-    existing = db.scalar(select(FeedbackEvent).where(FeedbackEvent.source_event_id == event_id))
-    if existing:
-        return feedback_dict(existing)
+    if not smoke:
+        existing = db.scalar(select(FeedbackEvent).where(FeedbackEvent.source_event_id == event_id))
+        if existing:
+            return feedback_dict(existing)
 
     content_type = (file.content_type or "").lower().strip()
     if content_type not in _ALLOWED_CONTENT_TYPES:
@@ -79,10 +81,37 @@ async def ingest_app_feedback(
     digest = hashlib.sha256(data).hexdigest()
     day = datetime.now(timezone.utc).strftime("%Y%m%d")
     suffix = _CONTENT_TYPE_SUFFIX[content_type]
-    object_name = f"feedback/app/{day}/{_safe_event_component(event_id)}_{digest[:16]}{suffix}"
+    prefix = "feedback/smoke" if smoke else "feedback/app"
+    object_name = f"{prefix}/{day}/{_safe_event_component(event_id)}_{digest[:16]}{suffix}"
     bucket_name = get_bucket_name()
     client = storage.Client()
     blob = client.bucket(bucket_name).blob(object_name)
+
+    if smoke:
+        try:
+            if blob.exists(client):
+                blob.delete(client)
+            blob.upload_from_string(data, content_type=content_type, if_generation_match=0)
+            blob.reload(client)
+            if int(blob.size or 0) != len(data):
+                raise RuntimeError("GCS smoke object size mismatch")
+            db.scalar(select(1))
+            blob.delete(client)
+            return {
+                "status": "ok",
+                "smoke": True,
+                "image_sha256": digest,
+                "gcs_write_delete": True,
+                "db_reachable": True,
+            }
+        except Exception as exc:
+            db.rollback()
+            try:
+                if blob.exists(client):
+                    blob.delete(client)
+            except Exception:
+                pass
+            raise HTTPException(status_code=500, detail=f"feedback ingest smoke failed: {exc}") from exc
 
     try:
         if not blob.exists(client):
