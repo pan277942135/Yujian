@@ -26,19 +26,52 @@ log "Authenticated principal"
 gcloud auth list --filter=status:ACTIVE --format='value(account)'
 printf 'Cloud Run build service account: %s\n' "$BUILD_SA_RESOURCE"
 
+# Preserve an existing ingest key. UAT bootstraps one random key only when the
+# service has never had one; later deploys never rotate it. The value is masked
+# immediately and is never committed or printed.
+PREVIOUS_SERVICE_JSON="$(gcloud run services describe "$SERVICE" \
+  --project "$PROJECT_ID" --region "$REGION" --format=json 2>/dev/null || true)"
+FEEDBACK_ENV_PRESENT=0
+FEEDBACK_INGEST_KEY=""
+if [[ -n "$PREVIOUS_SERVICE_JSON" ]]; then
+  FEEDBACK_ENV_PRESENT="$(printf '%s' "$PREVIOUS_SERVICE_JSON" | python -c '
+import json,sys
+d=json.load(sys.stdin)
+containers=((d.get("spec") or {}).get("template") or {}).get("spec",{}).get("containers") or []
+env=(containers[0].get("env") if containers else []) or []
+print(1 if any(x.get("name")=="FEEDBACK_INGEST_KEY" for x in env) else 0)
+')"
+  FEEDBACK_INGEST_KEY="$(printf '%s' "$PREVIOUS_SERVICE_JSON" | python -c '
+import json,sys
+d=json.load(sys.stdin)
+containers=((d.get("spec") or {}).get("template") or {}).get("spec",{}).get("containers") or []
+env=(containers[0].get("env") if containers else []) or []
+print(next((x.get("value","") for x in env if x.get("name")=="FEEDBACK_INGEST_KEY"), ""))
+')"
+fi
+
+DEPLOY_ENV_VARS="APP_GIT_COMMIT=${GIT_SHA}"
+if [[ "$FEEDBACK_ENV_PRESENT" == "0" ]]; then
+  FEEDBACK_INGEST_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+  DEPLOY_ENV_VARS="${DEPLOY_ENV_VARS},FEEDBACK_INGEST_KEY=${FEEDBACK_INGEST_KEY}"
+  printf 'Bootstrapping UAT feedback ingest key: yes\n'
+else
+  printf 'Bootstrapping UAT feedback ingest key: no (preserving existing configuration)\n'
+fi
+if [[ -n "$FEEDBACK_INGEST_KEY" && -n "${GITHUB_ACTIONS:-}" ]]; then
+  printf '::add-mask::%s\n' "$FEEDBACK_INGEST_KEY"
+fi
+
 log "Runtime-only deploy ${SERVICE} @ ${GIT_SHA}"
-# Deliberately do not create infrastructure, rotate secrets, mutate IAM, deploy the
-# trainer, or replace the service's existing Cloud SQL / secret configuration here.
-# Unspecified Cloud Run settings are preserved; only a new source revision and the
-# provenance variable are updated. Pin the build identity so Cloud Run cannot silently
-# switch to a different project-default service account.
+# Do not mutate IAM, Cloud SQL, trainer resources, or existing secret bindings.
+# Source deploy updates provenance and bootstraps the UAT feedback key only when absent.
 set +e
 gcloud run deploy "$SERVICE" \
   --project "$PROJECT_ID" \
   --region "$REGION" \
   --source . \
   --build-service-account "$BUILD_SA_RESOURCE" \
-  --update-env-vars="APP_GIT_COMMIT=${GIT_SHA}" \
+  --update-env-vars="$DEPLOY_ENV_VARS" \
   --quiet
 DEPLOY_RC=$?
 set -e
@@ -120,6 +153,54 @@ if [[ -z "$DEPLOY_HEALTH" ]]; then
   exit 1
 fi
 
+FEEDBACK_READY="$(printf '%s' "$DEPLOY_HEALTH" | python -c 'import json,sys; print("true" if json.load(sys.stdin).get("feedback_ingest_key_configured") else "false")')"
+if [[ "$FEEDBACK_READY" != "true" ]]; then
+  echo "Feedback ingest readiness failed: FEEDBACK_INGEST_KEY is not configured" >&2
+  exit 1
+fi
+
+FEEDBACK_SMOKE='{"status":"skipped","reason":"key value managed by external secret binding"}'
+if [[ -n "$FEEDBACK_INGEST_KEY" ]]; then
+  log "Online feedback multipart + GCS + DB smoke"
+  SMOKE_IMAGE="$(mktemp --suffix=.png)"
+  python - "$SMOKE_IMAGE" <<'PY'
+import binascii
+import struct
+import sys
+import zlib
+
+path = sys.argv[1]
+def chunk(kind: bytes, data: bytes) -> bytes:
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", binascii.crc32(kind + data) & 0xFFFFFFFF)
+png = b"\x89PNG\r\n\x1a\n"
+png += chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0))
+png += chunk(b"IDAT", zlib.compress(b"\x00\x2e\x8b\x83\xff"))
+png += chunk(b"IEND", b"")
+open(path, "wb").write(png)
+PY
+  SMOKE_EVENT_ID="uat_${GIT_SHA:0:12}_${REVISION//[^A-Za-z0-9_.-]/_}"
+  FEEDBACK_SMOKE="$(curl --retry 2 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 45 -fsS \
+    -H "X-YuJian-Ingest-Key: ${FEEDBACK_INGEST_KEY}" \
+    -F "source_event_id=${SMOKE_EVENT_ID}" \
+    -F "feedback_type=confirmed" \
+    -F "source=uat_deploy_smoke" \
+    -F "model_version=deploy-smoke" \
+    -F "predicted_species=草鱼" \
+    -F "confidence=0.99" \
+    -F "smoke=true" \
+    -F "file=@${SMOKE_IMAGE};type=image/png" \
+    "${SERVICE_URL}/api/feedback/ingest")"
+  rm -f "$SMOKE_IMAGE"
+  printf '%s' "$FEEDBACK_SMOKE" | python -c '
+import json,sys
+d=json.load(sys.stdin)
+assert d.get("status")=="ok", d
+assert d.get("smoke") is True, d
+assert d.get("gcs_write_delete") is True, d
+assert d.get("db_reachable") is True, d
+'
+fi
+
 printf 'SERVICE_URL=%s\n' "$SERVICE_URL"
 printf 'REVISION=%s\n' "$REVISION"
 printf 'APP_GIT_COMMIT=%s\n' "$GIT_SHA"
@@ -127,6 +208,7 @@ printf 'BUILD_SA=%s\n' "$BUILD_SA"
 printf 'BUILD_SA_RESOURCE=%s\n' "$BUILD_SA_RESOURCE"
 printf 'HEALTH=%s\n' "$BASIC_HEALTH"
 printf 'DEPLOY_HEALTH=%s\n' "$DEPLOY_HEALTH"
+printf 'FEEDBACK_SMOKE=%s\n' "$FEEDBACK_SMOKE"
 
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   {
@@ -134,5 +216,6 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "revision=${REVISION}"
     echo "git_commit=${GIT_SHA}"
     echo "build_service_account=${BUILD_SA}"
+    echo "feedback_ingest_ready=${FEEDBACK_READY}"
   } >> "$GITHUB_OUTPUT"
 fi
