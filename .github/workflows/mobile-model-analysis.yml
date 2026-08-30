@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 env:
@@ -19,6 +19,7 @@ env:
   DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
   MODEL_VERSION: MODEL_M1_v0.2
   MODEL_PREFIX: gs://yujian-model-factory-571785698442/models/MODEL_M1_v0.2
+  RELEASE_TAG: mobile-model-v0.2
 
 jobs:
   analyze-export:
@@ -86,6 +87,55 @@ jobs:
             --out mobile-analysis/fish_classifier_v0_2.tflite \
             --report mobile-analysis/export_report.json
 
+      - name: Inspect exported LiteRT tensor contract
+        run: |
+          python - <<'PY'
+          import json
+          from ai_edge_litert.interpreter import Interpreter
+          model = 'mobile-analysis/fish_classifier_v0_2.tflite'
+          interpreter = Interpreter(model_path=model)
+          interpreter.allocate_tensors()
+          inputs = interpreter.get_input_details()
+          outputs = interpreter.get_output_details()
+          doc = {
+            'inputs': [
+              {'name': x['name'], 'shape': [int(v) for v in x['shape']], 'dtype': str(x['dtype'])}
+              for x in inputs
+            ],
+            'outputs': [
+              {'name': x['name'], 'shape': [int(v) for v in x['shape']], 'dtype': str(x['dtype'])}
+              for x in outputs
+            ],
+          }
+          with open('mobile-analysis/tensor_contract.json', 'w', encoding='utf-8') as f:
+              json.dump(doc, f, ensure_ascii=False, indent=2)
+          print(json.dumps(doc, ensure_ascii=False, indent=2))
+          PY
+
+      - name: Verify release model checksum
+        run: |
+          test "$(stat -c%s mobile-analysis/fish_classifier_v0_2.tflite)" = "6220308"
+          echo "9575ede5c6c85b850647016d76e8e5175fa9ea6b609c47c83f54b4062e47d14e  mobile-analysis/fish_classifier_v0_2.tflite" | sha256sum -c -
+          test "$(dd if=mobile-analysis/fish_classifier_v0_2.tflite bs=1 skip=4 count=4 status=none)" = "TFL3"
+
+      - name: Publish verified mobile model release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --title "MODEL_M1_v0.2 Mobile" \
+              --notes "Verified MODEL_M1_v0.2 LiteRT/TFLite export. Whole-image letterbox is the approved mobile preprocessing mode."
+          fi
+          gh release upload "$RELEASE_TAG" \
+            mobile-analysis/fish_classifier_v0_2.tflite \
+            mobile-analysis/class_map.json \
+            mobile-analysis/metrics.json \
+            mobile-analysis/preprocess_comparison.json \
+            mobile-analysis/export_report.json \
+            mobile-analysis/tensor_contract.json \
+            --clobber
+
       - name: Publish analysis summary
         if: always()
         shell: bash
@@ -112,6 +162,10 @@ jobs:
           print(f"- TFLite SHA-256: `{p['tflite_sha256']}`")
           print(f"- Classes: **{p['num_classes']}**")
           PY
+            fi
+            if [[ -f mobile-analysis/tensor_contract.json ]]; then
+              echo '- Tensor contract:'
+              cat mobile-analysis/tensor_contract.json
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
