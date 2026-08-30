@@ -71,7 +71,7 @@ jobs:
             --out mobile-analysis/preprocess_comparison.json
 
       - name: Install LiteRT PyTorch exporter
-        run: pip install ai-edge-torch
+        run: pip install litert-torch
 
       - name: Export raw classifier to TFLite
         run: |
