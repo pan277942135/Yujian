@@ -49,8 +49,9 @@ def main() -> None:
         [
             'PROJECT_NUMBER="${PROJECT_NUMBER:-571785698442}"',
             'BUILD_SA="${BUILD_SA:-${PROJECT_NUMBER}-compute@developer.gserviceaccount.com}"',
+            'BUILD_SA_RESOURCE="${BUILD_SA_RESOURCE:-projects/${PROJECT_ID}/serviceAccounts/${BUILD_SA}}"',
             "--source .",
-            '--build-service-account "$BUILD_SA"',
+            '--build-service-account "$BUILD_SA_RESOURCE"',
             "--update-env-vars=\"APP_GIT_COMMIT=${GIT_SHA}\"",
             "roles/run.builder",
             "roles/iam.serviceAccountUser",
