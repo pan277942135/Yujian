@@ -47,8 +47,13 @@ def main() -> None:
     require_text(
         "scripts/deploy_console_runtime.sh",
         [
+            'PROJECT_NUMBER="${PROJECT_NUMBER:-571785698442}"',
+            'BUILD_SA="${BUILD_SA:-${PROJECT_NUMBER}-compute@developer.gserviceaccount.com}"',
             "--source .",
+            '--build-service-account "$BUILD_SA"',
             "--update-env-vars=\"APP_GIT_COMMIT=${GIT_SHA}\"",
+            "roles/run.builder",
+            "roles/iam.serviceAccountUser",
             "/health",
             "/health/deploy",
             "DEPLOYED_SHA",
