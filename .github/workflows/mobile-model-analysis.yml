@@ -70,6 +70,10 @@ jobs:
             --limit 200 \
             --out mobile-analysis/preprocess_comparison.json
 
+      - name: Upgrade export runtime to PyTorch 2.11
+        run: |
+          pip install --upgrade --index-url https://download.pytorch.org/whl/cpu torch==2.11.0 torchvision==0.26.0
+
       - name: Install LiteRT PyTorch exporter
         run: pip install litert-torch
 
