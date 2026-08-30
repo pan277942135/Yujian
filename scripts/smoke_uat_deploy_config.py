@@ -46,6 +46,16 @@ def main() -> None:
             "google-github-actions/setup-gcloud@v3.0.1",
             "projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main",
             "scripts/deploy_console_runtime.sh",
+            "repository: pan277942135/Yujian_App",
+            "python3 scripts/verify_production_model.py",
+            "actions/setup-java@v4",
+            "gradle/actions/setup-gradle@v4",
+            "YUJIAN_FEEDBACK_BASE_URL",
+            "YUJIAN_FEEDBACK_INGEST_KEY",
+            "::add-mask::$INGEST_KEY",
+            "reactivecircus/android-emulator-runner@v2",
+            "api-level: 28",
+            ":app:connectedDebugAndroidTest",
         ],
     )
     require_text(
@@ -104,7 +114,7 @@ def main() -> None:
     for path in (".gitignore", ".gcloudignore", ".dockerignore"):
         require_text(path, ["gha-creds-*.json"])
 
-    print("UAT deploy config + feedback-ingest smoke contract OK", payload)
+    print("UAT deploy + feedback backend smoke + Android API28 E2E contract OK", payload)
 
 
 if __name__ == "__main__":
