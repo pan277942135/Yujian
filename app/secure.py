@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 COOKIE_NAME = "yujian_console"
 PUBLIC_PATHS = {"/health", "/health/deploy", "/login"}
+FEEDBACK_INGEST_PATHS = {"/api/feedback", "/api/feedback/ingest"}
 
 
 def _configured_key() -> str:
@@ -29,7 +30,7 @@ def install_access_guard(app: FastAPI) -> None:
             return await call_next(request)
 
         ingest_key = _feedback_ingest_key()
-        if request.method == "POST" and request.url.path == "/api/feedback" and ingest_key:
+        if request.method == "POST" and request.url.path in FEEDBACK_INGEST_PATHS and ingest_key:
             supplied = request.headers.get("X-YuJian-Ingest-Key", "")
             if supplied and secrets.compare_digest(supplied, ingest_key):
                 return await call_next(request)
