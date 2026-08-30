@@ -2,8 +2,11 @@
 set -euo pipefail
 
 PROJECT_ID="${PROJECT_ID:-gemini-api-project-503706}"
+PROJECT_NUMBER="${PROJECT_NUMBER:-571785698442}"
 REGION="${REGION:-asia-east1}"
 SERVICE="${SERVICE:-yujian-model-factory-console}"
+BUILD_SA="${BUILD_SA:-${PROJECT_NUMBER}-compute@developer.gserviceaccount.com}"
+DEPLOY_SA="${DEPLOY_SERVICE_ACCOUNT:-yujian-github-deployer@${PROJECT_ID}.iam.gserviceaccount.com}"
 GIT_SHA="${GIT_SHA:-${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || true)}}"
 HEALTH_ATTEMPTS="${HEALTH_ATTEMPTS:-12}"
 HEALTH_DELAY_SECONDS="${HEALTH_DELAY_SECONDS:-5}"
@@ -20,18 +23,49 @@ fi
 
 log "Authenticated principal"
 gcloud auth list --filter=status:ACTIVE --format='value(account)'
+printf 'Cloud Run build service account: %s\n' "$BUILD_SA"
 
 log "Runtime-only deploy ${SERVICE} @ ${GIT_SHA}"
 # Deliberately do not create infrastructure, rotate secrets, mutate IAM, deploy the
 # trainer, or replace the service's existing Cloud SQL / secret configuration here.
 # Unspecified Cloud Run settings are preserved; only a new source revision and the
-# provenance variable are updated.
+# provenance variable are updated. Pin the build identity so Cloud Run cannot silently
+# switch to a different project-default service account.
+set +e
 gcloud run deploy "$SERVICE" \
   --project "$PROJECT_ID" \
   --region "$REGION" \
   --source . \
+  --build-service-account "$BUILD_SA" \
   --update-env-vars="APP_GIT_COMMIT=${GIT_SHA}" \
   --quiet
+DEPLOY_RC=$?
+set -e
+
+if [[ "$DEPLOY_RC" -ne 0 ]]; then
+  cat >&2 <<EOF
+
+Cloud Run source deploy failed.
+If the error mentions iam.serviceAccounts.actAs or missing build-service-account
+permissions, run this ONE-TIME bootstrap from a project Owner / IAM Admin identity:
+
+  PROJECT_ID=${PROJECT_ID} PROJECT_NUMBER=${PROJECT_NUMBER} \\
+    BUILD_SA=${BUILD_SA} bash scripts/bootstrap_github_wif.sh
+
+Equivalent minimum IAM bindings are:
+
+  gcloud projects add-iam-policy-binding "${PROJECT_ID}" \\
+    --member="serviceAccount:${BUILD_SA}" \\
+    --role="roles/run.builder" --condition=None
+
+  gcloud iam service-accounts add-iam-policy-binding "${BUILD_SA}" \\
+    --project "${PROJECT_ID}" \\
+    --member="serviceAccount:${DEPLOY_SA}" \\
+    --role="roles/iam.serviceAccountUser"
+
+EOF
+  exit "$DEPLOY_RC"
+fi
 
 SERVICE_JSON="$(gcloud run services describe "$SERVICE" \
   --project "$PROJECT_ID" \
@@ -88,6 +122,7 @@ fi
 printf 'SERVICE_URL=%s\n' "$SERVICE_URL"
 printf 'REVISION=%s\n' "$REVISION"
 printf 'APP_GIT_COMMIT=%s\n' "$GIT_SHA"
+printf 'BUILD_SA=%s\n' "$BUILD_SA"
 printf 'HEALTH=%s\n' "$BASIC_HEALTH"
 printf 'DEPLOY_HEALTH=%s\n' "$DEPLOY_HEALTH"
 
@@ -96,5 +131,6 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "service_url=${SERVICE_URL}"
     echo "revision=${REVISION}"
     echo "git_commit=${GIT_SHA}"
+    echo "build_service_account=${BUILD_SA}"
   } >> "$GITHUB_OUTPUT"
 fi
