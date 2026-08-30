@@ -62,12 +62,12 @@ def main() -> None:
         raise RuntimeError(f"class_map count {len(classes)} != model output count {num_classes}")
 
     try:
-        import ai_edge_torch
+        import litert_torch
     except Exception as exc:
-        raise RuntimeError("ai-edge-torch is required for LiteRT/TFLite export") from exc
+        raise RuntimeError("litert-torch is required for LiteRT/TFLite export") from exc
 
     sample = (torch.randn(1, 3, image_size, image_size),)
-    edge_model = ai_edge_torch.convert(model, sample)
+    edge_model = litert_torch.convert(model, sample)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     edge_model.export(str(out))
@@ -82,10 +82,11 @@ def main() -> None:
     try:
         with torch.inference_mode():
             ref = model(sample[0])
-            got = edge_model(*sample)
-            if isinstance(got, (list, tuple)):
-                got = got[0]
-            converted_max_abs = float((ref - got).abs().max().item())
+        got = edge_model(*sample)
+        if isinstance(got, (list, tuple)):
+            got = got[0]
+        got_tensor = torch.as_tensor(got)
+        converted_max_abs = float((ref - got_tensor).abs().max().item())
     except Exception:
         # Export itself remains authoritative; Android runtime smoke will validate the file.
         pass
