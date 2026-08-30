@@ -39,12 +39,15 @@ def seed_target_species_catalog() -> None:
 @app.get("/health/deploy")
 def deployment_health() -> dict:
     """Public, non-secret deployment provenance for online CD verification."""
+    feedback_ingest_key_configured = bool(os.getenv("FEEDBACK_INGEST_KEY", "").strip())
     return {
         "status": "ok",
         "version": app.version,
         "git_commit": os.getenv("APP_GIT_COMMIT", "unknown"),
         "revision": os.getenv("K_REVISION", "unknown"),
         "service": os.getenv("K_SERVICE", "unknown"),
+        "feedback_ingest_path": "/api/feedback/ingest",
+        "feedback_ingest_key_configured": feedback_ingest_key_configured,
     }
 
 
