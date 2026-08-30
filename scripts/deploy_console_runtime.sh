@@ -6,6 +6,7 @@ PROJECT_NUMBER="${PROJECT_NUMBER:-571785698442}"
 REGION="${REGION:-asia-east1}"
 SERVICE="${SERVICE:-yujian-model-factory-console}"
 BUILD_SA="${BUILD_SA:-${PROJECT_NUMBER}-compute@developer.gserviceaccount.com}"
+BUILD_SA_RESOURCE="${BUILD_SA_RESOURCE:-projects/${PROJECT_ID}/serviceAccounts/${BUILD_SA}}"
 DEPLOY_SA="${DEPLOY_SERVICE_ACCOUNT:-yujian-github-deployer@${PROJECT_ID}.iam.gserviceaccount.com}"
 GIT_SHA="${GIT_SHA:-${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || true)}}"
 HEALTH_ATTEMPTS="${HEALTH_ATTEMPTS:-12}"
@@ -23,7 +24,7 @@ fi
 
 log "Authenticated principal"
 gcloud auth list --filter=status:ACTIVE --format='value(account)'
-printf 'Cloud Run build service account: %s\n' "$BUILD_SA"
+printf 'Cloud Run build service account: %s\n' "$BUILD_SA_RESOURCE"
 
 log "Runtime-only deploy ${SERVICE} @ ${GIT_SHA}"
 # Deliberately do not create infrastructure, rotate secrets, mutate IAM, deploy the
@@ -36,7 +37,7 @@ gcloud run deploy "$SERVICE" \
   --project "$PROJECT_ID" \
   --region "$REGION" \
   --source . \
-  --build-service-account "$BUILD_SA" \
+  --build-service-account "$BUILD_SA_RESOURCE" \
   --update-env-vars="APP_GIT_COMMIT=${GIT_SHA}" \
   --quiet
 DEPLOY_RC=$?
@@ -123,6 +124,7 @@ printf 'SERVICE_URL=%s\n' "$SERVICE_URL"
 printf 'REVISION=%s\n' "$REVISION"
 printf 'APP_GIT_COMMIT=%s\n' "$GIT_SHA"
 printf 'BUILD_SA=%s\n' "$BUILD_SA"
+printf 'BUILD_SA_RESOURCE=%s\n' "$BUILD_SA_RESOURCE"
 printf 'HEALTH=%s\n' "$BASIC_HEALTH"
 printf 'DEPLOY_HEALTH=%s\n' "$DEPLOY_HEALTH"
 
