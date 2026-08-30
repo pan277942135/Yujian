@@ -1,0 +1,121 @@
+name: Mobile Model Analysis
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/mobile-model-analysis.yml'
+      - 'scripts/export_mobile_model.py'
+      - 'scripts/evaluate_preprocess_modes.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: gemini-api-project-503706
+  WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+  DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+  MODEL_VERSION: MODEL_M1_v0.2
+  MODEL_PREFIX: gs://yujian-model-factory-571785698442/models/MODEL_M1_v0.2
+
+jobs:
+  analyze-export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          version: '>= 416.0.0'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install analysis runtime
+        run: |
+          python -m pip install --upgrade pip
+          pip install google-cloud-storage Pillow numpy
+          pip install --index-url https://download.pytorch.org/whl/cpu torch==2.7.1 torchvision==0.22.1
+
+      - name: Download exact model contract from GCS
+        run: |
+          mkdir -p mobile-analysis
+          gcloud storage cp "$MODEL_PREFIX/model_torchscript.pt" mobile-analysis/model_torchscript.pt
+          gcloud storage cp "$MODEL_PREFIX/class_map.json" mobile-analysis/class_map.json
+          gcloud storage cp "$MODEL_PREFIX/metrics.json" mobile-analysis/metrics.json
+          sha256sum mobile-analysis/model_torchscript.pt | tee mobile-analysis/source_sha256.txt
+
+      - name: Compare center crop with whole-fish letterbox on real holdout images
+        run: |
+          python scripts/evaluate_preprocess_modes.py \
+            --torchscript mobile-analysis/model_torchscript.pt \
+            --metrics mobile-analysis/metrics.json \
+            --class-map mobile-analysis/class_map.json \
+            --limit 200 \
+            --out mobile-analysis/preprocess_comparison.json
+
+      - name: Install LiteRT PyTorch exporter
+        run: pip install ai-edge-torch
+
+      - name: Export raw classifier to TFLite
+        run: |
+          python scripts/export_mobile_model.py \
+            --torchscript mobile-analysis/model_torchscript.pt \
+            --metrics mobile-analysis/metrics.json \
+            --class-map mobile-analysis/class_map.json \
+            --out mobile-analysis/fish_classifier_v0_2.tflite \
+            --report mobile-analysis/export_report.json
+
+      - name: Publish analysis summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '### MODEL_M1_v0.2 mobile analysis'
+            if [[ -f mobile-analysis/preprocess_comparison.json ]]; then
+              python - <<'PY'
+          import json
+          p=json.load(open('mobile-analysis/preprocess_comparison.json'))
+          c=p['center_crop']; l=p['whole_image_letterbox']
+          print(f"- Holdout evaluated: **{p['evaluated']}**")
+          print(f"- Center-crop Top-1: **{c['top1_accuracy']*100:.1f}%**")
+          print(f"- Whole-fish letterbox Top-1: **{l['top1_accuracy']*100:.1f}%**")
+          print(f"- Delta: **{p['top1_accuracy_delta_letterbox_minus_center']*100:+.1f} pp**")
+          print(f"- Prediction disagreement: **{p['prediction_disagreement_rate']*100:.1f}%**")
+          PY
+            fi
+            if [[ -f mobile-analysis/export_report.json ]]; then
+              python - <<'PY'
+          import json
+          p=json.load(open('mobile-analysis/export_report.json'))
+          print(f"- TFLite size: **{p['tflite_size']} bytes**")
+          print(f"- TFLite SHA-256: `{p['tflite_sha256']}`")
+          print(f"- Classes: **{p['num_classes']}**")
+          PY
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload mobile analysis artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MODEL_M1_v0.2-mobile-analysis
+          path: mobile-analysis/
+          retention-days: 7
+          if-no-files-found: error
