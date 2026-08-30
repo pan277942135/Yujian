@@ -11,6 +11,7 @@ os.environ.setdefault("REGISTRY_DB_URL", "sqlite:///:memory:")
 os.environ["APP_GIT_COMMIT"] = "a" * 40
 os.environ["K_REVISION"] = "yujian-model-factory-console-smoke"
 os.environ["K_SERVICE"] = "yujian-model-factory-console"
+os.environ.pop("FEEDBACK_INGEST_KEY", None)
 
 from app.entry import app, deployment_health  # noqa: E402
 from app.secure import PUBLIC_PATHS  # noqa: E402
@@ -28,8 +29,11 @@ def main() -> None:
     assert payload["git_commit"] == "a" * 40, payload
     assert payload["revision"] == "yujian-model-factory-console-smoke", payload
     assert payload["service"] == "yujian-model-factory-console", payload
+    assert payload["feedback_ingest_path"] == "/api/feedback/ingest", payload
+    assert payload["feedback_ingest_key_configured"] is False, payload
     assert "/health/deploy" in PUBLIC_PATHS
     assert "/health/deploy" in app.openapi()["paths"]
+    assert "/api/feedback/ingest" in app.openapi()["paths"]
 
     require_text(
         ".github/workflows/uat-deploy.yml",
@@ -52,13 +56,33 @@ def main() -> None:
             'BUILD_SA_RESOURCE="${BUILD_SA_RESOURCE:-projects/${PROJECT_ID}/serviceAccounts/${BUILD_SA}}"',
             "--source .",
             '--build-service-account "$BUILD_SA_RESOURCE"',
-            "--update-env-vars=\"APP_GIT_COMMIT=${GIT_SHA}\"",
+            'DEPLOY_ENV_VARS="APP_GIT_COMMIT=${GIT_SHA}"',
+            'FEEDBACK_INGEST_KEY="$(python -c',
+            '::add-mask::%s',
+            '--update-env-vars="$DEPLOY_ENV_VARS"',
             "roles/run.builder",
             "roles/iam.serviceAccountUser",
             "/health",
             "/health/deploy",
+            "/api/feedback/ingest",
+            'smoke=true',
+            'feedback_ingest_key_configured',
+            'gcs_write_delete',
+            'db_reachable',
             "DEPLOYED_SHA",
             "HEALTH_REVISION",
+        ],
+    )
+    require_text(
+        "app/feedback_ingest_api.py",
+        [
+            'smoke: bool = Form(default=False)',
+            'prefix = "feedback/smoke" if smoke else "feedback/app"',
+            'blob.upload_from_string',
+            'blob.delete',
+            'db.scalar(select(1))',
+            '"gcs_write_delete": True',
+            '"db_reachable": True',
         ],
     )
     bootstrap = (ROOT / "scripts/bootstrap_github_wif.sh").read_text(encoding="utf-8")
@@ -80,7 +104,7 @@ def main() -> None:
     for path in (".gitignore", ".gcloudignore", ".dockerignore"):
         require_text(path, ["gha-creds-*.json"])
 
-    print("UAT deploy config smoke OK", payload)
+    print("UAT deploy config + feedback-ingest smoke contract OK", payload)
 
 
 if __name__ == "__main__":
