@@ -10,7 +10,14 @@ import hashlib
 import io
 import json
 import os
+import sys
 from pathlib import Path
+
+# Running `python scripts/<name>.py` places scripts/ rather than the repository root
+# on sys.path. Resolve backend modules deterministically before importing app.*.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from google.cloud import storage
 from PIL import Image, ImageOps
