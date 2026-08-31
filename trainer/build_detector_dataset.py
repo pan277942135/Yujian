@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tarfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -57,6 +58,10 @@ def _split_key(image: ImageAsset) -> str:
     return "test"
 
 
+def _coco_dir(split: str) -> str:
+    return {"train": "train2017", "val": "val2017", "test": "test2017"}[split]
+
+
 def _download(client: storage.Client, uri: str, target: Path) -> None:
     bucket_name, object_name = _parse_gs(uri)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -94,6 +99,29 @@ def _collect() -> list[Candidate]:
     return out
 
 
+def _publish_dataset(client: storage.Client, root: Path, report: dict, manifest: list[dict]) -> dict:
+    bucket_name = os.environ.get("GCS_BUCKET", "").strip()
+    if not bucket_name:
+        return {}
+    dataset_version = os.environ.get("DETECTOR_DATASET_VERSION", "DET_DS_v0.1").strip()
+    prefix = f"detector-datasets/{dataset_version}"
+    archive = Path("/tmp") / f"{dataset_version}.tar.gz"
+    with tarfile.open(archive, "w:gz") as tf:
+        tf.add(root, arcname=dataset_version)
+
+    bucket = client.bucket(bucket_name)
+    payloads = {
+        f"{prefix}/{dataset_version}.tar.gz": archive,
+        f"{prefix}/bootstrap_report.json": root / "bootstrap_report.json",
+        f"{prefix}/bootstrap_manifest.json": root / "bootstrap_manifest.json",
+    }
+    uris = {}
+    for object_name, local_path in payloads.items():
+        bucket.blob(object_name).upload_from_filename(str(local_path))
+        uris[local_path.name] = f"gs://{bucket_name}/{object_name}"
+    return {"dataset_version": dataset_version, "gcs": uris}
+
+
 def main() -> None:
     output_root = Path(os.environ.get("DETECTOR_DATASET_ROOT", "/tmp/yujian-detector-dataset"))
     output_root.mkdir(parents=True, exist_ok=True)
@@ -101,7 +129,7 @@ def main() -> None:
     positives = [x for x in candidates if x.boxes]
     negatives = [x for x in candidates if not x.boxes]
 
-    # Keep enough true negatives to teach the detector to return no boxes, without swamping positives.
+    # True negative images are essential for a reliable NO_FISH result, but should not dominate training.
     max_negatives = max(1, int(len(positives) * 0.35)) if positives else len(negatives)
     negatives = sorted(negatives, key=lambda x: hashlib.sha256(x.image.image_id.encode()).hexdigest())[:max_negatives]
     selected = positives + negatives
@@ -123,7 +151,7 @@ def main() -> None:
         split = _split_key(candidate.image)
         suffix = Path(candidate.image.file_name or candidate.image.object_name).suffix.lower() or ".jpg"
         local_name = f"{candidate.image.id:08d}{suffix}"
-        local_path = output_root / "images" / split / local_name
+        local_path = output_root / _coco_dir(split) / local_name
         try:
             _download(client, candidate.image.gcs_uri, local_path)
             with Image.open(local_path) as source:
@@ -182,7 +210,7 @@ def main() -> None:
     annotations_dir = output_root / "annotations"
     annotations_dir.mkdir(parents=True, exist_ok=True)
     for split in ("train", "val", "test"):
-        (annotations_dir / f"instances_{split}.json").write_text(
+        (annotations_dir / f"instances_{split}2017.json").write_text(
             json.dumps(coco[split], ensure_ascii=False), encoding="utf-8"
         )
 
@@ -207,6 +235,18 @@ def main() -> None:
     (output_root / "bootstrap_report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    published = _publish_dataset(client, output_root, report, manifest)
+    if published:
+        report["published"] = published
+        (output_root / "bootstrap_report.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        # Refresh published report after adding GCS metadata.
+        bucket_name = os.environ["GCS_BUCKET"].strip()
+        dataset_version = published["dataset_version"]
+        client.bucket(bucket_name).blob(
+            f"detector-datasets/{dataset_version}/bootstrap_report.json"
+        ).upload_from_filename(str(output_root / "bootstrap_report.json"))
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 
