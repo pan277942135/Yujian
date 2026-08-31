@@ -13,7 +13,7 @@ MODEL_VERSION="${DETECTOR_MODEL_VERSION:-DET_FISH_v0.1}"
 log() { printf '\n==> %s\n' "$*"; }
 
 gcloud config set project "$PROJECT_ID" >/dev/null
-gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com storage.googleapis.com --project "$PROJECT_ID"
+# Required APIs are already enabled. The deployer deliberately lacks serviceusage.services.enable.
 
 if ! gcloud artifacts repositories describe "$AR_REPOSITORY" --project "$PROJECT_ID" --location "$REGION" >/dev/null 2>&1; then
   gcloud artifacts repositories create "$AR_REPOSITORY" \
