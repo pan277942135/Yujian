@@ -50,6 +50,14 @@ def main() -> None:
     checkpoint_bytes = int(checkpoint_blob.size or 0)
     if checkpoint_bytes <= 0:
         raise RuntimeError("required trained best_ckpt.pth is empty")
+    metadata = json.loads(download_bytes(client, f"{prefix}/detector_metadata.json").decode("utf-8"))
+    training = metadata.get("training") or {}
+    if int(training.get("epochs") or 0) != 30 or int(training.get("epochs_completed") or 0) < 30:
+        raise RuntimeError(f"detector training epoch gate failed: {training}")
+    for metric in ("ap50", "ap50_95"):
+        value = training.get(metric)
+        if not isinstance(value, (int, float)) or float(value) < 0.0:
+            raise RuntimeError(f"detector metadata has invalid {metric}: {value!r}")
     document = json.loads(download_bytes(client, f"{prefix}/golden/golden_cases.json").decode("utf-8"))
     if document.get("schema_version") != "DET_FISH_GOLDEN_CASES_v1":
         raise RuntimeError("unexpected golden manifest schema")
@@ -123,7 +131,8 @@ def main() -> None:
     print(
         "PRODUCTION_DETECTOR_RUNTIME_GATE_PASS "
         f"model={model.model_version} sha256={model.onnx_sha256} bytes={model.onnx_bytes} "
-        f"best_ckpt_bytes={checkpoint_bytes} input={model.input_size}",
+        f"best_ckpt_bytes={checkpoint_bytes} ap50={training['ap50']} ap50_95={training['ap50_95']} "
+        f"input={model.input_size}",
         flush=True,
     )
 
