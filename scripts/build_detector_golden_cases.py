@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Publish real, audited DET_DS_v0.1 images as detector parity golden cases.
 
-The script never creates images or detector outputs.  Each fixture is copied from the
+The script never creates images or detector outputs. Each fixture is copied from the
 reviewed detector bootstrap manifest only after the official DET_FISH_v0.1 ONNX returns
 the recorded quality-gate status on that exact source image.
 """
@@ -11,8 +11,15 @@ import argparse
 import hashlib
 import io
 import json
+import sys
 from pathlib import Path
 from typing import Any
+
+# Running `python scripts/<name>.py` places scripts/ rather than the repository root
+# on sys.path. Resolve backend modules deterministically before importing app.*.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 import numpy as np
 import onnxruntime as ort
