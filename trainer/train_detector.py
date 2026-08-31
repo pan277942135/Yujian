@@ -56,8 +56,11 @@ def require_dataset(report: dict) -> None:
     splits = report.get("splits") or {}
     train = splits.get("train") or {}
     val = splits.get("val") or {}
+    test = splits.get("test") or {}
     min_train_boxes = int(os.environ.get("DETECTOR_MIN_TRAIN_BOXES", "30"))
     min_val_boxes = int(os.environ.get("DETECTOR_MIN_VAL_BOXES", "3"))
+    min_test_images = int(os.environ.get("DETECTOR_MIN_TEST_IMAGES", "1"))
+    min_negatives = int(os.environ.get("DETECTOR_MIN_NEGATIVES", "1"))
     train_boxes = int(train.get("annotations") or 0)
     val_boxes = int(val.get("annotations") or 0)
     train_images = int(train.get("images") or 0)
@@ -69,6 +72,18 @@ def require_dataset(report: dict) -> None:
         )
     if train_images < 40:
         raise RuntimeError(f"DETECTOR_DATASET_GATE_FAIL: train_images={train_images} < 40")
+    test_images = int(test.get("images") or 0)
+    negatives = int(report.get("negatives") or 0)
+    if test_images < min_test_images:
+        raise RuntimeError(
+            "DETECTOR_DATASET_GATE_FAIL: "
+            f"test_images={test_images} (need {min_test_images})"
+        )
+    if negatives < min_negatives:
+        raise RuntimeError(
+            "DETECTOR_DATASET_GATE_FAIL: "
+            f"no_fish_negatives={negatives} (need {min_negatives})"
+        )
 
 
 def run_training(dataset_root: Path, pretrain: Path, output_root: Path) -> Path:
