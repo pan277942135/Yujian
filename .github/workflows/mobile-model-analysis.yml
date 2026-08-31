@@ -7,6 +7,7 @@ on:
       - '.github/workflows/mobile-model-analysis.yml'
       - 'scripts/export_mobile_model.py'
       - 'scripts/evaluate_preprocess_modes.py'
+      - 'scripts/verify_tflite_parity.py'
   workflow_dispatch:
 
 permissions:
@@ -112,6 +113,22 @@ jobs:
           print(json.dumps(doc, ensure_ascii=False, indent=2))
           PY
 
+      - name: Download shared golden image
+        run: |
+          curl -fL --retry 3 --retry-delay 2 \
+            -o mobile-analysis/golden_yellow_catfish_224.jpg \
+            https://raw.githubusercontent.com/pan277942135/Yujian_App/main/app/src/androidTest/assets/golden_yellow_catfish_224.jpg
+          sha256sum mobile-analysis/golden_yellow_catfish_224.jpg | tee mobile-analysis/golden_sha256.txt
+
+      - name: Verify TorchScript vs Python TFLite parity
+        run: |
+          python scripts/verify_tflite_parity.py \
+            --torchscript mobile-analysis/model_torchscript.pt \
+            --tflite mobile-analysis/fish_classifier_v0_2.tflite \
+            --image mobile-analysis/golden_yellow_catfish_224.jpg \
+            --expected-index 7 \
+            --out mobile-analysis/parity_report.json
+
       - name: Verify release model checksum
         run: |
           test "$(stat -c%s mobile-analysis/fish_classifier_v0_2.tflite)" = "6220308"
@@ -134,6 +151,7 @@ jobs:
             mobile-analysis/preprocess_comparison.json \
             mobile-analysis/export_report.json \
             mobile-analysis/tensor_contract.json \
+            mobile-analysis/parity_report.json \
             --clobber
 
       - name: Publish analysis summary
@@ -161,11 +179,23 @@ jobs:
           print(f"- TFLite size: **{p['tflite_size']} bytes**")
           print(f"- TFLite SHA-256: `{p['tflite_sha256']}`")
           print(f"- Classes: **{p['num_classes']}**")
+          print(f"- Export edge-model max abs: **{p.get('torch_to_litert_max_abs')}**")
           PY
             fi
             if [[ -f mobile-analysis/tensor_contract.json ]]; then
               echo '- Tensor contract:'
               cat mobile-analysis/tensor_contract.json
+            fi
+            if [[ -f mobile-analysis/parity_report.json ]]; then
+              python - <<'PY'
+          import json
+          p=json.load(open('mobile-analysis/parity_report.json'))
+          print(f"- TorchScript Top-1: **{p['torch_top1']}**")
+          print(f"- Python TFLite Top-1: **{p['tflite_top1']}**")
+          print(f"- max_abs_diff: **{p['max_abs_diff']:.8f}**")
+          print(f"- mean_abs_diff: **{p['mean_abs_diff']:.8f}**")
+          print(f"- cosine similarity: **{p['cosine_similarity']:.8f}**")
+          PY
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
