@@ -2,6 +2,14 @@ name: Detector Golden Cases
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - scripts/build_detector_golden_cases.py
+      - app/detector_runtime.py
+      - app/recognition_pipeline.py
+      - config/recognition_pipeline_v1.json
+      - .github/workflows/detector-golden-cases.yml
   workflow_run:
     workflows:
       - Detector Bootstrap
@@ -22,7 +30,7 @@ env:
 
 jobs:
   publish-golden-cases:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
