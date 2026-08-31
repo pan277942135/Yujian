@@ -1,0 +1,24 @@
+FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/opt/YOLOX:/app
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-detector.txt .
+RUN python -m pip install --upgrade pip setuptools wheel \
+    && pip install --no-cache-dir -r requirements-detector.txt \
+    && pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu128 torchvision==0.22.1
+
+RUN git clone --depth 1 --branch 0.3.0 https://github.com/Megvii-BaseDetection/YOLOX.git /opt/YOLOX
+
+COPY config ./config
+COPY trainer ./trainer
+
+CMD ["python", "-m", "trainer.train_detector"]

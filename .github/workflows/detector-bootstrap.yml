@@ -1,0 +1,174 @@
+name: Detector Bootstrap
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/detector-bootstrap.yml'
+      - 'config/recognition_pipeline_v1.json'
+      - 'trainer/build_detector_dataset.py'
+      - 'trainer/train_detector.py'
+      - 'trainer/yolox_fish_exp.py'
+      - 'Dockerfile.detector'
+      - 'requirements-detector.txt'
+      - 'requirements-training.txt'
+      - 'infra/cloudbuild.detector.yaml'
+      - 'scripts/deploy_detector_dataset_job.sh'
+      - 'scripts/deploy_detector_training_gcp.sh'
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: yujian-detector-bootstrap
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: gemini-api-project-503706
+  WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+  DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+  BUCKET: yujian-model-factory-571785698442
+  DATASET_REGION: asia-east1
+  GPU_REGION: asia-southeast1
+  DETECTOR_DATASET_VERSION: DET_DS_v0.1
+  DETECTOR_MODEL_VERSION: DET_FISH_v0.1
+
+jobs:
+  build-dataset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          version: '>= 416.0.0'
+
+      - name: Deploy detector dataset builder
+        env:
+          REGION: ${{ env.DATASET_REGION }}
+          DETECTOR_DATASET_VERSION: ${{ env.DETECTOR_DATASET_VERSION }}
+        run: bash scripts/deploy_detector_dataset_job.sh
+
+      - name: Build frozen detector dataset
+        run: |
+          gcloud run jobs execute yujian-detector-dataset-builder \
+            --project "$PROJECT_ID" \
+            --region "$DATASET_REGION" \
+            --wait
+
+      - name: Validate bootstrap dataset before GPU spend
+        run: |
+          gcloud storage cp \
+            "gs://${BUCKET}/detector-datasets/${DETECTOR_DATASET_VERSION}/bootstrap_report.json" \
+            detector-bootstrap-report.json
+          python - <<'PY'
+          import json
+          p=json.load(open('detector-bootstrap-report.json', encoding='utf-8'))
+          train=(p.get('splits') or {}).get('train') or {}
+          val=(p.get('splits') or {}).get('val') or {}
+          train_boxes=int(train.get('annotations') or 0)
+          val_boxes=int(val.get('annotations') or 0)
+          train_images=int(train.get('images') or 0)
+          if train_boxes < 30 or val_boxes < 3 or train_images < 40:
+              raise SystemExit(f'DETECTOR_DATASET_GATE_FAIL train_images={train_images} train_boxes={train_boxes} val_boxes={val_boxes}')
+          print(f'DETECTOR_DATASET_GATE_PASS train_images={train_images} train_boxes={train_boxes} val_boxes={val_boxes}')
+          PY
+
+      - name: Dataset summary
+        if: always()
+        run: |
+          echo '### DET_DS_v0.1 bootstrap' >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f detector-bootstrap-report.json ]]; then
+            python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          p=json.load(open('detector-bootstrap-report.json'))
+          print(f"- Selected: **{p.get('selected',0)}**")
+          print(f"- Positives: **{p.get('positives',0)}**")
+          print(f"- No-fish negatives: **{p.get('negatives',0)}**")
+          print(f"- Incomplete candidates: **{p.get('incomplete_candidates',0)}**")
+          for s,v in (p.get('splits') or {}).items():
+              print(f"- {s}: {v.get('images',0)} images / {v.get('annotations',0)} boxes")
+          PY
+          fi
+
+  train-detector:
+    needs: build-dataset
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          version: '>= 416.0.0'
+
+      - name: Deploy YOLOX-Nano L4 training job
+        env:
+          DETECTOR_GPU_REGION: ${{ env.GPU_REGION }}
+          DETECTOR_DATASET_VERSION: ${{ env.DETECTOR_DATASET_VERSION }}
+          DETECTOR_MODEL_VERSION: ${{ env.DETECTOR_MODEL_VERSION }}
+        run: bash scripts/deploy_detector_training_gcp.sh
+
+      - name: Train and export detector
+        run: |
+          gcloud run jobs execute yujian-detector-trainer \
+            --project "$PROJECT_ID" \
+            --region "$GPU_REGION" \
+            --wait
+
+      - name: Verify DET_FISH_v0.1 artifacts
+        run: |
+          MODEL_PREFIX="gs://${BUCKET}/models/${DETECTOR_MODEL_VERSION}"
+          gcloud storage ls "$MODEL_PREFIX/fish_detector_yolox_nano_v0_1.onnx"
+          gcloud storage ls "$MODEL_PREFIX/detector_metadata.json"
+          gcloud storage cp "$MODEL_PREFIX/detector_metadata.json" detector_metadata.json
+          python - <<'PY'
+          import json
+          p=json.load(open('detector_metadata.json'))
+          assert p['model_version']=='DET_FISH_v0.1'
+          assert p['model_family']=='YOLOX_NANO'
+          assert p['onnx']['output_shape'][-1] == 6
+          assert len(p['onnx_sha256']) == 64
+          print('DET_FISH_ARTIFACT_GATE_PASS', p['onnx_sha256'], p['onnx_bytes'])
+          PY
+
+      - name: Training summary
+        if: always()
+        run: |
+          echo '### DET_FISH_v0.1' >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f detector_metadata.json ]]; then
+            python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          p=json.load(open('detector_metadata.json'))
+          t=p.get('training') or {}
+          print(f"- Model: **{p.get('model_version')}** / {p.get('model_family')}")
+          print(f"- Dataset: **{p.get('dataset_version')}**")
+          print(f"- Best AP50:95: **{t.get('best_ap50_95')}**")
+          print(f"- ONNX bytes: **{p.get('onnx_bytes')}**")
+          print(f"- ONNX SHA256: `{p.get('onnx_sha256')}`")
+          print(f"- Output: `{p.get('onnx',{}).get('output_shape')}`")
+          PY
+          fi
