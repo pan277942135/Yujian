@@ -108,15 +108,32 @@ def run_training(dataset_root: Path, pretrain: Path, output_root: Path) -> Path:
     ]
     subprocess.run(command, check=True, env=env)
     experiment_dir = output_root / "fish_detector_yolox_nano"
-    choices = [
-        experiment_dir / "best_ckpt.pth",
-        experiment_dir / "last_epoch_ckpt.pth",
-        experiment_dir / "latest_ckpt.pth",
-    ]
-    for path in choices:
-        if path.exists():
-            return path
-    raise RuntimeError(f"YOLOX training completed but no checkpoint found in {experiment_dir}")
+    checkpoint = experiment_dir / "best_ckpt.pth"
+    if checkpoint.exists():
+        return checkpoint
+    raise RuntimeError(f"YOLOX training completed but no best checkpoint found in {experiment_dir}")
+
+
+def evaluate_checkpoint(checkpoint: Path) -> dict:
+    """Measure the actual exported checkpoint with COCO AP50 and AP50:95 metrics."""
+    if not torch.cuda.is_available():
+        raise RuntimeError("DET_FISH evaluation requires CUDA; Cloud Run GPU was not attached")
+
+    exp = Exp()
+    model = exp.get_model()
+    state = torch.load(checkpoint, map_location="cpu")
+    model_state = state.get("model", state) if isinstance(state, dict) else state
+    model.load_state_dict(model_state)
+    model.cuda().eval()
+
+    batch_size = int(os.environ.get("DETECTOR_BATCH_SIZE", "16"))
+    evaluator = exp.get_evaluator(batch_size=batch_size, is_distributed=False)
+    ap50_95, ap50, summary = exp.eval(model, evaluator, is_distributed=False, half=True)
+    return {
+        "ap50": float(ap50),
+        "ap50_95": float(ap50_95),
+        "summary": str(summary or ""),
+    }
 
 
 def export_onnx(checkpoint: Path, output: Path) -> dict:
@@ -199,6 +216,7 @@ def main() -> None:
 
     output_root = work / "outputs"
     checkpoint = run_training(dataset_root, pretrain, output_root)
+    evaluation = evaluate_checkpoint(checkpoint)
     onnx_path = work / "fish_detector_yolox_nano_v0_1.onnx"
     onnx_contract = export_onnx(checkpoint, onnx_path)
 
@@ -214,7 +232,9 @@ def main() -> None:
         "training": {
             "epochs": int(os.environ.get("DETECTOR_EPOCHS", "30")),
             "batch_size": int(os.environ.get("DETECTOR_BATCH_SIZE", "16")),
-            "best_ap50_95": float(checkpoint_doc.get("best_ap", 0.0)) if isinstance(checkpoint_doc, dict) else None,
+            "ap50": evaluation["ap50"],
+            "ap50_95": evaluation["ap50_95"],
+            "checkpoint_best_ap50_95": float(checkpoint_doc.get("best_ap", 0.0)) if isinstance(checkpoint_doc, dict) else None,
             "pretrained_source": PRETRAIN_URL,
         },
         "dataset_report": report,

@@ -201,8 +201,10 @@ jobs:
           assert p['model_version']=='DET_FISH_v0.1'
           assert p['model_family']=='YOLOX_NANO'
           assert p['onnx']['output_shape'][-1] == 6
+          assert p['training']['ap50'] >= 0.0
+          assert p['training']['ap50_95'] >= 0.0
           assert len(p['onnx_sha256']) == 64
-          print('DET_FISH_ARTIFACT_GATE_PASS', p['onnx_sha256'], p['onnx_bytes'])
+          print('DET_FISH_ARTIFACT_GATE_PASS', p['onnx_sha256'], p['onnx_bytes'], p['training']['ap50'], p['training']['ap50_95'])
           PY
 
       - name: Training summary
@@ -216,7 +218,8 @@ jobs:
           t=p.get('training') or {}
           print(f"- Model: **{p.get('model_version')}** / {p.get('model_family')}")
           print(f"- Dataset: **{p.get('dataset_version')}**")
-          print(f"- Best AP50:95: **{t.get('best_ap50_95')}**")
+          print(f"- AP50: **{t.get('ap50')}**")
+          print(f"- AP50:95: **{t.get('ap50_95')}**")
           print(f"- ONNX bytes: **{p.get('onnx_bytes')}**")
           print(f"- ONNX SHA256: `{p.get('onnx_sha256')}`")
           print(f"- Output: `{p.get('onnx',{}).get('output_shape')}`")
