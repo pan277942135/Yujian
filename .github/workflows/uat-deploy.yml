@@ -119,6 +119,15 @@ jobs:
           path: android-app
           fetch-depth: 1
 
+      - name: Download verified MODEL_M1_v0.2 mobile asset for Android UAT
+        working-directory: android-app
+        shell: bash
+        run: |
+          mkdir -p app/src/main/assets
+          curl -fL --retry 3 --retry-delay 2 \
+            -o app/src/main/assets/fish_classifier.tflite \
+            https://github.com/pan277942135/Yujian/releases/download/mobile-model-v0.2/fish_classifier_v0_2.tflite
+
       - name: Verify Android production model asset
         working-directory: android-app
         run: python3 scripts/verify_production_model.py
