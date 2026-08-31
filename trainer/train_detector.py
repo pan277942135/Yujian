@@ -119,6 +119,11 @@ def run_training(dataset_root: Path, pretrain: Path, output_root: Path) -> tuple
     env["DETECTOR_DATASET_ROOT"] = str(dataset_root)
     env["DETECTOR_OUTPUT_DIR"] = str(output_root)
     batch = os.environ.get("DETECTOR_BATCH_SIZE", "16")
+    epochs = os.environ.get("DETECTOR_EPOCHS", "30")
+    # Pass the frozen values through YOLOX's explicit config override channel as
+    # well as the environment.  This avoids a base-exp default or stale dynamic
+    # setting silently shortening a production run.
+    eval_interval = os.environ.get("DETECTOR_EVAL_INTERVAL", "2")
     command = [
         sys.executable,
         "/opt/YOLOX/tools/train.py",
@@ -133,6 +138,10 @@ def run_training(dataset_root: Path, pretrain: Path, output_root: Path) -> tuple
         str(pretrain),
         "-expn",
         "fish_detector_yolox_nano",
+        "max_epoch",
+        epochs,
+        "eval_interval",
+        eval_interval,
     ]
     subprocess.run(command, check=True, env=env)
     experiment_dir = output_root / "fish_detector_yolox_nano"
