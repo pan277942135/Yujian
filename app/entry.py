@@ -1,5 +1,8 @@
 import os
 
+from fastapi import HTTPException
+
+from app.detector_runtime import load_detector
 from app.main import app, templates as main_templates
 from app.presence import router as presence_router
 from app.dedupe import router as dedupe_router
@@ -48,6 +51,22 @@ def deployment_health() -> dict:
         "service": os.getenv("K_SERVICE", "unknown"),
         "feedback_ingest_path": "/api/feedback/ingest",
         "feedback_ingest_key_configured": feedback_ingest_key_configured,
+    }
+
+
+@app.get("/health/detector")
+def detector_health() -> dict:
+    """Public readiness probe that proves the deployed service can load official DET_FISH_v0.1."""
+    try:
+        detector = load_detector()
+    except Exception as exc:  # pragma: no cover - exercised in Cloud Run deployment smoke
+        raise HTTPException(status_code=503, detail="production detector is unavailable") from exc
+    return {
+        "status": "ok",
+        "model_version": detector.model_version,
+        "onnx_sha256": detector.onnx_sha256,
+        "onnx_bytes": detector.onnx_bytes,
+        "input_size": detector.input_size,
     }
 
 

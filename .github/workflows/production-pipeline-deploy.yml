@@ -1,0 +1,65 @@
+name: Production Pipeline Deploy
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - Production Detector Runtime
+    types:
+      - completed
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: yujian-production-pipeline-deploy
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: gemini-api-project-503706
+  PROJECT_NUMBER: '571785698442'
+  REGION: asia-east1
+  SERVICE: yujian-model-factory-console
+  WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+  DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+
+jobs:
+  deploy-production-pipeline:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+      - uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          version: '>= 416.0.0'
+      - name: Deploy the CI-verified production runtime
+        id: deploy
+        run: |
+          GIT_SHA="$(git rev-parse HEAD)" bash scripts/deploy_console_runtime.sh
+      - name: Verify deployed DET_FISH_v0.1 runtime
+        env:
+          SERVICE_URL: ${{ steps.deploy.outputs.service_url }}
+        run: |
+          curl --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 60 -fsS \
+            "$SERVICE_URL/health/detector" > detector-health.json
+          python - <<'PY'
+          import json
+          payload = json.load(open("detector-health.json"))
+          assert payload["status"] == "ok", payload
+          assert payload["model_version"] == "DET_FISH_v0.1", payload
+          assert len(payload["onnx_sha256"]) == 64, payload
+          assert int(payload["onnx_bytes"]) > 0, payload
+          assert int(payload["input_size"]) == 416, payload
+          print("DEPLOYED_PRODUCTION_DETECTOR_GATE_PASS", payload)
+          PY

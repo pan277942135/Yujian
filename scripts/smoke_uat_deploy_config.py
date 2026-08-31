@@ -33,6 +33,8 @@ def main() -> None:
     assert payload["feedback_ingest_key_configured"] is False, payload
     assert "/health/deploy" in PUBLIC_PATHS
     assert "/health/deploy" in app.openapi()["paths"]
+    assert "/health/detector" in PUBLIC_PATHS
+    assert "/health/detector" in app.openapi()["paths"]
     assert "/api/feedback/ingest" in app.openapi()["paths"]
 
     require_text(

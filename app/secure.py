@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 COOKIE_NAME = "yujian_console"
-PUBLIC_PATHS = {"/health", "/health/deploy", "/login"}
+PUBLIC_PATHS = {"/health", "/health/deploy", "/health/detector", "/login"}
 FEEDBACK_INGEST_PATHS = {"/api/feedback", "/api/feedback/ingest"}
 
 
