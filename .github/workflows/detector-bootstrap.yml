@@ -64,11 +64,42 @@ jobs:
         run: bash scripts/deploy_detector_dataset_job.sh
 
       - name: Build frozen detector dataset
+        id: execute-dataset
+        continue-on-error: true
         run: |
           gcloud run jobs execute yujian-detector-dataset-builder \
             --project "$PROJECT_ID" \
             --region "$DATASET_REGION" \
             --wait
+
+      - name: Diagnose detector dataset execution
+        if: always()
+        env:
+          DATASET_JOB_NAME: yujian-detector-dataset-builder
+        run: |
+          set -o pipefail
+          EXECUTION="$(gcloud run jobs executions list "$DATASET_JOB_NAME" \
+            --project "$PROJECT_ID" \
+            --region "$DATASET_REGION" \
+            --limit=1 \
+            --sort-by='~metadata.creationTimestamp' \
+            --format='value(metadata.name)')"
+          test -n "$EXECUTION"
+          echo "Detector dataset execution: $EXECUTION"
+          gcloud run jobs executions describe "$EXECUTION" \
+            --project "$PROJECT_ID" \
+            --region "$DATASET_REGION" \
+            --format=yaml
+          gcloud logging read \
+            "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"$DATASET_JOB_NAME\"" \
+            --project "$PROJECT_ID" \
+            --limit=200 \
+            --freshness=2h \
+            --format='value(timestamp,severity,textPayload,jsonPayload.message)' || true
+
+      - name: Fail when detector dataset execution failed
+        if: steps.execute-dataset.outcome == 'failure'
+        run: exit 1
 
       - name: Validate bootstrap dataset before GPU spend
         run: |
