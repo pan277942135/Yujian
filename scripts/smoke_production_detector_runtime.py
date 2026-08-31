@@ -43,6 +43,13 @@ def main() -> None:
 
     client = storage.Client()
     prefix = f"gs://{bucket}/models/{model_version}"
+    checkpoint_blob = client.bucket(bucket).blob(f"models/{model_version}/best_ckpt.pth")
+    if not checkpoint_blob.exists(client):
+        raise RuntimeError("required trained best_ckpt.pth is missing from the official model prefix")
+    checkpoint_blob.reload(client)
+    checkpoint_bytes = int(checkpoint_blob.size or 0)
+    if checkpoint_bytes <= 0:
+        raise RuntimeError("required trained best_ckpt.pth is empty")
     document = json.loads(download_bytes(client, f"{prefix}/golden/golden_cases.json").decode("utf-8"))
     if document.get("schema_version") != "DET_FISH_GOLDEN_CASES_v1":
         raise RuntimeError("unexpected golden manifest schema")
@@ -116,7 +123,7 @@ def main() -> None:
     print(
         "PRODUCTION_DETECTOR_RUNTIME_GATE_PASS "
         f"model={model.model_version} sha256={model.onnx_sha256} bytes={model.onnx_bytes} "
-        f"input={model.input_size}",
+        f"best_ckpt_bytes={checkpoint_bytes} input={model.input_size}",
         flush=True,
     )
 
