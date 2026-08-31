@@ -114,7 +114,7 @@ def require_dataset(report: dict) -> None:
         )
 
 
-def run_training(dataset_root: Path, pretrain: Path, output_root: Path) -> Path:
+def run_training(dataset_root: Path, pretrain: Path, output_root: Path) -> tuple[Path, str]:
     env = dict(os.environ)
     env["DETECTOR_DATASET_ROOT"] = str(dataset_root)
     env["DETECTOR_OUTPUT_DIR"] = str(output_root)
@@ -138,8 +138,22 @@ def run_training(dataset_root: Path, pretrain: Path, output_root: Path) -> Path:
     experiment_dir = output_root / "fish_detector_yolox_nano"
     checkpoint = experiment_dir / "best_ckpt.pth"
     if checkpoint.exists():
-        return checkpoint
-    raise RuntimeError(f"YOLOX training completed but no best checkpoint found in {experiment_dir}")
+        return checkpoint, "yolox_best_ckpt"
+
+    # YOLOX only writes best_ckpt.pth for a strictly positive AP improvement.  On a
+    # new small detector dataset an all-zero validation AP is a real measured tie, not
+    # a failed training run.  Promote its actual final evaluated checkpoint to the
+    # required best_ckpt.pth name so the published artifact is never synthetic.
+    final_evaluated_checkpoint = experiment_dir / "last_epoch_ckpt.pth"
+    if final_evaluated_checkpoint.exists():
+        shutil.copy2(final_evaluated_checkpoint, checkpoint)
+        return checkpoint, "last_epoch_promoted_after_yolox_zero_ap_tie"
+
+    candidates = sorted(str(path.relative_to(output_root)) for path in output_root.rglob("*_ckpt.pth"))
+    raise RuntimeError(
+        "YOLOX training completed but no evaluated checkpoint was produced in "
+        f"{experiment_dir}; candidates={candidates}"
+    )
 
 
 def evaluate_checkpoint(checkpoint: Path) -> dict:
@@ -243,7 +257,7 @@ def main() -> None:
         raise RuntimeError("YOLOX-Nano pretrained checkpoint download is incomplete")
 
     output_root = work / "outputs"
-    checkpoint = run_training(dataset_root, pretrain, output_root)
+    checkpoint, checkpoint_selection = run_training(dataset_root, pretrain, output_root)
     evaluation = evaluate_checkpoint(checkpoint)
     onnx_path = work / "fish_detector_yolox_nano_v0_1.onnx"
     onnx_contract = export_onnx(checkpoint, onnx_path)
@@ -263,6 +277,8 @@ def main() -> None:
             "ap50": evaluation["ap50"],
             "ap50_95": evaluation["ap50_95"],
             "checkpoint_best_ap50_95": float(checkpoint_doc.get("best_ap", 0.0)) if isinstance(checkpoint_doc, dict) else None,
+            "checkpoint_selection": checkpoint_selection,
+            "checkpoint_source": "best_ckpt.pth" if checkpoint_selection == "yolox_best_ckpt" else "last_epoch_ckpt.pth",
             "pretrained_source": PRETRAIN_URL,
         },
         "dataset_report": report,
