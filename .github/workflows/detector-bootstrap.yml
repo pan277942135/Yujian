@@ -183,11 +183,49 @@ jobs:
         run: bash scripts/deploy_detector_training_gcp.sh
 
       - name: Train and export detector
+        id: execute_training
+        continue-on-error: true
         run: |
           gcloud run jobs execute yujian-detector-trainer \
             --project "$PROJECT_ID" \
             --region "$GPU_REGION" \
             --wait
+
+      - name: Diagnose detector training execution
+        if: always()
+        env:
+          TRAINING_JOB_NAME: yujian-detector-trainer
+        run: |
+          set -o pipefail
+          EXECUTION="$(gcloud run jobs executions list \
+            --job="$TRAINING_JOB_NAME" \
+            --project "$PROJECT_ID" \
+            --region "$GPU_REGION" \
+            --limit=1 \
+            --sort-by='~metadata.creationTimestamp' \
+            --format='value(metadata.name)')"
+          test -n "$EXECUTION"
+          echo "Detector training execution: $EXECUTION"
+          gcloud run jobs executions describe "$EXECUTION" \
+            --project "$PROJECT_ID" \
+            --region "$GPU_REGION" \
+            --format=yaml
+          gcloud logging read \
+            "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"$TRAINING_JOB_NAME\"" \
+            --project "$PROJECT_ID" \
+            --limit=200 \
+            --freshness=2h \
+            --format='value(timestamp,severity,textPayload,jsonPayload.message)' || true
+
+      - name: Read detector training failure diagnostic
+        if: steps.execute_training.outcome == 'failure'
+        run: |
+          gcloud storage cat \
+            "gs://${BUCKET}/models/${DETECTOR_MODEL_VERSION}/training_failure.json" || true
+
+      - name: Fail when detector training execution failed
+        if: steps.execute_training.outcome == 'failure'
+        run: exit 1
 
       - name: Verify DET_FISH_v0.1 artifacts
         run: |

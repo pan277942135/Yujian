@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import traceback
 import urllib.request
 from pathlib import Path
 
@@ -50,6 +51,33 @@ def upload_gcs(bucket_name: str, object_name: str, source: Path, content_type: s
     blob = storage.Client().bucket(bucket_name).blob(object_name)
     blob.upload_from_filename(str(source), content_type=content_type)
     return f"gs://{bucket_name}/{object_name}"
+
+
+def write_failure_diagnostic(error: BaseException) -> None:
+    """Persist the Cloud Run traceback where GitHub Actions can read it after a failed GPU task."""
+    bucket = os.environ.get("GCS_BUCKET", "").strip()
+    model_version = os.environ.get("DETECTOR_MODEL_VERSION", "DET_FISH_v0.1").strip()
+    if not bucket:
+        return
+    diagnostic = {
+        "status": "DET_FISH_TRAINING_FAIL",
+        "model_version": model_version,
+        "dataset_version": os.environ.get("DETECTOR_DATASET_VERSION", "DET_DS_v0.1"),
+        "git_commit": os.environ.get("APP_GIT_COMMIT", "unknown"),
+        "error_type": type(error).__name__,
+        "error": str(error),
+        "traceback": traceback.format_exc(),
+    }
+    try:
+        storage.Client().bucket(bucket).blob(
+            f"models/{model_version}/training_failure.json"
+        ).upload_from_string(
+            json.dumps(diagnostic, ensure_ascii=False, indent=2),
+            content_type="application/json",
+        )
+        print(json.dumps(diagnostic, ensure_ascii=False, indent=2), file=sys.stderr)
+    except Exception as diagnostic_error:  # pragma: no cover - preserve original GPU failure
+        print(f"unable to upload detector training diagnostic: {diagnostic_error}", file=sys.stderr)
 
 
 def require_dataset(report: dict) -> None:
@@ -258,4 +286,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as error:
+        write_failure_diagnostic(error)
+        raise
