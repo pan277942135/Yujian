@@ -1,10 +1,10 @@
-name: Detector Golden Cases
+name: Production Detector Runtime
 
 on:
   workflow_dispatch:
   workflow_run:
     workflows:
-      - Detector Bootstrap
+      - Detector Golden Cases
     types:
       - completed
 
@@ -16,12 +16,11 @@ env:
   PROJECT_ID: gemini-api-project-503706
   WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
   DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
-  BUCKET: yujian-model-factory-571785698442
-  DETECTOR_DATASET_VERSION: DET_DS_v0.1
+  GCS_BUCKET: yujian-model-factory-571785698442
   DETECTOR_MODEL_VERSION: DET_FISH_v0.1
 
 jobs:
-  publish-golden-cases:
+  smoke-production-detector:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 35
@@ -35,11 +34,7 @@ jobs:
           project_id: ${{ env.PROJECT_ID }}
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
-      - name: Install detector parity runtime
-        run: python -m pip install -r requirements-detector.txt
-      - name: Publish audited detector golden cases
-        run: |
-          python scripts/build_detector_golden_cases.py \
-            --bucket "$BUCKET" \
-            --dataset-version "$DETECTOR_DATASET_VERSION" \
-            --model-version "$DETECTOR_MODEL_VERSION"
+      - name: Install production detector runtime
+        run: python -m pip install -r requirements.txt
+      - name: Run GCS-backed YOLOX → quality-gate → crop parity smoke
+        run: python scripts/smoke_production_detector_runtime.py
