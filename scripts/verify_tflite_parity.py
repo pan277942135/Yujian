@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
 import numpy as np
 import torch
-from PIL import Image
+from PIL import Image, ImageFile
+
+# Android BitmapFactory accepts this golden JPEG even though its stream is truncated.
+# Pillow is strict by default, so opt into the same tolerant behavior for the parity fixture.
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 MEAN = np.asarray([0.485, 0.456, 0.406], dtype=np.float32)
 STD = np.asarray([0.229, 0.224, 0.225], dtype=np.float32)
@@ -51,12 +56,17 @@ def main() -> None:
     parser.add_argument("--tflite", required=True)
     parser.add_argument("--image", required=True)
     parser.add_argument("--out", required=True)
+    parser.add_argument("--tensor-out", default=None)
     parser.add_argument("--expected-index", type=int, default=None)
     parser.add_argument("--max-abs-tolerance", type=float, default=1e-3)
     parser.add_argument("--min-cosine", type=float, default=0.9999)
     args = parser.parse_args()
 
     tensor = image_to_nchw(Path(args.image))
+    tensor_bytes = tensor.astype("<f4", copy=False).tobytes(order="C")
+    tensor_sha256 = hashlib.sha256(tensor_bytes).hexdigest()
+    if args.tensor_out:
+        Path(args.tensor_out).write_bytes(tensor_bytes)
 
     model = torch.jit.load(args.torchscript, map_location="cpu")
     model.eval()
@@ -83,7 +93,7 @@ def main() -> None:
     input_shape = [int(v) for v in input_detail["shape"]]
     if input_shape != list(tensor.shape):
         raise RuntimeError(f"TFLite input shape {input_shape} != golden tensor shape {list(tensor.shape)}")
-    if str(input_detail["dtype"]) != "<class 'numpy.float32'>":
+    if input_detail["dtype"] != np.float32:
         raise RuntimeError(f"TFLite input dtype must be float32, got {input_detail['dtype']}")
 
     interpreter.set_tensor(input_detail["index"], tensor)
@@ -102,6 +112,9 @@ def main() -> None:
 
     report = {
         "input_shape": list(tensor.shape),
+        "input_dtype": "float32_le",
+        "input_tensor_sha256": tensor_sha256,
+        "input_tensor_bytes": len(tensor_bytes),
         "torch_logits": [float(v) for v in torch_logits],
         "tflite_logits": [float(v) for v in tflite_logits],
         "torch_top3": topk(torch_logits),
