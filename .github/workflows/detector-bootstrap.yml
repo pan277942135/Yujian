@@ -2,6 +2,12 @@ name: Detector Bootstrap
 
 on:
   workflow_dispatch:
+    inputs:
+      rebuild_dataset:
+        description: 'Explicitly rebuild frozen DET_DS_v0.1 before detector training'
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [main]
     paths:
@@ -37,7 +43,7 @@ env:
   DETECTOR_MODEL_VERSION: DET_FISH_v0.1
 
 jobs:
-  build-dataset:
+  prepare-dataset:
     runs-on: ubuntu-latest
     timeout-minutes: 55
     steps:
@@ -57,58 +63,23 @@ jobs:
           project_id: ${{ env.PROJECT_ID }}
           version: '>= 416.0.0'
 
-      - name: Deploy detector dataset builder
+      - name: Rebuild frozen detector dataset only when explicitly requested
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.rebuild_dataset == true }}
         env:
           REGION: ${{ env.DATASET_REGION }}
           DETECTOR_DATASET_VERSION: ${{ env.DETECTOR_DATASET_VERSION }}
-        run: bash scripts/deploy_detector_dataset_job.sh
-
-      - name: Build frozen detector dataset
-        id: execute_dataset
-        continue-on-error: true
         run: |
+          bash scripts/deploy_detector_dataset_job.sh
           gcloud run jobs execute yujian-detector-dataset-builder \
             --project "$PROJECT_ID" \
             --region "$DATASET_REGION" \
             --wait
 
-      - name: Diagnose detector dataset execution
-        if: always()
-        env:
-          DATASET_JOB_NAME: yujian-detector-dataset-builder
-        run: |
-          set -o pipefail
-          EXECUTION="$(gcloud run jobs executions list \
-            --job="$DATASET_JOB_NAME" \
-            --project "$PROJECT_ID" \
-            --region "$DATASET_REGION" \
-            --limit=1 \
-            --sort-by='~metadata.creationTimestamp' \
-            --format='value(metadata.name)')"
-          test -n "$EXECUTION"
-          echo "Detector dataset execution: $EXECUTION"
-          gcloud run jobs executions describe "$EXECUTION" \
-            --project "$PROJECT_ID" \
-            --region "$DATASET_REGION" \
-            --format=yaml
-          gcloud logging read \
-            "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"$DATASET_JOB_NAME\"" \
-            --project "$PROJECT_ID" \
-            --limit=200 \
-            --freshness=2h \
-            --format='value(timestamp,severity,textPayload,jsonPayload.message)' || true
+      - name: Reuse frozen DET_DS_v0.1
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.rebuild_dataset != true }}
+        run: echo "Reusing frozen ${DETECTOR_DATASET_VERSION}; dataset builder will not run."
 
-      - name: Read detector bootstrap failure diagnostic
-        if: steps.execute_dataset.outcome == 'failure'
-        run: |
-          gcloud storage cat \
-            "gs://${BUCKET}/detector-datasets/${DETECTOR_DATASET_VERSION}/bootstrap_failure.json" || true
-
-      - name: Fail when detector dataset execution failed
-        if: steps.execute_dataset.outcome == 'failure'
-        run: exit 1
-
-      - name: Validate bootstrap dataset before GPU spend
+      - name: Validate frozen detector dataset gate
         run: |
           gcloud storage cp \
             "gs://${BUCKET}/detector-datasets/${DETECTOR_DATASET_VERSION}/bootstrap_report.json" \
@@ -140,22 +111,22 @@ jobs:
       - name: Dataset summary
         if: always()
         run: |
-          echo '### DET_DS_v0.1 bootstrap' >> "$GITHUB_STEP_SUMMARY"
+          echo '### DET_DS_v0.1 frozen dataset' >> "$GITHUB_STEP_SUMMARY"
           if [[ -f detector-bootstrap-report.json ]]; then
             python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json
           p=json.load(open('detector-bootstrap-report.json'))
+          print('- Rebuild requested: **${{ github.event_name == 'workflow_dispatch' && inputs.rebuild_dataset == true }}**')
           print(f"- Selected: **{p.get('selected',0)}**")
           print(f"- Positives: **{p.get('positives',0)}**")
           print(f"- No-fish negatives: **{p.get('negatives',0)}**")
-          print(f"- Incomplete candidates: **{p.get('incomplete_candidates',0)}**")
           for s,v in (p.get('splits') or {}).items():
               print(f"- {s}: {v.get('images',0)} images / {v.get('annotations',0)} boxes")
           PY
           fi
 
   train-detector:
-    needs: build-dataset
+    needs: prepare-dataset
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -238,7 +209,9 @@ jobs:
           p=json.load(open('detector_metadata.json'))
           assert p['model_version']=='DET_FISH_v0.1'
           assert p['model_family']=='YOLOX_NANO'
+          assert p['dataset_version']=='DET_DS_v0.1'
           assert p['onnx']['output_shape'][-1] == 6
+          assert int(p['training']['completed_epochs']) == int(p['training']['configured_epochs']) == 30
           assert p['training']['ap50'] >= 0.0
           assert p['training']['ap50_95'] >= 0.0
           assert len(p['onnx_sha256']) == 64
@@ -256,6 +229,7 @@ jobs:
           t=p.get('training') or {}
           print(f"- Model: **{p.get('model_version')}** / {p.get('model_family')}")
           print(f"- Dataset: **{p.get('dataset_version')}**")
+          print(f"- Epochs: **{t.get('completed_epochs')} / {t.get('configured_epochs')}**")
           print(f"- AP50: **{t.get('ap50')}**")
           print(f"- AP50:95: **{t.get('ap50_95')}**")
           print(f"- ONNX bytes: **{p.get('onnx_bytes')}**")
