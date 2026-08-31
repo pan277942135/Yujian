@@ -114,7 +114,7 @@ def require_dataset(report: dict) -> None:
         )
 
 
-def run_training(dataset_root: Path, pretrain: Path, output_root: Path) -> tuple[Path, str]:
+def run_training(dataset_root: Path, pretrain: Path, output_root: Path) -> tuple[Path, str, int]:
     env = dict(os.environ)
     env["DETECTOR_DATASET_ROOT"] = str(dataset_root)
     env["DETECTOR_OUTPUT_DIR"] = str(output_root)
@@ -136,9 +136,21 @@ def run_training(dataset_root: Path, pretrain: Path, output_root: Path) -> tuple
     ]
     subprocess.run(command, check=True, env=env)
     experiment_dir = output_root / "fish_detector_yolox_nano"
+    latest_checkpoint = experiment_dir / "latest_ckpt.pth"
+    if not latest_checkpoint.exists():
+        raise RuntimeError(f"YOLOX training completed without latest_ckpt.pth in {experiment_dir}")
+    latest_doc = torch.load(latest_checkpoint, map_location="cpu")
+    completed_epochs = int(latest_doc.get("start_epoch") or 0) if isinstance(latest_doc, dict) else 0
+    expected_epochs = int(os.environ.get("DETECTOR_EPOCHS", "30"))
+    if completed_epochs < expected_epochs:
+        raise RuntimeError(
+            "YOLOX stopped before the configured epoch count: "
+            f"completed={completed_epochs} expected={expected_epochs}"
+        )
+
     checkpoint = experiment_dir / "best_ckpt.pth"
     if checkpoint.exists():
-        return checkpoint, "yolox_best_ckpt"
+        return checkpoint, "yolox_best_ckpt", completed_epochs
 
     # YOLOX only writes best_ckpt.pth for a strictly positive AP improvement.  On a
     # new small detector dataset an all-zero validation AP is a real measured tie, not
@@ -147,13 +159,15 @@ def run_training(dataset_root: Path, pretrain: Path, output_root: Path) -> tuple
     final_evaluated_checkpoint = experiment_dir / "last_epoch_ckpt.pth"
     if final_evaluated_checkpoint.exists():
         shutil.copy2(final_evaluated_checkpoint, checkpoint)
-        return checkpoint, "last_epoch_promoted_after_yolox_zero_ap_tie"
+        return checkpoint, "last_epoch_promoted_after_yolox_zero_ap_tie", completed_epochs
 
-    candidates = sorted(str(path.relative_to(output_root)) for path in output_root.rglob("*_ckpt.pth"))
-    raise RuntimeError(
-        "YOLOX training completed but no evaluated checkpoint was produced in "
-        f"{experiment_dir}; candidates={candidates}"
-    )
+    # Some YOLOX releases skip their own evaluator for a one-class validation
+    # configuration while still completing every requested epoch and saving latest_ckpt.
+    # We explicitly evaluate this real final checkpoint below, so it is valid to publish
+    # it as best only after proving the recorded epoch count is complete.
+    shutil.copy2(latest_checkpoint, checkpoint)
+    return checkpoint, "latest_ckpt_promoted_after_yolox_no_eval", completed_epochs
+
 
 
 def evaluate_checkpoint(checkpoint: Path) -> dict:
@@ -257,7 +271,7 @@ def main() -> None:
         raise RuntimeError("YOLOX-Nano pretrained checkpoint download is incomplete")
 
     output_root = work / "outputs"
-    checkpoint, checkpoint_selection = run_training(dataset_root, pretrain, output_root)
+    checkpoint, checkpoint_selection, completed_epochs = run_training(dataset_root, pretrain, output_root)
     evaluation = evaluate_checkpoint(checkpoint)
     onnx_path = work / "fish_detector_yolox_nano_v0_1.onnx"
     onnx_contract = export_onnx(checkpoint, onnx_path)
@@ -273,12 +287,17 @@ def main() -> None:
         "git_commit": app_git_commit,
         "training": {
             "epochs": int(os.environ.get("DETECTOR_EPOCHS", "30")),
+            "epochs_completed": completed_epochs,
             "batch_size": int(os.environ.get("DETECTOR_BATCH_SIZE", "16")),
             "ap50": evaluation["ap50"],
             "ap50_95": evaluation["ap50_95"],
             "checkpoint_best_ap50_95": float(checkpoint_doc.get("best_ap", 0.0)) if isinstance(checkpoint_doc, dict) else None,
             "checkpoint_selection": checkpoint_selection,
-            "checkpoint_source": "best_ckpt.pth" if checkpoint_selection == "yolox_best_ckpt" else "last_epoch_ckpt.pth",
+            "checkpoint_source": {
+                "yolox_best_ckpt": "best_ckpt.pth",
+                "last_epoch_promoted_after_yolox_zero_ap_tie": "last_epoch_ckpt.pth",
+                "latest_ckpt_promoted_after_yolox_no_eval": "latest_ckpt.pth",
+            }[checkpoint_selection],
             "pretrained_source": PRETRAIN_URL,
         },
         "dataset_report": report,
