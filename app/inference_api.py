@@ -24,8 +24,10 @@ from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.db import get_db
+from app.detector_runtime import DetectorRun, detect
 from app.factory import get_bucket_name
 from app.models import ModelVersion, TrainingRun
+from app.recognition_pipeline import BBox, Detection, PipelineStatus, assess_detections, crop_box_pixels, load_contract
 
 router = APIRouter(tags=["model-inference"])
 templates = Jinja2Templates(directory="app/templates")
@@ -35,6 +37,10 @@ MAX_BATCH_FILES = int(os.getenv("INFERENCE_MAX_BATCH_FILES", "20"))
 MAX_BATCH_BYTES = int(os.getenv("INFERENCE_MAX_BATCH_BYTES", str(24 * 1024 * 1024)))
 LOW_CONFIDENCE_THRESHOLD = float(os.getenv("INFERENCE_LOW_CONFIDENCE_THRESHOLD", "0.55"))
 MAX_IMAGE_PIXELS = int(os.getenv("INFERENCE_MAX_IMAGE_PIXELS", "40000000"))
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD = (0.229, 0.224, 0.225)
+# These are exactly the Android MODEL_M1_v0.2 letterbox padding values.
+IMAGENET_MEAN_RGB = (124, 116, 104)
 
 _MODEL_CACHE: dict[str, "LoadedModel"] = {}
 _MODEL_CACHE_LOCK = threading.Lock()
@@ -48,6 +54,20 @@ class LoadedModel:
     classes: list[dict]
     classes_by_index: dict[int, dict]
     image_size: int
+
+
+class WholeImageLetterbox:
+    """MODEL_M1_v0.2 preprocessing: retain the entire detector crop, never center-crop it."""
+
+    def __init__(self, size: int):
+        self.size = size
+
+    def __call__(self, image: Image.Image) -> Image.Image:
+        source = image.convert("RGB")
+        contained = ImageOps.contain(source, (self.size, self.size), method=Image.Resampling.BILINEAR)
+        canvas = Image.new("RGB", (self.size, self.size), IMAGENET_MEAN_RGB)
+        canvas.paste(contained, ((self.size - contained.width) // 2, (self.size - contained.height) // 2))
+        return canvas
 
 
 def _utcnow() -> datetime:
@@ -93,13 +113,12 @@ def _torch_stack():
 def _build_eval_transform(image_size: int):
     _torch, transforms = _torch_stack()
     normalize = transforms.Normalize(
-        mean=[0.485, 0.456, 0.406],
-        std=[0.229, 0.224, 0.225],
+        mean=list(IMAGENET_MEAN),
+        std=list(IMAGENET_STD),
     )
     return transforms.Compose(
         [
-            transforms.Resize(int(image_size * 1.15)),
-            transforms.CenterCrop(image_size),
+            WholeImageLetterbox(image_size),
             transforms.ToTensor(),
             normalize,
         ]
@@ -165,22 +184,51 @@ def _species_label(row: dict) -> str:
     return str(row.get("common_name_zh") or row.get("species_key") or row.get("class_index"))
 
 
-def _predict_bytes(db: Session, model_version: str, data: bytes) -> dict:
-    model_row = db.get(ModelVersion, model_version)
-    if not model_row:
-        raise ValueError("模型不存在")
+def _serialize_box(box: BBox | None) -> dict | None:
+    if box is None:
+        return None
+    normalized = box.normalized()
+    return {
+        "x1": round(normalized.x1, 6),
+        "y1": round(normalized.y1, 6),
+        "x2": round(normalized.x2, 6),
+        "y2": round(normalized.y2, 6),
+        "area_ratio": round(normalized.area_ratio, 6),
+    }
+
+
+def _serialize_detection(detection: Detection) -> dict:
+    return {
+        "confidence": round(float(detection.confidence), 6),
+        "class_name": detection.class_name,
+        "bbox": _serialize_box(detection.box),
+    }
+
+
+def _input_message(status: PipelineStatus) -> tuple[str, str]:
+    messages = {
+        PipelineStatus.NO_FISH: ("没有检测到鱼", "请重新拍摄或选择包含鱼的照片"),
+        PipelineStatus.UNCERTAIN: ("鱼体检测结果不够确定", "请重新拍摄或选择更清晰、完整的单条鱼照片"),
+        PipelineStatus.MULTIPLE_FISH: ("检测到多条鱼", "请重新拍摄单条鱼，或选择更清晰的照片"),
+        PipelineStatus.INCOMPLETE_FISH: ("鱼体没有完整进入画面", "请尽量让鱼头、鱼尾和主要鳍部完整出现在照片中"),
+        PipelineStatus.FISH_TOO_SMALL: ("鱼离镜头有点远", "靠近一点再拍，更容易准确识别鱼种"),
+        PipelineStatus.READY: ("检测到完整单条鱼", "正在进行鱼种识别"),
+    }
+    return messages[status]
+
+
+def _run_production_detector(image: Image.Image) -> DetectorRun:
+    """Thin seam for deterministic production-pipeline tests; it always calls the verified runtime."""
+    return detect(image)
+
+
+def _classifier_prediction(model_row: ModelVersion, crop: Image.Image) -> dict:
+    """Run MODEL_M1 only after the detector quality gate has declared the crop READY."""
     if not model_row.artifact_uri:
         raise ValueError("模型没有可用产物")
-
-    meta = _inspect_image(data)
     loaded = _load_model(model_row)
     torch, _transforms = _torch_stack()
-    try:
-        with Image.open(io.BytesIO(data)) as source:
-            image = ImageOps.exif_transpose(source).convert("RGB")
-            tensor = loaded.transform(image).unsqueeze(0)
-    except (UnidentifiedImageError, OSError) as exc:
-        raise ValueError("无法读取图片") from exc
+    tensor = loaded.transform(crop).unsqueeze(0)
 
     started = time.perf_counter()
     with torch.inference_mode():
@@ -207,16 +255,92 @@ def _predict_bytes(db: Session, model_version: str, data: bytes) -> dict:
         raise RuntimeError("模型没有返回预测结果")
 
     return {
-        "model_version": model_version,
         "model_status": model_row.status,
         "image_size": loaded.image_size,
-        "input": meta,
         "top1": top3[0],
         "top3": top3,
         "low_confidence": top3[0]["confidence"] < LOW_CONFIDENCE_THRESHOLD,
         "low_confidence_threshold": LOW_CONFIDENCE_THRESHOLD,
-        "latency_ms": latency_ms,
+        "classifier_latency_ms": latency_ms,
     }
+
+
+def _predict_bytes(db: Session, model_version: str, data: bytes) -> dict:
+    """RECOGNITION_PIPELINE_v1: YOLOX → NMS → gate → expanded crop → classifier."""
+    meta = _inspect_image(data)
+    pipeline_started = time.perf_counter()
+    try:
+        with Image.open(io.BytesIO(data)) as source:
+            image = ImageOps.exif_transpose(source).convert("RGB")
+    except (UnidentifiedImageError, OSError) as exc:
+        raise ValueError("无法读取图片") from exc
+
+    detector_run = _run_production_detector(image)
+    assessment = assess_detections(detector_run.detections)
+    title, guidance = _input_message(assessment.status)
+    detector_payload = {
+        "model_version": detector_run.model_version,
+        "onnx_sha256": detector_run.onnx_sha256,
+        "input_size": detector_run.input_size,
+        "input_scale": detector_run.input_scale,
+        "input_draw_width": detector_run.input_draw_width,
+        "input_draw_height": detector_run.input_draw_height,
+        "latency_ms": detector_run.latency_ms,
+        "detections": [_serialize_detection(item) for item in detector_run.detections],
+    }
+    gate_payload = {
+        "status": assessment.status.name,
+        "status_wire": assessment.status.value,
+        "reason": assessment.reason,
+        "primary_bbox": _serialize_box(assessment.primary.box if assessment.primary else None),
+        "strong_detection_count": len(assessment.strong_detections),
+        "weak_detection_count": len(assessment.weak_detections),
+    }
+    result = {
+        "pipeline_version": str(load_contract()["contract_version"]),
+        "model_version": model_version,
+        "input": meta,
+        "status": assessment.status.name,
+        "status_wire": assessment.status.value,
+        "ready": assessment.status is PipelineStatus.READY,
+        "message": title,
+        "guidance": guidance,
+        "reason": assessment.reason,
+        "detector": detector_payload,
+        "quality_gate": gate_payload,
+        "classification_ran": False,
+        "low_confidence": False,
+    }
+    if assessment.status is not PipelineStatus.READY:
+        result["latency_ms"] = round((time.perf_counter() - pipeline_started) * 1000.0, 1)
+        return result
+
+    assert assessment.crop_box is not None
+    crop_pixels = crop_box_pixels(assessment.crop_box, image.width, image.height)
+    crop = image.crop(crop_pixels)
+    model_row = db.get(ModelVersion, model_version)
+    if not model_row:
+        raise ValueError("模型不存在")
+    classifier = _classifier_prediction(model_row, crop)
+    result.update(classifier)
+    result.update(
+        {
+            "classification_ran": True,
+            "crop": {
+                "bbox": _serialize_box(assessment.crop_box),
+                "pixels": {
+                    "left": crop_pixels[0],
+                    "top": crop_pixels[1],
+                    "right": crop_pixels[2],
+                    "bottom": crop_pixels[3],
+                    "width": crop.width,
+                    "height": crop.height,
+                },
+            },
+            "latency_ms": round((time.perf_counter() - pipeline_started) * 1000.0, 1),
+        }
+    )
+    return result
 
 
 def _safe_model_component(model_version: str) -> str:

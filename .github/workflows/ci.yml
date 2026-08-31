@@ -16,7 +16,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install dependencies
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt pytest
       - name: Compile Python
         run: python -m compileall app scripts trainer
       - name: Validate deployment shell syntax
@@ -63,6 +63,10 @@ jobs:
         env:
           REGISTRY_DB_URL: 'sqlite:///:memory:'
         run: python scripts/smoke_inference.py
+      - name: Run production recognition pipeline tests
+        env:
+          REGISTRY_DB_URL: 'sqlite:///:memory:'
+        run: python -m pytest -q tests
       - name: Run UAT deploy config smoke test
         env:
           REGISTRY_DB_URL: 'sqlite:///:memory:'

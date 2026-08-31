@@ -41,7 +41,7 @@
           <div id="singleConfidenceFlag"></div>
           <h3>Top-3</h3>
           <div id="singleTop3"></div>
-          <div class="actions"><button class="goodBtn" onclick="confirmSingle()">✓ 结果正确</button><button class="badBtn" onclick="showCorrection()">✕ 结果错误</button><button class="ghost" onclick="unknownSingle()">无法判断</button></div>
+          <div id="singleFeedbackActions" class="actions"><button class="goodBtn" onclick="confirmSingle()">✓ 结果正确</button><button class="badBtn" onclick="showCorrection()">✕ 结果错误</button><button class="ghost" onclick="unknownSingle()">无法判断</button></div>
           <div id="singleCorrection" style="display:none;margin-top:14px">
             <div class="row"><label>真实鱼种</label><select id="singleTruth"></select></div>
             <button class="badBtn" onclick="correctSingle()">保存纠错 / Hard Case</button>
@@ -135,17 +135,26 @@ async function runSingle(){
 }
 function renderSingle(r){
   document.getElementById('singleEmpty').style.display='none';document.getElementById('singleResult').classList.add('show');
+  const ready=r.ready!==false&&(r.status===undefined||r.status==='READY');
+  document.getElementById('singleFeedbackActions').style.display=ready?'flex':'none';
+  document.getElementById('singleCorrection').style.display='none';document.getElementById('singleFeedbackState').textContent='';document.getElementById('singleTruth').value='';
+  if(!ready){
+    document.getElementById('singleTop1').textContent=r.message||r.status||'无法识别图片';document.getElementById('singleConfidence').textContent='';
+    document.getElementById('singleLatency').textContent=`检测 ${r.detector?.latency_ms??r.latency_ms??'-'} ms · 输入 ${r.input.width}×${r.input.height}`;
+    document.getElementById('singleTop3').innerHTML='';
+    document.getElementById('singleConfidenceFlag').innerHTML=`<div class="warnBox">${esc(r.guidance||r.reason||'请重新拍摄。')}</div>`;
+    return;
+  }
   document.getElementById('singleTop1').textContent=r.top1.species;document.getElementById('singleConfidence').textContent=pct(r.top1.confidence);document.getElementById('singleLatency').textContent=`推理 ${r.latency_ms} ms · 输入 ${r.input.width}×${r.input.height} · 模型输入 ${r.image_size}×${r.image_size}`;
   document.getElementById('singleTop3').innerHTML=r.top3.map(p=>`<div class="topRow"><b>${esc(p.species)}</b><div class="bar"><span style="width:${Math.max(1,p.confidence*100)}%"></span></div><span>${pct(p.confidence)}</span></div>`).join('');
   document.getElementById('singleConfidenceFlag').innerHTML=r.low_confidence?`<div class="warnBox">低置信度：Top-1 低于 ${pct(r.low_confidence_threshold)}，建议重点复核。</div>`:`<div class="goodBox">Top-1 置信度高于当前低置信度阈值 ${pct(r.low_confidence_threshold)}。</div>`;
-  document.getElementById('singleCorrection').style.display='none';document.getElementById('singleFeedbackState').textContent='';document.getElementById('singleTruth').value='';
 }
-function feedbackPayload(result,type,truth=null){return {source_event_id:result.inference_id,feedback_type:type,source:'console_inference_test',image_gcs_uri:result.image_gcs_uri,model_version:result.model_version,predicted_species:result.top1.species,confidence:result.top1.confidence,corrected_species:truth,user_note:`inference_v1 top3=${result.top3.map(x=>x.species+':'+x.confidence).join('|')}`}}
+function feedbackPayload(result,type,truth=null){return {source_event_id:result.inference_id,feedback_type:type,source:'console_inference_test',image_gcs_uri:result.image_gcs_uri,model_version:result.model_version,predicted_species:result.top1.species,confidence:result.top1.confidence,corrected_species:truth,user_note:`recognition_pipeline_v1 top3=${result.top3.map(x=>x.species+':'+x.confidence).join('|')}`}}
 async function saveFeedback(result,type,truth=null){return jsonApi('/api/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(feedbackPayload(result,type,truth))})}
-async function confirmSingle(){if(!singleResult)return;try{await saveFeedback(singleResult,'confirmed');document.getElementById('singleFeedbackState').textContent='已保存：结果确认正确，将进入 Feedback 数据飞轮。'}catch(e){showBanner(e.message,true)}}
-function showCorrection(){if(!singleResult)return;document.getElementById('singleCorrection').style.display='block'}
-async function correctSingle(){if(!singleResult)return;const truth=document.getElementById('singleTruth').value;if(!truth){showBanner('请选择真实鱼种。',true);return}try{await saveFeedback(singleResult,'corrected',truth);document.getElementById('singleFeedbackState').textContent=`已保存 Hard Case：${singleResult.top1.species} → 真实 ${truth}`;}catch(e){showBanner(e.message,true)}}
-async function unknownSingle(){if(!singleResult)return;try{await saveFeedback(singleResult,'unknown');document.getElementById('singleFeedbackState').textContent='已保存：暂时无法确认真实鱼种。'}catch(e){showBanner(e.message,true)}}
+async function confirmSingle(){if(!singleResult||singleResult.ready===false)return;try{await saveFeedback(singleResult,'confirmed');document.getElementById('singleFeedbackState').textContent='已保存：结果确认正确，将进入 Feedback 数据飞轮。'}catch(e){showBanner(e.message,true)}}
+function showCorrection(){if(!singleResult||singleResult.ready===false)return;document.getElementById('singleCorrection').style.display='block'}
+async function correctSingle(){if(!singleResult||singleResult.ready===false)return;const truth=document.getElementById('singleTruth').value;if(!truth){showBanner('请选择真实鱼种。',true);return}try{await saveFeedback(singleResult,'corrected',truth);document.getElementById('singleFeedbackState').textContent=`已保存 Hard Case：${singleResult.top1.species} → 真实 ${truth}`;}catch(e){showBanner(e.message,true)}}
+async function unknownSingle(){if(!singleResult||singleResult.ready===false)return;try{await saveFeedback(singleResult,'unknown');document.getElementById('singleFeedbackState').textContent='已保存：暂时无法确认真实鱼种。'}catch(e){showBanner(e.message,true)}}
 
 function clearBatch(){batchRows.forEach(r=>{if(r.preview)URL.revokeObjectURL(r.preview)});batchRows=[];batchCursor=0;document.getElementById('batchFiles').value='';renderBatch();updateBatchSummary();document.getElementById('batchProgress').style.width='0%';document.getElementById('batchProgressText').textContent='尚未开始'}
 async function runBatch(){
@@ -158,7 +167,7 @@ async function runBatch(){
   batchRows=files.map((file,i)=>({index:i,file,preview:URL.createObjectURL(file),state:'waiting',result:null,error:null,truth:'',feedbackSaved:false}));
   batchCursor=0;renderBatch();
   const btn=document.getElementById('batchRun');btn.disabled=true;btn.textContent='批量识别中…';
-  try{await Promise.all([batchWorker(),batchWorker()])}finally{btn.disabled=false;btn.textContent='开始批量识别';updateBatchSummary();document.getElementById('batchFeedbackBtn').disabled=!batchRows.some(r=>r.result&&r.truth&&!r.feedbackSaved)}
+  try{await Promise.all([batchWorker(),batchWorker()])}finally{btn.disabled=false;btn.textContent='开始批量识别';updateBatchSummary();document.getElementById('batchFeedbackBtn').disabled=!batchRows.some(r=>r.result&&r.result.ready!==false&&r.truth&&!r.feedbackSaved)}
 }
 async function batchWorker(){
   while(true){
@@ -168,22 +177,23 @@ async function batchWorker(){
   }
 }
 function rowHtml(r){
-  const top1=r.result?.top1;const top3=r.result?.top3||[];const evalState=r.truth&&r.result?(r.truth===top1.species?'正确':'错误'):'-';
+  const ready=r.result?.ready!==false&&(r.result?.status===undefined||r.result?.status==='READY');const top1=ready?r.result?.top1:null;const top3=ready?(r.result?.top3||[]):[];const evalState=r.truth&&top1?(r.truth===top1.species?'正确':'错误'):'-';
   const pill=r.state==='done'?'<span class="pill good">完成</span>':r.state==='error'?'<span class="pill bad">失败</span>':r.state==='running'?'<span class="pill warn">识别中</span>':'<span class="pill">等待</span>';
-  const truthSelect=r.result?`<select onchange="setBatchTruth(${r.index},this.value)">${truthOptions(r.truth)}</select>`:'-';
-  const feedback=r.feedbackSaved?'<span class="pill good">已保存</span>':(r.result&&r.truth?`<button class="smallBtn" onclick="saveOneBatchFeedback(${r.index})">保存</button>`:'-');
-  return `<td><img class="thumb" src="${r.preview}"></td><td>${esc(r.file.name)}<div class="statusText">${pill}${r.error?` ${esc(r.error)}`:''}</div></td><td><b>${esc(top1?.species||'-')}</b></td><td>${top1?pct(top1.confidence):'-'}${r.result?.low_confidence?' <span class="pill warn">低</span>':''}</td><td class="top3mini">${top3.map(x=>`${esc(x.species)} ${pct(x.confidence)}`).join(' / ')||'-'}</td><td>${truthSelect}</td><td>${evalState==='正确'?'<span class="pill good">正确</span>':evalState==='错误'?'<span class="pill bad">错误</span>':'-'}</td><td>${feedback}</td>`;
+  const truthSelect=top1?`<select onchange="setBatchTruth(${r.index},this.value)">${truthOptions(r.truth)}</select>`:'-';
+  const feedback=r.feedbackSaved?'<span class="pill good">已保存</span>':(top1&&r.truth?`<button class="smallBtn" onclick="saveOneBatchFeedback(${r.index})">保存</button>`:'-');
+  const primary=top1?.species||(r.result?.message||'-');const confidence=top1?pct(top1.confidence):'-';const statusDetail=!ready&&r.result?`<div class="statusText">${esc(r.result.guidance||r.result.reason||'请重新拍摄。')}</div>`:'';
+  return `<td><img class="thumb" src="${r.preview}"></td><td>${esc(r.file.name)}<div class="statusText">${pill}${r.error?` ${esc(r.error)}`:''}</div></td><td><b>${esc(primary)}</b>${statusDetail}</td><td>${confidence}${r.result?.low_confidence?' <span class="pill warn">低</span>':''}</td><td class="top3mini">${top3.map(x=>`${esc(x.species)} ${pct(x.confidence)}`).join(' / ')||'-'}</td><td>${truthSelect}</td><td>${evalState==='正确'?'<span class="pill good">正确</span>':evalState==='错误'?'<span class="pill bad">错误</span>':'-'}</td><td>${feedback}</td>`;
 }
 function renderBatch(){const body=document.getElementById('batchRows');if(!batchRows.length){body.innerHTML='<tr><td colspan="8" class="muted">暂无批量结果</td></tr>';return}body.innerHTML=batchRows.map(r=>`<tr id="batchRow${r.index}">${rowHtml(r)}</tr>`).join('')}
 function renderBatchRow(i){const tr=document.getElementById(`batchRow${i}`);if(tr)tr.innerHTML=rowHtml(batchRows[i])}
-function setBatchTruth(i,value){batchRows[i].truth=value;batchRows[i].feedbackSaved=false;renderBatchRow(i);updateBatchSummary();document.getElementById('batchFeedbackBtn').disabled=!batchRows.some(r=>r.result&&r.truth&&!r.feedbackSaved)}
+function setBatchTruth(i,value){batchRows[i].truth=value;batchRows[i].feedbackSaved=false;renderBatchRow(i);updateBatchSummary();document.getElementById('batchFeedbackBtn').disabled=!batchRows.some(r=>r.result&&r.result.ready!==false&&r.truth&&!r.feedbackSaved)}
 function updateBatchProgress(){const finished=batchRows.filter(r=>r.state==='done'||r.state==='error').length;const total=batchRows.length;const p=total?finished/total*100:0;document.getElementById('batchProgress').style.width=p+'%';document.getElementById('batchProgressText').textContent=`${finished} / ${total} 已完成`}
 function updateBatchSummary(){
-  const done=batchRows.filter(r=>r.result);const evaluated=done.filter(r=>r.truth);const top1=evaluated.filter(r=>r.truth===r.result.top1.species).length;const top3=evaluated.filter(r=>r.result.top3.some(p=>p.species===r.truth)).length;const low=done.filter(r=>r.result.low_confidence).length;
+  const done=batchRows.filter(r=>r.result);const classified=done.filter(r=>r.result.ready!==false&&(r.result.status===undefined||r.result.status==='READY'));const evaluated=classified.filter(r=>r.truth);const top1=evaluated.filter(r=>r.truth===r.result.top1.species).length;const top3=evaluated.filter(r=>r.result.top3.some(p=>p.species===r.truth)).length;const low=classified.filter(r=>r.result.low_confidence).length;
   document.getElementById('bDone').textContent=done.length;document.getElementById('bEvaluated').textContent=evaluated.length;document.getElementById('bTop1').textContent=evaluated.length?pct(top1/evaluated.length):'-';document.getElementById('bTop3').textContent=evaluated.length?pct(top3/evaluated.length):'-';document.getElementById('bLow').textContent=low;
 }
-async function saveOneBatchFeedback(i){const r=batchRows[i];if(!r.result||!r.truth)return;try{const type=r.truth===r.result.top1.species?'confirmed':'corrected';await saveFeedback(r.result,type,type==='corrected'?r.truth:null);r.feedbackSaved=true;renderBatchRow(i);document.getElementById('batchFeedbackBtn').disabled=!batchRows.some(x=>x.result&&x.truth&&!x.feedbackSaved)}catch(e){showBanner(e.message,true)}}
-async function saveBatchFeedback(){const targets=batchRows.filter(r=>r.result&&r.truth&&!r.feedbackSaved);if(!targets.length)return;const btn=document.getElementById('batchFeedbackBtn');btn.disabled=true;btn.textContent='保存中…';for(const r of targets){await saveOneBatchFeedback(r.index)}btn.textContent='保存已标注反馈';btn.disabled=!batchRows.some(r=>r.result&&r.truth&&!r.feedbackSaved)}
+async function saveOneBatchFeedback(i){const r=batchRows[i];if(!r.result||r.result.ready===false||!r.truth)return;try{const type=r.truth===r.result.top1.species?'confirmed':'corrected';await saveFeedback(r.result,type,type==='corrected'?r.truth:null);r.feedbackSaved=true;renderBatchRow(i);document.getElementById('batchFeedbackBtn').disabled=!batchRows.some(x=>x.result&&x.result.ready!==false&&x.truth&&!x.feedbackSaved)}catch(e){showBanner(e.message,true)}}
+async function saveBatchFeedback(){const targets=batchRows.filter(r=>r.result&&r.result.ready!==false&&r.truth&&!r.feedbackSaved);if(!targets.length)return;const btn=document.getElementById('batchFeedbackBtn');btn.disabled=true;btn.textContent='保存中…';for(const r of targets){await saveOneBatchFeedback(r.index)}btn.textContent='保存已标注反馈';btn.disabled=!batchRows.some(r=>r.result&&r.result.ready!==false&&r.truth&&!r.feedbackSaved)}
 
 loadBase();
 </script>

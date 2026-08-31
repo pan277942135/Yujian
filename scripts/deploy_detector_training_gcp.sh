@@ -32,6 +32,8 @@ if ! gcloud artifacts docker images describe "$IMAGE_URI" --project "$PROJECT_ID
 fi
 
 log "Deploying L4 detector training job ${JOB_NAME} in ${REGION}"
+# Cloud Run Jobs caps GPU task timeout at one hour. The detector dataset is small enough
+# for the complete train → evaluate → ONNX export path to fit this platform limit.
 gcloud run jobs deploy "$JOB_NAME" \
   --project "$PROJECT_ID" \
   --region "$REGION" \
@@ -46,7 +48,7 @@ gcloud run jobs deploy "$JOB_NAME" \
   --tasks=1 \
   --parallelism=1 \
   --max-retries=0 \
-  --task-timeout=7200s \
+  --task-timeout=3600s \
   --quiet
 
 printf 'Detector trainer ready: %s -> %s\n' "$DATASET_VERSION" "$MODEL_VERSION"
