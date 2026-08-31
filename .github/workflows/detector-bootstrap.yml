@@ -211,7 +211,7 @@ jobs:
           assert p['model_family']=='YOLOX_NANO'
           assert p['dataset_version']=='DET_DS_v0.1'
           assert p['onnx']['output_shape'][-1] == 6
-          assert int(p['training']['completed_epochs']) == int(p['training']['configured_epochs']) == 30
+          assert int(p['training']['epochs_completed']) == int(p['training']['epochs']) == 30
           assert p['training']['ap50'] >= 0.0
           assert p['training']['ap50_95'] >= 0.0
           assert len(p['onnx_sha256']) == 64
@@ -229,7 +229,7 @@ jobs:
           t=p.get('training') or {}
           print(f"- Model: **{p.get('model_version')}** / {p.get('model_family')}")
           print(f"- Dataset: **{p.get('dataset_version')}**")
-          print(f"- Epochs: **{t.get('completed_epochs')} / {t.get('configured_epochs')}**")
+          print(f"- Epochs: **{t.get('epochs_completed')} / {t.get('epochs')}**")
           print(f"- AP50: **{t.get('ap50')}**")
           print(f"- AP50:95: **{t.get('ap50_95')}**")
           print(f"- ONNX bytes: **{p.get('onnx_bytes')}**")
