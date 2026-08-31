@@ -10,6 +10,7 @@ on:
       - 'trainer/build_detector_dataset.py'
       - 'trainer/train_detector.py'
       - 'trainer/yolox_fish_exp.py'
+      - 'Dockerfile.trainer'
       - 'Dockerfile.detector'
       - 'requirements-detector.txt'
       - 'requirements-training.txt'
