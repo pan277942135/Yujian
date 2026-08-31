@@ -1,5 +1,16 @@
 # YuJian AI Model Factory
 
+> ## 新任务从这里开始
+>
+> YuJian 项目的项目级 Source of Truth：[`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md)
+>
+> 后续新开开发任务时，必须先读取该指导文档，再读取本 README、相关 `docs/`、最新 `main` HEAD 与 CI 状态。若历史对话与 GitHub 最新状态冲突，以 GitHub 为准。
+>
+> 项目明确分为两大主线：
+>
+> - **后台侧**：本仓库 `pan277942135/Yujian`，内部 AI Model Factory，负责数据、审核、Dataset、训练、评测、Detector / Classifier、模型发布与 Feedback Review。
+> - **前端侧**：`pan277942135/Yujian_App`，面向真实钓友的 Android App，目前仍处于第一版 0→1 产品阶段。
+
 渔见 AI 的长期数据与模型持续迭代工程。
 
 ## 核心目标
@@ -37,6 +48,8 @@
 - **Google Cloud Storage (GCS)**：原始图片、清洗结果、冻结 Dataset、模型、评估产物。
 - **Registry DB**：Batch、图片审核状态、Species Catalog、反馈事件、Dataset/Model 版本关系。
 - **Model Factory Console**：把日常数据操作从 Cloud Shell 命令转换成网页按钮。
+
+当前阶段定位：**仅供内部使用的 AI 生产后台**。规模化以后再考虑多人权限、外部平台化等扩展。
 
 ## Model Factory Console V0.1
 
@@ -127,23 +140,17 @@ gs://<bucket>/
 
 ## 线上 Feedback 接口
 
-未来 App 可将真实用户鱼获与识别反馈写入：
+App 可将真实用户鱼获与识别反馈写入后台；具体当前接口与鉴权实现以最新代码和 `docs/PROJECT_GUIDE.md` 为准。
 
-```text
-POST /api/feedback
-X-YuJian-Ingest-Key: <FEEDBACK_INGEST_KEY>
-```
-
-支持：
+原则不变：
 
 ```text
 confirmed
 corrected
-unknown
-new_species_candidate
+unknown / new_species_candidate
 ```
 
-未知的新鱼种纠错会自动生成 Species Candidate，但不会未经审核直接进入训练。
+用户纠错不会未经人工 Review 直接成为 Ground Truth。
 
 ## Console 运行配置
 
@@ -157,11 +164,15 @@ FEEDBACK_INGEST_KEY=<mobile feedback API key>
 
 本地开发可以使用 SQLite；Cloud Run 正式环境必须使用持久化 PostgreSQL / Cloud SQL。
 
-## 当前阶段
+## 当前项目方向
 
-1. 用 Pilot + 豆包跑通 `Incoming -> Review -> Approved Master Pool`。
-2. 通过 Console 完成人工审核与 Species Truth。
-3. 冻结累计 `DS_M1_v0.1`。
-4. V0.2 接入 CVAT、Training Run、Evaluation、Error Pool 与自动再训练触发。
+MVP 模型目标不是盲目扩大类别，而是：
 
-详见 `docs/ARCHITECTURE.md`、`docs/GCS_BOOTSTRAP.md` 与 `docs/MODEL_FACTORY_CONSOLE_V0_1.md`。
+> **先把中国钓友最常见约 20–50 类做深，达到真实场景可商用识别水平，并逐步接入 YOLO Fish Detector + Species Classifier。**
+
+当前具体 P0、Runtime Parity、移动模型发布策略和后续 YOLO 架构详见：
+
+- [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md) — 项目级指导 / 新任务必读
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- [`docs/GCS_BOOTSTRAP.md`](docs/GCS_BOOTSTRAP.md)
+- [`docs/MODEL_FACTORY_CONSOLE_V0_1.md`](docs/MODEL_FACTORY_CONSOLE_V0_1.md)
