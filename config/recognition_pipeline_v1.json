@@ -1,0 +1,31 @@
+{
+  "contract_version": "RECOGNITION_PIPELINE_v1",
+  "detector": {
+    "model_family": "YOLOX_NANO",
+    "class_name": "fish",
+    "input_size": 416,
+    "strong_confidence": 0.35,
+    "weak_confidence": 0.2,
+    "nms_iou": 0.45
+  },
+  "quality_gate": {
+    "min_primary_area_ratio": 0.08,
+    "incomplete_edge_margin_ratio": 0.015
+  },
+  "crop": {
+    "expand_ratio": 0.15,
+    "classifier_size": 224,
+    "resize_mode": "letterbox",
+    "padding_rgb": [124, 116, 104],
+    "normalization_mean": [0.485, 0.456, 0.406],
+    "normalization_std": [0.229, 0.224, 0.225]
+  },
+  "statuses": [
+    "ready",
+    "no_fish",
+    "uncertain",
+    "multiple_fish",
+    "incomplete_fish",
+    "fish_too_small"
+  ]
+}
