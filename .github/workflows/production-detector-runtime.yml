@@ -2,6 +2,14 @@ name: Production Detector Runtime
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - scripts/smoke_production_detector_runtime.py
+      - app/detector_runtime.py
+      - app/recognition_pipeline.py
+      - config/recognition_pipeline_v1.json
+      - .github/workflows/production-detector-runtime.yml
   workflow_run:
     workflows:
       - Detector Golden Cases
@@ -21,7 +29,7 @@ env:
 
 jobs:
   smoke-production-detector:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
