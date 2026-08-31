@@ -4,22 +4,19 @@ import hashlib
 import json
 import os
 import tarfile
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from google.cloud import storage
 from PIL import Image, ImageOps
-from sqlalchemy import select
-
-from app.db import SessionLocal
-from app.models import ImageAsset
-from app.presence import FishPresenceResult, _is_fish_term, effective_status
 from app.recognition_pipeline import BBox, load_contract
 
 
 @dataclass
 class Candidate:
-    image: ImageAsset
+    image: Any
     status: str
     boxes: list[tuple[float, BBox]]
 
@@ -30,7 +27,7 @@ def _parse_gs(uri: str) -> tuple[str, str]:
     return tuple(uri[5:].split("/", 1))  # type: ignore[return-value]
 
 
-def _saved_evidence(row: FishPresenceResult) -> dict:
+def _saved_evidence(row: Any) -> dict:
     try:
         return json.loads(row.evidence_json or "{}")
     except json.JSONDecodeError:
@@ -48,7 +45,7 @@ def _vertices_to_box(vertices: list[dict]) -> BBox | None:
     return box if box.area_ratio > 0.002 else None
 
 
-def _split_key(image: ImageAsset) -> str:
+def _split_key(image: Any) -> str:
     digest = hashlib.sha256(f"{image.batch_id}:{image.image_id}".encode("utf-8")).digest()
     bucket = int.from_bytes(digest[:2], "big") % 100
     if bucket < 80:
@@ -69,6 +66,15 @@ def _download(client: storage.Client, uri: str, target: Path) -> None:
 
 
 def _collect() -> list[Candidate]:
+    # These imports deliberately stay inside the function. If Cloud SQL or its secret is
+    # misconfigured, the outer launcher can persist the real exception to GCS rather than
+    # leaving an opaque Cloud Run non-zero exit code.
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models import ImageAsset
+    from app.presence import FishPresenceResult, _is_fish_term, effective_status
+
     contract = load_contract()
     strong_threshold = float(contract["detector"]["strong_confidence"])
     out: list[Candidate] = []
@@ -97,6 +103,31 @@ def _collect() -> list[Candidate]:
             elif status == "no_fish":
                 out.append(Candidate(image=image, status=status, boxes=[]))
     return out
+
+
+def _publish_failure(exc: Exception) -> None:
+    """Persist a redacted bootstrap traceback when Cloud Logging is unavailable to CI."""
+    bucket_name = os.environ.get("GCS_BUCKET", "").strip()
+    if not bucket_name:
+        return
+    dataset_version = os.environ.get("DETECTOR_DATASET_VERSION", "DET_DS_v0.1").strip()
+    document = {
+        "dataset_version": dataset_version,
+        "error_type": type(exc).__name__,
+        "error": str(exc),
+        "traceback": traceback.format_exc(),
+    }
+    try:
+        storage.Client().bucket(bucket_name).blob(
+            f"detector-datasets/{dataset_version}/bootstrap_failure.json"
+        ).upload_from_string(
+            json.dumps(document, ensure_ascii=False, indent=2),
+            content_type="application/json",
+        )
+    except Exception as publish_error:
+        # Preserve the original exception as the process failure; do not replace it with
+        # a secondary diagnostic-write error.
+        print(f"DETECTOR_BOOTSTRAP_FAILURE_DIAGNOSTIC_WRITE_FAILED: {publish_error}", flush=True)
 
 
 def _publish_dataset(client: storage.Client, root: Path, report: dict, manifest: list[dict]) -> dict:
@@ -251,4 +282,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        _publish_failure(exc)
+        raise

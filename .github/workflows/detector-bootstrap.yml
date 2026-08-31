@@ -98,6 +98,12 @@ jobs:
             --freshness=2h \
             --format='value(timestamp,severity,textPayload,jsonPayload.message)' || true
 
+      - name: Read detector bootstrap failure diagnostic
+        if: steps.execute_dataset.outcome == 'failure'
+        run: |
+          gcloud storage cat \
+            "gs://${BUCKET}/detector-datasets/${DETECTOR_DATASET_VERSION}/bootstrap_failure.json" || true
+
       - name: Fail when detector dataset execution failed
         if: steps.execute_dataset.outcome == 'failure'
         run: exit 1
