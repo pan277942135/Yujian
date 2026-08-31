@@ -9,6 +9,7 @@ import sys
 import tarfile
 import traceback
 import urllib.request
+import re
 from pathlib import Path
 
 import numpy as np
@@ -67,7 +68,20 @@ def write_failure_diagnostic(error: BaseException) -> None:
         "error_type": type(error).__name__,
         "error": str(error),
         "traceback": traceback.format_exc(),
+        "runtime_config": {
+            "DETECTOR_EPOCHS": os.environ.get("DETECTOR_EPOCHS"),
+            "DETECTOR_EVAL_INTERVAL": os.environ.get("DETECTOR_EVAL_INTERVAL"),
+            "DETECTOR_BATCH_SIZE": os.environ.get("DETECTOR_BATCH_SIZE"),
+        },
     }
+    train_log = Path("/tmp/yujian-detector/outputs/yolox_train.log")
+    if train_log.exists():
+        # Cloud Run's application logs are intentionally not readable by the GitHub
+        # deployer.  Preserve the tail next to the failure diagnostic so every failed
+        # GPU attempt remains independently debuggable by the workflow.
+        diagnostic["yolox_train_log_tail"] = train_log.read_text(
+            encoding="utf-8", errors="replace"
+        )[-24_000:]
     try:
         storage.Client().bucket(bucket).blob(
             f"models/{model_version}/training_failure.json"
@@ -120,6 +134,16 @@ def run_training(dataset_root: Path, pretrain: Path, output_root: Path) -> tuple
     env["DETECTOR_OUTPUT_DIR"] = str(output_root)
     batch = os.environ.get("DETECTOR_BATCH_SIZE", "16")
     epochs = os.environ.get("DETECTOR_EPOCHS", "30")
+    expected_epochs = int(epochs)
+    # Instantiate the same experiment that YOLOX will load before spending GPU time.
+    # This makes an environment/config regression fail with a durable diagnostic
+    # instead of silently publishing a shortened run.
+    preflight_exp = Exp()
+    if preflight_exp.max_epoch != expected_epochs:
+        raise RuntimeError(
+            "YOLOX experiment epoch preflight failed: "
+            f"resolved={preflight_exp.max_epoch} expected={expected_epochs}"
+        )
     # Pass the frozen values through YOLOX's explicit config override channel as
     # well as the environment.  This avoids a base-exp default or stale dynamic
     # setting silently shortening a production run.
@@ -143,14 +167,42 @@ def run_training(dataset_root: Path, pretrain: Path, output_root: Path) -> tuple
         "eval_interval",
         eval_interval,
     ]
-    subprocess.run(command, check=True, env=env)
+    output_root.mkdir(parents=True, exist_ok=True)
+    train_log = output_root / "yolox_train.log"
+    with train_log.open("w", encoding="utf-8") as handle:
+        completed = subprocess.run(
+            command,
+            check=False,
+            env=env,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+        )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "YOLOX train.py exited with "
+            f"{completed.returncode}; log tail:\n"
+            f"{train_log.read_text(encoding='utf-8', errors='replace')[-6_000:]}"
+        )
+
+    log_text = train_log.read_text(encoding="utf-8", errors="replace")
+    observed_epochs = [
+        (int(current), int(total))
+        for current, total in re.findall(r"epoch:\s*(\d+)\s*/\s*(\d+)", log_text)
+    ]
+    if not observed_epochs:
+        raise RuntimeError("YOLOX train log did not contain any epoch progress records")
+    observed_current, observed_total = max(observed_epochs)
+    if observed_current < expected_epochs or observed_total != expected_epochs:
+        raise RuntimeError(
+            "YOLOX train loop did not honor the production epoch count: "
+            f"observed={observed_current}/{observed_total} expected={expected_epochs}"
+        )
     experiment_dir = output_root / "fish_detector_yolox_nano"
     latest_checkpoint = experiment_dir / "latest_ckpt.pth"
     if not latest_checkpoint.exists():
         raise RuntimeError(f"YOLOX training completed without latest_ckpt.pth in {experiment_dir}")
     latest_doc = torch.load(latest_checkpoint, map_location="cpu")
     completed_epochs = int(latest_doc.get("start_epoch") or 0) if isinstance(latest_doc, dict) else 0
-    expected_epochs = int(os.environ.get("DETECTOR_EPOCHS", "30"))
     if completed_epochs < expected_epochs:
         raise RuntimeError(
             "YOLOX stopped before the configured epoch count: "
