@@ -23,7 +23,7 @@ permissions:
 
 concurrency:
   group: yujian-detector-bootstrap
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   PROJECT_ID: gemini-api-project-503706
