@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -55,3 +55,41 @@ def init_db():
     from app import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    _ensure_production_pipeline_columns()
+
+
+def _ensure_production_pipeline_columns() -> None:
+    """Apply additive v2 columns for installations created before the migration.
+
+    The console intentionally has no destructive migration path.  These fixed
+    identifiers match schemas/0013_production_pipeline_v2.sql and are safe to
+    run at every startup on SQLite and PostgreSQL.
+    """
+
+    additions = {
+        "datasets": {
+            "pipeline_type": "VARCHAR(64) NOT NULL DEFAULT 'WHOLE_IMAGE_V1'",
+        },
+        "training_runs": {
+            "pipeline_type": "VARCHAR(64) NOT NULL DEFAULT 'WHOLE_IMAGE_V1'",
+            "detector_version": "VARCHAR(128)",
+            "crop_version": "VARCHAR(128)",
+            "classifier_version": "VARCHAR(128)",
+        },
+        "models": {
+            "pipeline_type": "VARCHAR(64) NOT NULL DEFAULT 'WHOLE_IMAGE_V1'",
+            "detector_version": "VARCHAR(128)",
+            "crop_version": "VARCHAR(128)",
+            "classifier_version": "VARCHAR(128)",
+            "dataset_version": "VARCHAR(128)",
+        },
+    }
+    inspector = inspect(engine)
+    with engine.begin() as connection:
+        for table, columns in additions.items():
+            if not inspector.has_table(table):
+                continue
+            existing = {column["name"] for column in inspect(connection).get_columns(table)}
+            for name, definition in columns.items():
+                if name not in existing:
+                    connection.exec_driver_sql(f'ALTER TABLE "{table}" ADD COLUMN "{name}" {definition}')

@@ -21,7 +21,7 @@ from app.inference_upload_api import (
     review_inference_asset,
     upload_inference_asset,
 )
-from app.models import InferenceAsset
+from app.models import FeedbackEvent, InferenceAsset
 
 
 class FakeBlob:
@@ -103,6 +103,13 @@ def test_record_rejects_ground_truth_in_detector_payload():
         _read_record(json.dumps(document).encode())
 
 
+def test_record_rejects_nested_identity_mismatch():
+    document = _record()
+    document["detection"]["image_id"] = "yj_img_other"
+    with pytest.raises(InferenceContractError, match="detection.image_id"):
+        _read_record(json.dumps(document).encode())
+
+
 def test_put_if_absent_is_hash_idempotent_and_conflict_safe():
     blob = FakeBlob()
     client = object()
@@ -168,4 +175,43 @@ def test_upload_persists_candidate_and_duplicate_without_overwrite(monkeypatch, 
     )
     assert reviewed["status"] == "ACCEPTED"
     assert session.get(InferenceAsset, "yj_img_123456").accepted_species == "grass_carp"
+    session.close()
+
+
+def test_upload_materializes_nested_feedback_as_existing_review_pool_event(monkeypatch, tmp_path: Path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'registry-feedback.db'}")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine, autoflush=False, autocommit=False)()
+    bucket = FakeBucket()
+
+    class Client:
+        def bucket(self, name):
+            return bucket
+
+    monkeypatch.setattr("app.inference_upload_api.storage.Client", Client)
+    monkeypatch.setattr("app.inference_upload_api.get_bucket_name", lambda: "test-bucket")
+    image = _image_bytes()
+    record = _record("yj_img_feedback_001")
+    record["feedback"] = {
+        "source_event_id": "APP_feedback_001",
+        "ai_prediction": "草鱼",
+        "user_label": "鲤鱼",
+        "is_error": True,
+        "hard_case": True,
+        "feedback_type": "corrected",
+        "user_note": "用户确认是鲤鱼",
+    }
+    result = asyncio.run(
+        upload_inference_asset(
+            record=_upload(json.dumps(record, ensure_ascii=False).encode(), "InferenceRecord.json", "application/json"),
+            image=_upload(image, "original.jpg", "image/jpeg"),
+            crop=None,
+            db=session,
+        )
+    )
+    assert result["feedback_event"]["source_event_id"] == "APP_feedback_001"
+    event = session.query(FeedbackEvent).filter_by(source_event_id="APP_feedback_001").one()
+    assert event.feedback_type == "corrected"
+    assert event.corrected_species == "鲤鱼"
+    assert event.pipeline_status == "NEW"
     session.close()

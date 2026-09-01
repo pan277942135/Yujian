@@ -245,6 +245,8 @@ def build_crop_dataset(
     root = Path(output_root)
     root.mkdir(parents=True, exist_ok=True)
     accepted, excluded = _reviewed_records(records)
+    species_keys = sorted({_accepted_species(record) for record in accepted if _accepted_species(record)})
+    class_index = {species: index for index, species in enumerate(species_keys)}
     rows: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
     for record in accepted:
@@ -268,11 +270,13 @@ def build_crop_dataset(
                     "image_id": image_id,
                     "file_name": crop_path.name,
                     "species_key": species,
+                    "class_index": class_index[species],
                     "gcs_uri": "",
                     "local_path": str(crop_path.relative_to(root)),
                     "input_type": "crop",
                     "pipeline_type": "CROP_CLASSIFIER_V1",
                     "source_image_id": image_id,
+                    "source_image_gcs_uri": _storage_value(record, "image_gcs_uri") or "",
                     "split": _split(image_id),
                     "accepted_bbox": json.dumps(record["accepted_bbox"], separators=(",", ":")),
                     "expand_ratio": expand_ratio,
@@ -281,13 +285,21 @@ def build_crop_dataset(
         except Exception as exc:
             failures.append({"image_id": image_id, "error": str(exc)})
 
-    fields = ["image_id", "file_name", "species_key", "gcs_uri", "local_path", "input_type", "pipeline_type", "source_image_id", "split", "accepted_bbox", "expand_ratio"]
+    fields = ["image_id", "file_name", "species_key", "class_index", "gcs_uri", "local_path", "input_type", "pipeline_type", "source_image_id", "source_image_gcs_uri", "split", "accepted_bbox", "expand_ratio"]
     _write_csv(root / "metadata" / "crop_manifest.csv", fields, rows)
+    class_map = {
+        "dataset_version": dataset_version,
+        "pipeline_type": "CROP_CLASSIFIER_V1",
+        "classes": [{"class_index": index, "species_key": species} for species, index in class_index.items()],
+    }
+    _write_json(root / "metadata" / "class_map.json", class_map)
     report = {
         "dataset_version": dataset_version,
         "pipeline_type": "CROP_CLASSIFIER_V1",
         "input_type": "crop",
         "expand_ratio": expand_ratio,
+        "class_count": len(class_index),
+        "class_map": "metadata/class_map.json",
         "written": len(rows),
         "excluded": excluded,
         "failures": failures,
@@ -317,9 +329,45 @@ def load_record_directory(root: str | Path) -> list[dict[str, Any]]:
     return records
 
 
+def load_reviewed_inference_records(db: Any, storage_client: Any = None, limit: int = 5000) -> list[dict[str, Any]]:
+    """Join the immutable GCS record with DB review fields for a dataset job."""
+
+    from sqlalchemy import select
+
+    from app.models import InferenceAsset
+
+    rows = db.scalars(select(InferenceAsset).order_by(InferenceAsset.created_at).limit(limit)).all()
+    result: list[dict[str, Any]] = []
+    for asset in rows:
+        try:
+            uri = asset.record_gcs_uri
+            if not uri.startswith("gs://"):
+                document = json.loads(Path(uri).read_text(encoding="utf-8"))
+            else:
+                bucket, object_name = _parse_gs_uri(uri)
+                if storage_client is None:
+                    from google.cloud import storage
+
+                    storage_client = storage.Client()
+                document = json.loads(storage_client.bucket(bucket).blob(object_name).download_as_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(document, dict):
+            continue
+        document["status"] = asset.status
+        if asset.accepted_bbox_json:
+            document["accepted_bbox_json"] = asset.accepted_bbox_json
+        if asset.accepted_species:
+            document["accepted_species"] = asset.accepted_species
+        document.setdefault("image_gcs_uri", asset.image_gcs_uri)
+        result.append(document)
+    return result
+
+
 __all__ = [
     "ACCEPTED_STATUSES",
     "build_crop_dataset",
     "build_reviewed_detector_dataset",
     "load_record_directory",
+    "load_reviewed_inference_records",
 ]

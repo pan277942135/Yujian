@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.db import get_db
-from app.models import DatasetVersion, Evaluation, ImageAsset, ModelVersion, SpeciesCatalog
+from app.models import DatasetVersion, Evaluation, ImageAsset, InferenceAsset, ModelVersion, SpeciesCatalog
 from app.intelligence.confusion_analyzer import build_confusion_report
 from app.intelligence.data_gap_analyzer import analyze_data_gaps
 from app.intelligence.hard_case_miner import mine_hard_cases
@@ -281,6 +281,31 @@ def _registry_manifest_rows(db: Session) -> list[dict[str, Any]]:
     return rows
 
 
+def _uploaded_inference_records(db: Session, storage_client: Any = None, limit: int = 500) -> list[dict[str, Any]]:
+    """Load App records for detector analysis without treating them as labels."""
+
+    try:
+        rows = db.scalars(select(InferenceAsset).order_by(InferenceAsset.created_at.desc()).limit(limit)).all()
+    except Exception:
+        return []
+    result: list[dict[str, Any]] = []
+    for asset in rows:
+        try:
+            document = _read_uri_or_path(asset.record_gcs_uri, storage_client)
+        except Exception:
+            continue
+        if not isinstance(document, Mapping):
+            continue
+        row = dict(document)
+        row["status"] = asset.status
+        if asset.accepted_bbox_json:
+            row["accepted_bbox_json"] = asset.accepted_bbox_json
+        if asset.accepted_species:
+            row["accepted_species"] = asset.accepted_species
+        result.append(row)
+    return result
+
+
 def _load_class_map(db: Session, model_version: str, document: Any, storage_client: Any = None) -> Any:
     if not isinstance(document, Mapping) or document.get("classes"):
         return document
@@ -352,11 +377,16 @@ def build_intelligence_payload(
     tasks = [task] if task.get("requirements", {}).get("species") else []
     artifact_report = evaluation_document.get("evaluation_artifact_report") if isinstance(evaluation_document, Mapping) else None
     detector_samples = []
+    detector_source = "evaluation_artifact"
     if isinstance(evaluation_document, Mapping):
         raw_detector_samples = evaluation_document.get("detector_samples") or evaluation_document.get("inference_records") or []
         if isinstance(raw_detector_samples, list):
             detector_samples = [row for row in raw_detector_samples if isinstance(row, Mapping)]
+    if not detector_samples:
+        detector_samples = _uploaded_inference_records(db, storage_client)
+        detector_source = "inference_assets" if detector_samples else "none"
     detector_report = analyze_detector_errors(detector_samples)
+    detector_report["source"] = detector_source
     return {
         "model": {
             "model_version": resolved_model,

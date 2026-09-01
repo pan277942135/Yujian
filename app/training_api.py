@@ -329,6 +329,7 @@ def training_run_detail(run_id: str, db: Session = Depends(get_db)):
             "detector_version": getattr(model, "detector_version", None),
             "crop_version": getattr(model, "crop_version", None),
             "classifier_version": getattr(model, "classifier_version", None),
+            "dataset_version": getattr(model, "dataset_version", None) or row.dataset_version,
         }
         if model
         else None

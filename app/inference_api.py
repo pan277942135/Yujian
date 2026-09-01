@@ -26,6 +26,7 @@ from starlette.requests import Request
 from app.db import get_db
 from app.detector_runtime import DetectorRun, detect
 from app.factory import get_bucket_name
+from app.pipeline_contract import CROP_CLASSIFIER_V1, WHOLE_IMAGE_V1, validate_pipeline_type
 from app.models import ModelVersion, TrainingRun
 from app.recognition_pipeline import BBox, Detection, PipelineStatus, assess_detections, crop_box_pixels, load_contract
 
@@ -70,6 +71,15 @@ class WholeImageLetterbox:
         return canvas
 
 
+class CropLetterbox(WholeImageLetterbox):
+    """CROP_CLASSIFIER_V1 preprocessing shared with the Android crop input.
+
+    The pixel operation is deliberately the same centered letterbox used by
+    the App classifier; the distinct type makes the model contract explicit
+    and prevents a future whole-image transform from being reused silently.
+    """
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -110,15 +120,17 @@ def _torch_stack():
     return torch, transforms
 
 
-def _build_eval_transform(image_size: int):
+def _build_eval_transform(image_size: int, pipeline_type: str = WHOLE_IMAGE_V1):
     _torch, transforms = _torch_stack()
+    pipeline_type = validate_pipeline_type(pipeline_type)
     normalize = transforms.Normalize(
         mean=list(IMAGENET_MEAN),
         std=list(IMAGENET_STD),
     )
+    letterbox = CropLetterbox(image_size) if pipeline_type == CROP_CLASSIFIER_V1 else WholeImageLetterbox(image_size)
     return transforms.Compose(
         [
-            WholeImageLetterbox(image_size),
+            letterbox,
             transforms.ToTensor(),
             normalize,
         ]
@@ -144,13 +156,14 @@ def _load_model(row: ModelVersion) -> LoadedModel:
         if not classes:
             raise RuntimeError("模型 class_map.json 为空")
         image_size = int((metrics_doc.get("params") or {}).get("image_size") or 224)
+        pipeline_type = validate_pipeline_type(getattr(row, "pipeline_type", WHOLE_IMAGE_V1))
         model_bytes = _download_bytes(client, row.artifact_uri)
         model = torch.jit.load(io.BytesIO(model_bytes), map_location="cpu")
         model.eval()
         loaded = LoadedModel(
             artifact_uri=row.artifact_uri,
             model=model,
-            transform=_build_eval_transform(image_size),
+            transform=_build_eval_transform(image_size, pipeline_type),
             classes=classes,
             classes_by_index={int(item["class_index"]): item for item in classes},
             image_size=image_size,
@@ -321,10 +334,17 @@ def _predict_bytes(db: Session, model_version: str, data: bytes) -> dict:
     model_row = db.get(ModelVersion, model_version)
     if not model_row:
         raise ValueError("模型不存在")
-    classifier = _classifier_prediction(model_row, crop)
+    # New models are trained on the exact detector-expanded crop consumed by
+    # the Android production pipeline. Explicit legacy models retain their
+    # original-image input contract and are never silently relabelled.
+    pipeline_type = validate_pipeline_type(getattr(model_row, "pipeline_type", CROP_CLASSIFIER_V1))
+    classifier_input = crop if pipeline_type == CROP_CLASSIFIER_V1 else image
+    classifier = _classifier_prediction(model_row, classifier_input)
     result.update(classifier)
     result.update(
         {
+            "pipeline_type": pipeline_type,
+            "classifier_input": "crop" if pipeline_type == CROP_CLASSIFIER_V1 else "original",
             "classification_ran": True,
             "crop": {
                 "bbox": _serialize_box(assessment.crop_box),

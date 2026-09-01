@@ -98,14 +98,28 @@ def materialize_images(storage_client: storage.Client, rows: list[dict], root: P
 
     def download_one(item: tuple[int, dict]) -> dict:
         idx, row = item
-        uri = (row.get("crop_gcs_uri") if pipeline_type == CROP_CLASSIFIER_V1 else row.get("gcs_uri") or row.get("crop_gcs_uri") or "")
+        # Generated crop manifests use the canonical ``gcs_uri`` field while
+        # some registry exports use the more explicit ``crop_gcs_uri``.  The
+        # pipeline guard in ``execute`` has already verified ``input_type=crop``
+        # for this mode, so accepting both names never falls back to an
+        # original-image row silently.
+        if pipeline_type == CROP_CLASSIFIER_V1:
+            uri = row.get("crop_gcs_uri") or row.get("gcs_uri") or row.get("local_path") or ""
+        else:
+            uri = row.get("gcs_uri") or row.get("crop_gcs_uri") or row.get("local_path") or ""
         uri = (uri or "").strip()
         if not uri:
             raise ValueError(f"manifest row missing gcs_uri: {row.get('image_id')}")
-        bucket_name, object_name = parse_gs_uri(uri)
-        suffix = Path(row.get("file_name") or object_name).suffix.lower() or ".jpg"
-        local_path = root / f"{idx:06d}{suffix}"
-        storage_client.bucket(bucket_name).blob(object_name).download_to_filename(str(local_path))
+        if uri.startswith("gs://"):
+            bucket_name, object_name = parse_gs_uri(uri)
+            suffix = Path(row.get("file_name") or object_name).suffix.lower() or ".jpg"
+            local_path = root / f"{idx:06d}{suffix}"
+            storage_client.bucket(bucket_name).blob(object_name).download_to_filename(str(local_path))
+        else:
+            source_path = Path(uri)
+            if not source_path.is_file():
+                raise ValueError(f"manifest local_path does not exist: {source_path}")
+            local_path = source_path
         out = dict(row)
         out["local_path"] = str(local_path)
         return out

@@ -80,7 +80,7 @@ def test_ready_detection_uses_expanded_floor_ceil_crop_before_classifier(monkeyp
         }
 
     monkeypatch.setattr(inference_api, "_classifier_prediction", classifier)
-    db = SimpleNamespace(get=lambda _model, version: SimpleNamespace(model_version=version, artifact_uri="gs://model.pt"))
+    db = SimpleNamespace(get=lambda _model, version: SimpleNamespace(model_version=version, artifact_uri="gs://model.pt", pipeline_type="CROP_CLASSIFIER_V1"))
 
     result = inference_api._predict_bytes(db, "MODEL_M1_v0.2", _jpeg())
 
@@ -89,3 +89,40 @@ def test_ready_detection_uses_expanded_floor_ceil_crop_before_classifier(monkeyp
     assert result["classification_ran"] is True
     assert result["crop"]["pixels"] == {"left": 11, "top": 35, "right": 89, "bottom": 165, "width": 78, "height": 130}
     assert seen["size"] == (78, 130)
+    assert result["classifier_input"] == "crop"
+
+
+def test_legacy_whole_image_model_keeps_original_classifier_input(monkeypatch):
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(
+        inference_api,
+        "_run_production_detector",
+        lambda _image: _run((_det(0.92, 0.2, 0.25, 0.8, 0.75),)),
+    )
+
+    def classifier(_row, source):
+        seen["size"] = source.size
+        return {
+            "model_status": "PRODUCTION",
+            "image_size": 224,
+            "top1": {"species": "草鱼", "confidence": 0.9},
+            "top3": [{"species": "草鱼", "confidence": 0.9}],
+            "low_confidence": False,
+            "low_confidence_threshold": 0.55,
+            "classifier_latency_ms": 2.1,
+        }
+
+    monkeypatch.setattr(inference_api, "_classifier_prediction", classifier)
+    db = SimpleNamespace(
+        get=lambda _model, version: SimpleNamespace(
+            model_version=version,
+            artifact_uri="gs://model.pt",
+            pipeline_type="WHOLE_IMAGE_V1",
+        )
+    )
+
+    result = inference_api._predict_bytes(db, "MODEL_M1_v0.2", _jpeg())
+
+    assert result["pipeline_type"] == "WHOLE_IMAGE_V1"
+    assert result["classifier_input"] == "original"
+    assert seen["size"] == (100, 200)

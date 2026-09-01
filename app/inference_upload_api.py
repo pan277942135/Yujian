@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.factory import get_bucket_name
+from app.flywheel import record_feedback
 from app.models import InferenceAsset
 
 router = APIRouter(tags=["inference-assets"])
@@ -30,6 +31,9 @@ SUFFIXES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
 
 class InferenceContractError(ValueError):
     """A client record failed the additive inference contract."""
+
+
+VALID_FEEDBACK_TYPES = {"confirmed", "corrected", "unknown", "new_species_candidate"}
 
 
 class InferenceReviewRequest(BaseModel):
@@ -111,6 +115,9 @@ def _read_record(data: bytes) -> dict[str, Any]:
     if detection is not None:
         if not isinstance(detection, dict):
             raise InferenceContractError("detection must be an object or null")
+        detection_image_id = str(detection.get("image_id") or "").strip()
+        if detection_image_id and detection_image_id != image_id:
+            raise InferenceContractError("detection.image_id must match image_id")
         if "ground_truth_bbox" in detection or "ground_truth" in detection:
             raise InferenceContractError("detector output must use candidate_bbox; ground truth requires review")
         bbox = detection.get("candidate_bbox")
@@ -133,6 +140,18 @@ def _read_record(data: bytes) -> dict[str, Any]:
             raise InferenceContractError("classification.model_version is required")
         if not _finite_between_zero_one(classification.get("confidence")):
             raise InferenceContractError("classification.confidence must be between 0 and 1")
+    feedback = document.get("feedback")
+    if feedback is not None:
+        if not isinstance(feedback, dict):
+            raise InferenceContractError("feedback must be an object or null")
+        feedback_type = str(feedback.get("feedback_type") or "").strip()
+        if feedback_type not in VALID_FEEDBACK_TYPES:
+            raise InferenceContractError("feedback.feedback_type is unsupported")
+        if not str(feedback.get("ai_prediction") or "").strip():
+            raise InferenceContractError("feedback.ai_prediction is required")
+        for key in ("is_error", "hard_case"):
+            if key in feedback and not isinstance(feedback[key], bool):
+                raise InferenceContractError(f"feedback.{key} must be boolean")
     return document
 
 
@@ -192,6 +211,39 @@ def _asset_dict(row: InferenceAsset, *, duplicate: bool = False) -> dict[str, An
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "reviewed_at": row.reviewed_at.isoformat() if row.reviewed_at else None,
     }
+
+
+def _record_feedback(document: dict[str, Any], image_gcs_uri: str, db: Session) -> dict[str, Any] | None:
+    """Materialize the optional nested App feedback in the existing feedback pool.
+
+    The immutable inference JSON remains the source artifact.  This adapter
+    only creates the normal ``FeedbackEvent`` queue entry; it never promotes a
+    user label to an accepted Dataset label or changes Freeze state.
+    """
+
+    feedback = document.get("feedback")
+    if not isinstance(feedback, dict):
+        return None
+    classification = document.get("classification") if isinstance(document.get("classification"), dict) else {}
+    source_event_id = str(feedback.get("source_event_id") or f"inference:{document['image_id']}").strip()
+    user_label = str(feedback.get("user_label") or "").strip() or None
+    confidence = feedback.get("confidence", classification.get("confidence"))
+    try:
+        confidence_value = float(confidence) if confidence not in (None, "") else None
+    except (TypeError, ValueError):
+        confidence_value = None
+    return record_feedback(
+        db,
+        source_event_id=source_event_id,
+        feedback_type=str(feedback["feedback_type"]).strip(),
+        source="android_app",
+        image_gcs_uri=image_gcs_uri,
+        model_version=str(classification.get("model_version") or "").strip() or None,
+        predicted_species=str(feedback.get("ai_prediction") or classification.get("prediction_species") or "").strip() or None,
+        confidence=confidence_value,
+        corrected_species=user_label,
+        user_note=str(feedback.get("user_note") or "").strip() or None,
+    )
 
 
 @router.post("/api/v1/inference/upload")
@@ -272,12 +324,17 @@ async def upload_inference_asset(
             classifier_version=str(classifier.get("model_version") or "") or None,
         )
         db.add(row)
+        db.flush()
+        feedback_event = _record_feedback(document, _uri(bucket_name, image_name), db)
         db.commit()
-        return {
+        result = {
             **_asset_dict(row),
             "storage": storage_results,
             "image": {"width": image_width, "height": image_height, "format": image_format},
         }
+        if feedback_event is not None:
+            result["feedback_event"] = feedback_event
+        return result
     except HTTPException:
         raise
     except InferenceContractError as exc:
