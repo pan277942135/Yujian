@@ -15,6 +15,7 @@ from .confusion_analyzer import (
 from .data_gap_analyzer import analyze_data_gaps, analyze_gaps, build_data_gap_report
 from .hard_case_miner import build_hard_case_set, mine_hard_cases
 from .task_generator import build_collection_task, generate_collection_task, generate_task
+from .detector_error_analyzer import analyze_detector_errors
 
 __all__ = [
     "analyze_confusion",
@@ -28,6 +29,7 @@ __all__ = [
     "generate_collection_task",
     "generate_confusion_report",
     "generate_task",
+    "analyze_detector_errors",
     "mine_hard_cases",
     "write_confusion_report",
 ]

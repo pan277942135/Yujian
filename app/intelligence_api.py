@@ -22,6 +22,7 @@ from app.intelligence.confusion_analyzer import build_confusion_report
 from app.intelligence.data_gap_analyzer import analyze_data_gaps
 from app.intelligence.hard_case_miner import mine_hard_cases
 from app.intelligence.task_generator import generate_collection_task, write_collection_task
+from app.intelligence.detector_error_analyzer import analyze_detector_errors
 
 router = APIRouter(tags=["model-intelligence"])
 templates = Jinja2Templates(directory="app/templates")
@@ -350,6 +351,12 @@ def build_intelligence_payload(
     task = generate_collection_task(confusion, gaps, model_version=resolved_model)
     tasks = [task] if task.get("requirements", {}).get("species") else []
     artifact_report = evaluation_document.get("evaluation_artifact_report") if isinstance(evaluation_document, Mapping) else None
+    detector_samples = []
+    if isinstance(evaluation_document, Mapping):
+        raw_detector_samples = evaluation_document.get("detector_samples") or evaluation_document.get("inference_records") or []
+        if isinstance(raw_detector_samples, list):
+            detector_samples = [row for row in raw_detector_samples if isinstance(row, Mapping)]
+    detector_report = analyze_detector_errors(detector_samples)
     return {
         "model": {
             "model_version": resolved_model,
@@ -366,6 +373,7 @@ def build_intelligence_payload(
             "source": source,
             "available": bool(source),
         },
+        "detector_errors": detector_report,
     }
 
 
