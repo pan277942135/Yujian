@@ -25,6 +25,8 @@ env:
   SERVICE: yujian-model-factory-console
   WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
   DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+  DETECTOR_BUNDLE_URL: https://github.com/pan277942135/Yujian/releases/download/detector-model-v0.1/det_fish_v0_1_android_bundle.zip
+  DETECTOR_BUNDLE_SHA256: 246ddacaf89ca7ecc9c64a47d3e12c5ee9088d92c763a38626778505ae8c15ee
 
 jobs:
   preflight:
@@ -132,6 +134,27 @@ jobs:
         working-directory: android-app
         run: python3 scripts/verify_production_model.py
 
+      - name: Download and install verified DET_FISH_v0.1 Android bundle
+        working-directory: android-app
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 --retry-delay 2 -o /tmp/detector_bundle.zip "$DETECTOR_BUNDLE_URL"
+          echo "$DETECTOR_BUNDLE_SHA256  /tmp/detector_bundle.zip" | sha256sum -c -
+          rm -rf /tmp/detector_bundle
+          mkdir -p /tmp/detector_bundle app/src/main/assets app/src/androidTest/assets/detector
+          unzip -q /tmp/detector_bundle.zip -d /tmp/detector_bundle
+          cp /tmp/detector_bundle/fish_detector_yolox_nano_v0_1.onnx app/src/main/assets/
+          cp /tmp/detector_bundle/detector_metadata.json app/src/main/assets/
+          cp /tmp/detector_bundle/recognition_pipeline_v1.json app/src/main/assets/
+          cp /tmp/detector_bundle/golden_cases.json app/src/androidTest/assets/detector/
+          rm -rf app/src/androidTest/assets/detector/golden
+          cp -R /tmp/detector_bundle/golden app/src/androidTest/assets/detector/golden
+
+      - name: Verify production detector model and contract
+        working-directory: android-app
+        run: python3 scripts/verify_production_detector.py
+
       - name: Set up JDK 17 for Android UAT
         uses: actions/setup-java@v4
         with:
@@ -185,3 +208,4 @@ jobs:
             echo "- Android API 28 production TFLite runtime: **PASS**"
             echo "- Android authenticated feedback transport: **PASS**"
           } >> "$GITHUB_STEP_SUMMARY"
+
