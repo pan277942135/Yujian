@@ -8,6 +8,7 @@ from pathlib import PurePosixPath
 from google.cloud import storage
 from sqlalchemy.orm import Session
 
+from app.batch_upload_api import ensure_incoming_manifest
 from app.factory import IMAGE_EXTS, audit_incoming_batch, get_bucket_name
 from app.flywheel import species_names
 from app.species_alias import normalize_species_name
@@ -43,7 +44,17 @@ def list_incoming_batches(bucket_name: str | None = None) -> list[dict]:
     for prefix in prefixes:
         blobs = [b for b in client.list_blobs(bucket_name, prefix=prefix) if not b.name.endswith("/")]
         images = [b for b in blobs if PurePosixPath(b.name).suffix.lower() in IMAGE_EXTS]
-        manifests = [b for b in blobs if b.name.endswith("/fish_manifest.csv") or b.name == prefix + "fish_manifest.csv"]
+        canonical_manifest = [b for b in blobs if b.name == prefix + "metadata/fish_manifest.csv"]
+        manifests = canonical_manifest or [
+            b for b in blobs if b.name.endswith("/fish_manifest.csv") or b.name == prefix + "fish_manifest.csv"
+        ]
+        upload_state: dict = {}
+        upload_marker = bucket.blob(prefix + "_upload.json")
+        if upload_marker.exists(client):
+            try:
+                upload_state = json.loads(upload_marker.download_as_text(encoding="utf-8"))
+            except Exception:
+                upload_state = {}
         uri = f"gs://{bucket_name}/{prefix}"
         audit = reports.get(uri.rstrip("/") + "/")
         canonical_batch = (audit or {}).get("batch_id") or prefix.rstrip("/").split("/")[-1]
@@ -60,6 +71,9 @@ def list_incoming_batches(bucket_name: str | None = None) -> list[dict]:
                 "source": source,
                 "audit": audit,
                 "promoted": raw_marker.exists(client),
+                "status": upload_state.get("status") or ("MANIFEST_READY" if manifests else "UPLOADED"),
+                "status_history": upload_state.get("status_history") or [],
+                "manifest_path": upload_state.get("manifest_path"),
             }
         )
     return result
@@ -80,7 +94,12 @@ def audit_with_species_catalog(
     needs-review and are never promoted into Ground Truth.
     """
     bucket_name = bucket_name or get_bucket_name()
+    manifest_info = ensure_incoming_manifest(incoming_prefix, bucket_name)
     report = audit_incoming_batch(incoming_prefix, batch_id, source, bucket_name)
+    report["manifest_normalized"] = bool(manifest_info.get("generated"))
+    report["manifest_status"] = manifest_info.get("status", "MANIFEST_READY")
+    report["manifest_path"] = manifest_info.get("manifest_path", "metadata/fish_manifest.csv")
+    report["manifest_rows"] = manifest_info.get("manifest_rows", report.get("manifest_rows"))
     ensure_target_species(db)
     accepted_names = set(species_names(db, include_candidates=True))
     client = storage.Client()

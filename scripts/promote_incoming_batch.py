@@ -4,8 +4,21 @@ import csv
 import io
 import json
 from datetime import datetime, timezone
+from pathlib import Path
+
+import sys
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from google.cloud import storage
+
+from app.services.manifest_normalizer import (
+    ManifestNormalizationError,
+    normalize_manifest_text,
+    validate_fish_manifest_text,
+)
 
 IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.webp')
 
@@ -42,12 +55,41 @@ def main():
     if not incoming:
         raise RuntimeError(f'no objects found under gs://{args.bucket}/{incoming_prefix}')
 
-    manifests = [b for b in incoming if b.name.endswith('/fish_manifest.csv') or b.name == incoming_prefix + 'fish_manifest.csv']
+    canonical_name = incoming_prefix.rstrip('/') + '/metadata/fish_manifest.csv'
+    manifests = [b for b in incoming if b.name == canonical_name]
+    if not manifests:
+        manifests = [b for b in incoming if b.name.endswith('/fish_manifest.csv') or b.name == incoming_prefix + 'fish_manifest.csv']
+    if not manifests:
+        sources = [
+            b for b in incoming
+            if b.name.endswith('/metadata/manifest.csv') or b.name.endswith('/manifest.csv')
+        ]
+        sources.sort(key=lambda b: (0 if b.name.endswith('/metadata/manifest.csv') else 1, len(b.name)))
+        if not sources:
+            raise ManifestNormalizationError('missing metadata/manifest.csv')
+        source = sources[0]
+        normalized, _ = normalize_manifest_text(
+            source.download_as_text(encoding='utf-8-sig'), source_name=source.name
+        )
+        output_name = incoming_prefix + 'metadata/fish_manifest.csv'
+        output = bucket.blob(output_name)
+        try:
+            output.upload_from_string(
+                normalized, content_type='text/csv; charset=utf-8', if_generation_match=0
+            )
+        except Exception:
+            if not output.exists(client):
+                raise
+        manifests = [output]
+        # Include the newly materialized contract file in the immutable copy
+        # below; otherwise the marker would point at an object never promoted.
+        incoming.append(output)
     if len(manifests) != 1:
         raise RuntimeError(f'expected exactly one fish_manifest.csv, found {len(manifests)}')
 
     manifest_blob = manifests[0]
     manifest_text = manifest_blob.download_as_text(encoding='utf-8-sig')
+    validate_fish_manifest_text(manifest_text, source_name=manifest_blob.name)
     rows = list(csv.DictReader(io.StringIO(manifest_text)))
     if not rows:
         raise RuntimeError('fish_manifest.csv is empty')
@@ -107,4 +149,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except ManifestNormalizationError as exc:
+        raise SystemExit(f'{exc.code}: {exc.reason}') from exc

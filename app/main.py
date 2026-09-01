@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from google.cloud import storage
 from pydantic import BaseModel, Field
@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.batch_console import audit_with_species_catalog, list_incoming_batches
+from app.batch_upload_api import ensure_incoming_manifest
 from app.db import SessionLocal, get_db, init_db
 from app.factory import DOWNLOAD_RETRY, get_bucket_name, promote_incoming_batch, sync_batch_registry
 from app.feedback_pipeline import materialize_feedback_batch
@@ -37,6 +38,7 @@ from app.data_policy import (
 )
 from app.models import Batch, DatasetVersion, ImageAsset, ReviewEvent
 from app.secure import install_access_guard
+from app.services.manifest_normalizer import ManifestNormalizationError
 
 REVIEW_VALUES = {"approved", "needs_review", "rejected", "hard_case", "pending"}
 TRUTH_VALUES = {
@@ -264,6 +266,8 @@ def batch_audit(payload: BatchAction, db: Session = Depends(get_db)):
             batch_id=payload.batch_id,
             source=payload.source,
         )
+    except ManifestNormalizationError as exc:
+        return JSONResponse(status_code=400, content=exc.as_dict())
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -271,7 +275,10 @@ def batch_audit(payload: BatchAction, db: Session = Depends(get_db)):
 @app.post("/api/batches/promote")
 def batch_promote(payload: BatchAction):
     try:
+        ensure_incoming_manifest(payload.incoming_prefix)
         return promote_incoming_batch(payload.incoming_prefix, payload.batch_id, payload.source)
+    except ManifestNormalizationError as exc:
+        return JSONResponse(status_code=400, content=exc.as_dict())
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

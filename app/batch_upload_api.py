@@ -11,13 +11,18 @@ from pathlib import PurePosixPath
 from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from google.cloud import storage
 from pydantic import BaseModel, Field
 from starlette.requests import Request
 
 from app.factory import IMAGE_EXTS, get_bucket_name
+from app.services.manifest_normalizer import (
+    ManifestNormalizationError,
+    normalize_manifest_text,
+    validate_fish_manifest_text,
+)
 
 router = APIRouter(tags=["batch-upload"])
 templates = Jinja2Templates(directory="app/templates")
@@ -106,10 +111,101 @@ def _source_manifest_blob(blobs: list[storage.Blob]) -> storage.Blob | None:
 
 
 def _existing_fish_manifest(blobs: list[storage.Blob]) -> storage.Blob | None:
+    canonical = [b for b in blobs if b.name.endswith("/metadata/fish_manifest.csv")]
+    if canonical:
+        return sorted(canonical, key=lambda b: (len(b.name), b.name))[0]
     candidates = [b for b in blobs if b.name.endswith("/fish_manifest.csv")]
     if len(candidates) > 1:
-        raise ValueError(f"检测到多个 fish_manifest.csv：{len(candidates)}")
+        raise ManifestNormalizationError(f"multiple fish_manifest.csv files found: {len(candidates)}")
     return candidates[0] if candidates else None
+
+
+def _download_manifest_text(blob: storage.Blob) -> str:
+    try:
+        return blob.download_as_text(encoding="utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ManifestNormalizationError("manifest is not valid UTF-8", source_path=blob.name) from exc
+
+
+def _ensure_manifest_ready(
+    client: storage.Client,
+    bucket: storage.Bucket,
+    *,
+    bucket_name: str,
+    incoming_prefix: str,
+    blobs: list[storage.Blob],
+) -> dict:
+    """Validate or materialize the canonical metadata/fish_manifest.csv in GCS."""
+
+    prefix = incoming_prefix.strip("/") + "/"
+    existing = _existing_fish_manifest(blobs)
+    if existing is not None:
+        manifest_text = _download_manifest_text(existing)
+        rows = validate_fish_manifest_text(manifest_text, source_name=existing.name)
+        return {
+            "status": "MANIFEST_READY",
+            "manifest_path": existing.name[len(prefix):] if existing.name.startswith(prefix) else existing.name,
+            "manifest_rows": rows,
+            "generated": False,
+        }
+
+    source = _source_manifest_blob(blobs)
+    if source is None:
+        raise ManifestNormalizationError("missing metadata/manifest.csv")
+    source_text = _download_manifest_text(source)
+    normalized, rows = normalize_manifest_text(source_text, source_name=source.name)
+    output_name = prefix + "metadata/fish_manifest.csv"
+    output = bucket.blob(output_name)
+    try:
+        output.upload_from_string(
+            normalized,
+            content_type="text/csv; charset=utf-8",
+            if_generation_match=0,
+        )
+    except Exception:
+        # A concurrent finalize may have created the canonical file. Never overwrite it;
+        # validate and reuse it if it is now present.
+        if not output.exists(client):
+            raise
+        rows = validate_fish_manifest_text(
+            _download_manifest_text(output),
+            source_name=output_name,
+        )
+        return {
+            "status": "MANIFEST_READY",
+            "manifest_path": "metadata/fish_manifest.csv",
+            "manifest_rows": rows,
+            "generated": False,
+        }
+    return {
+        "status": "MANIFEST_READY",
+        "manifest_path": "metadata/fish_manifest.csv",
+        "manifest_rows": rows,
+        "generated": True,
+    }
+
+
+def ensure_incoming_manifest(incoming_prefix: str, bucket_name: str | None = None) -> dict:
+    """Public Batch/Audit fallback that keeps GCS handling out of business logic."""
+
+    bucket_name = bucket_name or get_bucket_name()
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    prefix = incoming_prefix.strip("/") + "/"
+    blobs = [b for b in client.list_blobs(bucket_name, prefix=prefix) if not b.name.endswith("/")]
+    if not blobs:
+        raise ManifestNormalizationError("no objects under incoming batch")
+    return _ensure_manifest_ready(
+        client,
+        bucket,
+        bucket_name=bucket_name,
+        incoming_prefix=prefix,
+        blobs=blobs,
+    )
+
+
+def _manifest_error_response(exc: ManifestNormalizationError) -> JSONResponse:
+    return JSONResponse(status_code=400, content=exc.as_dict())
 
 
 def _finalize_upload(batch_id: str, source: str) -> dict:
@@ -125,20 +221,16 @@ def _finalize_upload(batch_id: str, source: str) -> dict:
     if not images:
         raise ValueError("没有发现 jpg/jpeg/png/webp 图片")
 
-    manifest_blob = _existing_fish_manifest(blobs)
-    generated_manifest = False
-    if manifest_blob is None:
-        source_manifest = _source_manifest_blob(blobs)
-        if source_manifest is None:
-            raise ValueError("缺少 metadata/manifest.csv（或 fish_manifest.csv）")
-        source_text = source_manifest.download_as_text(encoding="utf-8-sig")
-        fish_manifest, manifest_rows = _build_fish_manifest(source_text)
-        manifest_blob = bucket.blob(_prefix(batch_id) + "fish_manifest.csv")
-        manifest_blob.upload_from_string(fish_manifest, content_type="text/csv; charset=utf-8")
-        generated_manifest = True
-    else:
-        fish_manifest = manifest_blob.download_as_text(encoding="utf-8-sig")
-        _normalized, manifest_rows = _build_fish_manifest(fish_manifest)
+    manifest_info = _ensure_manifest_ready(
+        client,
+        bucket,
+        bucket_name=bucket_name,
+        incoming_prefix=_prefix(batch_id),
+        blobs=blobs,
+    )
+    generated_manifest = bool(manifest_info["generated"])
+    manifest_rows = int(manifest_info["manifest_rows"])
+    status_history = ["UPLOADED", "MANIFEST_READY", "READY_FOR_AUDIT"]
 
     marker = {
         "batch_id": batch_id,
@@ -146,6 +238,9 @@ def _finalize_upload(batch_id: str, source: str) -> dict:
         "image_count": len(images),
         "manifest_rows": manifest_rows,
         "generated_fish_manifest": generated_manifest,
+        "manifest_path": manifest_info["manifest_path"],
+        "status": "READY_FOR_AUDIT",
+        "status_history": status_history,
     }
     bucket.blob(_prefix(batch_id) + "_upload.json").upload_from_string(
         json.dumps(marker, ensure_ascii=False, indent=2),
@@ -160,6 +255,9 @@ def _finalize_upload(batch_id: str, source: str) -> dict:
         "image_count": len(images),
         "manifest_rows": manifest_rows,
         "generated_fish_manifest": generated_manifest,
+        "manifest_path": manifest_info["manifest_path"],
+        "manifest_status": manifest_info["status"],
+        "status_history": status_history,
         "status": "READY_FOR_AUDIT",
     }
 
@@ -214,6 +312,8 @@ async def upload_batch_file(
 def finalize_batch_upload(payload: UploadFinalizeRequest):
     try:
         return _finalize_upload(payload.batch_id, payload.source)
+    except ManifestNormalizationError as exc:
+        return _manifest_error_response(exc)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -265,6 +365,8 @@ async def upload_batch_dataset(
                     if_generation_match=0,
                 )
         return _finalize_upload(final_batch, source)
+    except ManifestNormalizationError as exc:
+        return _manifest_error_response(exc)
     except zipfile.BadZipFile as exc:
         raise HTTPException(status_code=400, detail="ZIP 文件损坏或格式不正确") from exc
     except Exception as exc:

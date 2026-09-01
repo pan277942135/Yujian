@@ -5,16 +5,29 @@ import io
 import json
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
+from pathlib import Path
 from pathlib import PurePosixPath
+
+import sys
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from google.api_core.retry import Retry
 from google.cloud import storage
+from app.services.manifest_normalizer import (
+    ManifestNormalizationError,
+    normalize_manifest_text,
+    validate_fish_manifest_text,
+)
 
 IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp'}
 TARGET_SPECIES = {
     '草鱼', '鳙鱼', '白鲢', '鲤鱼', '鲫鱼', '加州鲈', '黑鱼', '黄骨鱼', '青鱼'
 }
-REQUIRED_COLUMNS = {'image_id', 'file_name', 'claimed_species'}
+REQUIRED_COLUMNS = {'image_id', 'claimed_species'}
+IMAGE_PATH_COLUMNS = ('image_path', 'file_name', 'filename', 'image_name')
 DOWNLOAD_RETRY = Retry(initial=1.0, maximum=20.0, multiplier=2.0, deadline=600.0)
 
 
@@ -28,12 +41,55 @@ def load_manifest(blob):
     reader = csv.DictReader(io.StringIO(text))
     if not reader.fieldnames:
         raise RuntimeError('manifest has no header')
-    missing = REQUIRED_COLUMNS - set(reader.fieldnames)
+    fields = set(reader.fieldnames)
+    missing = REQUIRED_COLUMNS - fields
+    if not fields.intersection(IMAGE_PATH_COLUMNS):
+        missing.add('image_path/file_name')
     if missing:
         raise RuntimeError(f'manifest missing required columns: {sorted(missing)}')
     rows = list(reader)
     malformed = sum(1 for r in rows if None in r)
     return reader.fieldnames, rows, malformed
+
+
+def select_manifests(blobs, prefix):
+    canonical_name = prefix.rstrip('/') + '/metadata/fish_manifest.csv'
+    canonical = [b for b in blobs if b.name == canonical_name]
+    if canonical:
+        return canonical
+    return [b for b in blobs if b.name.endswith('/fish_manifest.csv') or b.name == prefix + 'fish_manifest.csv']
+
+
+def ensure_manifest(blobs, bucket, prefix):
+    manifests = select_manifests(blobs, prefix)
+    if manifests:
+        validate_fish_manifest_text(
+            manifests[0].download_as_text(encoding='utf-8-sig'),
+            source_name=manifests[0].name,
+        )
+        return manifests, False
+
+    sources = [
+        b for b in blobs
+        if b.name.endswith('/metadata/manifest.csv') or b.name.endswith('/manifest.csv')
+    ]
+    sources.sort(key=lambda b: (0 if b.name.endswith('/metadata/manifest.csv') else 1, len(b.name)))
+    if not sources:
+        raise ManifestNormalizationError('missing metadata/manifest.csv')
+    source = sources[0]
+    normalized, rows = normalize_manifest_text(
+        source.download_as_text(encoding='utf-8-sig'), source_name=source.name
+    )
+    output_name = prefix + 'metadata/fish_manifest.csv'
+    output = bucket.blob(output_name)
+    try:
+        output.upload_from_string(
+            normalized, content_type='text/csv; charset=utf-8', if_generation_match=0
+        )
+    except Exception:
+        if not output.exists():
+            raise
+    return [output], True
 
 
 def main():
@@ -53,7 +109,10 @@ def main():
     if not blobs:
         raise RuntimeError(f'no objects under gs://{args.bucket}/{prefix}')
 
-    manifests = [b for b in blobs if b.name.endswith('/fish_manifest.csv') or b.name == prefix + 'fish_manifest.csv']
+    try:
+        manifests, manifest_normalized = ensure_manifest(blobs, bucket, prefix)
+    except ManifestNormalizationError as exc:
+        raise SystemExit(f'{exc.code}: {exc.reason}') from exc
     if len(manifests) != 1:
         raise RuntimeError(f'expected exactly one fish_manifest.csv, found {len(manifests)}')
 
@@ -66,7 +125,10 @@ def main():
         basename_index[PurePosixPath(rel).name].append(blob)
 
     id_counts = Counter((r.get('image_id') or '').strip() for r in rows if (r.get('image_id') or '').strip())
-    file_counts = Counter(norm_path(r.get('file_name')) for r in rows if (r.get('file_name') or '').strip())
+    def image_value(row):
+        return next((row.get(key) for key in IMAGE_PATH_COLUMNS if (row.get(key) or '').strip()), '')
+
+    file_counts = Counter(norm_path(image_value(r)) for r in rows if image_value(r).strip())
     url_counts = Counter((r.get('source_url') or '').strip() for r in rows if (r.get('source_url') or '').strip())
 
     linked_blob_names = set()
@@ -75,7 +137,7 @@ def main():
 
     for idx, row in enumerate(rows, start=1):
         image_id = (row.get('image_id') or '').strip()
-        file_name = norm_path(row.get('file_name'))
+        file_name = norm_path(image_value(row))
         species = (row.get('claimed_species') or '').strip()
         source_url = (row.get('source_url') or '').strip()
         reasons = []
@@ -163,6 +225,8 @@ def main():
         'status_counts': dict(status_counts),
         'species_counts': dict(species_counts),
         'orphan_images': [b.name[len(prefix):] for b in orphan_blobs],
+        'manifest_normalized': manifest_normalized,
+        'manifest_path': manifests[0].name[len(prefix):] if manifests[0].name.startswith(prefix) else manifests[0].name,
     }
 
     print(json.dumps(report, ensure_ascii=False, indent=2))

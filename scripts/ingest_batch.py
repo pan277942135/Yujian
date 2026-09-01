@@ -9,7 +9,17 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Keep the documented ``python scripts/ingest_batch.py`` invocation importable
+# when the current working directory is not the repository root.
+import sys
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from google.cloud import storage
+
+from app.services.manifest_normalizer import ManifestNormalizationError, normalize_manifest
 
 
 def sha256(path: Path) -> str:
@@ -67,7 +77,11 @@ def main():
         raise SystemExit('batch-id must start with BATCH_')
 
     root = unpack_input(Path(args.input).resolve())
-    manifest = find_manifest(root)
+    try:
+        normalized = normalize_manifest(root)
+    except ManifestNormalizationError as exc:
+        raise SystemExit(f"{exc.code}: {exc.reason}") from exc
+    manifest = normalized.output_path
     rows = read_manifest(manifest)
     images = collect_images(root)
     if not images:

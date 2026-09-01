@@ -20,7 +20,8 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 TARGET_SPECIES = ["草鱼", "鳙鱼", "白鲢", "鲤鱼", "鲫鱼", "加州鲈", "黑鱼", "黄骨鱼", "青鱼"]
 TARGET_SPECIES_SET = set(TARGET_SPECIES)
 VALID_REVIEW = {"approved", "needs_review", "rejected", "hard_case", "pending"}
-REQUIRED_COLUMNS = {"image_id", "file_name", "claimed_species"}
+REQUIRED_COLUMNS = {"image_id", "claimed_species"}
+IMAGE_PATH_COLUMNS = ("image_path", "file_name", "filename", "image_name")
 DOWNLOAD_RETRY = Retry(initial=1.0, maximum=20.0, multiplier=2.0, deadline=600.0)
 
 
@@ -50,12 +51,35 @@ def _manifest_rows(blob: storage.Blob) -> tuple[list[str], list[dict[str, str]],
     reader = csv.DictReader(io.StringIO(text))
     if not reader.fieldnames:
         raise RuntimeError("manifest has no header")
-    missing = REQUIRED_COLUMNS - set(reader.fieldnames)
+    fieldnames = set(reader.fieldnames)
+    missing = REQUIRED_COLUMNS - fieldnames
+    if not (fieldnames & set(IMAGE_PATH_COLUMNS)):
+        missing.add("image_path/file_name")
     if missing:
         raise RuntimeError(f"manifest missing required columns: {sorted(missing)}")
     rows = list(reader)
     malformed = sum(1 for row in rows if None in row)
     return list(reader.fieldnames), rows, malformed
+
+
+def _fish_manifest_blobs(blobs: list[storage.Blob], prefix: str) -> list[storage.Blob]:
+    """Select the canonical manifest, falling back to one legacy location.
+
+    Normalized uploads live at ``metadata/fish_manifest.csv``. Older batches may
+    still contain a root-level (or nested) ``fish_manifest.csv``. If both are
+    present, the canonical file is authoritative so a historical duplicate does
+    not make audit/promote fail with an ambiguous-manifest error.
+    """
+
+    canonical_name = prefix.rstrip("/") + "/metadata/fish_manifest.csv"
+    canonical = [blob for blob in blobs if blob.name == canonical_name]
+    if canonical:
+        return canonical
+    return [
+        blob
+        for blob in blobs
+        if blob.name.endswith("/fish_manifest.csv") or blob.name == prefix + "fish_manifest.csv"
+    ]
 
 
 def _audit_reports(client: storage.Client, bucket_name: str) -> dict[str, dict]:
@@ -87,7 +111,10 @@ def list_incoming_batches(bucket_name: str | None = None) -> list[dict]:
     for prefix in sorted(prefixes):
         blobs = [b for b in client.list_blobs(bucket_name, prefix=prefix) if not b.name.endswith("/")]
         images = [b for b in blobs if PurePosixPath(b.name).suffix.lower() in IMAGE_EXTS]
-        manifests = [b for b in blobs if b.name.endswith("/fish_manifest.csv") or b.name == prefix + "fish_manifest.csv"]
+        canonical_manifest = [b for b in blobs if b.name == prefix + "metadata/fish_manifest.csv"]
+        manifests = canonical_manifest or [
+            b for b in blobs if b.name.endswith("/fish_manifest.csv") or b.name == prefix + "fish_manifest.csv"
+        ]
         uri = f"gs://{bucket_name}/{prefix}"
         audit = reports.get(uri.rstrip("/") + "/")
         canonical_batch = (audit or {}).get("batch_id") or prefix.rstrip("/").split("/")[-1]
@@ -125,7 +152,7 @@ def audit_incoming_batch(
     blobs = [b for b in client.list_blobs(bucket_name, prefix=prefix) if not b.name.endswith("/")]
     if not blobs:
         raise RuntimeError(f"no objects under gs://{bucket_name}/{prefix}")
-    manifests = [b for b in blobs if b.name.endswith("/fish_manifest.csv") or b.name == prefix + "fish_manifest.csv"]
+    manifests = _fish_manifest_blobs(blobs, prefix)
     if len(manifests) != 1:
         raise RuntimeError(f"expected exactly one fish_manifest.csv, found {len(manifests)}")
 
@@ -137,7 +164,11 @@ def audit_incoming_batch(
         basename_index[PurePosixPath(rel).name].append(blob)
 
     id_counts = Counter((r.get("image_id") or "").strip() for r in rows if (r.get("image_id") or "").strip())
-    file_counts = Counter(norm_path(r.get("file_name")) for r in rows if (r.get("file_name") or "").strip())
+    file_counts = Counter(
+        norm_path(r.get("image_path") or r.get("file_name") or r.get("filename") or r.get("image_name"))
+        for r in rows
+        if (r.get("image_path") or r.get("file_name") or r.get("filename") or r.get("image_name") or "").strip()
+    )
     url_counts = Counter((r.get("source_url") or "").strip() for r in rows if (r.get("source_url") or "").strip())
 
     linked_blob_names: set[str] = set()
@@ -146,7 +177,9 @@ def audit_incoming_batch(
 
     for idx, row in enumerate(rows, start=1):
         image_id = (row.get("image_id") or "").strip()
-        file_name = norm_path(row.get("file_name"))
+        file_name = norm_path(
+            row.get("image_path") or row.get("file_name") or row.get("filename") or row.get("image_name")
+        )
         species = (row.get("claimed_species") or "").strip()
         source_url = (row.get("source_url") or "").strip()
         reasons: list[str] = []
@@ -283,7 +316,7 @@ def promote_incoming_batch(
     incoming = [b for b in client.list_blobs(bucket_name, prefix=prefix) if not b.name.endswith("/")]
     if not incoming:
         raise RuntimeError(f"no objects found under gs://{bucket_name}/{prefix}")
-    manifests = [b for b in incoming if b.name.endswith("/fish_manifest.csv") or b.name == prefix + "fish_manifest.csv"]
+    manifests = _fish_manifest_blobs(incoming, prefix)
     if len(manifests) != 1:
         raise RuntimeError(f"expected exactly one fish_manifest.csv, found {len(manifests)}")
     _, rows, malformed = _manifest_rows(manifests[0])
@@ -387,7 +420,12 @@ def sync_batch_registry(db: Session, batch_id: str, bucket_name: str | None = No
 
     inserted = updated = missing = 0
     for row in rows:
-        file_name = norm_path(row.get("file_name") or row.get("filename"))
+        file_name = norm_path(
+            row.get("image_path")
+            or row.get("file_name")
+            or row.get("filename")
+            or row.get("image_name")
+        )
         relative_path = norm_path(row.get("relative_path") or row.get("file_path") or row.get("path"))
         object_name = None
         for rel in (relative_path, file_name):
@@ -436,7 +474,7 @@ def sync_batch_registry(db: Session, batch_id: str, bucket_name: str | None = No
             "object_name": object_name,
             "gcs_uri": f"gs://{bucket_name}/{object_name}",
             "source_url": row.get("source_url") or row.get("url"),
-            "source_platform": row.get("source_platform") or row.get("platform"),
+            "source_platform": row.get("source_platform") or row.get("platform") or row.get("source"),
             "claimed_species": claimed_species,
             "truth_species": truth_species,
             "scene": row.get("scene"),

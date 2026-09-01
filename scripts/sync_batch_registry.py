@@ -91,7 +91,7 @@ def main():
             batch.raw_uri = batch_doc["raw_uri"]
 
         for index, row in enumerate(rows, start=1):
-            file_name = first(row, "file_name", "filename")
+            file_name = first(row, "image_path", "file_name", "filename", "image_name")
             rel = norm_path(first(row, "relative_path", "file_path", "path"))
             object_name = None
             if rel:
@@ -124,7 +124,7 @@ def main():
                 object_name=object_name,
                 gcs_uri=f"gs://{args.bucket}/{object_name}",
                 source_url=first(row, "source_url", "url"),
-                source_platform=first(row, "source_platform", "platform"),
+                source_platform=first(row, "source_platform", "platform", "source"),
                 claimed_species=first(row, "claimed_species", "species", "class_name"),
                 scene=first(row, "scene"),
                 lighting=first(row, "lighting"),
