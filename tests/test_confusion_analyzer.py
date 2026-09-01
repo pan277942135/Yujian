@@ -51,8 +51,8 @@ def test_sample_level_evaluation_and_priority_score_are_supported(tmp_path):
     report = ConfusionAnalyzer(species_importance={"grass_carp": 2})(path)
     pair = next(row for row in report["top_confusions"] if row["true_species"] == "grass_carp")
     assert pair["error_count"] == 2
-    assert pair["error_rate"] == 2 / 3
-    assert pair["priority"] == "P1"
+    assert pair["error_rate"] == round(2 / 3, 6)
+    assert pair["priority"] == "P0"
     assert pair["priority_score"] == round(2 * (2 / 3) * 2, 6)
 
 
