@@ -8,7 +8,8 @@ from jinja2 import BaseLoader
 
 _NAV_ITEMS = [
     ("/", "总览", "root"),
-    ("/batches", "数据批次", "prefix"),
+    ("/batches", "数据批次", "exact"),
+    ("/batches/upload", "数据导入", "prefix"),
     ("/review/bulk", "快速审核", "prefix"),
     ("/review", "单张审核", "exact"),
     ("/species", "鱼种管理", "prefix"),
