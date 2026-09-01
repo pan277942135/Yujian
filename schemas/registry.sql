@@ -155,6 +155,104 @@ CREATE TABLE IF NOT EXISTS inference_assets (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS fish_species (
+  id TEXT PRIMARY KEY,
+  name_cn TEXT NOT NULL UNIQUE,
+  alias TEXT NOT NULL DEFAULT '[]',
+  scientific_name TEXT,
+  category TEXT NOT NULL,
+  family TEXT,
+  genus TEXT,
+  summary TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'DRAFT' CHECK(status IN ('ACTIVE', 'DRAFT')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(id) REFERENCES species_catalog(species_key) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS fish_gallery (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  species_id TEXT NOT NULL,
+  type TEXT NOT NULL CHECK(type IN ('standard', 'side', 'top', 'catch', 'environment', 'action')),
+  url TEXT NOT NULL,
+  title TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  object_name TEXT,
+  content_type TEXT,
+  size_bytes INTEGER,
+  sha256 TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(species_id, sort_order),
+  UNIQUE(species_id, url),
+  FOREIGN KEY(species_id) REFERENCES fish_species(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS fish_profile (
+  species_id TEXT PRIMARY KEY,
+  body_shape TEXT,
+  features TEXT NOT NULL DEFAULT '[]',
+  habitat TEXT NOT NULL DEFAULT '[]',
+  food TEXT,
+  season TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(species_id) REFERENCES fish_species(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS fish_fishing (
+  species_id TEXT PRIMARY KEY,
+  water_layer TEXT,
+  season TEXT NOT NULL DEFAULT '[]',
+  bait TEXT NOT NULL DEFAULT '[]',
+  method TEXT NOT NULL DEFAULT '[]',
+  summary TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(species_id) REFERENCES fish_species(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS fish_video (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  species_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  type TEXT NOT NULL CHECK(type IN ('INTRO', 'HOW_TO_FISH', 'REAL_CATCH', 'EQUIPMENT')),
+  cover_url TEXT,
+  video_url TEXT NOT NULL,
+  duration INTEGER NOT NULL,
+  tags TEXT NOT NULL DEFAULT '[]',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(species_id, video_url),
+  FOREIGN KEY(species_id) REFERENCES fish_species(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS fish_similarity (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  species_id TEXT NOT NULL,
+  similar_species_id TEXT NOT NULL,
+  difference TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK(species_id <> similar_species_id),
+  UNIQUE(species_id, similar_species_id),
+  FOREIGN KEY(species_id) REFERENCES fish_species(id) ON DELETE CASCADE,
+  FOREIGN KEY(similar_species_id) REFERENCES fish_species(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS fish_ranking (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  species_id TEXT NOT NULL,
+  type TEXT NOT NULL CHECK(type IN ('MAX_WEIGHT', 'MAX_LENGTH', 'MOST_CATCHES')),
+  value REAL NOT NULL,
+  location TEXT,
+  user_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(species_id) REFERENCES fish_species(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS training_runs (
   run_id TEXT PRIMARY KEY,
   dataset_version TEXT NOT NULL,
@@ -228,6 +326,15 @@ CREATE INDEX IF NOT EXISTS idx_fingerprint_group ON image_fingerprints(duplicate
 CREATE INDEX IF NOT EXISTS idx_feedback_pipeline ON feedback_events(pipeline_status);
 CREATE INDEX IF NOT EXISTS idx_feedback_batch ON feedback_events(materialized_batch_id);
 CREATE INDEX IF NOT EXISTS idx_inference_assets_status ON inference_assets(status);
+CREATE INDEX IF NOT EXISTS idx_fish_species_name ON fish_species(name_cn);
+CREATE INDEX IF NOT EXISTS idx_fish_species_status ON fish_species(status);
+CREATE INDEX IF NOT EXISTS idx_fish_gallery_species ON fish_gallery(species_id);
+CREATE INDEX IF NOT EXISTS idx_fish_video_species ON fish_video(species_id);
+CREATE INDEX IF NOT EXISTS idx_fish_similarity_species ON fish_similarity(species_id);
+CREATE INDEX IF NOT EXISTS idx_fish_similarity_target ON fish_similarity(similar_species_id);
+CREATE INDEX IF NOT EXISTS idx_fish_ranking_species ON fish_ranking(species_id);
+CREATE INDEX IF NOT EXISTS idx_fish_ranking_type ON fish_ranking(type);
+CREATE INDEX IF NOT EXISTS idx_fish_ranking_user ON fish_ranking(user_id);
 CREATE INDEX IF NOT EXISTS idx_runs_dataset ON training_runs(dataset_version);
 CREATE INDEX IF NOT EXISTS idx_models_status ON models(status);
 CREATE INDEX IF NOT EXISTS idx_error_pool_status ON error_pool(status);
