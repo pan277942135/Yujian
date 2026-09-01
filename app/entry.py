@@ -12,6 +12,7 @@ from app.dataset_api import router as dataset_freeze_router
 from app.training_api import router as training_router, templates as training_templates
 from app.inference_api import router as inference_router, templates as inference_templates
 from app.feedback_ingest_api import router as feedback_ingest_router
+from app.inference_upload_api import router as inference_upload_router
 from app.batch_upload_api import router as batch_upload_router, templates as batch_upload_templates
 from app.intelligence_api import router as intelligence_router, templates as intelligence_templates
 from app.p0_automation import install_feedback_automation, router as automation_router
@@ -53,6 +54,7 @@ def deployment_health() -> dict:
         "revision": os.getenv("K_REVISION", "unknown"),
         "service": os.getenv("K_SERVICE", "unknown"),
         "feedback_ingest_path": "/api/feedback/ingest",
+        "inference_upload_path": "/api/v1/inference/upload",
         "feedback_ingest_key_configured": feedback_ingest_key_configured,
     }
 
@@ -80,6 +82,7 @@ app.include_router(dataset_freeze_router)
 app.include_router(training_router)
 app.include_router(inference_router)
 app.include_router(feedback_ingest_router)
+app.include_router(inference_upload_router)
 app.include_router(batch_upload_router)
 app.include_router(automation_router)
 app.include_router(intelligence_router)

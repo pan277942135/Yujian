@@ -130,6 +130,30 @@ class FeedbackEvent(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
 
 
+class InferenceAsset(Base):
+    """Immutable App inference asset awaiting the existing human review gate."""
+
+    __tablename__ = "inference_assets"
+
+    image_id = Column(String(256), primary_key=True)
+    source = Column(String(64), nullable=False, default="android_detector")
+    status = Column(String(32), nullable=False, default="RECEIVED", index=True)
+    record_gcs_uri = Column(Text, nullable=False)
+    image_gcs_uri = Column(Text, nullable=False)
+    crop_gcs_uri = Column(Text)
+    record_sha256 = Column(String(64), nullable=False)
+    image_sha256 = Column(String(64), nullable=False)
+    crop_sha256 = Column(String(64))
+    detector_version = Column(String(128), index=True)
+    classifier_version = Column(String(128), index=True)
+    accepted_bbox_json = Column(Text)
+    accepted_species = Column(String(128), index=True)
+    reviewed_by = Column(String(256))
+    reviewed_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
 class TrainingRun(Base):
     __tablename__ = "training_runs"
 
@@ -144,6 +168,10 @@ class TrainingRun(Base):
     status = Column(String(64), nullable=False)
     artifact_uri = Column(Text)
     metrics_uri = Column(Text)
+    pipeline_type = Column(String(64), nullable=False, default="WHOLE_IMAGE_V1")
+    detector_version = Column(String(128))
+    crop_version = Column(String(128))
+    classifier_version = Column(String(128))
 
 
 class ModelVersion(Base):
@@ -156,6 +184,11 @@ class ModelVersion(Base):
     metrics_uri = Column(Text)
     status = Column(String(64), nullable=False)
     notes = Column(Text)
+    pipeline_type = Column(String(64), nullable=False, default="WHOLE_IMAGE_V1")
+    detector_version = Column(String(128))
+    crop_version = Column(String(128))
+    classifier_version = Column(String(128))
+    dataset_version = Column(String(128))
 
 
 class Evaluation(Base):

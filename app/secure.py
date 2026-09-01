@@ -7,7 +7,11 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 COOKIE_NAME = "yujian_console"
 PUBLIC_PATHS = {"/health", "/health/deploy", "/health/detector", "/login"}
-FEEDBACK_INGEST_PATHS = {"/api/feedback", "/api/feedback/ingest"}
+FEEDBACK_INGEST_PATHS = {
+    "/api/feedback",
+    "/api/feedback/ingest",
+    "/api/v1/inference/upload",
+}
 
 
 def _configured_key() -> str:
