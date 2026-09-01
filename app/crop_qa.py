@@ -54,7 +54,7 @@ def _parse_bbox(value: Any) -> list[float] | None:
 def _record_document(asset: InferenceAsset, storage_client: Any = None) -> dict[str, Any]:
     """Best-effort metadata read; QA remains useful when the record is offline."""
 
-    uri = str(asset.record_gcs_uri or "")
+    uri = str(getattr(asset, "record_gcs_uri", "") or "")
     if not uri:
         return {}
     try:
@@ -75,26 +75,28 @@ def _record_document(asset: InferenceAsset, storage_client: Any = None) -> dict[
 def crop_qa_item(asset: InferenceAsset, *, storage_client: Any = None) -> dict[str, Any] | None:
     """Serialize one accepted inference asset for the QA page/API."""
 
-    if str(asset.status or "").upper() not in REVIEWED_STATUSES:
+    status = str(getattr(asset, "status", "") or "").upper()
+    if status not in REVIEWED_STATUSES:
         return None
-    bbox = _parse_bbox(asset.accepted_bbox_json)
+    bbox = _parse_bbox(getattr(asset, "accepted_bbox_json", None))
     if bbox is None:
         # An accepted state without a valid human box is not QA/training-ready.
         return None
     document = _record_document(asset, storage_client)
     crop = document.get("crop") if isinstance(document.get("crop"), dict) else {}
-    source_image_id = str(crop.get("source_image_id") or document.get("image_id") or asset.image_id)
-    crop_uri = str(asset.crop_gcs_uri or "").strip() or None
+    image_id = str(getattr(asset, "image_id", "") or "")
+    source_image_id = str(crop.get("source_image_id") or document.get("image_id") or image_id)
+    crop_uri = str(getattr(asset, "crop_gcs_uri", "") or "").strip() or None
     return {
-        "image_id": asset.image_id,
+        "image_id": image_id,
         "source_image_id": source_image_id,
-        "status": str(asset.status).upper(),
-        "accepted_species": asset.accepted_species,
+        "status": status,
+        "accepted_species": getattr(asset, "accepted_species", None),
         "accepted_bbox": bbox,
         "bbox_source": "human_review",
         "crop_available": bool(crop_uri),
-        "original_url": f"/media/inference/{quote(asset.image_id, safe='')}/original",
-        "crop_url": f"/media/inference/{quote(asset.image_id, safe='')}/crop" if crop_uri else None,
+        "original_url": f"/media/inference/{quote(image_id, safe='')}/original",
+        "crop_url": f"/media/inference/{quote(image_id, safe='')}/crop" if crop_uri else None,
         "crop_metadata": {
             "source_image_id": source_image_id,
             "crop_gcs_uri": crop_uri,

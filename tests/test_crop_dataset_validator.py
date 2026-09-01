@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from PIL import Image
 
 from trainer.build_reviewed_datasets import build_crop_dataset
-from trainer.crop_dataset_validator import validate_crop_dataset, validate_crop_rows
+from trainer.crop_dataset_validator import validate_crop_dataset, validate_crop_manifest, validate_crop_rows
 
 
 def _jpeg_bytes() -> bytes:
@@ -71,6 +71,24 @@ def test_validator_rejects_original_input_and_missing_crop(tmp_path):
     assert {"ORIGINAL_INPUT_FORBIDDEN", "CROP_NOT_FOUND"} <= codes
 
 
+def test_validator_prefers_crop_reference_and_rejects_source_reference(tmp_path):
+    original = tmp_path / "original.jpg"
+    crop = tmp_path / "crop.jpg"
+    original.write_bytes(_jpeg_bytes())
+    crop.write_bytes(_jpeg_bytes())
+    row = _row(path="original.jpg")
+    row.update({"crop_path": "crop.jpg", "source_image_path": "original.jpg"})
+
+    report = validate_crop_rows([row], tmp_path)
+
+    assert report["valid"] is True
+    assert report["checks"]["crop_exists"] is True
+
+    row["crop_path"] = "original.jpg"
+    report = validate_crop_rows([row], tmp_path)
+    assert any(error["code"] == "ORIGINAL_INPUT_FORBIDDEN" for error in report["errors"])
+
+
 def test_crop_builder_writes_provenance_metadata_and_validation(tmp_path):
     def loader(_uri: str) -> bytes:
         return _jpeg_bytes()
@@ -97,6 +115,7 @@ def test_crop_builder_writes_provenance_metadata_and_validation(tmp_path):
     assert int(row["crop_width"]) > 0
     assert int(row["crop_height"]) > 0
     assert validate_crop_dataset(root)["valid"] is True
+    assert validate_crop_manifest(manifest_path)["valid"] is True
     saved_report = json.loads((root / "metadata" / "report.json").read_text(encoding="utf-8"))
     assert saved_report["safety"]["candidate_bbox_used"] is False
 

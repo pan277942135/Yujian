@@ -113,9 +113,12 @@ def validate_crop_rows(
         else:
             seen[image_id] = index
 
-        species = _first(row, "species_key", "accepted_species")
+        # ``accepted_species`` is the review-facing name; generated manifests
+        # use ``species_key``.  ``species`` is accepted for older exported
+        # manifests, but only after the explicit reviewed fields.
+        species = _first(row, "accepted_species", "species_key", "species")
         if not _text(species):
-            add(index, image_id, "MISSING_SPECIES", "species_key or accepted_species is required")
+            add(index, image_id, "MISSING_SPECIES", "accepted_species, species_key, or species is required")
 
         if require_bbox:
             raw_bbox = _first(row, "accepted_bbox", "accepted_bbox_json")
@@ -131,11 +134,20 @@ def validate_crop_rows(
         if pipeline_type and pipeline_type != CROP_PIPELINE_TYPE:
             add(index, image_id, "PIPELINE_TYPE_INVALID", f"pipeline_type must be {CROP_PIPELINE_TYPE}")
 
-        crop_ref = _first(row, "local_path", "crop_path", "file_path", "crop_gcs_uri", "gcs_uri")
+        # Crop-specific paths must win over generic paths.  This prevents a
+        # manifest containing both ``local_path`` (original) and ``crop_path``
+        # (crop) from silently training on the original image.
+        crop_ref = _first(row, "crop_gcs_uri", "crop_path", "local_path", "file_path", "gcs_uri")
         if not _text(crop_ref):
             add(index, image_id, "MISSING_CROP", "crop path or URI is required")
         else:
             crop_value = _text(crop_ref)
+            source_refs = {
+                _text(row.get(key))
+                for key in ("source_image_gcs_uri", "source_image_path", "original_gcs_uri", "original_path", "image_gcs_uri", "image_path")
+            }
+            if crop_value in source_refs:
+                add(index, image_id, "ORIGINAL_INPUT_FORBIDDEN", "crop reference must not equal the source/original image")
             if crop_value.startswith("gs://"):
                 if image_exists is not None:
                     try:
@@ -217,10 +229,25 @@ def validate_crop_dataset(
     )
 
 
-def validate_crop_manifest(*args: Any, **kwargs: Any) -> dict[str, Any]:
-    """Backward-compatible alias for callers that name the CSV explicitly."""
+def validate_crop_manifest(
+    manifest: str | Path | Iterable[Mapping[str, Any]],
+    dataset_root: str | Path | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Validate either a crop CSV path/root or already-loaded manifest rows.
 
-    return validate_crop_dataset(*args, **kwargs)
+    Older workers used ``validate_crop_manifest(rows, root)`` while the
+    dataset-oriented API uses ``validate_crop_dataset(root, manifest_path)``.
+    Keeping both forms avoids forcing callers to rewrite their import layer.
+    """
+
+    if isinstance(manifest, (str, Path)):
+        path = Path(manifest)
+        if path.suffix.lower() == ".csv":
+            root = dataset_root or path.parent.parent
+            return validate_crop_dataset(root, path, **kwargs)
+        return validate_crop_dataset(path, dataset_root, **kwargs)
+    return validate_crop_rows(manifest, dataset_root, **kwargs)
 
 
 def raise_if_invalid(report: Mapping[str, Any]) -> dict[str, Any]:
