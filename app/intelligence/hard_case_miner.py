@@ -59,6 +59,15 @@ def pair_slug(true_species: str, pred_species: str) -> str:
     return f"{_safe_part(true_species)}_vs_{_safe_part(pred_species)}"
 
 
+def default_error_group(true_species: str, pred_species: str) -> str:
+    carp_family = {"grass_carp", "common_carp", "black_carp", "bighead_carp", "silver_carp"}
+    if true_species in carp_family and pred_species in carp_family:
+        return "carp_family_boundary"
+    if "whitefish" in {true_species.lower(), pred_species.lower()}:
+        return "whitefish_multi_class"
+    return pair_slug(true_species, pred_species)
+
+
 def _report_pairs(report: Any) -> dict[tuple[str, str], Mapping[str, Any]]:
     document = _load_json(report)
     if not isinstance(document, Mapping):
@@ -207,7 +216,7 @@ def mine_hard_cases(
             "true_species": truth,
             "pred_species": pred,
             "confidence": _confidence(sample),
-            "error_group": _text(_first(sample, ("error_group", "hard_pair_type", "pair_type"))) or directory,
+            "error_group": _text(_first(sample, ("error_group", "hard_pair_type", "pair_type"))) or default_error_group(truth, pred),
             "model_version": model_version,
             "hard_case_type": _text(_first(sample, ("hard_case_type", "case_type"))) or "confusion_pair",
         }
@@ -255,6 +264,7 @@ __all__ = [
     "HARD_CASE_FIELDS",
     "HardCaseMiner",
     "build_hard_case_set",
+    "default_error_group",
     "mine_hard_cases",
     "pair_slug",
 ]

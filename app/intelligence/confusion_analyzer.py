@@ -27,7 +27,7 @@ _PRED_KEYS = (
     "pred",
     "model_prediction",
 )
-_SAMPLE_KEYS = ("samples", "evaluation_samples", "predictions", "results", "items")
+_SAMPLE_KEYS = ("samples", "evaluation_samples", "predictions", "results", "items", "errors")
 _MATRIX_KEYS = ("confusion_matrix", "matrix")
 
 
@@ -35,7 +35,9 @@ def utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _load_document(source: Mapping[str, Any] | str | Path) -> tuple[dict[str, Any], str | None]:
+def _load_document(source: Mapping[str, Any] | list[Any] | str | Path) -> tuple[dict[str, Any], str | None]:
+    if isinstance(source, list):
+        return {"samples": source}, None
     if isinstance(source, Mapping):
         return dict(source), None
     path = Path(source)
@@ -274,6 +276,14 @@ def analyze_confusion(*args: Any, **kwargs: Any) -> dict[str, Any]:
     return build_confusion_report(*args, **kwargs)
 
 
+def analyze_confusion_matrix(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    return build_confusion_report(*args, **kwargs)
+
+
+def generate_confusion_report(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    return build_confusion_report(*args, **kwargs)
+
+
 def write_confusion_report(
     evaluation: Mapping[str, Any] | str | Path,
     output_path: str | Path,
@@ -302,6 +312,8 @@ class ConfusionAnalyzer:
 __all__ = [
     "ConfusionAnalyzer",
     "analyze_confusion",
+    "analyze_confusion_matrix",
     "build_confusion_report",
+    "generate_confusion_report",
     "write_confusion_report",
 ]

@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
 os.environ.setdefault("REGISTRY_DB_URL", "sqlite:///:memory:")
 
 from app import batch_upload_api, bulk_review, inference_api, inspect, main, training_api  # noqa: E402
+from app import intelligence_api  # noqa: E402
 from app.entry import app  # noqa: F401,E402
 from app.unified_nav import UnifiedNavLoader  # noqa: E402
 
@@ -27,6 +28,7 @@ EXPECTED_LINKS = [
     ('href="/datasets"', "数据集"),
     ('href="/training"', "模型训练"),
     ('href="/inference"', "模型实测"),
+    ('href="/intelligence"', "模型智能分析"),
 ]
 
 TEMPLATE_ENGINES = [
@@ -36,6 +38,7 @@ TEMPLATE_ENGINES = [
     training_api.templates,
     inference_api.templates,
     batch_upload_api.templates,
+    intelligence_api.templates,
 ]
 
 TEMPLATES = [
@@ -50,6 +53,7 @@ TEMPLATES = [
     "training.html",
     "inference.html",
     "inspect.html",
+    "intelligence.html",
 ]
 
 

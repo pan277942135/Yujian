@@ -1,0 +1,16 @@
+{
+  "targets": {
+    "grass_carp": 300,
+    "common_carp": 300,
+    "black_carp": 200,
+    "mandarin_fish": 250
+  },
+  "required_scenes": [
+    "hand_hold",
+    "river",
+    "fish_basket",
+    "night",
+    "fish_net",
+    "water_background"
+  ]
+}
