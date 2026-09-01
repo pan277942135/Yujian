@@ -21,14 +21,18 @@ species_catalog.species_key
 - `fish_video`：介绍、钓法、真实钓获和装备视频。
 - `fish_similarity`：相似鱼及结构化短差异说明。
 - `fish_ranking`：仅预留表结构，V1 不开放接口。
+- `fish_species_cover`：每个鱼种一张列表页 1:1 动漫风图鉴卡。
+- `fish_cards`：每个鱼种五张 1:1 黑金详情卡；规范类型为 `HERO`、`IDENTIFICATION`、`ECO`、`GEAR`、`SKILL`。
 
 生产数据库迁移：`schemas/0014_fish_knowledge_v1.sql`。
+V1.1 增量迁移：`schemas/0015_fish_cards_v11.sql`、`schemas/0016_fish_species_cover_v11.sql`。
 
 ## App 只读 API
 
 ```text
 GET /api/v1/fish/species
 GET /api/v1/fish/species/{species_id}
+GET /api/v1/fish/species/{species_id}/detail
 GET /api/v1/fish/gallery/{image_id}/media
 ```
 
@@ -51,6 +55,14 @@ GET /api/v1/fish/gallery/{image_id}/media
 
 这些 GET 接口是公开只读接口。所有 Admin 写接口仍受 Model Factory Console 登录保护。
 
+### V1.1 完整详情
+
+`/detail` 在一次响应中聚合 `species`、`cover`、`cards`、`gallery`、`profile`、`fishing`、`videos`、`similarity` 和 `dynamic` 占位对象。列表页优先使用 ACTIVE 的 `fish_species_cover.image_url`，没有已发布封面时回退到 V1 Gallery 第一张图片。
+
+白条沿用模型/目录稳定 ID `sharpbelly`；产品路由同时接受 `baitiao` 作为兼容别名，不创建第二个物种。
+
+卡片 Admin 接口接受规范类型，以及旧任务字段的兼容别名：`ECOLOGY` → `ECO`、`FISHING` → `SKILL`、`RECORD` → `GEAR`。同一鱼种最多一个同类型 ACTIVE 卡片，DRAFT 空卡位可以先保存。
+
 ## Admin API
 
 ```text
@@ -72,6 +84,17 @@ DELETE /api/v1/admin/fish/species/{species_id}/videos/{video_id}
 
 PUT    /api/v1/admin/fish/species/{species_id}/similarity/{similar_species_id}
 DELETE /api/v1/admin/fish/species/{species_id}/similarity/{similar_species_id}
+
+POST   /api/v1/admin/fish/species/{species_id}/cover
+PATCH  /api/v1/admin/fish/species/{species_id}/cover
+GET    /api/v1/admin/fish/species/{species_id}/cover
+DELETE /api/v1/admin/fish/species/{species_id}/cover
+
+GET    /api/v1/admin/fish/species/{species_id}/cards
+POST   /api/v1/admin/fish/species/{species_id}/cards
+PATCH  /api/v1/admin/fish/cards/{card_id}
+DELETE /api/v1/admin/fish/cards/{card_id}
+GET    /api/v1/admin/fish/species/{species_id}/completion
 ```
 
 ### 图片上传合同

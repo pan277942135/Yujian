@@ -389,6 +389,10 @@ def _require_species(db: Session, species_id: str) -> FishSpecies:
     return row
 
 
+def _get_species_cover(db: Session, species_id: str) -> FishSpeciesCover | None:
+    return db.scalar(select(FishSpeciesCover).where(FishSpeciesCover.species_id == species_id))
+
+
 def _gallery_dict(row: FishGalleryImage) -> dict:
     return {
         "id": row.id,
@@ -589,7 +593,7 @@ def update_admin_species(species_id: str, payload: SpeciesPatch, db: Session = D
 @router.get("/species/{species_id}/cover")
 def get_species_cover(species_id: str, db: Session = Depends(get_db)) -> dict:
     species = _require_species(db, species_id)
-    row = db.get(FishSpeciesCover, species.id)
+    row = _get_species_cover(db, species.id)
     if row is None:
         raise HTTPException(status_code=404, detail="fish species cover not found")
     return _cover_dict(row)
@@ -598,7 +602,7 @@ def get_species_cover(species_id: str, db: Session = Depends(get_db)) -> dict:
 @router.post("/species/{species_id}/cover", status_code=201)
 def create_species_cover(species_id: str, payload: CoverCreate, db: Session = Depends(get_db)) -> dict:
     species = _require_species(db, species_id)
-    if db.get(FishSpeciesCover, species.id) is not None:
+    if _get_species_cover(db, species.id) is not None:
         raise HTTPException(status_code=409, detail="fish species cover already exists")
     row = FishSpeciesCover(species_id=species.id, **payload.model_dump())
     db.add(row)
@@ -610,7 +614,7 @@ def create_species_cover(species_id: str, payload: CoverCreate, db: Session = De
 @router.patch("/species/{species_id}/cover")
 def update_species_cover(species_id: str, payload: CoverPatch, db: Session = Depends(get_db)) -> dict:
     species = _require_species(db, species_id)
-    row = db.get(FishSpeciesCover, species.id)
+    row = _get_species_cover(db, species.id)
     if row is None:
         raise HTTPException(status_code=404, detail="fish species cover not found")
     for field in payload.model_fields_set:
@@ -627,7 +631,7 @@ def update_species_cover(species_id: str, payload: CoverPatch, db: Session = Dep
 @router.delete("/species/{species_id}/cover")
 def delete_species_cover(species_id: str, db: Session = Depends(get_db)) -> dict:
     species = _require_species(db, species_id)
-    row = db.get(FishSpeciesCover, species.id)
+    row = _get_species_cover(db, species.id)
     if row is None:
         raise HTTPException(status_code=404, detail="fish species cover not found")
     db.delete(row)
@@ -703,7 +707,7 @@ def delete_species_card(card_id: int, db: Session = Depends(get_db)) -> dict:
 @router.get("/species/{species_id}/completion")
 def species_completion(species_id: str, db: Session = Depends(get_db)) -> dict:
     species = _require_species(db, species_id)
-    cover = db.get(FishSpeciesCover, species.id)
+    cover = _get_species_cover(db, species.id)
     cards = db.scalars(select(FishCard).where(FishCard.species_id == species.id)).all()
     gallery_count = int(
         db.scalar(select(func.count()).select_from(FishGalleryImage).where(FishGalleryImage.species_id == species.id))

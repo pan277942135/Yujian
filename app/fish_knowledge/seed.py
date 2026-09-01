@@ -3,6 +3,8 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.fish_knowledge.cards import FishCard, normalize_card_type
+from app.fish_knowledge.cover import FishSpeciesCover
 from app.fish_knowledge.fishing import FishFishing
 from app.fish_knowledge.profile import FishProfile
 from app.fish_knowledge.similarity import FishSimilarity
@@ -11,6 +13,35 @@ from app.species_policy import ensure_target_species
 
 
 FISH_KNOWLEDGE_SEED_VERSION = "MODEL_M1_v0.5_20_V1"
+BAITIAO_SPECIES_ID = "sharpbelly"
+
+INITIAL_BAITIAO_COVER = {
+    "species_id": BAITIAO_SPECIES_ID,
+    "image_url": "",
+    "style": "ANIME_CARD",
+    "title": "白条图鉴卡",
+    "status": "DRAFT",
+}
+
+INITIAL_BAITIAO_CARDS = tuple(
+    {
+        "card_type": card_type,
+        "title": title,
+        "image_url": "",
+        "description": "",
+        "sort_order": order,
+        "status": "DRAFT",
+    }
+    for order, (card_type, title) in enumerate(
+        (
+            ("HERO", "白条英雄卡"),
+            ("IDENTIFICATION", "白条识别卡"),
+            ("ECO", "白条生态卡"),
+            ("GEAR", "白条装备卡"),
+            ("SKILL", "白条作钓技术卡"),
+        )
+    )
+)
 
 # Media is intentionally not seeded. Gallery and video URLs must point to real,
 # reviewed assets uploaded through Fish Knowledge Admin.
@@ -585,6 +616,8 @@ def seed_initial_fish_knowledge(db: Session) -> dict[str, int | str]:
     species_created = 0
     profile_created = 0
     fishing_created = 0
+    cover_created = 0
+    cards_created = 0
 
     for item in INITIAL_FISH_KNOWLEDGE:
         species_values = item["species"]
@@ -627,7 +660,33 @@ def seed_initial_fish_knowledge(db: Session) -> dict[str, int | str]:
             )
             similarity_created += 1
 
-    if species_created or profile_created or fishing_created or similarity_created:
+    # 白条 uses the existing stable model/catalog key ``sharpbelly``.  The
+    # public API additionally accepts ``baitiao`` as a product-facing alias.
+    # These are intentionally empty DRAFT slots: media must be supplied by an
+    # operator after the real artwork has been reviewed.
+    baitiao = db.get(FishSpecies, BAITIAO_SPECIES_ID)
+    if baitiao is not None:
+        cover_exists = db.scalar(
+            select(FishSpeciesCover.id).where(FishSpeciesCover.species_id == BAITIAO_SPECIES_ID)
+        )
+        if cover_exists is None:
+            db.add(FishSpeciesCover(**INITIAL_BAITIAO_COVER))
+            cover_created += 1
+
+        existing_card_types = {
+            normalize_card_type(card.card_type)
+            for card in db.scalars(
+                select(FishCard).where(FishCard.species_id == BAITIAO_SPECIES_ID)
+            ).all()
+        }
+        for card_values in INITIAL_BAITIAO_CARDS:
+            if card_values["card_type"] in existing_card_types:
+                continue
+            db.add(FishCard(species_id=BAITIAO_SPECIES_ID, **card_values))
+            existing_card_types.add(card_values["card_type"])
+            cards_created += 1
+
+    if species_created or profile_created or fishing_created or similarity_created or cover_created or cards_created:
         db.commit()
     return {
         "version": FISH_KNOWLEDGE_SEED_VERSION,
@@ -635,5 +694,7 @@ def seed_initial_fish_knowledge(db: Session) -> dict[str, int | str]:
         "profile_created": profile_created,
         "fishing_created": fishing_created,
         "similarity_created": similarity_created,
+        "cover_created": cover_created,
+        "cards_created": cards_created,
         "existing_species": len(existing_species_ids),
     }
