@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir \
     torch==2.7.1 torchvision==0.22.1
 
 COPY app ./app
+COPY evaluation ./evaluation
 COPY trainer ./trainer
 COPY config ./config
 
