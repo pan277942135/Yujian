@@ -10,148 +10,7 @@
 </head>
 <body>
 <header class="app-nav"><a href="/">总览</a><a href="/batches">数据批次</a><a href="/review/bulk">快速审核</a><a href="/review">单张审核</a><a href="/species">鱼种管理</a><a href="/feedback">用户反馈</a><a href="/datasets">数据集</a></header>
-<style id="yujian-mobile-ux">
-  html{overflow-x:hidden}
-  body{min-width:0}
-  main{min-width:0;width:100%;box-sizing:border-box}
-  header.app-nav{box-sizing:border-box}
-  header.app-nav{overflow:visible!important;white-space:normal!important;flex-wrap:wrap!important;align-items:center!important}
-  header.app-nav .nav-toggle{display:none;border:0;background:transparent;color:#111827;font:inherit;font-weight:750;cursor:pointer;align-items:center;gap:8px;padding:0;min-height:44px}
-  header.app-nav .nav-toggle:focus-visible{outline:2px solid #2563eb;outline-offset:2px}
-  header.app-nav .nav-icon{font-size:22px;line-height:1}
-  header.app-nav .nav-links{display:flex;align-items:center;gap:6px;flex:1 1 auto;min-width:0;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:thin}
-  header.app-nav .nav-links a{flex:0 0 auto}
-  header.app-nav .filters{flex:0 0 auto}
-  img{max-width:100%}
-  input,select,textarea{max-width:100%}
-  @media(max-width:768px){
-    header.app-nav{padding:8px 16px!important;gap:0!important;overflow:visible!important}
-    header.app-nav .nav-toggle{display:flex;order:0}
-    header.app-nav .nav-links{display:none;order:2;flex-basis:100%;width:100%;flex-direction:column;align-items:stretch;gap:4px;padding:8px 0 4px;overflow:visible}
-    header.app-nav .nav-links.open{display:flex}
-    header.app-nav .nav-links a{width:100%;min-height:44px;padding:0 12px;justify-content:flex-start}
-    header.app-nav .filters{order:3;width:100%;margin:8px 0 0!important;display:grid!important;grid-template-columns:1fr;gap:8px;align-items:stretch}
-    header.app-nav .filters>*{width:100%!important;min-height:44px;box-sizing:border-box}
-    main{max-width:100%!important;padding:12px 16px!important}
-    h1{font-size:26px;line-height:1.2}
-    h2{font-size:20px;line-height:1.3}
-    .top{align-items:stretch!important;flex-direction:column}
-    .section,.panel,.card{max-width:100%;box-sizing:border-box}
-    .section{padding:14px!important}
-    .actions{display:flex;flex-direction:column;align-items:stretch;gap:8px}
-    .actions>*{width:100%;box-sizing:border-box}
-    .actions>button,.actions>.button,.primary,.prepare,.top>button,main>button,.uploadBox button,.skip,.footer button{width:100%;min-height:44px;box-sizing:border-box}
-    .footer{display:flex;flex-direction:column;align-items:stretch;gap:8px}
-    .footer>*{width:100%;text-align:center;box-sizing:border-box}
-    .summary{display:grid!important;grid-template-columns:1fr 1fr!important;gap:8px!important}
-    .summary .pill{min-height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;box-sizing:border-box}
-    .cards{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px!important}
-    .workflow{grid-template-columns:1fr!important}
-    .grid{grid-template-columns:1fr!important}
-    .metrics,.metricGrid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px!important}
-    .metric{min-width:0;padding:10px!important}
-    .row{grid-template-columns:1fr!important;gap:6px!important}
-    main input:not([type="checkbox"]):not([type="radio"]),main select,main textarea{width:100%;min-height:44px;box-sizing:border-box}
-    input[type="file"]{min-height:44px}
-    .toolbar{display:grid!important;grid-template-columns:1fr!important;gap:8px!important;align-items:stretch}
-    .toolbar>*{width:100%;min-height:44px;box-sizing:border-box}
-    .toolbar .spacer{display:none}
-    .filters{display:grid;grid-template-columns:1fr;gap:8px}
-    .filters>*{width:100%;min-height:44px;box-sizing:border-box}
-    .stateBtns{grid-template-columns:1fr!important;gap:8px!important}
-    .stateBtns button{min-height:44px!important}
-    .speciesTabs{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px!important}
-    .speciesTabs button{min-height:44px}
-    .bulkSpecies{display:flex;flex-direction:column;align-items:stretch;padding:8px 0 0;border-left:0;border-top:1px solid #e5e7eb}
-    .bulkSpecies>*{width:100%;min-height:44px;box-sizing:border-box}
-    .tabs{display:grid!important;grid-template-columns:1fr 1fr;gap:8px!important}
-    .tabs .tab{min-height:44px}
-    .photo{height:auto!important;max-height:58vh;min-height:220px}
-    .previewBox{min-height:200px}
-    .heroPrediction b{font-size:26px}
-    .topRow{grid-template-columns:minmax(70px,1fr) minmax(0,2fr) 60px}
-    .top3mini{white-space:normal;max-width:none;overflow:visible}
-    .tableWrap{overflow:visible!important;border:0!important}
-    table[data-card-labels]{display:block;width:100%;min-width:0!important;border-collapse:separate;border-spacing:0}
-    table[data-card-labels] thead{display:none}
-    table[data-card-labels] tbody,table[data-card-labels] tr,table[data-card-labels] td{display:block;width:100%;box-sizing:border-box}
-    table[data-card-labels] tr{margin:0 0 12px;padding:6px 10px;border:1px solid #e5e7eb;border-radius:12px;background:#fff;box-shadow:0 1px 2px rgba(15,23,42,.04)}
-    table[data-card-labels] tr:last-child{margin-bottom:0}
-    table[data-card-labels] td{display:grid;grid-template-columns:minmax(80px,34%) minmax(0,1fr);gap:8px;align-items:start;border:0!important;padding:8px 0!important;min-width:0!important;font-size:13px;line-height:1.45;overflow-wrap:anywhere}
-    table[data-card-labels] td::before{content:attr(data-label);color:#6b7280;font-size:12px;font-weight:650;line-height:1.4}
-    table[data-card-labels] td[colspan]{display:block;text-align:center}
-    table[data-card-labels] td[colspan]::before{display:none}
-    table[data-card-labels] td>input,table[data-card-labels] td>select,table[data-card-labels] td>textarea{width:100%!important;min-height:44px;box-sizing:border-box}
-    table[data-card-labels] td .actions{display:flex;flex-direction:column;align-items:stretch;gap:8px}
-    table[data-card-labels] td .actions>*{width:100%;min-height:44px;box-sizing:border-box}
-    table[data-card-labels] td .audit,table[data-card-labels] td .presence,table[data-card-labels] td .dedupe{display:flex;flex-direction:column;align-items:stretch;gap:6px;min-width:0}
-    table[data-card-labels] td .pill{display:flex;align-items:center;min-height:32px;box-sizing:border-box}
-    table[data-card-labels] td .numBtn{font-size:inherit;text-align:left;padding:0;min-height:32px}
-    table[data-card-labels] td .reviewLink{display:block;padding:10px;border:1px solid #d1d5db;border-radius:8px;text-align:center}
-    table[data-card-labels] td .uri{max-width:none}
-    .matrixWrap,.diag{max-width:100%;overflow:auto!important}
-  }
-</style>
-<script>
-(function(){
-  function decorateTables(){
-    document.querySelectorAll('table[data-card-labels]').forEach(function(table){
-      const labels=(table.dataset.cardLabels||'').split('|');
-      table.querySelectorAll('tbody tr').forEach(function(row){
-        Array.from(row.cells).forEach(function(cell,index){
-          if(cell.colSpan>1){cell.removeAttribute('data-label');return}
-          if(labels[index])cell.setAttribute('data-label',labels[index]);
-        });
-      });
-    });
-  }
-  function initNav(){
-    const header=document.querySelector('header.app-nav');
-    if(!header)return;
-    if(!header.dataset.mobileReady){
-      const links=Array.from(header.children).filter(function(el){return el.tagName==='A'});
-      const controls=Array.from(header.children).filter(function(el){return el.tagName!=='A'});
-      const nav=document.createElement('nav');
-      nav.className='nav-links';
-      nav.id='yujian-primary-nav';
-      nav.setAttribute('aria-label','主导航');
-      links.forEach(function(link){nav.appendChild(link)});
-      const toggle=document.createElement('button');
-      toggle.type='button';
-      toggle.className='nav-toggle';
-      toggle.setAttribute('aria-expanded','false');
-      toggle.setAttribute('aria-controls',nav.id);
-      toggle.innerHTML='<span class="nav-icon" aria-hidden="true">☰</span><span>渔见 AI Console</span>';
-      header.insertBefore(toggle,header.firstChild);
-      header.insertBefore(nav,controls[0]||null);
-      toggle.addEventListener('click',function(){
-        const open=nav.classList.toggle('open');
-        toggle.setAttribute('aria-expanded',String(open));
-      });
-      nav.addEventListener('click',function(event){
-        if(event.target.closest('a')){
-          nav.classList.remove('open');
-          toggle.setAttribute('aria-expanded','false');
-        }
-      });
-      document.addEventListener('click',function(event){
-        if(!header.contains(event.target)){
-          nav.classList.remove('open');
-          toggle.setAttribute('aria-expanded','false');
-        }
-      });
-      header.dataset.mobileReady='true';
-    }
-    decorateTables();
-    if(!window.__yujianMobileObserver){
-      const observer=new MutationObserver(decorateTables);
-      observer.observe(document.body,{childList:true,subtree:true});
-      window.__yujianMobileObserver=observer;
-    }
-  }
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initNav,{once:true});else initNav();
-})();
-</script>
+{% include "_mobile_ux.html" %}
 <main>
   <div class="top"><div><h1>数据批次</h1><div class="muted">“准备审核”会自动完成检查、入库、登记、近重复检测和鱼体检测；完成后直接进入人工审核。</div></div><button onclick="loadAll()">刷新</button></div>
   <div id="banner" class="banner"></div>
@@ -169,7 +28,7 @@ function batchStatus(v){return ({REGISTERED:'已登记',INGESTED:'已入库'})[v
 function openInspect(params={}){const p=new URLSearchParams(params);window.open('/inspect?'+p.toString(),'yujian-data-inspect')}
 function presenceHtml(p,batchId){if(!p||!p.scanned)return '<span class="muted">未检测</span>';const b=JSON.stringify(batchId);return `<div class="presence"><button class="pill pillBtn ok" onclick='openInspect({batch_id:${b},presence:"single_fish"})'>单鱼 ${p.single_fish||0}</button><button class="pill pillBtn warn" onclick='openInspect({batch_id:${b},presence:"multi_fish"})'>多鱼 ${p.multi_fish||0}</button><button class="pill pillBtn bad" onclick='openInspect({batch_id:${b},presence:"no_fish"})'>无鱼 ${p.no_fish||0}</button><button class="pill pillBtn info" onclick='openInspect({batch_id:${b},presence:"uncertain"})'>不确定 ${p.uncertain||0}</button>${p.remaining?`<span class="pill">未检测 ${p.remaining}</span>`:''}${p.error?`<span class="pill bad">失败 ${p.error}</span>`:''}</div>`}
 function dedupeHtml(d){if(!d||!d.scanned)return '<span class="muted">未检测</span>';return `<div class="dedupe"><span class="pill info">重复组 ${d.groups||0}</span><span class="pill warn">可过滤 ${d.duplicate_images||0}</span><span class="pill">完全 ${d.exact_duplicates||0}</span><span class="pill">近似 ${d.near_duplicates||0}</span>${d.remaining?`<span class="pill">未检测 ${d.remaining}</span>`:''}</div>`}
-async function loadAll(){try{const [incoming,registered,presenceRows,dedupeRows]=await Promise.all([api('/api/incoming'),api('/api/batches'),api('/api/presence/batches'),api('/api/dedupe/batches')]);const presenceMap=Object.fromEntries(presenceRows.map(x=>[x.batch_id,x]));const dedupeMap=Object.fromEntries(dedupeRows.map(x=>[x.batch_id,x]));document.getElementById('incoming').innerHTML=incoming.map((x,i)=>{const a=x.audit||{},s=a.status_counts||{};return `<tr><td><b>${esc(x.folder)}</b><br><span class="muted">${esc(x.incoming_prefix)}</span></td><td>${x.image_count} / ${x.manifest_count}</td><td>${a.batch_id?`<div class="audit"><span class="pill ok">候选 ${s.CANDIDATE||0}</span><span class="pill warn">待定 ${s.NEEDS_REVIEW||0}</span><span class="pill bad">剔除 ${s.AUTO_REJECT||0}</span></div>`:'<span class="muted">未检查</span>'}</td><td><input id="batch-${i}" value="${esc(x.canonical_batch_id)}"></td><td><select id="source-${i}"><option value="">选择来源</option><option value="pilot" ${x.source==='pilot'?'selected':''}>种子集</option><option value="doubao" ${x.source==='doubao'?'selected':''}>豆包</option><option value="app_feedback" ${x.source==='app_feedback'?'selected':''}>用户反馈</option><option value="workbuddy" ${x.source==='workbuddy'?'selected':''}>WorkBuddy</option><option value="other" ${x.source==='other'?'selected':''}>其他</option></select></td><td>${x.promoted?'<span class="pill ok">已入库</span>':'<span class="pill">待入库</span>'}</td><td><div class="actions"><button class="prepare" onclick="prepare(${i},'${esc(x.incoming_prefix)}')">准备审核</button><button class="soft" onclick="act(${i},'audit','${esc(x.incoming_prefix)}')">仅检查</button><button onclick="act(${i},'promote','${esc(x.incoming_prefix)}')">仅入库</button><button onclick="sync(${i})">仅登记</button></div></td></tr>`}).join('')||'<tr><td colspan="7" class="muted">没有发现待处理上传数据</td></tr>';document.getElementById('registered').innerHTML=registered.map(x=>{const pending=(x.review.pending||0)+(x.review.needs_review||0)+(x.review.hard_case||0);const p=presenceMap[x.batch_id]||{};const d=dedupeMap[x.batch_id]||{};const b=JSON.stringify(x.batch_id);return `<tr><td><b>${esc(x.batch_id)}</b><br><span class="pill">${esc(batchStatus(x.status))}</span></td><td>${esc(sourceName(x.source))}</td><td><button class="numBtn" onclick='openInspect({batch_id:${b}})'>${x.image_count}</button></td><td><button class="numBtn" onclick='openInspect({batch_id:${b},review_status:"approved"})'>${x.review.approved||0}</button></td><td><button class="numBtn" onclick='openInspect({batch_id:${b},review_status:"pending"})'>${pending}</button></td><td><button class="numBtn" onclick='openInspect({batch_id:${b},review_status:"rejected"})'>${x.review.rejected||0}</button></td><td>${presenceHtml(p,x.batch_id)}</td><td>${dedupeHtml(d)}</td><td><div class="actions"><button class="dedupeBtn" onclick="scanDedupe('${esc(x.batch_id)}')">检测重复</button>${d.filterable_duplicate_images?`<button class="filterBtn" onclick="filterDuplicates('${esc(x.batch_id)}',${d.filterable_duplicate_images})">过滤重复项</button>`:''}<button class="presenceBtn" onclick="scanPresence('${esc(x.batch_id)}')">检测鱼体</button>${p.filterable_no_fish?`<button class="filterBtn" onclick="filterNoFish('${esc(x.batch_id)}',${p.filterable_no_fish})">过滤无鱼</button>`:''}<a class="reviewLink" href="/review/bulk?batch=${encodeURIComponent(x.batch_id)}">快速审核 →</a><a class="reviewLink" href="/review?batch=${encodeURIComponent(x.batch_id)}">单张审核</a></div></td></tr>`}).join('')||'<tr><td colspan="9" class="muted">还没有已登记批次</td></tr>'}catch(e){msg(e.message,true)}}
+async function loadAll(){try{const [incoming,registered,presenceRows,dedupeRows]=await Promise.all([api('/api/incoming'),api('/api/batches'),api('/api/presence/batches'),api('/api/dedupe/batches')]);const presenceMap=Object.fromEntries(presenceRows.map(x=>[x.batch_id,x]));const dedupeMap=Object.fromEntries(dedupeRows.map(x=>[x.batch_id,x]));document.getElementById('incoming').innerHTML=incoming.map((x,i)=>{const a=x.audit||{},s=a.status_counts||{};return `<tr><td><b>${esc(x.folder)}</b><br><span class="muted">${esc(x.incoming_prefix)}</span></td><td>${x.image_count} / ${x.manifest_count}</td><td>${a.batch_id?`<div class="audit"><span class="pill ok">候选 ${s.CANDIDATE||0}</span><span class="pill warn">待定 ${s.NEEDS_REVIEW||0}</span><span class="pill bad">剔除 ${s.AUTO_REJECT||0}</span></div>`:'<span class="muted">未检查</span>'}</td><td><input id="batch-${i}" value="${esc(x.canonical_batch_id)}"></td><td><select id="source-${i}"><option value="">选择来源</option><option value="pilot" ${x.source==='pilot'?'selected':''}>种子集</option><option value="doubao" ${x.source==='doubao'?'selected':''}>豆包</option><option value="app_feedback" ${x.source==='app_feedback'?'selected':''}>用户反馈</option><option value="workbuddy" ${x.source==='workbuddy'?'selected':''}>WorkBuddy</option><option value="other" ${x.source==='other'?'selected':''}>其他</option></select></td><td>${x.promoted?'<span class="pill ok">已入库</span>':'<span class="pill">待入库</span>'}</td><td><div class="actions"><button class="prepare" onclick="prepare(${i},'${esc(x.incoming_prefix)}')">准备审核</button><details class="more-actions"><summary>更多操作</summary><div class="more-menu"><button class="soft" onclick="act(${i},'audit','${esc(x.incoming_prefix)}')">仅检查</button><button onclick="act(${i},'promote','${esc(x.incoming_prefix)}')">仅入库</button><button onclick="sync(${i})">仅登记</button></div></details></div></div></td></tr>`}).join('')||'<tr><td colspan="7" class="muted">没有发现待处理上传数据</td></tr>';document.getElementById('registered').innerHTML=registered.map(x=>{const pending=(x.review.pending||0)+(x.review.needs_review||0)+(x.review.hard_case||0);const p=presenceMap[x.batch_id]||{};const d=dedupeMap[x.batch_id]||{};const b=JSON.stringify(x.batch_id);return `<tr><td><b>${esc(x.batch_id)}</b><br><span class="pill">${esc(batchStatus(x.status))}</span></td><td>${esc(sourceName(x.source))}</td><td><button class="numBtn" onclick='openInspect({batch_id:${b}})'>${x.image_count}</button></td><td><button class="numBtn" onclick='openInspect({batch_id:${b},review_status:"approved"})'>${x.review.approved||0}</button></td><td><button class="numBtn" onclick='openInspect({batch_id:${b},review_status:"pending"})'>${pending}</button></td><td><button class="numBtn" onclick='openInspect({batch_id:${b},review_status:"rejected"})'>${x.review.rejected||0}</button></td><td>${presenceHtml(p,x.batch_id)}</td><td>${dedupeHtml(d)}</td><td><div class="actions"><a class="reviewLink prepare" href="/review/bulk?batch=${encodeURIComponent(x.batch_id)}">快速审核 →</a><details class="more-actions"><summary>更多操作</summary><div class="more-menu"><button class="dedupeBtn" onclick="scanDedupe('${esc(x.batch_id)}')">检测重复</button>${d.filterable_duplicate_images?`<button class="filterBtn" onclick="filterDuplicates('${esc(x.batch_id)}',${d.filterable_duplicate_images})">过滤重复项</button>`:''}<button class="presenceBtn" onclick="scanPresence('${esc(x.batch_id)}')">检测鱼体</button>${p.filterable_no_fish?`<button class="filterBtn" onclick="filterNoFish('${esc(x.batch_id)}',${p.filterable_no_fish})">过滤无鱼</button>`:''}<a class="reviewLink" href="/review?batch=${encodeURIComponent(x.batch_id)}">单张审核</a></div></details></div></div></td></tr>`}).join('')||'<tr><td colspan="9" class="muted">还没有已登记批次</td></tr>'}catch(e){msg(e.message,true)}}
 async function act(i,action,prefix){let payload;try{payload=values(i,prefix)}catch(e){msg(e.message,true);return}setBusy(true);msg(`${action==='audit'?'正在自动检查':'正在正式入库'} ${payload.batch_id} …`);try{const d=await api(`/api/batches/${action}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});msg(JSON.stringify(d,null,2));await loadAll()}catch(e){msg(e.message,true)}finally{setBusy(false)}}
 async function sync(i){const batch=document.getElementById('batch-'+i).value.trim();if(!batch){msg('请先确认正式批次 ID',true);return}setBusy(true);msg(`正在登记 ${batch} …`);try{await api('/api/batches/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({batch_id:batch})});msg(`已登记 ${batch}`);await loadAll()}catch(e){msg(e.message,true)}finally{setBusy(false)}}
 async function prepare(i,prefix){let payload;try{payload=values(i,prefix)}catch(e){msg(e.message,true);return}setBusy(true);try{msg(`1/5 自动检查 ${payload.batch_id} …`);const audit=await api('/api/batches/audit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});msg(`2/5 正式入库 ${payload.batch_id} …`);const promote=await api('/api/batches/promote',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});msg(`3/5 登记数据 ${payload.batch_id} …`);await api('/api/batches/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({batch_id:payload.batch_id})});let dedupeTotal=0,dedupe={};while(true){msg(`4/5 自动检测近重复：${payload.batch_id}\n已处理 ${dedupeTotal} 张…`);dedupe=await api('/api/dedupe/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({batch_id:payload.batch_id,limit:100,rescan:false})});dedupeTotal+=dedupe.processed||0;if(!dedupe.remaining||!dedupe.processed)break}let presenceTotal=0,presence={};while(true){msg(`5/5 自动检测鱼体：${payload.batch_id}\n已处理 ${presenceTotal} 张…`);presence=await api('/api/presence/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({batch_id:payload.batch_id,limit:40,rescan:false})});presenceTotal+=presence.processed||0;if(!presence.remaining||!presence.processed)break}msg(`准备审核完成：${payload.batch_id}\n候选 ${audit.status_counts?.CANDIDATE||0} / 待定 ${audit.status_counts?.NEEDS_REVIEW||0} / 剔除 ${audit.status_counts?.AUTO_REJECT||0}\n正式入库：${promote.already_exists?'已存在，直接复用':'完成'}\n近重复：${dedupe.duplicate_images||0} 张非代表图 / ${dedupe.groups||0} 组\n鱼体：单鱼 ${presence.single_fish||0} / 多鱼 ${presence.multi_fish||0} / 无鱼 ${presence.no_fish||0} / 不确定 ${presence.uncertain||0}\n\n下一步：直接进入“快速审核”。`);await loadAll()}catch(e){msg(`自动准备中断：${e.message}\n已完成的步骤会保留，可再次点击“准备审核”续跑。`,true)}finally{setBusy(false)}}
