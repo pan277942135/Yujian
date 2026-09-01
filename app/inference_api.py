@@ -337,7 +337,10 @@ def _predict_bytes(db: Session, model_version: str, data: bytes) -> dict:
     # New models are trained on the exact detector-expanded crop consumed by
     # the Android production pipeline. Explicit legacy models retain their
     # original-image input contract and are never silently relabelled.
-    pipeline_type = validate_pipeline_type(getattr(model_row, "pipeline_type", CROP_CLASSIFIER_V1))
+    # A registry row created before the additive pipeline metadata migration is
+    # a legacy whole-image model.  Keep that safe default so old models never
+    # receive a crop input merely because the new column is unavailable.
+    pipeline_type = validate_pipeline_type(getattr(model_row, "pipeline_type", WHOLE_IMAGE_V1))
     classifier_input = crop if pipeline_type == CROP_CLASSIFIER_V1 else image
     classifier = _classifier_prediction(model_row, classifier_input)
     result.update(classifier)
@@ -500,3 +503,4 @@ async def inference_batch(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"批量模型推理失败：{exc}") from exc
+
