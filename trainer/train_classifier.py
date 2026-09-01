@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from google.cloud import storage
-from PIL import Image
+from PIL import Image, ImageOps
 from sqlalchemy.orm import Session
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
@@ -26,6 +26,7 @@ from torchvision.models import MobileNet_V3_Small_Weights, mobilenet_v3_small
 
 from app.db import SessionLocal, init_db
 from app.models import DatasetVersion, Evaluation, ModelVersion, TrainingRun
+from app.pipeline_contract import CROP_CLASSIFIER_V1, WHOLE_IMAGE_V1, validate_pipeline_type
 from evaluation.artifact_builder import build_evaluation_artifacts
 
 
@@ -92,12 +93,13 @@ def download_json(storage_client: storage.Client, uri: str) -> dict:
     return json.loads(storage_client.bucket(bucket_name).blob(object_name).download_as_text(encoding="utf-8"))
 
 
-def materialize_images(storage_client: storage.Client, rows: list[dict], root: Path) -> list[dict]:
+def materialize_images(storage_client: storage.Client, rows: list[dict], root: Path, pipeline_type: str = WHOLE_IMAGE_V1) -> list[dict]:
     root.mkdir(parents=True, exist_ok=True)
 
     def download_one(item: tuple[int, dict]) -> dict:
         idx, row = item
-        uri = (row.get("gcs_uri") or "").strip()
+        uri = (row.get("crop_gcs_uri") if pipeline_type == CROP_CLASSIFIER_V1 else row.get("gcs_uri") or row.get("crop_gcs_uri") or "")
+        uri = (uri or "").strip()
         if not uri:
             raise ValueError(f"manifest row missing gcs_uri: {row.get('image_id')}")
         bucket_name, object_name = parse_gs_uri(uri)
@@ -122,11 +124,30 @@ def split_rows(rows: list[dict]) -> dict[str, list[dict]]:
     return result
 
 
-def build_transforms(image_size: int):
+class CropLetterbox:
+    """PIL equivalent of Android's crop → centered letterbox preprocessing."""
+
+    def __init__(self, size: int):
+        self.size = size
+
+    def __call__(self, image: Image.Image) -> Image.Image:
+        source = image.convert("RGB")
+        contained = ImageOps.contain(source, (self.size, self.size), method=Image.Resampling.BILINEAR)
+        canvas = Image.new("RGB", (self.size, self.size), (124, 116, 104))
+        canvas.paste(contained, ((self.size - contained.width) // 2, (self.size - contained.height) // 2))
+        return canvas
+
+
+def build_transforms(image_size: int, pipeline_type: str = WHOLE_IMAGE_V1):
+    pipeline_type = validate_pipeline_type(pipeline_type)
     normalize = transforms.Normalize(
         mean=[0.485, 0.456, 0.406],
         std=[0.229, 0.224, 0.225],
     )
+    if pipeline_type == CROP_CLASSIFIER_V1:
+        transform = transforms.Compose([CropLetterbox(image_size), transforms.ToTensor(), normalize])
+        return transform, transform
+
     train_transform = transforms.Compose(
         [
             transforms.RandomResizedCrop(image_size, scale=(0.72, 1.0), ratio=(0.8, 1.25)),
@@ -235,6 +256,7 @@ def build_test_prediction_rows(
     class_rows: list[dict],
     image_size: int,
     batch_size: int,
+    pipeline_type: str = WHOLE_IMAGE_V1,
 ) -> list[dict]:
     """Create provenance-rich rows for the post-training artifact contract.
 
@@ -245,7 +267,8 @@ def build_test_prediction_rows(
 
     if not test_rows:
         return []
-    _train_transform, eval_transform = build_transforms(image_size)
+    pipeline_type = validate_pipeline_type(pipeline_type)
+    _train_transform, eval_transform = build_transforms(image_size, pipeline_type)
     labels = {
         int(row.get("class_index", index)): str(row.get("species_key") or row.get("common_name_en") or row.get("common_name_zh") or f"class_{index}")
         for index, row in enumerate(class_rows)
@@ -296,6 +319,7 @@ def train_model(
     rows: dict[str, list[dict]],
     class_rows: list[dict],
     params: dict,
+    pipeline_type: str = WHOLE_IMAGE_V1,
 ) -> tuple[nn.Module, dict]:
     seed = int(params.get("seed", 20260827))
     epochs = int(params.get("epochs", 12))
@@ -314,7 +338,8 @@ def train_model(
     if not rows["train"]:
         raise ValueError("training split is empty")
 
-    train_transform, eval_transform = build_transforms(image_size)
+    pipeline_type = validate_pipeline_type(pipeline_type)
+    train_transform, eval_transform = build_transforms(image_size, pipeline_type)
     train_ds = FishDataset(rows["train"], train_transform)
     val_source = rows["val"] or rows["test"] or rows["train"]
     val_ds = FishDataset(val_source, eval_transform)
@@ -411,6 +436,7 @@ def train_model(
             "warmup_epochs": warmup_epochs,
             "early_stopping_patience": patience,
             "label_smoothing": label_smoothing,
+            "pipeline_type": pipeline_type,
         },
         "history": history,
         "split_counts": {name: len(rows[name]) for name in ("train", "val", "test")},
@@ -462,6 +488,10 @@ def register_running(db: Session, run_id: str, dataset_version: str, model_famil
             params_json=json.dumps(params, ensure_ascii=False),
             seed=int(params.get("seed", 20260827)),
             status="RUNNING",
+            pipeline_type=validate_pipeline_type(params.get("pipeline_type", WHOLE_IMAGE_V1)),
+            detector_version=params.get("detector_version"),
+            crop_version=params.get("crop_version"),
+            classifier_version=params.get("classifier_version"),
         )
         db.add(row)
     else:
@@ -469,6 +499,10 @@ def register_running(db: Session, run_id: str, dataset_version: str, model_famil
         row.started_at = utcnow()
         row.finished_at = None
         row.params_json = json.dumps(params, ensure_ascii=False)
+        row.pipeline_type = validate_pipeline_type(params.get("pipeline_type", WHOLE_IMAGE_V1))
+        row.detector_version = params.get("detector_version")
+        row.crop_version = params.get("crop_version")
+        row.classifier_version = params.get("classifier_version")
     db.commit()
     return row
 
@@ -492,6 +526,12 @@ def execute() -> dict:
             "early_stopping_patience": 4,
         },
     )
+    pipeline_type = validate_pipeline_type(os.getenv("PIPELINE_TYPE", params.get("pipeline_type", WHOLE_IMAGE_V1)))
+    params["pipeline_type"] = pipeline_type
+    if pipeline_type == CROP_CLASSIFIER_V1:
+        params.setdefault("crop_version", os.getenv("CROP_VERSION", "DS_CROP_M1_v0.1"))
+        params.setdefault("detector_version", os.getenv("DETECTOR_VERSION", "DET_FISH_v0.1"))
+        params.setdefault("classifier_version", os.getenv("CLASSIFIER_VERSION", ""))
     params["model_version"] = model_version
     params["model_family"] = model_family
     git_commit = os.getenv("APP_GIT_COMMIT", "unknown").strip() or "unknown"
@@ -517,11 +557,19 @@ def execute() -> dict:
         if not class_rows:
             raise ValueError("dataset class map is empty")
 
+        if pipeline_type == CROP_CLASSIFIER_V1:
+            invalid = [row.get("image_id") for row in manifest if row.get("input_type") != "crop" or row.get("pipeline_type") != CROP_CLASSIFIER_V1]
+            if invalid:
+                raise ValueError(
+                    "CROP_CLASSIFIER_V1 refuses original-image manifest rows; "
+                    f"missing crop contract for {len(invalid)} row(s)"
+                )
+
         with tempfile.TemporaryDirectory(prefix=f"yujian-{run_id}-") as temp_dir:
             root = Path(temp_dir)
-            local_rows = materialize_images(storage_client, manifest, root / "images")
+            local_rows = materialize_images(storage_client, manifest, root / "images", pipeline_type)
             grouped = split_rows(local_rows)
-            model, report = train_model(grouped, class_rows, params)
+            model, report = train_model(grouped, class_rows, params, pipeline_type=pipeline_type)
             test_source = grouped["test"] or grouped["val"] or grouped["train"]
             prediction_rows = build_test_prediction_rows(
                 model,
@@ -529,6 +577,7 @@ def execute() -> dict:
                 class_rows,
                 int(params.get("image_size", 224)),
                 int(params.get("batch_size", 16)),
+                pipeline_type=pipeline_type,
             )
 
             bucket_name = os.getenv("GCS_BUCKET", "").strip() or parse_gs_uri(dataset.manifest_uri)[0]
@@ -540,6 +589,10 @@ def execute() -> dict:
                     "run_id": run_id,
                     "model_version": model_version,
                     "model_family": model_family,
+                    "pipeline_type": pipeline_type,
+                    "detector_version": params.get("detector_version"),
+                    "crop_version": params.get("crop_version"),
+                    "classifier_version": params.get("classifier_version"),
                     "dataset_version": dataset_version,
                     "dataset_manifest_uri": dataset.manifest_uri,
                     "dataset_class_map_uri": dataset.class_map_uri,
@@ -615,6 +668,10 @@ def execute() -> dict:
                 "model_version": model_version,
                 "dataset_version": dataset_version,
                 "model_family": model_family,
+                "pipeline_type": pipeline_type,
+                "detector_version": params.get("detector_version"),
+                "crop_version": params.get("crop_version"),
+                "classifier_version": params.get("classifier_version"),
                 "artifact_uri": artifact_uri,
                 "state_dict_uri": state_uri,
                 "metrics_uri": metrics_uri,
@@ -648,12 +705,22 @@ def execute() -> dict:
                     metrics_uri=metrics_uri,
                     status="CANDIDATE",
                     notes="YuJian MVP whole-image fish species classifier baseline",
+                    pipeline_type=pipeline_type,
+                    detector_version=params.get("detector_version"),
+                    crop_version=params.get("crop_version"),
+                    classifier_version=params.get("classifier_version"),
+                    dataset_version=dataset_version,
                 )
                 db.add(existing_model)
             else:
                 existing_model.artifact_uri = artifact_uri
                 existing_model.metrics_uri = metrics_uri
                 existing_model.status = "CANDIDATE"
+                existing_model.pipeline_type = pipeline_type
+                existing_model.detector_version = params.get("detector_version")
+                existing_model.crop_version = params.get("crop_version")
+                existing_model.classifier_version = params.get("classifier_version")
+                existing_model.dataset_version = dataset_version
 
             evaluation_id = f"EVAL_{model_version}_{run_id}"[:128]
             evaluation_row = db.get(Evaluation, evaluation_id)

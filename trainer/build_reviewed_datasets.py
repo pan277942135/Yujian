@@ -13,7 +13,6 @@ import hashlib
 import io
 import json
 import math
-import shutil
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -274,6 +273,7 @@ def build_crop_dataset(
                     "input_type": "crop",
                     "pipeline_type": "CROP_CLASSIFIER_V1",
                     "source_image_id": image_id,
+                    "split": _split(image_id),
                     "accepted_bbox": json.dumps(record["accepted_bbox"], separators=(",", ":")),
                     "expand_ratio": expand_ratio,
                 }
@@ -281,7 +281,7 @@ def build_crop_dataset(
         except Exception as exc:
             failures.append({"image_id": image_id, "error": str(exc)})
 
-    fields = ["image_id", "file_name", "species_key", "gcs_uri", "local_path", "input_type", "pipeline_type", "source_image_id", "accepted_bbox", "expand_ratio"]
+    fields = ["image_id", "file_name", "species_key", "gcs_uri", "local_path", "input_type", "pipeline_type", "source_image_id", "split", "accepted_bbox", "expand_ratio"]
     _write_csv(root / "metadata" / "crop_manifest.csv", fields, rows)
     report = {
         "dataset_version": dataset_version,

@@ -18,6 +18,7 @@ from starlette.requests import Request
 
 from app.db import get_db
 from app.models import DatasetVersion, ModelVersion, TrainingRun
+from app.pipeline_contract import CROP_CLASSIFIER_V1, PIPELINE_TYPES, WHOLE_IMAGE_V1, validate_pipeline_type
 
 router = APIRouter(tags=["classifier-training"])
 templates = Jinja2Templates(directory="app/templates")
@@ -45,6 +46,10 @@ class TrainingCreate(BaseModel):
     warmup_epochs: int = Field(default=2, ge=0, le=20)
     early_stopping_patience: int = Field(default=4, ge=1, le=30)
     label_smoothing: float = Field(default=0.05, ge=0, le=0.3)
+    pipeline_type: str = Field(default=CROP_CLASSIFIER_V1, max_length=64)
+    detector_version: str | None = Field(default=None, max_length=128)
+    crop_version: str | None = Field(default=None, max_length=128)
+    classifier_version: str | None = Field(default=None, max_length=128)
 
 
 def _parse_gs_uri(uri: str) -> tuple[str, str]:
@@ -167,6 +172,10 @@ def _params(payload: TrainingCreate, model_version: str) -> dict:
         "warmup_epochs": payload.warmup_epochs,
         "early_stopping_patience": payload.early_stopping_patience,
         "label_smoothing": payload.label_smoothing,
+        "pipeline_type": validate_pipeline_type(payload.pipeline_type),
+        "detector_version": payload.detector_version,
+        "crop_version": payload.crop_version,
+        "classifier_version": payload.classifier_version,
     }
 
 
@@ -186,6 +195,10 @@ def _run_cloud_job(run_id: str, dataset_version: str, model_version: str, model_
                         {"name": "DATASET_VERSION", "value": dataset_version},
                         {"name": "MODEL_VERSION", "value": model_version},
                         {"name": "MODEL_FAMILY", "value": model_family},
+                        {"name": "PIPELINE_TYPE", "value": str(params.get("pipeline_type") or WHOLE_IMAGE_V1)},
+                        {"name": "DETECTOR_VERSION", "value": str(params.get("detector_version") or "")},
+                        {"name": "CROP_VERSION", "value": str(params.get("crop_version") or "")},
+                        {"name": "CLASSIFIER_VERSION", "value": str(params.get("classifier_version") or "")},
                         {"name": "TRAINING_PARAMS_JSON", "value": json.dumps(params, ensure_ascii=False)},
                     ]
                 }
@@ -217,6 +230,10 @@ def run_dict(row: TrainingRun) -> dict:
         "status": row.status,
         "artifact_uri": row.artifact_uri,
         "metrics_uri": row.metrics_uri,
+        "pipeline_type": getattr(row, "pipeline_type", WHOLE_IMAGE_V1),
+        "detector_version": getattr(row, "detector_version", None),
+        "crop_version": getattr(row, "crop_version", None),
+        "classifier_version": getattr(row, "classifier_version", None),
     }
 
 
@@ -234,6 +251,7 @@ def queue_training_run(
         raise ValueError("训练集为空，不能启动训练")
     if payload.model_family != "mobilenet_v3_small":
         raise ValueError("V0.1 仅支持 mobilenet_v3_small")
+    pipeline_type = validate_pipeline_type(payload.pipeline_type)
 
     run_id, model_version = _names(payload)
     if db.get(TrainingRun, run_id):
@@ -251,6 +269,10 @@ def queue_training_run(
         seed=payload.seed,
         started_at=utcnow(),
         status="QUEUED",
+        pipeline_type=pipeline_type,
+        detector_version=payload.detector_version,
+        crop_version=payload.crop_version,
+        classifier_version=payload.classifier_version,
     )
     db.add(row)
     db.commit()
@@ -303,6 +325,10 @@ def training_run_detail(run_id: str, db: Session = Depends(get_db)):
             "status": model.status,
             "artifact_uri": model.artifact_uri,
             "metrics_uri": model.metrics_uri,
+            "pipeline_type": getattr(model, "pipeline_type", WHOLE_IMAGE_V1),
+            "detector_version": getattr(model, "detector_version", None),
+            "crop_version": getattr(model, "crop_version", None),
+            "classifier_version": getattr(model, "classifier_version", None),
         }
         if model
         else None
@@ -355,6 +381,11 @@ def list_models(limit: int = Query(default=50, ge=1, le=200), db: Session = Depe
             "metrics_uri": row.metrics_uri,
             "status": row.status,
             "notes": row.notes,
+            "pipeline_type": getattr(row, "pipeline_type", WHOLE_IMAGE_V1),
+            "detector_version": getattr(row, "detector_version", None),
+            "crop_version": getattr(row, "crop_version", None),
+            "classifier_version": getattr(row, "classifier_version", None),
+            "dataset_version": getattr(row, "dataset_version", None),
         }
         for row in rows
     ]

@@ -103,6 +103,7 @@ class DatasetVersion(Base):
     selection_mode = Column(String(64), nullable=False, default="ALL_APPROVED")
     source_cutoff_at = Column(DateTime(timezone=True))
     status = Column(String(64), nullable=False)
+    pipeline_type = Column(String(64), nullable=False, default="WHOLE_IMAGE_V1")
 
 
 class FeedbackEvent(Base):

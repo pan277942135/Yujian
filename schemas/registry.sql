@@ -135,6 +135,26 @@ CREATE TABLE IF NOT EXISTS feedback_events (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS inference_assets (
+  image_id TEXT PRIMARY KEY,
+  source TEXT NOT NULL DEFAULT 'android_detector',
+  status TEXT NOT NULL DEFAULT 'RECEIVED',
+  record_gcs_uri TEXT NOT NULL,
+  image_gcs_uri TEXT NOT NULL,
+  crop_gcs_uri TEXT,
+  record_sha256 TEXT NOT NULL,
+  image_sha256 TEXT NOT NULL,
+  crop_sha256 TEXT,
+  detector_version TEXT,
+  classifier_version TEXT,
+  accepted_bbox_json TEXT,
+  accepted_species TEXT,
+  reviewed_by TEXT,
+  reviewed_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS training_runs (
   run_id TEXT PRIMARY KEY,
   dataset_version TEXT NOT NULL,
@@ -147,6 +167,10 @@ CREATE TABLE IF NOT EXISTS training_runs (
   status TEXT NOT NULL,
   artifact_uri TEXT,
   metrics_uri TEXT,
+  pipeline_type TEXT NOT NULL DEFAULT 'WHOLE_IMAGE_V1',
+  detector_version TEXT,
+  crop_version TEXT,
+  classifier_version TEXT,
   FOREIGN KEY(dataset_version) REFERENCES datasets(dataset_version)
 );
 
@@ -158,6 +182,11 @@ CREATE TABLE IF NOT EXISTS models (
   metrics_uri TEXT,
   status TEXT NOT NULL,
   notes TEXT,
+  pipeline_type TEXT NOT NULL DEFAULT 'WHOLE_IMAGE_V1',
+  detector_version TEXT,
+  crop_version TEXT,
+  classifier_version TEXT,
+  dataset_version TEXT,
   FOREIGN KEY(run_id) REFERENCES training_runs(run_id)
 );
 
@@ -198,6 +227,7 @@ CREATE INDEX IF NOT EXISTS idx_fingerprint_sha ON image_fingerprints(sha256);
 CREATE INDEX IF NOT EXISTS idx_fingerprint_group ON image_fingerprints(duplicate_group);
 CREATE INDEX IF NOT EXISTS idx_feedback_pipeline ON feedback_events(pipeline_status);
 CREATE INDEX IF NOT EXISTS idx_feedback_batch ON feedback_events(materialized_batch_id);
+CREATE INDEX IF NOT EXISTS idx_inference_assets_status ON inference_assets(status);
 CREATE INDEX IF NOT EXISTS idx_runs_dataset ON training_runs(dataset_version);
 CREATE INDEX IF NOT EXISTS idx_models_status ON models(status);
 CREATE INDEX IF NOT EXISTS idx_error_pool_status ON error_pool(status);

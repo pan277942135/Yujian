@@ -77,6 +77,8 @@ jobs:
         run: test -f schemas/registry.sql
       - name: Validate Dataset Freeze migration exists
         run: test -f schemas/0012_dataset_freeze_v01.sql
+      - name: Validate production pipeline migration exists
+        run: test -f schemas/0013_production_pipeline_v2.sql
       - name: Validate classifier trainer assets exist
         run: test -f Dockerfile.trainer && test -f requirements-training.txt && test -f infra/cloudbuild.trainer.yaml
       - name: Validate inference runtime image configuration

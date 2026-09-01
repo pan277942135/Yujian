@@ -415,6 +415,10 @@ def inference_models(db: Session = Depends(get_db)):
             "dataset_version": run.dataset_version,
             "created_at": model.created_at.isoformat() if model.created_at else None,
             "artifact_uri": model.artifact_uri,
+            "pipeline_type": getattr(model, "pipeline_type", "WHOLE_IMAGE_V1"),
+            "detector_version": getattr(model, "detector_version", None),
+            "crop_version": getattr(model, "crop_version", None),
+            "classifier_version": getattr(model, "classifier_version", None),
         }
         for model, run in rows
     ]
