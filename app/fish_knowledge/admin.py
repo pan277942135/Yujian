@@ -5,7 +5,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from google.cloud import storage
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
@@ -13,6 +13,14 @@ from sqlalchemy.orm import Session, selectinload
 from app.db import get_db
 from app.factory import get_bucket_name
 from app.fish_knowledge.api import build_species_detail, load_species_with_knowledge
+from app.fish_knowledge.cards import (
+    CARD_TYPE_ORDER,
+    CARD_TYPES,
+    FishCard,
+    card_type_sort_order,
+    normalize_card_type,
+)
+from app.fish_knowledge.cover import FishSpeciesCover
 from app.fish_knowledge.fishing import FishFishing
 from app.fish_knowledge.gallery import (
     GALLERY_TYPES,
@@ -259,6 +267,113 @@ class SimilarityUpsert(BaseModel):
         return result
 
 
+class CoverCreate(BaseModel):
+    image_url: str = Field(default="", max_length=2048)
+    style: str = Field(default="ANIME_CARD", min_length=1, max_length=64)
+    title: str = Field(default="", max_length=256)
+    status: Literal["ACTIVE", "DRAFT"] = "DRAFT"
+
+    @field_validator("image_url")
+    @classmethod
+    def valid_image_url(cls, value: str) -> str:
+        result = value.strip()
+        return "" if not result else str(_validate_url(result))
+
+    @field_validator("style", "title")
+    @classmethod
+    def clean_text(cls, value: str) -> str:
+        return value.strip()
+
+
+class CoverPatch(BaseModel):
+    image_url: str | None = Field(default=None, max_length=2048)
+    style: str | None = Field(default=None, min_length=1, max_length=64)
+    title: str | None = Field(default=None, max_length=256)
+    status: Literal["ACTIVE", "DRAFT"] | None = None
+
+    @field_validator("image_url")
+    @classmethod
+    def valid_image_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        result = value.strip()
+        return "" if not result else str(_validate_url(result))
+
+    @field_validator("style", "title")
+    @classmethod
+    def clean_text(cls, value: str | None) -> str | None:
+        return None if value is None else value.strip()
+
+
+class CardCreate(BaseModel):
+    card_type: str = Field(
+        validation_alias=AliasChoices("card_type", "type"),
+        min_length=1,
+        max_length=32,
+    )
+    title: str = Field(default="", max_length=256)
+    image_url: str = Field(default="", max_length=2048)
+    description: str = Field(default="", max_length=2000)
+    sort_order: int | None = Field(default=None, ge=0, le=10000)
+    status: Literal["ACTIVE", "DRAFT"] = "DRAFT"
+
+    @field_validator("card_type")
+    @classmethod
+    def valid_card_type(cls, value: str) -> str:
+        normalized = str(value).strip().upper()
+        if normalized not in CARD_TYPES:
+            raise ValueError(f"不支持的卡片类型：{value}")
+        return normalize_card_type(normalized)
+
+    @field_validator("image_url")
+    @classmethod
+    def valid_image_url(cls, value: str) -> str:
+        result = value.strip()
+        return "" if not result else str(_validate_url(result))
+
+    @field_validator("title", "description")
+    @classmethod
+    def clean_text(cls, value: str) -> str:
+        return value.strip()
+
+
+class CardPatch(BaseModel):
+    card_type: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("card_type", "type"),
+        min_length=1,
+        max_length=32,
+    )
+    title: str | None = Field(default=None, max_length=256)
+    image_url: str | None = Field(default=None, max_length=2048)
+    description: str | None = Field(default=None, max_length=2000)
+    sort_order: int | None = Field(default=None, ge=0, le=10000)
+    status: Literal["ACTIVE", "DRAFT"] | None = None
+
+    @field_validator("card_type")
+    @classmethod
+    def valid_card_type(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip().upper()
+        if normalized not in CARD_TYPES:
+            raise ValueError(f"不支持的卡片类型：{value}")
+        return normalize_card_type(normalized)
+
+    @field_validator("image_url")
+    @classmethod
+    def valid_image_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        result = value.strip()
+        return "" if not result else str(_validate_url(result))
+
+    @field_validator("title", "description")
+    @classmethod
+    def clean_text(cls, value: str | None) -> str | None:
+        return None if value is None else value.strip()
+
+
 def _commit(db: Session) -> None:
     try:
         db.commit()
@@ -301,6 +416,55 @@ def _video_dict(row: FishVideo) -> dict:
         "tags": row.tags or [],
         "order": row.sort_order,
     }
+
+
+def _cover_dict(row: FishSpeciesCover) -> dict:
+    return {
+        "id": row.id,
+        "species_id": row.species_id,
+        "image_url": row.image_url,
+        "style": row.style,
+        "title": row.title,
+        "status": row.status,
+    }
+
+
+def _card_dict(row: FishCard) -> dict:
+    card_type = normalize_card_type(row.card_type)
+    return {
+        "id": row.id,
+        "species_id": row.species_id,
+        "card_type": card_type,
+        # ``type`` mirrors the public detail example while ``card_type`` keeps
+        # the database field name explicit for Admin clients.
+        "type": card_type,
+        "title": row.title,
+        "image_url": row.image_url,
+        "description": row.description,
+        "sort_order": row.sort_order,
+        "status": row.status,
+    }
+
+
+def _ensure_active_card_type(
+    db: Session,
+    species_id: str,
+    card_type: str,
+    *,
+    exclude_id: int | None = None,
+) -> None:
+    normalized = normalize_card_type(card_type)
+    rows = db.scalars(
+        select(FishCard).where(
+            FishCard.species_id == species_id,
+            FishCard.status == "ACTIVE",
+        )
+    ).all()
+    if any(
+        row.id != exclude_id and normalize_card_type(row.card_type) == normalized
+        for row in rows
+    ):
+        raise HTTPException(status_code=409, detail=f"同一鱼种不能有两个 ACTIVE {normalized} 卡片")
 
 
 def _ensure_gallery_slot(
@@ -419,6 +583,147 @@ def update_admin_species(species_id: str, payload: SpeciesPatch, db: Session = D
         "genus": row.genus,
         "summary": row.summary,
         "status": row.status,
+    }
+
+
+@router.get("/species/{species_id}/cover")
+def get_species_cover(species_id: str, db: Session = Depends(get_db)) -> dict:
+    species = _require_species(db, species_id)
+    row = db.get(FishSpeciesCover, species.id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="fish species cover not found")
+    return _cover_dict(row)
+
+
+@router.post("/species/{species_id}/cover", status_code=201)
+def create_species_cover(species_id: str, payload: CoverCreate, db: Session = Depends(get_db)) -> dict:
+    species = _require_species(db, species_id)
+    if db.get(FishSpeciesCover, species.id) is not None:
+        raise HTTPException(status_code=409, detail="fish species cover already exists")
+    row = FishSpeciesCover(species_id=species.id, **payload.model_dump())
+    db.add(row)
+    _commit(db)
+    db.refresh(row)
+    return _cover_dict(row)
+
+
+@router.patch("/species/{species_id}/cover")
+def update_species_cover(species_id: str, payload: CoverPatch, db: Session = Depends(get_db)) -> dict:
+    species = _require_species(db, species_id)
+    row = db.get(FishSpeciesCover, species.id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="fish species cover not found")
+    for field in payload.model_fields_set:
+        value = getattr(payload, field)
+        if field == "image_url" and value is None:
+            value = ""
+        if field == "style" and value is None:
+            raise HTTPException(status_code=400, detail="style 不能为空")
+        setattr(row, field, value)
+    _commit(db)
+    return _cover_dict(row)
+
+
+@router.delete("/species/{species_id}/cover")
+def delete_species_cover(species_id: str, db: Session = Depends(get_db)) -> dict:
+    species = _require_species(db, species_id)
+    row = db.get(FishSpeciesCover, species.id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="fish species cover not found")
+    db.delete(row)
+    _commit(db)
+    return {"deleted": True, "species_id": species.id}
+
+
+@router.get("/species/{species_id}/cards")
+def list_species_cards(species_id: str, db: Session = Depends(get_db)) -> list[dict]:
+    species = _require_species(db, species_id)
+    rows = db.scalars(
+        select(FishCard)
+        .where(FishCard.species_id == species.id)
+        .order_by(FishCard.sort_order, FishCard.id)
+    ).all()
+    return [_card_dict(row) for row in rows]
+
+
+@router.post("/species/{species_id}/cards", status_code=201)
+def create_species_card(species_id: str, payload: CardCreate, db: Session = Depends(get_db)) -> dict:
+    species = _require_species(db, species_id)
+    card_type = normalize_card_type(payload.card_type)
+    if payload.status == "ACTIVE":
+        _ensure_active_card_type(db, species.id, card_type)
+    values = payload.model_dump(exclude={"card_type", "sort_order"})
+    row = FishCard(
+        species_id=species.id,
+        card_type=card_type,
+        sort_order=payload.sort_order if payload.sort_order is not None else card_type_sort_order(card_type),
+        **values,
+    )
+    db.add(row)
+    _commit(db)
+    db.refresh(row)
+    return _card_dict(row)
+
+
+@router.patch("/cards/{card_id}")
+def update_species_card(card_id: int, payload: CardPatch, db: Session = Depends(get_db)) -> dict:
+    row = db.get(FishCard, card_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="fish card not found")
+
+    new_type = normalize_card_type(payload.card_type) if payload.card_type is not None else normalize_card_type(row.card_type)
+    new_status = payload.status if payload.status is not None else row.status
+    if new_status == "ACTIVE":
+        _ensure_active_card_type(db, row.species_id, new_type, exclude_id=row.id)
+
+    for field in payload.model_fields_set:
+        value = getattr(payload, field)
+        if field == "card_type":
+            value = new_type
+        elif field in {"title", "image_url", "description"} and value is None:
+            value = ""
+        setattr(row, field, value)
+    if "card_type" in payload.model_fields_set and "sort_order" not in payload.model_fields_set:
+        row.sort_order = card_type_sort_order(new_type)
+    _commit(db)
+    return _card_dict(row)
+
+
+@router.delete("/cards/{card_id}")
+def delete_species_card(card_id: int, db: Session = Depends(get_db)) -> dict:
+    row = db.get(FishCard, card_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="fish card not found")
+    species_id = row.species_id
+    db.delete(row)
+    _commit(db)
+    return {"deleted": True, "id": card_id, "species_id": species_id}
+
+
+@router.get("/species/{species_id}/completion")
+def species_completion(species_id: str, db: Session = Depends(get_db)) -> dict:
+    species = _require_species(db, species_id)
+    cover = db.get(FishSpeciesCover, species.id)
+    cards = db.scalars(select(FishCard).where(FishCard.species_id == species.id)).all()
+    gallery_count = int(
+        db.scalar(select(func.count()).select_from(FishGalleryImage).where(FishGalleryImage.species_id == species.id))
+        or 0
+    )
+    video_count = int(
+        db.scalar(select(func.count()).select_from(FishVideo).where(FishVideo.species_id == species.id)) or 0
+    )
+    completed_types = {
+        normalize_card_type(card.card_type)
+        for card in cards
+        if (card.image_url or "").strip()
+        and normalize_card_type(card.card_type) in CARD_TYPE_ORDER
+    }
+    return {
+        "species_complete": bool(species.name_cn.strip() and species.category.strip() and species.summary.strip()),
+        "cover": bool(cover is not None and (cover.image_url or "").strip()),
+        "cards": {"completed": len(completed_types), "total": len(CARD_TYPE_ORDER)},
+        "gallery": {"completed": min(gallery_count, MAX_GALLERY_IMAGES), "total": MAX_GALLERY_IMAGES},
+        "video": video_count > 0,
     }
 
 
