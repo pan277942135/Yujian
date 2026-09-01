@@ -12,6 +12,7 @@ from app.dataset_api import router as dataset_freeze_router
 from app.training_api import router as training_router, templates as training_templates
 from app.inference_api import router as inference_router, templates as inference_templates
 from app.feedback_ingest_api import router as feedback_ingest_router
+from app.batch_upload_api import router as batch_upload_router
 from app.p0_automation import install_feedback_automation, router as automation_router
 from app.unified_nav import install_unified_nav
 from app.db import SessionLocal
@@ -41,7 +42,6 @@ def seed_target_species_catalog() -> None:
 
 @app.get("/health/deploy")
 def deployment_health() -> dict:
-    """Public, non-secret deployment provenance for online CD verification."""
     feedback_ingest_key_configured = bool(os.getenv("FEEDBACK_INGEST_KEY", "").strip())
     return {
         "status": "ok",
@@ -56,10 +56,9 @@ def deployment_health() -> dict:
 
 @app.get("/health/detector")
 def detector_health() -> dict:
-    """Public readiness probe that proves the deployed service can load official DET_FISH_v0.1."""
     try:
         detector = load_detector()
-    except Exception as exc:  # pragma: no cover - exercised in Cloud Run deployment smoke
+    except Exception as exc:
         raise HTTPException(status_code=503, detail="production detector is unavailable") from exc
     return {
         "status": "ok",
@@ -78,4 +77,5 @@ app.include_router(dataset_freeze_router)
 app.include_router(training_router)
 app.include_router(inference_router)
 app.include_router(feedback_ingest_router)
+app.include_router(batch_upload_router)
 app.include_router(automation_router)
