@@ -49,6 +49,13 @@ class FishSpecies(Base):
         passive_deletes=True,
         order_by="FishCard.sort_order, FishCard.id",
     )
+    cover = relationship(
+        "FishSpeciesCover",
+        back_populates="species",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        uselist=False,
+    )
     profile = relationship(
         "FishProfile",
         back_populates="species",

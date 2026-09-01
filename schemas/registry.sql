@@ -189,6 +189,21 @@ CREATE INDEX IF NOT EXISTS idx_fish_cards_status ON fish_cards(status);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_fish_cards_active_type
   ON fish_cards(species_id, card_type) WHERE status = 'ACTIVE';
 
+CREATE TABLE IF NOT EXISTS fish_species_cover (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  species_id TEXT NOT NULL UNIQUE,
+  image_url TEXT NOT NULL DEFAULT '',
+  style TEXT NOT NULL DEFAULT 'ANIME_CARD',
+  title TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'DRAFT' CHECK(status IN ('ACTIVE', 'DRAFT')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(species_id) REFERENCES fish_species(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_fish_species_cover_species ON fish_species_cover(species_id);
+CREATE INDEX IF NOT EXISTS idx_fish_species_cover_status ON fish_species_cover(status);
+
 CREATE TABLE IF NOT EXISTS fish_gallery (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   species_id TEXT NOT NULL,
