@@ -4,6 +4,7 @@ import csv
 import io
 import json
 import mimetypes
+import os
 import re
 import shutil
 from collections import defaultdict
@@ -110,6 +111,15 @@ def _source_path(row: Mapping[str, Any]) -> tuple[Path | None, str]:
 
 def _copy_gcs(source_uri: str, destination: Path, storage_client: Any = None) -> bool:
     if not source_uri.startswith("gs://"):
+        return False
+    # Do not make local unit tests wait on the Compute Metadata Server when no
+    # GCS client/ADC is configured.  Cloud Run supplies K_SERVICE and can use
+    # its attached service account normally; callers may always inject a fake
+    # or real client explicitly.
+    if storage_client is None and not any(
+        os.getenv(name, "").strip()
+        for name in ("GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT", "GCP_PROJECT_ID", "K_SERVICE")
+    ):
         return False
     try:
         from google.cloud import storage

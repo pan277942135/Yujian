@@ -307,6 +307,24 @@ def _load_class_map(db: Session, model_version: str, document: Any, storage_clie
     return document
 
 
+def _metrics_for_dashboard(document: Any) -> dict[str, Any]:
+    """Expose the canonical metrics envelope without changing legacy reports."""
+
+    if not isinstance(document, Mapping):
+        return {}
+    raw = document.get("metrics")
+    if not isinstance(raw, Mapping):
+        raw = document.get("test")
+    if not isinstance(raw, Mapping):
+        return {}
+    result = dict(raw)
+    if document.get("test_samples") not in (None, ""):
+        result["test_samples"] = document.get("test_samples")
+    elif result.get("count") not in (None, ""):
+        result["test_samples"] = result.get("count")
+    return result
+
+
 def build_intelligence_payload(
     db: Session,
     *,
@@ -340,6 +358,7 @@ def build_intelligence_payload(
             "evaluation_warning": warning,
         },
         "confusion_report": confusion,
+        "metrics": _metrics_for_dashboard(evaluation_document),
         "data_gaps": gaps,
         "production_tasks": tasks,
         "manifest": {"source": "registry", "row_count": len(manifest_rows)},

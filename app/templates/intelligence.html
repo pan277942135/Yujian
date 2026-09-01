@@ -10,12 +10,13 @@
     header a{text-decoration:none;color:#111827;font-weight:650}main{max-width:1500px;margin:0 auto;padding:24px}
     .top{display:flex;justify-content:space-between;align-items:flex-end;gap:14px}.muted{color:#6b7280}.section{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin-top:18px}
     .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:18px}.card{background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:14px}.card b{display:block;font-size:22px;margin-top:4px}
+    .metric-cards{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-top:12px}.metric-card{background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:12px;min-width:0}.metric-card b{display:block;font-size:20px;margin-top:4px}.artifact-meta{margin-top:12px;padding:10px;border-radius:10px;background:#f9fafb;font-size:12px}
     .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
     button{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:9px 12px;background:#fff;cursor:pointer;font-weight:650}.primary{background:#111827;color:#fff;border-color:#111827}
     table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid #eee;font-size:13px;vertical-align:top}th{color:#6b7280}
     .pill{display:inline-block;padding:3px 8px;border-radius:999px;background:#f3f4f6;font-size:12px}.p0{background:#fff1f2;color:#9f1239}.p1{background:#fff7ed;color:#9a3412}.p2{background:#f3f4f6}.good{background:#ecfdf5}.warn{background:#fff7ed}.banner{display:none;white-space:pre-wrap;margin-top:14px;padding:12px;border-radius:10px;background:#eef2ff}.empty{padding:16px;color:#6b7280;text-align:center}.num{font-variant-numeric:tabular-nums}.uri{font-family:ui-monospace,monospace;font-size:11px;word-break:break-all}
     .task{border:1px solid #e5e7eb;border-radius:12px;padding:14px;margin-top:10px}.task h3{margin:0 0 7px}.task ul{margin:7px 0 0;padding-left:19px}
-    @media(max-width:850px){.grid{grid-template-columns:1fr}.cards{grid-template-columns:1fr 1fr}main{padding:16px}.section{padding:14px}}
+    @media(max-width:850px){.grid{grid-template-columns:1fr}.cards{grid-template-columns:1fr 1fr}.metric-cards{grid-template-columns:repeat(2,minmax(0,1fr))}main{padding:16px}.section{padding:14px}}
   </style>
 </head>
 <body>
@@ -30,6 +31,14 @@
     <div class="card"><span class="muted">Top Confusion</span><b id="confusionCount">0</b></div>
     <div class="card"><span class="muted">数据缺口</span><b id="gapCount">0</b></div>
   </div>
+
+  <section class="section"><h2>Evaluation Metrics</h2><div class="muted">来源：Evaluation Artifact Contract v1；仅展示评估结果，不会触发训练或数据变更。</div><div class="metric-cards">
+    <div class="metric-card"><span class="muted">Top1</span><b id="metricTop1">-</b></div>
+    <div class="metric-card"><span class="muted">Top3</span><b id="metricTop3">-</b></div>
+    <div class="metric-card"><span class="muted">Macro Precision</span><b id="metricPrecision">-</b></div>
+    <div class="metric-card"><span class="muted">Macro Recall</span><b id="metricRecall">-</b></div>
+    <div class="metric-card"><span class="muted">Macro F1</span><b id="metricF1">-</b></div>
+  </div><div id="artifactMeta" class="artifact-meta">尚未读取标准评估产物。</div></section>
 
   <div class="grid">
     <section class="section"><h2>Top Confusion</h2><div id="confusionNote" class="muted">优先级由 error_count × error_rate × species_importance 计算。</div><div style="overflow:auto;margin-top:8px"><table data-card-labels="真实鱼种|预测鱼种|错误数|错误率|优先级"><thead><tr><th>真实鱼种</th><th>预测鱼种</th><th>错误数</th><th>错误率</th><th>优先级</th></tr></thead><tbody id="confusions"></tbody></table></div></section>
@@ -46,9 +55,10 @@ function priority(v){const p=(v||'P2').toUpperCase();return `<span class="pill $
 function pct(v){const n=Number(v);return Number.isFinite(n)?(n*100).toFixed(1)+'%':'-'}
 function renderConfusions(rows){const body=document.getElementById('confusions');body.innerHTML=(rows||[]).map(x=>`<tr><td><b>${esc(x.true_species)}</b></td><td>${esc(x.pred_species)}</td><td class="num">${x.error_count??0}</td><td>${pct(x.error_rate)}</td><td>${priority(x.priority)}</td></tr>`).join('')||'<tr><td colspan="5" class="empty">暂无评估错误组合</td></tr>'}
 function renderGaps(data){const rows=data?.species_gaps||[];document.getElementById('gaps').innerHTML=rows.map(x=>`<tr><td><b>${esc(x.species)}</b></td><td class="num">${x.current??0}</td><td class="num">${x.target??0}</td><td class="num">${x.gap??0}</td></tr>`).join('')||'<tr><td colspan="4" class="empty">暂无目标配置</td></tr>';const scenes=(data?.scene_gaps||[]).filter(x=>(x.missing_scenes||[]).length);document.getElementById('sceneGaps').innerHTML=scenes.length?`场景缺口：${scenes.map(x=>`<b>${esc(x.species)}</b> 缺少 ${esc(x.missing_scenes.join('、'))}`).join('；')}`:'没有发现配置的场景缺口。'}
+function renderMetrics(data){const value=(...keys)=>{for(const key of keys){if(data&&data[key]!==undefined&&data[key]!==null&&data[key]!=='')return pct(data[key])}return '-'};document.getElementById('metricTop1').textContent=value('top1_accuracy','accuracy');document.getElementById('metricTop3').textContent=value('top3_accuracy');document.getElementById('metricPrecision').textContent=value('macro_precision');document.getElementById('metricRecall').textContent=value('macro_recall');document.getElementById('metricF1').textContent=value('macro_f1');}
 function renderTasks(rows){const host=document.getElementById('tasks');host.innerHTML=(rows||[]).map(x=>{const species=(x.requirements?.species||[]).map(s=>`${esc(s.name)} +${s.count??0}`).join('、')||'待补充';const scenes=(x.requirements?.scenes||[]).map(esc).join('、')||'-';return `<div class="task"><h3>${esc(x.task_id)} <span class="pill good">${esc(x.status||'OPEN')}</span></h3><div class="muted">${esc(x.task_type)} · ${esc(x.model_version||'-')}</div><p><b>原因：</b>${(x.reason||[]).map(r=>`${esc(r.true)} → ${esc(r.pred)}（${r.errors??0}）`).join('；')||'类别数量缺口'}</p><div><b>采集鱼种：</b>${species}</div><div><b>建议场景：</b>${scenes}</div><div class="actions"><button class="primary" onclick="propose('${esc(x.task_id)}')">生成采集Batch</button></div></div>`}).join('')||'<div class="empty">暂无可生成的采集任务。</div>'}
 async function propose(taskId){try{const d=await api('/api/intelligence/tasks/'+encodeURIComponent(taskId)+'/batch',{method:'POST'});msg(`${d.message}\n建议 Batch ID：${d.batch.batch_id}\n来源：${d.batch.source}\n此操作没有自动创建 Batch。`)}catch(e){msg(e.message,true)}}
-async function load(){try{const d=await api('/api/intelligence');document.getElementById('modelVersion').textContent=d.model?.model_version||'-';document.getElementById('evalStatus').textContent=d.model?.evaluation_status==='READY'?'READY':'未找到评估';const c=d.confusion_report?.top_confusions||[];document.getElementById('confusionCount').textContent=c.length;const g=d.data_gaps?.species_gaps||[];document.getElementById('gapCount').textContent=g.filter(x=>Number(x.gap)>0).length;renderConfusions(c);renderGaps(d.data_gaps);renderTasks(d.production_tasks);if(d.model?.evaluation_warning)msg(d.model.evaluation_warning,true)}catch(e){msg(e.message,true)}}
+async function load(){try{const d=await api('/api/intelligence');document.getElementById('modelVersion').textContent=d.model?.model_version||'-';document.getElementById('evalStatus').textContent=d.model?.evaluation_status==='READY'?'READY':'未找到评估';const c=d.confusion_report?.top_confusions||[];document.getElementById('confusionCount').textContent=c.length;const g=d.data_gaps?.species_gaps||[];document.getElementById('gapCount').textContent=g.filter(x=>Number(x.gap)>0).length;renderMetrics(d.metrics||{});const artifact=d.evaluation_artifacts||{};document.getElementById('artifactMeta').textContent=artifact.contract_version?`标准产物：${artifact.contract_version} · ${artifact.test_samples??d.metrics?.test_samples??'-'} 个 Test 样本`:(d.model?.evaluation_source?`评估来源：${d.model.evaluation_source}`:'尚未读取标准评估产物。');renderConfusions(c);renderGaps(d.data_gaps);renderTasks(d.production_tasks);if(d.model?.evaluation_warning)msg(d.model.evaluation_warning,true)}catch(e){msg(e.message,true)}}
 load();
 </script>
 </body>

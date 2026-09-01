@@ -66,3 +66,12 @@ def test_standard_artifact_bundle_is_joined_for_model_intelligence(tmp_path, mon
     )
     assert (pair["true_species"], pair["pred_species"], pair["priority"]) == ("grass_carp", "common_carp", "P0")
     assert payload["evaluation_artifacts"]["contract_version"] == "evaluation-artifact-v1"
+    assert payload["metrics"]["top1_accuracy"] == 0.645
+    assert payload["metrics"]["top3_accuracy"] == 0.879
+    assert payload["metrics"]["macro_f1"] == 0.601
+
+
+def test_intelligence_dashboard_exposes_artifact_metrics():
+    template = open("app/templates/intelligence.html", encoding="utf-8").read()
+    for token in ("Evaluation Metrics", 'id="metricTop1"', 'id="metricTop3"', 'id="metricF1"', "renderMetrics(d.metrics"):
+        assert token in template
