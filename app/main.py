@@ -230,6 +230,12 @@ def species_page(request: Request):
     return templates.TemplateResponse(request=request, name="species.html", context={})
 
 
+@app.get("/fish-knowledge", response_class=HTMLResponse)
+def fish_knowledge_page(request: Request):
+    """Content workspace for the Fish Knowledge asset package."""
+    return templates.TemplateResponse(request=request, name="fish_knowledge.html", context={})
+
+
 @app.get("/feedback", response_class=HTMLResponse)
 def feedback_page(request: Request):
     return templates.TemplateResponse(request=request, name="feedback.html", context={})

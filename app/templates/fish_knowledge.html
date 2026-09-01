@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>鱼鉴内容 · 渔见 AI</title>
+  <style>
+    body{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f6f7f8;color:#171717}
+    header{background:#fff;border-bottom:1px solid #e5e7eb;padding:14px 24px;display:flex;gap:22px;align-items:center;position:sticky;top:0;z-index:3}
+    header a{text-decoration:none;color:#111827;font-weight:650}
+    main{max-width:1500px;margin:0 auto;padding:24px}.top{display:flex;justify-content:space-between;align-items:flex-end;gap:14px}.muted{color:#6b7280}
+    .workspace{display:grid;grid-template-columns:330px minmax(0,1fr);gap:18px;align-items:start;margin-top:18px}
+    .section{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin-top:18px}.workspace>.section{margin-top:0}
+    .list{position:sticky;top:68px}.toolbar{display:flex;gap:8px;align-items:center}.toolbar input{flex:1;min-width:0}
+    input,button,select,textarea{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:9px;background:#fff;box-sizing:border-box}button{cursor:pointer;font-weight:650}.primary{background:#111827;color:#fff;border-color:#111827}.danger{color:#b91c1c}
+    .species-list{margin:12px -6px 0;max-height:calc(100vh - 220px);overflow:auto}.species-item{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid #f0f0f0;border-radius:0;padding:12px 10px;background:transparent}.species-item:hover,.species-item.selected{background:#f3f4f6}.species-item b{display:block}.species-meta{display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-top:5px;font-size:11px;color:#6b7280}.pill{display:inline-block;padding:3px 8px;border-radius:999px;background:#f3f4f6;font-size:12px}.good{background:#ecfdf5;color:#047857}.warn{background:#fff7ed;color:#9a3412}.draft{background:#f3f4f6;color:#6b7280}
+    .editor-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.actions{display:flex;gap:8px;flex-wrap:wrap}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.row{display:grid;grid-template-columns:118px 1fr;gap:10px;align-items:center;margin:9px 0}.row label{color:#4b5563;font-size:13px}.full{grid-column:1/-1}textarea{min-height:74px;resize:vertical;width:100%}
+    .preview{display:grid;grid-template-columns:190px 1fr;gap:16px;margin-top:16px}.cover-preview{height:190px;border-radius:14px;background:linear-gradient(145deg,#171717,#403522);display:grid;place-items:center;overflow:hidden;color:#d6b56d;text-align:center;padding:12px}.cover-preview img{width:100%;height:100%;object-fit:cover}.cover-preview .placeholder{font-size:12px;line-height:1.6}.progress{height:9px;background:#eef0f2;border-radius:99px;overflow:hidden}.progress>i{display:block;height:100%;background:#0f766e}.completion-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:12px}.completion-item{border:1px solid #e5e7eb;border-radius:10px;padding:10px;font-size:12px}.completion-item b{display:block;font-size:15px;margin-top:4px}.completion-item.ready{border-color:#a7f3d0;background:#ecfdf5}.completion-item.partial{border-color:#fed7aa;background:#fff7ed}
+    .cards-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}.card-slot{border:1px solid #e5e7eb;border-radius:12px;padding:12px;min-width:0}.card-slot h3{font-size:14px;margin:0}.card-slot small{display:block;color:#6b7280;margin-top:3px;min-height:30px}.card-slot input,.card-slot textarea,.card-slot select{width:100%;margin-top:7px}.card-slot textarea{min-height:82px}.card-slot .thumb{height:112px;border-radius:8px;background:#171717 url('') center/cover no-repeat;display:grid;place-items:center;color:#d6b56d;font-size:11px;text-align:center;overflow:hidden}.card-slot .thumb img{width:100%;height:100%;object-fit:cover}.card-slot .status{display:flex;gap:7px;align-items:center;margin-top:8px;font-size:12px}.card-slot .status select{margin:0;padding:6px}
+    .table-wrap{overflow:auto}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px 7px;border-bottom:1px solid #eee;font-size:13px;vertical-align:top}th{color:#6b7280}.empty{padding:16px;text-align:center;color:#6b7280}.banner{display:none;white-space:pre-wrap;margin-top:14px;padding:12px;border-radius:10px;background:#eef2ff}.asset-note{font-size:12px;color:#6b7280;line-height:1.6}.link{color:#075985;text-decoration:underline;word-break:break-all}.section h2{margin-top:0}.section h3{margin-bottom:8px}.inline-form{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.inline-form>*{min-width:0}.inline-form input{flex:1}.tag-list{display:flex;gap:6px;flex-wrap:wrap}.tag-list .pill{background:#eef2ff;color:#3730a3}
+    @media(max-width:1050px){.workspace{grid-template-columns:270px 1fr}.cards-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.completion-grid{grid-template-columns:repeat(3,1fr)}}
+    @media(max-width:760px){main{padding:14px}.workspace{display:block}.workspace>.section{margin-top:14px}.list{position:static}.species-list{max-height:270px}.preview{grid-template-columns:1fr}.cover-preview{height:220px}.grid{grid-template-columns:1fr}.cards-grid{grid-template-columns:1fr 1fr}.completion-grid{grid-template-columns:1fr 1fr}.row{grid-template-columns:1fr;gap:5px}.editor-head{flex-direction:column}.actions>*{width:100%}.inline-form>*{width:100%;flex-basis:100%}.inline-form input{flex:auto}}
+  </style>
+</head>
+<body>
+<header class="app-nav"><a href="/">总览</a><a href="/species">鱼种管理</a><a href="/fish-knowledge">鱼鉴内容</a><a href="/feedback">用户反馈</a><a href="/datasets">数据集</a></header>
+{% include "_mobile_ux.html" %}
+<main>
+  <div class="top">
+    <div><h1>鱼鉴内容工作台</h1><div class="muted">一个鱼种 = 列表封面 + 五张鱼鉴卡 + 结构化知识 + Gallery + 视频。只有 ACTIVE 内容会进入 App 公共详情接口。</div></div>
+    <div class="actions"><button onclick="loadSpecies()">刷新目录</button></div>
+  </div>
+  <div id="banner" class="banner"></div>
+  <div class="workspace">
+    <section class="section list">
+      <h2>鱼种资产包</h2>
+      <div class="toolbar"><input id="search" placeholder="搜索鱼种" oninput="renderSpeciesList()"><select id="statusFilter" onchange="renderSpeciesList()"><option value="">全部状态</option><option value="ACTIVE">ACTIVE</option><option value="DRAFT">DRAFT</option></select></div>
+      <div id="speciesList" class="species-list"><div class="empty">正在加载…</div></div>
+    </section>
+
+    <section class="section" id="editor">
+      <div id="emptyEditor" class="empty">请选择一个鱼种开始维护内容。</div>
+      <div id="editorBody" hidden>
+        <div class="editor-head">
+          <div><h2 id="editorTitle">鱼种内容</h2><div id="editorMeta" class="muted"></div></div>
+          <div class="actions"><button onclick="openPublicDetail()">打开 App 详情 JSON</button><button class="primary" onclick="saveSpecies()">保存鱼种资料</button></div>
+        </div>
+
+        <div class="preview">
+          <div id="coverPreview" class="cover-preview"><div class="placeholder">暂无 ACTIVE 封面<br>后台可先保存 DRAFT</div></div>
+          <div>
+            <div class="asset-note">内容完成度</div>
+            <div id="completionGrid" class="completion-grid"></div>
+            <p class="asset-note">封面与卡片支持空 URL 草稿；发布前请填入真实 HTTPS 地址。系统不会生成或伪造图片。</p>
+          </div>
+        </div>
+
+        <section class="section"><h2>Species 基础资料</h2><div class="grid">
+          <div class="row"><label>中文名</label><input id="speciesName"></div><div class="row"><label>学名</label><input id="scientificName"></div>
+          <div class="row"><label>分类</label><input id="category"></div><div class="row"><label>科</label><input id="family"></div>
+          <div class="row"><label>属</label><input id="genus"></div><div class="row"><label>状态</label><select id="speciesStatus"><option>ACTIVE</option><option>DRAFT</option></select></div>
+          <div class="row full"><label>别名</label><input id="aliases" placeholder="用逗号分隔"></div><div class="row full"><label>一句话介绍</label><textarea id="summary"></textarea></div>
+        </div></section>
+
+        <section class="section"><h2>列表 Cover Card</h2><div class="grid">
+          <div class="row"><label>图片 URL</label><input id="coverUrl" placeholder="https://…"></div><div class="row"><label>样式</label><input id="coverStyle" value="ANIME_CARD"></div>
+          <div class="row"><label>标题</label><input id="coverTitle"></div><div class="row"><label>状态</label><select id="coverStatus"><option>ACTIVE</option><option>DRAFT</option></select></div>
+        </div><p class="asset-note">列表封面是一张独立的动漫风图鉴卡，不占用下面五张详情鱼鉴卡名额。</p><div class="actions"><button class="primary" onclick="saveCover()">保存封面</button><button class="danger" onclick="deleteCover()">删除封面记录</button></div></section>
+
+        <section class="section"><h2>五张黑金鱼鉴卡</h2><p class="asset-note">固定槽位：HERO、IDENTIFICATION、ECO、GEAR、SKILL。兼容旧输入别名，但 API 保存为当前产品词汇。</p><div id="cardsGrid" class="cards-grid"></div><div class="actions" style="margin-top:12px"><button class="primary" onclick="saveCards()">保存五张卡</button></div></section>
+
+        <section class="section"><h2>结构化知识</h2><div class="grid">
+          <div class="row"><label>体型</label><input id="bodyShape"></div><div class="row"><label>食性</label><input id="food"></div>
+          <div class="row full"><label>视觉特征</label><textarea id="features" placeholder="每行或逗号一个"></textarea></div><div class="row full"><label>常见水域</label><textarea id="habitat" placeholder="每行或逗号一个"></textarea></div><div class="row full"><label>活跃季节</label><textarea id="season" placeholder="每行或逗号一个"></textarea></div>
+        </div><div class="actions"><button class="primary" onclick="saveProfile()">保存基础介绍</button></div></section>
+
+        <section class="section"><h2>钓鱼知识</h2><div class="grid">
+          <div class="row"><label>水层</label><input id="waterLayer"></div><div class="row"><label>季节</label><input id="fishingSeason" placeholder="用逗号分隔"></div>
+          <div class="row full"><label>饵料</label><textarea id="bait" placeholder="每行或逗号一个"></textarea></div><div class="row full"><label>钓法</label><textarea id="method" placeholder="每行或逗号一个"></textarea></div><div class="row full"><label>短说明</label><textarea id="fishingSummary"></textarea></div>
+        </div><div class="actions"><button class="primary" onclick="saveFishing()">保存钓鱼知识</button></div></section>
+
+        <section class="section"><h2>真实 Gallery</h2><div class="table-wrap"><table data-card-labels="顺序|类型|标题|地址|操作"><thead><tr><th>顺序</th><th>类型</th><th>标题</th><th>地址</th><th>操作</th></tr></thead><tbody id="galleryTable"></tbody></table></div><div class="inline-form" style="margin-top:12px"><input id="galleryUrl" placeholder="https://…真实照片地址"><select id="galleryType"><option value="standard">standard</option><option value="side">side</option><option value="top">top</option><option value="catch">catch</option><option value="environment">environment</option><option value="action">action</option></select><input id="galleryTitle" placeholder="标题"><select id="galleryOrder"><option value="0">1</option><option value="1">2</option><option value="2">3</option><option value="3">4</option><option value="4">5</option></select><button class="primary" onclick="addGallery()">新增 Gallery</button></div><p class="asset-note">也可使用已有上传接口提交真实文件：<code>POST /api/v1/admin/fish/species/{id}/gallery/upload</code>。</p></section>
+
+        <section class="section"><h2>Fishing Video</h2><div class="table-wrap"><table data-card-labels="标题|类型|视频地址|时长|标签|操作"><thead><tr><th>标题</th><th>类型</th><th>视频地址</th><th>时长</th><th>标签</th><th>操作</th></tr></thead><tbody id="videoTable"></tbody></table></div><div class="grid" style="margin-top:12px"><div class="row"><label>标题</label><input id="videoTitle"></div><div class="row"><label>类型</label><select id="videoType"><option>INTRO</option><option>HOW_TO_FISH</option><option>REAL_CATCH</option><option>EQUIPMENT</option></select></div><div class="row"><label>视频 URL</label><input id="videoUrl" placeholder="https://…"></div><div class="row"><label>封面 URL</label><input id="videoCoverUrl" placeholder="可留空"></div><div class="row"><label>时长（秒）</label><input id="videoDuration" type="number" min="0" value="0"></div><div class="row"><label>标签</label><input id="videoTags" placeholder="用逗号分隔"></div></div><div class="actions"><button class="primary" onclick="addVideo()">新增视频</button></div></section>
+
+        <section class="section"><h2>相似鱼与动态入口</h2><div id="similarity" class="tag-list"></div><p class="asset-note">用户鱼获与排行榜由详情接口的 <code>dynamic</code> 占位承载；当前不会伪造统计数据。</p></section>
+      </div>
+    </section>
+  </div>
+</main>
+<script>
+const CARD_TYPES=[['HERO','英雄卡'],['IDENTIFICATION','识别卡'],['ECO','生态卡'],['GEAR','装备卡'],['SKILL','作钓技术卡']];
+let speciesRows=[],selectedId=null,detail=null,cover=null,cards=[],completion=null;
+function esc(v){return (v??'').toString().replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function byId(id){return document.getElementById(id)}
+function message(text,error=false){const b=byId('banner');b.style.display='block';b.style.background=error?'#fff1f2':'#eef2ff';b.textContent=text;window.scrollTo({top:0,behavior:'smooth'})}
+async function api(url,opts){const r=await fetch(url,opts);const text=await r.text();let data;try{data=JSON.parse(text)}catch{data=text}if(!r.ok)throw new Error(data.detail||text||r.statusText);return data}
+function splitList(v){return [...new Set((v||'').replace(/\n/g,',').split(',').map(x=>x.trim()).filter(Boolean))]}
+function joinList(v){return Array.isArray(v)?v.join(', '):''}
+function statusPill(status){const s=status||'DRAFT';return `<span class="pill ${s==='ACTIVE'?'good':'draft'}">${esc(s)}</span>`}
+function renderSpeciesList(){const q=(byId('search').value||'').trim().toLowerCase(),filter=byId('statusFilter').value;const rows=speciesRows.filter(x=>(!filter||x.status===filter)&&(!q||`${x.name_cn} ${x.id} ${x.summary}`.toLowerCase().includes(q)));const host=byId('speciesList');host.innerHTML=rows.map(x=>`<button class="species-item ${x.id===selectedId?'selected':''}" onclick="selectSpecies('${esc(x.id)}')"><b>${esc(x.name_cn)} <span class="muted">${esc(x.id)}</span></b><div class="species-meta">${statusPill(x.status)}<span>封面 ${x.cover_ready?'✓':'—'}</span><span>卡 ${x.cards_ready||0}/${x.cards_total||5}</span><span>图 ${x.gallery_count||0}/5</span><span>视频 ${x.video_count||0}</span></div></button>`).join('')||'<div class="empty">没有匹配鱼种。</div>'}
+async function loadSpecies(){try{speciesRows=await api('/api/v1/admin/fish/species');renderSpeciesList();if(!selectedId&&speciesRows.length)await selectSpecies(speciesRows[0].id);else if(selectedId&&!speciesRows.some(x=>x.id===selectedId)&&speciesRows.length)await selectSpecies(speciesRows[0].id)}catch(e){message(e.message,true)}}
+async function selectSpecies(id){selectedId=id;renderSpeciesList();byId('emptyEditor').hidden=true;byId('editorBody').hidden=false;byId('editorTitle').textContent='正在加载…';try{const result=await Promise.all([api(`/api/v1/admin/fish/species/${encodeURIComponent(id)}`),api(`/api/v1/admin/fish/species/${encodeURIComponent(id)}/cards`),api(`/api/v1/admin/fish/species/${encodeURIComponent(id)}/completion`),api(`/api/v1/admin/fish/species/${encodeURIComponent(id)}/cover`).catch(e=>e.message.includes('not found')?null:Promise.reject(e)]);detail=result[0];cards=result[1];completion=result[2];cover=result[3];renderEditor()}catch(e){message(e.message,true)}}
+function renderEditor(){const s=detail.species;byId('editorTitle').textContent=`${s.name_cn} · 鱼鉴内容`;byId('editorMeta').textContent=`${s.id} · ${s.status} · ${s.category||'未分类'}`;byId('speciesName').value=s.name_cn||'';byId('scientificName').value=s.scientific_name||'';byId('category').value=s.category||'';byId('family').value=s.family||'';byId('genus').value=s.genus||'';byId('speciesStatus').value=s.status||'DRAFT';byId('aliases').value=joinList(s.alias);byId('summary').value=s.summary||'';byId('coverUrl').value=cover?.image_url||'';byId('coverStyle').value=cover?.style||'ANIME_CARD';byId('coverTitle').value=cover?.title||'';byId('coverStatus').value=cover?.status||'DRAFT';renderCover();renderCompletion();renderCards();renderKnowledge();renderGallery();renderVideos();renderSimilarity()}
+function renderCover(){const host=byId('coverPreview');if(cover?.status==='ACTIVE'&&cover.image_url){host.innerHTML=`<img src="${esc(cover.image_url)}" alt="${esc(cover.title||'鱼种封面')}">`}else{host.innerHTML=`<div class="placeholder">${cover?.title?esc(cover.title)+'<br>':''}暂无 ACTIVE 封面<br>当前：${esc(cover?.status||'未创建')}</div>`}}
+function renderCompletion(){const c=completion||{};const items=[['资料',c.species_complete?'完成':'未完成',c.species_complete?1:0],['封面',c.cover?'完成':'未发布',c.cover?1:0],['鱼鉴卡',`${c.cards?.completed||0}/${c.cards?.total||5}`,(c.cards?.completed||0)/(c.cards?.total||5)],['Gallery',`${c.gallery?.completed||0}/${c.gallery?.total||5}`,(c.gallery?.completed||0)/(c.gallery?.total||5)],['视频',c.video?'已添加':'未添加',c.video?1:0]];byId('completionGrid').innerHTML=items.map(x=>`<div class="completion-item ${x[2]>=1?'ready':x[2]>0?'partial':''}"><span class="muted">${x[0]}</span><b>${x[1]}</b></div>`).join('')}
+function renderCards(){const map=Object.fromEntries((cards||[]).map(x=>[x.card_type||x.type,x]));byId('cardsGrid').innerHTML=CARD_TYPES.map(([type,label],index)=>{const c=map[type]||{card_type:type,title:'',image_url:'',description:'',sort_order:index,status:'DRAFT'};const thumb=c.image_url?`<img src="${esc(c.image_url)}" alt="${esc(c.title||label)}">`:`<span>${type}<br>暂无真实图片</span>`;return `<div class="card-slot" data-card-type="${type}"><div class="thumb">${thumb}</div><h3>${type}</h3><small>${label}</small><input data-field="title" value="${esc(c.title)}" placeholder="卡片标题"><input data-field="image_url" value="${esc(c.image_url)}" placeholder="https://…真实图片"><textarea data-field="description" placeholder="结构化短说明">${esc(c.description)}</textarea><div class="status"><label>状态</label><select data-field="status"><option ${c.status==='ACTIVE'?'selected':''}>ACTIVE</option><option ${c.status!=='ACTIVE'?'selected':''}>DRAFT</option></select></div></div>`}).join('')}
+function renderKnowledge(){const p=detail.profile||{},f=detail.fishing||{};byId('bodyShape').value=p.body_shape||'';byId('food').value=p.food||'';byId('features').value=joinList(p.features);byId('habitat').value=joinList(p.habitat);byId('season').value=joinList(p.season);byId('waterLayer').value=f.water_layer||'';byId('fishingSeason').value=joinList(f.season);byId('bait').value=joinList(f.bait);byId('method').value=joinList(f.method);byId('fishingSummary').value=f.summary||''}
+function renderGallery(){const rows=detail.gallery?.images||[];byId('galleryTable').innerHTML=rows.map(x=>`<tr><td>${Number(x.order)+1}</td><td>${esc(x.type)}</td><td>${esc(x.title||'-')}</td><td><a class="link" href="${esc(x.url)}" target="_blank" rel="noreferrer">${esc(x.url)}</a></td><td><button class="danger" onclick="deleteGallery(${x.id})">删除</button></td></tr>`).join('')||'<tr><td colspan="5" class="empty">暂无真实 Gallery 图片</td></tr>'}
+function renderVideos(){const rows=detail.videos||[];byId('videoTable').innerHTML=rows.map(x=>`<tr><td>${esc(x.title)}</td><td>${esc(x.type)}</td><td><a class="link" href="${esc(x.video_url)}" target="_blank" rel="noreferrer">${esc(x.video_url)}</a></td><td>${x.duration||0}s</td><td>${(x.tags||[]).map(esc).join('、')||'-'}</td><td><button class="danger" onclick="deleteVideo(${x.id})">删除</button></td></tr>`).join('')||'<tr><td colspan="6" class="empty">暂无视频，建议优先补充 HOW_TO_FISH。</td></tr>'}
+function renderSimilarity(){const rows=detail.similarity||[];byId('similarity').innerHTML=rows.map(x=>`<span class="pill">${esc(x.similar_species_name_cn)}：${esc(x.difference)}</span>`).join('')||'<span class="muted">暂无相似鱼配置</span>'}
+async function refreshSelected(){await loadSpecies();if(selectedId)await selectSpecies(selectedId)}
+async function saveSpecies(){try{await api(`/api/v1/admin/fish/species/${encodeURIComponent(selectedId)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({name_cn:byId('speciesName').value.trim(),scientific_name:byId('scientificName').value.trim()||null,category:byId('category').value.trim(),family:byId('family').value.trim()||null,genus:byId('genus').value.trim()||null,alias:splitList(byId('aliases').value),summary:byId('summary').value.trim(),status:byId('speciesStatus').value})});message('鱼种资料已保存');await refreshSelected()}catch(e){message(e.message,true)}}
+async function saveCover(){try{const payload={image_url:byId('coverUrl').value.trim(),style:byId('coverStyle').value.trim()||'ANIME_CARD',title:byId('coverTitle').value.trim(),status:byId('coverStatus').value};const url=`/api/v1/admin/fish/species/${encodeURIComponent(selectedId)}/cover`;cover?await api(url,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}):await api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});message('封面已保存');await refreshSelected()}catch(e){message(e.message,true)}}
+async function deleteCover(){if(!cover)return message('当前没有封面记录',true);if(!confirm('删除这个封面记录？'))return;try{await api(`/api/v1/admin/fish/species/${encodeURIComponent(selectedId)}/cover`,{method:'DELETE'});message('封面记录已删除');await refreshSelected()}catch(e){message(e.message,true)}}
+function cardPayload(slot){const get=f=>slot.querySelector(`[data-field="${f}"]`).value;return {card_type:slot.dataset.cardType,title:get('title'),image_url:get('image_url'),description:get('description'),sort_order:CARD_TYPES.findIndex(x=>x[0]===slot.dataset.cardType),status:get('status')}}
+async function saveCards(){try{const existing=Object.fromEntries((cards||[]).map(x=>[x.card_type||x.type,x]));for(const slot of byId('cardsGrid').querySelectorAll('.card-slot')){const payload=cardPayload(slot),old=existing[payload.card_type];if(old)await api(`/api/v1/admin/fish/cards/${old.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});else await api(`/api/v1/admin/fish/species/${encodeURIComponent(selectedId)}/cards`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})}message('五张鱼鉴卡已保存');await refreshSelected()}catch(e){message(e.message,true)}}
+async function saveProfile(){try{const payload={body_shape:byId('bodyShape').value.trim()||null,food:byId('food').value.trim()||null,features:splitList(byId('features').value),habitat:splitList(byId('habitat').value),season:splitList(byId('season').value)};await api(`/api/v1/admin/fish/species/${encodeURIComponent(selectedId)}/profile`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});message('基础介绍已保存');await refreshSelected()}catch(e){message(e.message,true)}}
+async function saveFishing(){try{const payload={water_layer:byId('waterLayer').value.trim()||null,season:splitList(byId('fishingSeason').value),bait:splitList(byId('bait').value),method:splitList(byId('method').value),summary:byId('fishingSummary').value.trim()};await api(`/api/v1/admin/fish/species/${encodeURIComponent(selectedId)}/fishing`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});message('钓鱼知识已保存');await refreshSelected()}catch(e){message(e.message,true)}}
+async function addGallery(){try{const payload={type:byId('galleryType').value,url:byId('galleryUrl').value.trim(),title:byId('galleryTitle').value.trim()||null,order:Number(byId('galleryOrder').value)};await api(`/api/v1/admin/fish/species/${encodeURIComponent(selectedId)}/gallery`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});message('Gallery 已添加');byId('galleryUrl').value='';await refreshSelected()}catch(e){message(e.message,true)}}
+async function deleteGallery(id){if(!confirm('删除这张 Gallery 图片记录？'))return;try{await api(`/api/v1/admin/fish/species/${encodeURIComponent(selectedId)}/gallery/${id}`,{method:'DELETE'});message('Gallery 记录已删除');await refreshSelected()}catch(e){message(e.message,true)}}
+async function addVideo(){try{const payload={title:byId('videoTitle').value.trim(),type:byId('videoType').value,video_url:byId('videoUrl').value.trim(),cover_url:byId('videoCoverUrl').value.trim()||null,duration:Number(byId('videoDuration').value||0),tags:splitList(byId('videoTags').value),order:(detail.videos||[]).length};await api(`/api/v1/admin/fish/species/${encodeURIComponent(selectedId)}/videos`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});message('视频已添加');for(const id of ['videoTitle','videoUrl','videoCoverUrl','videoTags'])byId(id).value='';await refreshSelected()}catch(e){message(e.message,true)}}
+async function deleteVideo(id){if(!confirm('删除这个视频记录？'))return;try{await api(`/api/v1/admin/fish/species/${encodeURIComponent(selectedId)}/videos/${id}`,{method:'DELETE'});message('视频记录已删除');await refreshSelected()}catch(e){message(e.message,true)}}
+function openPublicDetail(){if(selectedId)window.open(`/api/v1/fish/species/${encodeURIComponent(selectedId)}/detail`,'fish-public-detail')}
+loadSpecies();
+</script>
+</body>
+</html>

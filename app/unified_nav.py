@@ -13,6 +13,7 @@ _NAV_ITEMS = [
     ("/review/bulk", "快速审核", "prefix"),
     ("/review", "单张审核", "exact"),
     ("/species", "鱼种管理", "prefix"),
+    ("/fish-knowledge", "鱼鉴内容", "prefix"),
     ("/feedback", "用户反馈", "prefix"),
     ("/datasets", "数据集", "prefix"),
     ("/training", "模型训练", "prefix"),

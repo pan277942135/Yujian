@@ -500,6 +500,8 @@ def list_admin_species(db: Session = Depends(get_db)) -> list[dict]:
         .join(SpeciesCatalog, SpeciesCatalog.species_key == FishSpecies.id)
         .options(
             selectinload(FishSpecies.gallery),
+            selectinload(FishSpecies.cover),
+            selectinload(FishSpecies.cards),
             selectinload(FishSpecies.profile),
             selectinload(FishSpecies.fishing),
             selectinload(FishSpecies.videos),
@@ -514,6 +516,13 @@ def list_admin_species(db: Session = Depends(get_db)) -> list[dict]:
             "category": row.category,
             "summary": row.summary,
             "gallery_count": len(row.gallery),
+            "cover_ready": bool(row.cover and row.cover.status == "ACTIVE" and row.cover.image_url.strip()),
+            "cards_ready": len({
+                normalize_card_type(card.card_type)
+                for card in row.cards
+                if card.status == "ACTIVE" and card.image_url.strip()
+            }),
+            "cards_total": len(CARD_TYPE_ORDER),
             "video_count": len(row.videos),
             "profile_ready": row.profile is not None,
             "fishing_ready": row.fishing is not None,
