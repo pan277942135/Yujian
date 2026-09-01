@@ -39,6 +39,7 @@ from app.data_policy import (
 from app.models import Batch, DatasetVersion, ImageAsset, ReviewEvent
 from app.secure import install_access_guard
 from app.services.manifest_normalizer import ManifestNormalizationError
+from app.services.review_prefill import parse_review_signals, trusted_truth_prefill
 
 REVIEW_VALUES = {"approved", "needs_review", "rejected", "hard_case", "pending"}
 TRUTH_VALUES = {
@@ -121,7 +122,36 @@ class FeedbackMaterialize(BaseModel):
     limit: int = Field(default=500, ge=1, le=2000)
 
 
-def image_dict(image: ImageAsset):
+def image_dict(
+    image: ImageAsset,
+    *,
+    classifier_prediction: str | None = None,
+    classifier_confidence: float | None = None,
+    species_check: str | None = None,
+):
+    signals = parse_review_signals(image.notes)
+    classifier_prediction = (
+        classifier_prediction
+        or signals.get("classifier_prediction")
+        or signals.get("prediction")
+        or getattr(image, "classifier_prediction", None)
+    )
+    classifier_confidence = (
+        classifier_confidence
+        if classifier_confidence is not None
+        else signals.get(
+            "classifier_confidence",
+            signals.get("prediction_confidence", getattr(image, "classifier_confidence", None)),
+        )
+    )
+    species_check = species_check or signals.get("species_check") or getattr(image, "species_check", None)
+    prefill = trusted_truth_prefill(
+        claimed_species=image.claimed_species,
+        species_check=species_check,
+        classifier_prediction=classifier_prediction,
+        classifier_confidence=classifier_confidence,
+        detector_confidence=getattr(image, "detector_confidence", None),
+    )
     return {
         "batch_id": image.batch_id,
         "image_id": image.image_id,
@@ -129,6 +159,14 @@ def image_dict(image: ImageAsset):
         "source_url": image.source_url,
         "source_platform": image.source_platform,
         "claimed_species": image.claimed_species,
+        "collected_label": image.claimed_species,
+        "species_check": species_check,
+        "ai_suggestion": prefill.ai_prediction,
+        "ai_confidence": prefill.ai_confidence,
+        "truth_prefill": prefill.truth_species,
+        "truth_prefill_source": prefill.source,
+        "label_conflict": prefill.conflict,
+        "label_conflict_message": prefill.message if prefill.conflict else None,
         "truth_species": image.truth_species,
         "truth_status": image.truth_status,
         "review_status": image.review_status,
@@ -304,7 +342,22 @@ def review_queue(
 ):
     stmt = apply_review_filters(select(ImageAsset), status, batch_id, species, q)
     stmt = stmt.order_by(ImageAsset.batch_id, ImageAsset.id).offset(offset).limit(limit)
-    return [image_dict(row) for row in db.scalars(stmt).all()]
+    rows = db.scalars(stmt).all()
+    result = []
+    for row in rows:
+        event = db.scalar(
+            select(FeedbackEvent)
+            .where(FeedbackEvent.image_gcs_uri == row.gcs_uri)
+            .order_by(FeedbackEvent.created_at.desc())
+        )
+        result.append(
+            image_dict(
+                row,
+                classifier_prediction=event.predicted_species if event else None,
+                classifier_confidence=event.confidence if event else None,
+            )
+        )
+    return result
 
 
 @app.get("/api/review/stats")

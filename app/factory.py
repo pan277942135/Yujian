@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Batch, DatasetVersion, ImageAsset
+from app.services.review_prefill import SIGNAL_PREFIX, encode_review_signals
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 TARGET_SPECIES = ["草鱼", "鳙鱼", "白鲢", "鲤鱼", "鲫鱼", "加州鲈", "黑鱼", "黄骨鱼", "青鱼"]
@@ -376,6 +377,39 @@ def _audit_queue(bucket: storage.Bucket, batch_id: str) -> dict[str, dict]:
     return {(row.get("image_id") or "").strip(): row for row in rows if (row.get("image_id") or "").strip()}
 
 
+def _manifest_review_signals(bucket: storage.Bucket, batch_id: str) -> dict[str, dict[str, str]]:
+    """Load optional asset-manifest review hints without changing the training contract."""
+
+    raw_prefix = f"raw/batches/{batch_id}/"
+    candidates = [bucket.blob(raw_prefix + "metadata/manifest.csv"), bucket.blob(raw_prefix + "manifest.csv")]
+    source = next((blob for blob in candidates if blob.exists()), None)
+    if source is None:
+        return {}
+    try:
+        rows = csv.DictReader(io.StringIO(_download_text(source)))
+    except Exception:
+        return {}
+    result: dict[str, dict[str, str]] = {}
+    for row in rows:
+        image_id = (row.get("image_id") or "").strip()
+        if not image_id:
+            continue
+        signals = {
+            key: (row.get(key) or "").strip()
+            for key in (
+                "species_check",
+                "classifier_prediction",
+                "prediction",
+                "classifier_confidence",
+                "prediction_confidence",
+            )
+            if (row.get(key) or "").strip()
+        }
+        if signals:
+            result[image_id] = signals
+    return result
+
+
 def sync_batch_registry(db: Session, batch_id: str, bucket_name: str | None = None) -> dict:
     bucket_name = bucket_name or get_bucket_name()
     client = storage.Client()
@@ -392,6 +426,7 @@ def sync_batch_registry(db: Session, batch_id: str, bucket_name: str | None = No
     if manifest_bucket != bucket_name:
         raise RuntimeError("manifest bucket differs from target bucket")
     rows = list(csv.DictReader(io.StringIO(_download_text(bucket.blob(manifest_object)))))
+    manifest_signals = _manifest_review_signals(bucket, batch_id)
 
     object_names = [b.name for b in client.list_blobs(bucket_name, prefix=prefix + "/")]
     object_set = set(object_names)
@@ -466,6 +501,12 @@ def sync_batch_registry(db: Session, batch_id: str, bucket_name: str | None = No
         if manifest_review == "approved" and not truth_species:
             manifest_review = "pending"
         notes = row.get("notes") or ""
+        signal_values = manifest_signals.get(image_id)
+        if signal_values:
+            notes = "\n".join(
+                line for line in notes.splitlines() if not line.startswith(SIGNAL_PREFIX)
+            ).strip()
+            notes = f"{notes}\n{encode_review_signals(signal_values)}".strip()
         if audit.get("auto_reasons"):
             auto_note = f"[auto_v1:{audit.get('auto_status')}] {audit.get('auto_reasons')}"
             notes = f"{notes}\n{auto_note}".strip()
