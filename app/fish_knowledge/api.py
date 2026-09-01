@@ -11,11 +11,13 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_db
 from app.factory import DOWNLOAD_RETRY, get_bucket_name
+from app.fish_knowledge.cards import FishCard, normalize_card_type
+from app.fish_knowledge.cover import FishSpeciesCover
 from app.fish_knowledge.fishing import FishFishing
 from app.fish_knowledge.gallery import FishGalleryImage
 from app.fish_knowledge.profile import FishProfile
 from app.fish_knowledge.similarity import FishSimilarity
-from app.fish_knowledge.species import FishSpecies
+from app.fish_knowledge.species import SPECIES_ID_ALIASES, FishSpecies
 from app.fish_knowledge.video import FishVideo
 from app.models import SpeciesCatalog
 
@@ -92,6 +94,27 @@ class SimilarityOut(BaseModel):
     difference: str
 
 
+class CoverOut(BaseModel):
+    id: int
+    species_id: str
+    image_url: str
+    style: str
+    title: str
+    status: str
+
+
+class CardOut(BaseModel):
+    id: int
+    species_id: str
+    card_type: str
+    type: str
+    title: str
+    image_url: str
+    description: str
+    sort_order: int
+    status: str
+
+
 class SpeciesDetailOut(BaseModel):
     species: SpeciesOut
     gallery: GalleryOut
@@ -99,6 +122,13 @@ class SpeciesDetailOut(BaseModel):
     fishing: FishingOut
     videos: list[VideoOut]
     similarity: list[SimilarityOut]
+
+
+class SpeciesFullDetailOut(SpeciesDetailOut):
+    cover: dict[str, Any]
+    cards: list[CardOut]
+    knowledge: dict[str, Any]
+    dynamic: dict[str, Any]
 
 
 def _string_list(value: Any) -> list[str]:
@@ -152,8 +182,38 @@ def _video(row: FishVideo) -> VideoOut:
     )
 
 
+def _cover_dict(row: FishSpeciesCover | None, *, active_only: bool = True) -> dict[str, Any]:
+    if row is None or (active_only and row.status != "ACTIVE"):
+        return {}
+    return {
+        "id": row.id,
+        "species_id": row.species_id,
+        "image_url": row.image_url,
+        "style": row.style,
+        "title": row.title,
+        "status": row.status,
+    }
+
+
 def _cover_image(species: FishSpecies) -> str | None:
+    if species.cover is not None and species.cover.status == "ACTIVE" and species.cover.image_url.strip():
+        return species.cover.image_url
     return species.gallery[0].url if species.gallery else None
+
+
+def _card(row: FishCard) -> CardOut:
+    card_type = normalize_card_type(row.card_type)
+    return CardOut(
+        id=row.id,
+        species_id=row.species_id,
+        card_type=card_type,
+        type=card_type,
+        title=row.title,
+        image_url=row.image_url,
+        description=row.description,
+        sort_order=row.sort_order,
+        status=row.status,
+    )
 
 
 def _species(species: FishSpecies) -> SpeciesOut:
@@ -176,7 +236,7 @@ def _active_species_query():
         select(FishSpecies)
         .join(SpeciesCatalog, SpeciesCatalog.species_key == FishSpecies.id)
         .where(FishSpecies.status == "ACTIVE")
-        .options(selectinload(FishSpecies.gallery))
+        .options(selectinload(FishSpecies.gallery), selectinload(FishSpecies.cover))
         .order_by(SpeciesCatalog.catalog_order, FishSpecies.id)
     )
 
@@ -184,6 +244,8 @@ def _active_species_query():
 def _knowledge_options():
     return (
         selectinload(FishSpecies.gallery),
+        selectinload(FishSpecies.cover),
+        selectinload(FishSpecies.cards),
         selectinload(FishSpecies.profile),
         selectinload(FishSpecies.fishing),
         selectinload(FishSpecies.videos),
@@ -197,7 +259,12 @@ def load_species_with_knowledge(
     *,
     active_only: bool,
 ) -> FishSpecies | None:
-    statement = select(FishSpecies).where(FishSpecies.id == species_id).options(*_knowledge_options())
+    requested_id = species_id.strip()
+    statement = select(FishSpecies).where(FishSpecies.id == requested_id).options(*_knowledge_options())
+    if not db.get(FishSpecies, requested_id):
+        alias = SPECIES_ID_ALIASES.get(requested_id)
+        if alias:
+            statement = select(FishSpecies).where(FishSpecies.id == alias).options(*_knowledge_options())
     if active_only:
         statement = statement.where(FishSpecies.status == "ACTIVE")
     return db.scalar(statement)
@@ -230,6 +297,36 @@ def build_species_detail(
     )
 
 
+def build_species_full_detail(row: FishSpecies) -> SpeciesFullDetailOut:
+    base = build_species_detail(row)
+    cards = [_card(item) for item in row.cards if item.status == "ACTIVE"]
+    profile = base.profile
+    fishing = base.fishing
+    return SpeciesFullDetailOut(
+        species=base.species,
+        cover=_cover_dict(row.cover),
+        cards=cards,
+        gallery=base.gallery,
+        profile=profile,
+        fishing=fishing,
+        videos=base.videos,
+        similarity=base.similarity,
+        knowledge={
+            "body_shape": profile.body_shape,
+            "features": profile.features,
+            "habitat": profile.habitat,
+            "food": profile.food,
+            "season": profile.season,
+            "water_layer": fishing.water_layer,
+            "bait": fishing.bait,
+            "method": fishing.method,
+        },
+        # Dynamic user catches/rankings are intentionally a stable placeholder
+        # until their separate content domain is implemented.
+        dynamic={},
+    )
+
+
 @router.get("/species", response_model=list[SpeciesListItem])
 def list_fish_species(db: Session = Depends(get_db)) -> list[SpeciesListItem]:
     rows = db.scalars(_active_species_query()).all()
@@ -242,6 +339,14 @@ def list_fish_species(db: Session = Depends(get_db)) -> list[SpeciesListItem]:
         )
         for row in rows
     ]
+
+
+@router.get("/species/{species_id}/detail", response_model=SpeciesFullDetailOut)
+def get_fish_species_full_detail(species_id: str, db: Session = Depends(get_db)) -> SpeciesFullDetailOut:
+    row = load_species_with_knowledge(db, species_id, active_only=True)
+    if row is None:
+        raise HTTPException(status_code=404, detail="fish species not found")
+    return build_species_full_detail(row)
 
 
 @router.get("/species/{species_id}", response_model=SpeciesDetailOut)

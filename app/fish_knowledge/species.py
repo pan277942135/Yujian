@@ -7,6 +7,11 @@ from app.db import Base
 from app.models import utcnow
 
 
+# Product-facing aliases are resolved at the API boundary only.  The stable
+# model/catalog identity remains ``sharpbelly`` for 白条.
+SPECIES_ID_ALIASES = {"baitiao": "sharpbelly"}
+
+
 class FishSpecies(Base):
     """Consumer-facing fish species master data.
 
