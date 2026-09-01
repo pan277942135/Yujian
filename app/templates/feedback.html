@@ -9,7 +9,149 @@
   </style>
 </head>
 <body>
-<header><a href="/">总览</a><a href="/batches">数据批次</a><a href="/review">人工审核</a><a href="/species">鱼种管理</a><a href="/feedback">用户反馈</a><a href="/datasets">数据集</a></header>
+<header class="app-nav"><a href="/">总览</a><a href="/batches">数据批次</a><a href="/review">人工审核</a><a href="/species">鱼种管理</a><a href="/feedback">用户反馈</a><a href="/datasets">数据集</a></header>
+<style id="yujian-mobile-ux">
+  html{overflow-x:hidden}
+  body{min-width:0}
+  main{min-width:0;width:100%;box-sizing:border-box}
+  header.app-nav{box-sizing:border-box}
+  header.app-nav{overflow:visible!important;white-space:normal!important;flex-wrap:wrap!important;align-items:center!important}
+  header.app-nav .nav-toggle{display:none;border:0;background:transparent;color:#111827;font:inherit;font-weight:750;cursor:pointer;align-items:center;gap:8px;padding:0;min-height:44px}
+  header.app-nav .nav-toggle:focus-visible{outline:2px solid #2563eb;outline-offset:2px}
+  header.app-nav .nav-icon{font-size:22px;line-height:1}
+  header.app-nav .nav-links{display:flex;align-items:center;gap:6px;flex:1 1 auto;min-width:0;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:thin}
+  header.app-nav .nav-links a{flex:0 0 auto}
+  header.app-nav .filters{flex:0 0 auto}
+  img{max-width:100%}
+  input,select,textarea{max-width:100%}
+  @media(max-width:768px){
+    header.app-nav{padding:8px 16px!important;gap:0!important;overflow:visible!important}
+    header.app-nav .nav-toggle{display:flex;order:0}
+    header.app-nav .nav-links{display:none;order:2;flex-basis:100%;width:100%;flex-direction:column;align-items:stretch;gap:4px;padding:8px 0 4px;overflow:visible}
+    header.app-nav .nav-links.open{display:flex}
+    header.app-nav .nav-links a{width:100%;min-height:44px;padding:0 12px;justify-content:flex-start}
+    header.app-nav .filters{order:3;width:100%;margin:8px 0 0!important;display:grid!important;grid-template-columns:1fr;gap:8px;align-items:stretch}
+    header.app-nav .filters>*{width:100%!important;min-height:44px;box-sizing:border-box}
+    main{max-width:100%!important;padding:12px 16px!important}
+    h1{font-size:26px;line-height:1.2}
+    h2{font-size:20px;line-height:1.3}
+    .top{align-items:stretch!important;flex-direction:column}
+    .section,.panel,.card{max-width:100%;box-sizing:border-box}
+    .section{padding:14px!important}
+    .actions{display:flex;flex-direction:column;align-items:stretch;gap:8px}
+    .actions>*{width:100%;box-sizing:border-box}
+    .actions>button,.actions>.button,.primary,.prepare,.top>button,main>button,.uploadBox button,.skip,.footer button{width:100%;min-height:44px;box-sizing:border-box}
+    .footer{display:flex;flex-direction:column;align-items:stretch;gap:8px}
+    .footer>*{width:100%;text-align:center;box-sizing:border-box}
+    .summary{display:grid!important;grid-template-columns:1fr 1fr!important;gap:8px!important}
+    .summary .pill{min-height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;box-sizing:border-box}
+    .cards{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px!important}
+    .workflow{grid-template-columns:1fr!important}
+    .grid{grid-template-columns:1fr!important}
+    .metrics,.metricGrid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px!important}
+    .metric{min-width:0;padding:10px!important}
+    .row{grid-template-columns:1fr!important;gap:6px!important}
+    main input:not([type="checkbox"]):not([type="radio"]),main select,main textarea{width:100%;min-height:44px;box-sizing:border-box}
+    input[type="file"]{min-height:44px}
+    .toolbar{display:grid!important;grid-template-columns:1fr!important;gap:8px!important;align-items:stretch}
+    .toolbar>*{width:100%;min-height:44px;box-sizing:border-box}
+    .toolbar .spacer{display:none}
+    .filters{display:grid;grid-template-columns:1fr;gap:8px}
+    .filters>*{width:100%;min-height:44px;box-sizing:border-box}
+    .stateBtns{grid-template-columns:1fr!important;gap:8px!important}
+    .stateBtns button{min-height:44px!important}
+    .speciesTabs{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px!important}
+    .speciesTabs button{min-height:44px}
+    .bulkSpecies{display:flex;flex-direction:column;align-items:stretch;padding:8px 0 0;border-left:0;border-top:1px solid #e5e7eb}
+    .bulkSpecies>*{width:100%;min-height:44px;box-sizing:border-box}
+    .tabs{display:grid!important;grid-template-columns:1fr 1fr;gap:8px!important}
+    .tabs .tab{min-height:44px}
+    .photo{height:auto!important;max-height:58vh;min-height:220px}
+    .previewBox{min-height:200px}
+    .heroPrediction b{font-size:26px}
+    .topRow{grid-template-columns:minmax(70px,1fr) minmax(0,2fr) 60px}
+    .top3mini{white-space:normal;max-width:none;overflow:visible}
+    .tableWrap{overflow:visible!important;border:0!important}
+    table[data-card-labels]{display:block;width:100%;min-width:0!important;border-collapse:separate;border-spacing:0}
+    table[data-card-labels] thead{display:none}
+    table[data-card-labels] tbody,table[data-card-labels] tr,table[data-card-labels] td{display:block;width:100%;box-sizing:border-box}
+    table[data-card-labels] tr{margin:0 0 12px;padding:6px 10px;border:1px solid #e5e7eb;border-radius:12px;background:#fff;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+    table[data-card-labels] tr:last-child{margin-bottom:0}
+    table[data-card-labels] td{display:grid;grid-template-columns:minmax(80px,34%) minmax(0,1fr);gap:8px;align-items:start;border:0!important;padding:8px 0!important;min-width:0!important;font-size:13px;line-height:1.45;overflow-wrap:anywhere}
+    table[data-card-labels] td::before{content:attr(data-label);color:#6b7280;font-size:12px;font-weight:650;line-height:1.4}
+    table[data-card-labels] td[colspan]{display:block;text-align:center}
+    table[data-card-labels] td[colspan]::before{display:none}
+    table[data-card-labels] td>input,table[data-card-labels] td>select,table[data-card-labels] td>textarea{width:100%!important;min-height:44px;box-sizing:border-box}
+    table[data-card-labels] td .actions{display:flex;flex-direction:column;align-items:stretch;gap:8px}
+    table[data-card-labels] td .actions>*{width:100%;min-height:44px;box-sizing:border-box}
+    table[data-card-labels] td .audit,table[data-card-labels] td .presence,table[data-card-labels] td .dedupe{display:flex;flex-direction:column;align-items:stretch;gap:6px;min-width:0}
+    table[data-card-labels] td .pill{display:flex;align-items:center;min-height:32px;box-sizing:border-box}
+    table[data-card-labels] td .numBtn{font-size:inherit;text-align:left;padding:0;min-height:32px}
+    table[data-card-labels] td .reviewLink{display:block;padding:10px;border:1px solid #d1d5db;border-radius:8px;text-align:center}
+    table[data-card-labels] td .uri{max-width:none}
+    .matrixWrap,.diag{max-width:100%;overflow:auto!important}
+  }
+</style>
+<script>
+(function(){
+  function decorateTables(){
+    document.querySelectorAll('table[data-card-labels]').forEach(function(table){
+      const labels=(table.dataset.cardLabels||'').split('|');
+      table.querySelectorAll('tbody tr').forEach(function(row){
+        Array.from(row.cells).forEach(function(cell,index){
+          if(cell.colSpan>1){cell.removeAttribute('data-label');return}
+          if(labels[index])cell.setAttribute('data-label',labels[index]);
+        });
+      });
+    });
+  }
+  function initNav(){
+    const header=document.querySelector('header.app-nav');
+    if(!header)return;
+    if(!header.dataset.mobileReady){
+      const links=Array.from(header.children).filter(function(el){return el.tagName==='A'});
+      const controls=Array.from(header.children).filter(function(el){return el.tagName!=='A'});
+      const nav=document.createElement('nav');
+      nav.className='nav-links';
+      nav.id='yujian-primary-nav';
+      nav.setAttribute('aria-label','主导航');
+      links.forEach(function(link){nav.appendChild(link)});
+      const toggle=document.createElement('button');
+      toggle.type='button';
+      toggle.className='nav-toggle';
+      toggle.setAttribute('aria-expanded','false');
+      toggle.setAttribute('aria-controls',nav.id);
+      toggle.innerHTML='<span class="nav-icon" aria-hidden="true">☰</span><span>渔见 AI Console</span>';
+      header.insertBefore(toggle,header.firstChild);
+      header.insertBefore(nav,controls[0]||null);
+      toggle.addEventListener('click',function(){
+        const open=nav.classList.toggle('open');
+        toggle.setAttribute('aria-expanded',String(open));
+      });
+      nav.addEventListener('click',function(event){
+        if(event.target.closest('a')){
+          nav.classList.remove('open');
+          toggle.setAttribute('aria-expanded','false');
+        }
+      });
+      document.addEventListener('click',function(event){
+        if(!header.contains(event.target)){
+          nav.classList.remove('open');
+          toggle.setAttribute('aria-expanded','false');
+        }
+      });
+      header.dataset.mobileReady='true';
+    }
+    decorateTables();
+    if(!window.__yujianMobileObserver){
+      const observer=new MutationObserver(decorateTables);
+      observer.observe(document.body,{childList:true,subtree:true});
+      window.__yujianMobileObserver=observer;
+    }
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initNav,{once:true});else initNav();
+})();
+</script>
 <main>
   <div class="top"><div><h1>用户反馈</h1><div class="muted">线上识别“正确 / 错误 / 不认识”都会重新进入数据生产线，形成持续学习闭环。</div></div><button onclick="load()">刷新</button></div>
   <div id="banner" class="banner"></div>
@@ -19,7 +161,7 @@
     <div class="actions"><input id="batch" style="width:300px" placeholder="BATCH_20260827_APPFB_001"><button class="primary" onclick="materialize()">把待处理反馈生成上传批次</button></div>
     <p class="muted">只处理已有图片地址的待处理反馈。生成后到“数据批次”页面点击“准备审核”；即使用户确认识别正确，也仍需经过统一审核流程后才进入训练数据。</p>
   </div>
-  <div class="section"><h2>最近反馈</h2><table><thead><tr><th>时间 / 事件 ID</th><th>模型版本</th><th>模型预测</th><th>用户反馈</th><th>用户纠正</th><th>置信度</th><th>处理状态</th></tr></thead><tbody id="table"></tbody></table></div>
+  <div class="section"><h2>最近反馈</h2><table data-card-labels="时间 / 事件 ID|模型版本|模型预测|用户反馈|用户纠正|置信度|处理状态"><thead><tr><th>时间 / 事件 ID</th><th>模型版本</th><th>模型预测</th><th>用户反馈</th><th>用户纠正</th><th>置信度</th><th>处理状态</th></tr></thead><tbody id="table"></tbody></table></div>
 </main>
 <script>
 function esc(v){return (v??'').toString().replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
