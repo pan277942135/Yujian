@@ -90,3 +90,9 @@ DELETE /api/v1/admin/fish/species/{species_id}/similarity/{similar_species_id}
 - `ACTIVE`：App 列表和详情可见。
 
 Fish Knowledge 的发布状态不自动改变 `species_catalog` 的训练状态。新建鱼种会先进入 Catalog `candidate`；是否进入模型训练仍需按原有审核流程独立确认。
+
+## V1 初始化内容
+
+服务启动时幂等导入 `MODEL_M1_v0.5_20_V1`：20 个 `ACTIVE` 鱼种，以及每个鱼种的 Profile 和 Fishing 结构化短内容。首批相似鱼关系覆盖草鱼/青鱼、鳙鱼/白鲢、鲤鱼/鲫鱼、黑鱼/加州鲈、黄骨鱼/鲶鱼等主要易混淆组合。
+
+初始化只补齐缺失记录，不覆盖 Admin 已维护的数据；Admin 删除的相似鱼关系也不会在下次启动时被重新创建。Gallery 和 Video 不写入占位链接，必须通过 Admin 维护真实媒体资产。

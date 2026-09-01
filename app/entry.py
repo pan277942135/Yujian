@@ -17,6 +17,7 @@ from app.batch_upload_api import router as batch_upload_router, templates as bat
 from app.intelligence_api import router as intelligence_router, templates as intelligence_templates
 from app.fish_knowledge.api import router as fish_knowledge_router
 from app.fish_knowledge.admin import router as fish_knowledge_admin_router
+from app.fish_knowledge.seed import seed_initial_fish_knowledge
 from app.p0_automation import install_feedback_automation, router as automation_router
 from app.unified_nav import install_unified_nav
 from app.db import SessionLocal
@@ -42,6 +43,7 @@ def seed_target_species_catalog() -> None:
     db = SessionLocal()
     try:
         ensure_target_species(db)
+        seed_initial_fish_knowledge(db)
     finally:
         db.close()
 
