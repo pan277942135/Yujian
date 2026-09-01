@@ -12,7 +12,7 @@ from app.dataset_api import router as dataset_freeze_router
 from app.training_api import router as training_router, templates as training_templates
 from app.inference_api import router as inference_router, templates as inference_templates
 from app.feedback_ingest_api import router as feedback_ingest_router
-from app.batch_upload_api import router as batch_upload_router
+from app.batch_upload_api import router as batch_upload_router, templates as batch_upload_templates
 from app.p0_automation import install_feedback_automation, router as automation_router
 from app.unified_nav import install_unified_nav
 from app.db import SessionLocal
@@ -25,6 +25,7 @@ for template_engine in (
     inspect_templates,
     training_templates,
     inference_templates,
+    batch_upload_templates,
 ):
     install_unified_nav(template_engine)
 
