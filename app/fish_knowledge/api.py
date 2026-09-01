@@ -3,11 +3,14 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import RedirectResponse, Response
+from google.cloud import storage
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_db
+from app.factory import DOWNLOAD_RETRY, get_bucket_name
 from app.fish_knowledge.fishing import FishFishing
 from app.fish_knowledge.gallery import FishGalleryImage
 from app.fish_knowledge.profile import FishProfile
@@ -178,6 +181,55 @@ def _active_species_query():
     )
 
 
+def _knowledge_options():
+    return (
+        selectinload(FishSpecies.gallery),
+        selectinload(FishSpecies.profile),
+        selectinload(FishSpecies.fishing),
+        selectinload(FishSpecies.videos),
+        selectinload(FishSpecies.similarities).selectinload(FishSimilarity.similar_species),
+    )
+
+
+def load_species_with_knowledge(
+    db: Session,
+    species_id: str,
+    *,
+    active_only: bool,
+) -> FishSpecies | None:
+    statement = select(FishSpecies).where(FishSpecies.id == species_id).options(*_knowledge_options())
+    if active_only:
+        statement = statement.where(FishSpecies.status == "ACTIVE")
+    return db.scalar(statement)
+
+
+def build_species_detail(
+    row: FishSpecies,
+    *,
+    include_inactive_similarity: bool = False,
+) -> SpeciesDetailOut:
+    gallery = [_gallery_item(item) for item in row.gallery[:5]]
+    similarity = [
+        SimilarityOut(
+            species_id=item.species_id,
+            similar_species_id=item.similar_species_id,
+            similar_species_name_cn=item.similar_species.name_cn,
+            difference=item.difference,
+        )
+        for item in row.similarities
+        if item.similar_species is not None
+        and (include_inactive_similarity or item.similar_species.status == "ACTIVE")
+    ]
+    return SpeciesDetailOut(
+        species=_species(row),
+        gallery=GalleryOut(species_id=row.id, images=gallery),
+        profile=_profile(row.id, row.profile),
+        fishing=_fishing(row.id, row.fishing),
+        videos=[_video(item) for item in row.videos],
+        similarity=similarity,
+    )
+
+
 @router.get("/species", response_model=list[SpeciesListItem])
 def list_fish_species(db: Session = Depends(get_db)) -> list[SpeciesListItem]:
     rows = db.scalars(_active_species_query()).all()
@@ -194,36 +246,42 @@ def list_fish_species(db: Session = Depends(get_db)) -> list[SpeciesListItem]:
 
 @router.get("/species/{species_id}", response_model=SpeciesDetailOut)
 def get_fish_species(species_id: str, db: Session = Depends(get_db)) -> SpeciesDetailOut:
-    row = db.scalar(
-        select(FishSpecies)
-        .where(FishSpecies.id == species_id, FishSpecies.status == "ACTIVE")
-        .options(
-            selectinload(FishSpecies.gallery),
-            selectinload(FishSpecies.profile),
-            selectinload(FishSpecies.fishing),
-            selectinload(FishSpecies.videos),
-            selectinload(FishSpecies.similarities).selectinload(FishSimilarity.similar_species),
-        )
-    )
+    row = load_species_with_knowledge(db, species_id, active_only=True)
     if row is None:
         raise HTTPException(status_code=404, detail="fish species not found")
+    return build_species_detail(row)
 
-    gallery = [_gallery_item(item) for item in row.gallery[:5]]
-    similarity = [
-        SimilarityOut(
-            species_id=item.species_id,
-            similar_species_id=item.similar_species_id,
-            similar_species_name_cn=item.similar_species.name_cn,
-            difference=item.difference,
-        )
-        for item in row.similarities
-        if item.similar_species is not None and item.similar_species.status == "ACTIVE"
-    ]
-    return SpeciesDetailOut(
-        species=_species(row),
-        gallery=GalleryOut(species_id=row.id, images=gallery),
-        profile=_profile(row.id, row.profile),
-        fishing=_fishing(row.id, row.fishing),
-        videos=[_video(item) for item in row.videos],
-        similarity=similarity,
+
+@router.get("/gallery/{image_id}/media")
+def get_gallery_media(image_id: int, db: Session = Depends(get_db)):
+    row = db.scalar(
+        select(FishGalleryImage)
+        .join(FishSpecies, FishSpecies.id == FishGalleryImage.species_id)
+        .where(FishGalleryImage.id == image_id, FishSpecies.status == "ACTIVE")
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="gallery image not found")
+    if not row.object_name:
+        if row.url.startswith("https://"):
+            return RedirectResponse(row.url, status_code=307)
+        raise HTTPException(status_code=404, detail="gallery media is not managed by YuJian")
+
+    try:
+        bucket_name = get_bucket_name()
+        client = storage.Client()
+        blob = client.bucket(bucket_name).blob(row.object_name)
+        if not blob.exists(client):
+            raise HTTPException(status_code=404, detail="gallery object not found")
+        content = blob.download_as_bytes(timeout=120, retry=DOWNLOAD_RETRY)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="gallery storage is unavailable") from exc
+    return Response(
+        content=content,
+        media_type=row.content_type or "application/octet-stream",
+        headers={
+            "Cache-Control": "public, max-age=86400",
+            "X-Content-Type-Options": "nosniff",
+        },
     )

@@ -174,5 +174,6 @@ MVP 模型目标不是盲目扩大类别，而是：
 
 - [`docs/PROJECT_GUIDE.md`](docs/PROJECT_GUIDE.md) — 项目级指导 / 新任务必读
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- [`docs/FISH_KNOWLEDGE_V1.md`](docs/FISH_KNOWLEDGE_V1.md) — App 图鉴知识库与 Admin API
 - [`docs/GCS_BOOTSTRAP.md`](docs/GCS_BOOTSTRAP.md)
 - [`docs/MODEL_FACTORY_CONSOLE_V0_1.md`](docs/MODEL_FACTORY_CONSOLE_V0_1.md)
