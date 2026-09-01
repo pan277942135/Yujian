@@ -63,10 +63,24 @@ source artifact.
   labels as `DS_DET_FISH_v0.1`.
 - `build_crop_dataset` regenerates crops from the original image and accepted
   box, writes species directories and `metadata/crop_manifest.csv` as
-  `DS_CROP_M1_v0.1`, and emits a class map.
+  `DS_CROP_M1_v0.1`, and emits a class map.  The manifest now records
+  `source_image_id`, `bbox_source=accepted_review`, the expanded crop bounds,
+  and the crop pixel dimensions.
+
+`trainer.crop_dataset_validator` enforces the crop training gate before a
+dataset is used: the crop file must exist, a reviewed species and normalized
+`accepted_bbox` must be present, and `image_id` values must be unique.  A
+`candidate_bbox` is never a valid substitute.  The training worker runs the
+same validator again after materialising remote files, so a missing GCS crop
+cannot enter `CROP_CLASSIFIER_V1` by accident.
 
 Both builders report excluded candidates and safety flags.  Neither changes
 labels, freezes a dataset, creates a batch or starts training.
+
+The read-only `/crop-qa` page and `/api/crop-qa` endpoint show the original
+image with the human accepted box alongside its crop preview.  Media access
+is limited to `ACCEPTED`/`TRAINING_READY` assets with a valid accepted box;
+the page has no label, review, or Freeze mutation controls.
 
 ## Classifier pipelines and preprocessing
 

@@ -15,6 +15,7 @@ from app.feedback_ingest_api import router as feedback_ingest_router
 from app.inference_upload_api import router as inference_upload_router
 from app.batch_upload_api import router as batch_upload_router, templates as batch_upload_templates
 from app.intelligence_api import router as intelligence_router, templates as intelligence_templates
+from app.crop_qa import router as crop_qa_router, templates as crop_qa_templates
 from app.fish_knowledge.api import router as fish_knowledge_router
 from app.fish_knowledge.admin import router as fish_knowledge_admin_router
 from app.fish_knowledge.seed import seed_initial_fish_knowledge
@@ -32,6 +33,7 @@ for template_engine in (
     inference_templates,
     batch_upload_templates,
     intelligence_templates,
+    crop_qa_templates,
 ):
     install_unified_nav(template_engine)
 
@@ -90,5 +92,6 @@ app.include_router(inference_upload_router)
 app.include_router(batch_upload_router)
 app.include_router(automation_router)
 app.include_router(intelligence_router)
+app.include_router(crop_qa_router)
 app.include_router(fish_knowledge_router)
 app.include_router(fish_knowledge_admin_router)

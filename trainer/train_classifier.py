@@ -28,6 +28,7 @@ from app.db import SessionLocal, init_db
 from app.models import DatasetVersion, Evaluation, ModelVersion, TrainingRun
 from app.pipeline_contract import CROP_CLASSIFIER_V1, WHOLE_IMAGE_V1, validate_pipeline_type
 from evaluation.artifact_builder import build_evaluation_artifacts
+from trainer.crop_dataset_validator import validate_crop_rows
 
 
 def utcnow() -> datetime:
@@ -582,8 +583,19 @@ def execute() -> dict:
         with tempfile.TemporaryDirectory(prefix=f"yujian-{run_id}-") as temp_dir:
             root = Path(temp_dir)
             local_rows = materialize_images(storage_client, manifest, root / "images", pipeline_type)
+            crop_validation = None
+            if pipeline_type == CROP_CLASSIFIER_V1:
+                crop_validation = validate_crop_rows(local_rows, require_bbox=True)
+                if not crop_validation["valid"]:
+                    first_error = (crop_validation.get("errors") or [{}])[0]
+                    raise ValueError(
+                        "CROP_DATASET_INVALID: "
+                        f"{first_error.get('code', 'INVALID')}: {first_error.get('message', 'crop manifest failed validation')}"
+                    )
             grouped = split_rows(local_rows)
             model, report = train_model(grouped, class_rows, params, pipeline_type=pipeline_type)
+            if crop_validation is not None:
+                report["crop_dataset_validation"] = crop_validation
             test_source = grouped["test"] or grouped["val"] or grouped["train"]
             prediction_rows = build_test_prediction_rows(
                 model,
@@ -718,7 +730,11 @@ def execute() -> dict:
                     artifact_uri=artifact_uri,
                     metrics_uri=metrics_uri,
                     status="CANDIDATE",
-                    notes="YuJian MVP whole-image fish species classifier baseline",
+                    notes=(
+                        "YuJian CROP_CLASSIFIER_V1 MobileNetV3 Small production candidate"
+                        if pipeline_type == CROP_CLASSIFIER_V1
+                        else "YuJian MVP whole-image fish species classifier baseline"
+                    ),
                     pipeline_type=pipeline_type,
                     detector_version=params.get("detector_version"),
                     crop_version=params.get("crop_version"),

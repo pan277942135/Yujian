@@ -18,6 +18,8 @@ from typing import Any, Callable, Iterable
 
 from PIL import Image, ImageOps
 
+from trainer.crop_dataset_validator import validate_crop_dataset
+
 
 ACCEPTED_STATUSES = {"ACCEPTED", "TRAINING_READY"}
 DEFAULT_EXPAND_RATIO = 0.15
@@ -261,6 +263,7 @@ def build_crop_dataset(
                 image = ImageOps.exif_transpose(source).convert("RGB")
                 left, top, right, bottom = _crop_pixels(record["accepted_bbox"], image.width, image.height, expand_ratio)
                 crop = image.crop((left, top, right, bottom))
+                crop_width, crop_height = crop.size
                 safe_species = species.replace("/", "_").replace("\\", "_").strip() or "unknown"
                 crop_path = root / "images" / safe_species / f"{image_id}_crop.jpg"
                 crop_path.parent.mkdir(parents=True, exist_ok=True)
@@ -279,13 +282,43 @@ def build_crop_dataset(
                     "source_image_gcs_uri": _storage_value(record, "image_gcs_uri") or "",
                     "split": _split(image_id),
                     "accepted_bbox": json.dumps(record["accepted_bbox"], separators=(",", ":")),
+                    "bbox_source": "accepted_review",
                     "expand_ratio": expand_ratio,
+                    "crop_width": crop_width,
+                    "crop_height": crop_height,
+                    "crop_left": left,
+                    "crop_top": top,
+                    "crop_right": right,
+                    "crop_bottom": bottom,
+                    "crop_path": str(crop_path.relative_to(root)),
                 }
             )
         except Exception as exc:
             failures.append({"image_id": image_id, "error": str(exc)})
 
-    fields = ["image_id", "file_name", "species_key", "class_index", "gcs_uri", "local_path", "input_type", "pipeline_type", "source_image_id", "source_image_gcs_uri", "split", "accepted_bbox", "expand_ratio"]
+    fields = [
+        "image_id",
+        "file_name",
+        "species_key",
+        "class_index",
+        "gcs_uri",
+        "local_path",
+        "crop_path",
+        "input_type",
+        "pipeline_type",
+        "source_image_id",
+        "source_image_gcs_uri",
+        "split",
+        "accepted_bbox",
+        "bbox_source",
+        "expand_ratio",
+        "crop_width",
+        "crop_height",
+        "crop_left",
+        "crop_top",
+        "crop_right",
+        "crop_bottom",
+    ]
     _write_csv(root / "metadata" / "crop_manifest.csv", fields, rows)
     class_map = {
         "dataset_version": dataset_version,
@@ -293,6 +326,22 @@ def build_crop_dataset(
         "classes": [{"class_index": index, "species_key": species} for species, index in class_index.items()],
     }
     _write_json(root / "metadata" / "class_map.json", class_map)
+    validation = validate_crop_dataset(root)
+    # A build failure represents an accepted record that could not become a
+    # crop.  Keep the failure visible and make the dataset ineligible instead
+    # of allowing a partially written manifest into training.
+    if failures:
+        validation["valid"] = False
+        validation.setdefault("errors", []).extend(
+            {
+                "row": None,
+                "image_id": failure.get("image_id"),
+                "code": "BUILD_FAILURE",
+                "message": failure.get("error", "crop build failed"),
+            }
+            for failure in failures
+        )
+        validation.setdefault("checks", {})["crop_exists"] = False
     report = {
         "dataset_version": dataset_version,
         "pipeline_type": "CROP_CLASSIFIER_V1",
@@ -303,6 +352,7 @@ def build_crop_dataset(
         "written": len(rows),
         "excluded": excluded,
         "failures": failures,
+        "validation": validation,
         "safety": {
             "original_images_used_for_classifier": False,
             "candidate_bbox_used": False,

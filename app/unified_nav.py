@@ -18,6 +18,7 @@ _NAV_ITEMS = [
     ("/training", "模型训练", "prefix"),
     ("/inference", "模型实测", "prefix"),
     ("/intelligence", "模型智能分析", "prefix"),
+    ("/crop-qa", "Crop QA", "prefix"),
 ]
 _NAV_HREFS = {href for href, _label, _mode in _NAV_ITEMS}
 

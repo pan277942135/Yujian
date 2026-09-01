@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Crop QA · 渔见 AI</title>
+  <style>
+    :root{color-scheme:light}body{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f6f7f8;color:#171717}
+    header.app-nav{background:#fff;border-bottom:1px solid #e5e7eb}main{max-width:1500px;margin:0 auto;padding:24px}.top{display:flex;justify-content:space-between;align-items:flex-end;gap:14px}.muted{color:#6b7280}.section{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin-top:18px}
+    .controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.controls input,.controls select{font:inherit;border:1px solid #d1d5db;border-radius:8px;min-height:42px;padding:0 10px;background:#fff}.controls button{font:inherit;border:1px solid #111827;border-radius:8px;min-height:42px;padding:0 14px;background:#111827;color:#fff;font-weight:700;cursor:pointer}
+    .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:18px}.card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden}.images{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:10px;background:#f9fafb}.panel{min-width:0}.panel h3{font-size:12px;color:#6b7280;margin:0 0 6px}.stage{position:relative;background:#111827;border-radius:8px;overflow:hidden;min-height:120px}.stage img{display:block;width:100%;height:auto;min-height:120px;object-fit:contain}.bbox{position:absolute;border:3px solid #22c55e;box-shadow:0 0 0 1px rgba(0,0,0,.5);pointer-events:none}.crop-stage{display:flex;align-items:center;justify-content:center;background:#111827;border-radius:8px;min-height:120px}.crop-stage img{max-width:100%;max-height:170px;object-fit:contain}.body{padding:13px}.title{font-weight:750;overflow-wrap:anywhere}.meta{font-size:12px;line-height:1.65;margin-top:7px}.pill{display:inline-block;padding:3px 8px;border-radius:999px;background:#ecfdf5;color:#166534;font-size:12px}.empty{padding:28px;color:#6b7280;text-align:center;background:#fff;border:1px dashed #d1d5db;border-radius:12px;margin-top:18px}.banner{display:none;white-space:pre-wrap;margin-top:14px;padding:12px;border-radius:10px;background:#fff1f2;color:#9f1239}
+    @media(max-width:1000px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:680px){main{padding:12px 16px}.top{align-items:flex-start;flex-direction:column}.controls{display:grid;grid-template-columns:1fr;width:100%}.controls input,.controls select,.controls button{width:100%;box-sizing:border-box}.grid{grid-template-columns:1fr}.section{padding:14px}.images{grid-template-columns:1fr 1fr}}
+  </style>
+</head>
+<body>
+<header class="app-nav"></header>
+{% include "_mobile_ux.html" %}
+<main>
+  <div class="top"><div><h1>Crop QA</h1><div class="muted">只展示已通过人工审核的 accepted_bbox；此页面为只读质检，不会修改标签或冻结数据。</div></div><div class="pill">human_review gate</div></div>
+  <section class="section">
+    <div class="controls"><select id="status"><option value="accepted">已审核（Accepted + Training Ready）</option><option value="training_ready">Training Ready</option><option value="all">全部已审核</option></select><input id="query" placeholder="搜索 image_id / 鱼种" /><button onclick="loadItems()">刷新</button></div>
+    <div id="banner" class="banner"></div>
+  </section>
+  <div id="summary" class="muted" style="margin-top:16px"></div>
+  <div id="items" class="grid"></div>
+</main>
+<script>
+function esc(v){return (v??'').toString().replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function banner(text){const node=document.getElementById('banner');node.style.display='block';node.textContent=text;}
+async function api(url){const response=await fetch(url);const text=await response.text();let data;try{data=JSON.parse(text)}catch{data=text}if(!response.ok)throw new Error(data.detail||text||response.statusText);return data}
+function card(item){const b=item.accepted_bbox||[0,0,0,0], style=`left:${b[0]*100}%;top:${b[1]*100}%;width:${b[2]*100}%;height:${b[3]*100}%`;const meta=item.crop_metadata||{};return `<article class="card"><div class="images"><div class="panel"><h3>Original · accepted bbox</h3><div class="stage"><img src="${esc(item.original_url)}" alt="${esc(item.image_id)} original" loading="lazy"/><div class="bbox" style="${style}" title="accepted_bbox · human review"></div></div></div><div class="panel"><h3>Crop Preview</h3><div class="crop-stage">${item.crop_url?`<img src="${esc(item.crop_url)}" alt="${esc(item.image_id)} crop" loading="lazy"/>`:'<span class="muted">尚未生成 crop</span>'}</div></div></div><div class="body"><div class="title">${esc(item.accepted_species||'未填写鱼种')} <span class="pill">${esc(item.status)}</span></div><div class="meta"><div>image_id：${esc(item.image_id)}</div><div>source_image_id：${esc(item.source_image_id)}</div><div>expand_ratio：${esc(meta.expand_ratio??'-')} · 尺寸：${esc(meta.crop_width??'-')} × ${esc(meta.crop_height??'-')}</div></div></div></article>`}
+async function loadItems(){try{const status=encodeURIComponent(document.getElementById('status').value),q=document.getElementById('query').value.trim();const suffix=q?`&q=${encodeURIComponent(q)}`:'';const data=await api(`/api/crop-qa?status=${status}&limit=60${suffix}`);document.getElementById('summary').textContent=`共 ${data.total||0} 条已审核 Crop 资产`;document.getElementById('items').innerHTML=(data.items||[]).map(card).join('')||'<div class="empty">暂无满足条件的 accepted_bbox Crop。</div>'}catch(error){banner(error.message);document.getElementById('items').innerHTML='<div class="empty">无法读取 Crop QA 队列。</div>'}}
+document.getElementById('query').addEventListener('keydown',event=>{if(event.key==='Enter')loadItems()});loadItems();
+</script>
+</body>
+</html>
