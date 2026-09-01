@@ -11,6 +11,11 @@
 <body>
 <header class="app-nav"><a href="/">总览</a><a href="/batches">数据批次</a></header>
 {% include "_mobile_ux.html" %}
+<style>
+  .uploadSummary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-top:12px}
+  .uploadSummary span{padding:9px 10px;border-radius:9px;background:#f8fafc;border:1px solid #e5e7eb;font-size:13px}
+  @media(max-width:768px){.uploadSummary{grid-template-columns:1fr 1fr}.uploadSummary span:first-child{grid-column:1/-1}}
+</style>
 <main>
   <div class="top">
     <div>
@@ -35,6 +40,8 @@
       <button id="uploadFolderBtn" class="primary" onclick="uploadFolder()">上传并生成 Incoming Batch</button>
       <div class="progress"><div id="progressBar"></div></div>
     </div>
+    <div id="uploadSummary" class="uploadSummary" aria-live="polite"><span>上传：0</span><span>成功：0</span><span>跳过：0</span><span>冲突：0</span><span>失败：0</span></div>
+    <button id="retryFailedBtn" class="secondary" style="display:none;margin-top:10px" onclick="retryFailed()">重试失败文件</button>
 
     <div class="smallZip">
       <h3>小型 ZIP 快速上传</h3>
@@ -55,30 +62,28 @@
 </main>
 <script>
 const MAX_SINGLE=25*1024*1024;
+let uploadContext=null;
 function status(text,kind=''){const el=document.getElementById('status');el.style.display='block';el.className='status '+kind;el.textContent=text}
 function busy(on){document.body.classList.toggle('spinner',on)}
 async function api(url,opts={}){const r=await fetch(url,opts);const t=await r.text();let d;try{d=JSON.parse(t)}catch{d=t}if(!r.ok)throw new Error((d&&d.detail)||t||r.statusText);return d}
 function chosenFiles(){return Array.from(document.getElementById('folderInput').files||[])}
 function commonRoot(files){const roots=files.map(f=>(f.webkitRelativePath||'').split('/')[0]).filter(Boolean);return roots.length&&roots.every(x=>x===roots[0])?roots[0]:''}
 function relativePath(file,root){let p=(file.webkitRelativePath||file.name).replace(/\\/g,'/');if(root&&p.startsWith(root+'/'))p=p.slice(root.length+1);return p}
-function updateFolderSummary(){const files=chosenFiles();if(!files.length){document.getElementById('folderSummary').textContent='尚未选择文件夹。';return}const bytes=files.reduce((s,f)=>s+f.size,0);const images=files.filter(f=>/\.(jpe?g|png|webp)$/i.test(f.name)).length;document.getElementById('folderSummary').textContent=`已选择 ${files.length} 个文件，其中图片 ${images} 张，总大小 ${(bytes/1024/1024).toFixed(1)} MiB。`}
+function updateFolderSummary(){const files=chosenFiles();if(!files.length){document.getElementById('folderSummary').textContent='尚未选择文件夹。';return}const bytes=files.reduce((s,f)=>s+f.size,0);const images=files.filter(f=>/\.(jpe?g|png|webp)$/i.test(f.name)).length;document.getElementById('folderSummary').textContent='已选择 '+files.length+' 个文件，其中图片 '+images+' 张，总大小 '+(bytes/1024/1024).toFixed(1)+' MiB。'}
 document.getElementById('folderInput').addEventListener('change',updateFolderSummary);
 
 async function startUpload(batchId,source){return api('/api/batches/upload-start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({batch_id:batchId||null,source})})}
-async function sendFile(batchId,file,path){if(file.size>MAX_SINGLE)throw new Error(`单文件超过 25 MiB：${path}`);const fd=new FormData();fd.append('batch_id',batchId);fd.append('relative_path',path);fd.append('file',file,file.name);return api('/api/batches/upload-file',{method:'POST',body:fd})}
+async function sendFile(batchId,file,path){if(file.size>MAX_SINGLE)throw new Error('单文件超过 25 MiB：'+path);const fd=new FormData();fd.append('batch_id',batchId);fd.append('relative_path',path);fd.append('file',file,file.name);return api('/api/batches/upload-file',{method:'POST',body:fd})}
 async function finalize(batchId,source){return api('/api/batches/upload-finalize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({batch_id:batchId,source})})}
-
-async function uploadFolder(){const files=chosenFiles();if(!files.length){status('请先选择统一格式数据文件夹。','error');return}const source=document.getElementById('source').value;const requested=document.getElementById('batchId').value.trim();const root=commonRoot(files);const paths=files.map(f=>relativePath(f,root));if(!paths.some(p=>/(^|\/)metadata\/manifest\.csv$/i.test(p))&&!paths.some(p=>/(^|\/)fish_manifest\.csv$/i.test(p))){status('未发现 metadata/manifest.csv 或 fish_manifest.csv，请确认选择的是统一采集数据根目录。','error');return}if(!paths.some(p=>/(^|\/)images\//i.test(p))){status('未发现 images/ 目录，请确认数据包结构。','error');return}
-  busy(true);document.getElementById('progressBar').style.width='0%';
-  try{
-    status('正在建立上传批次…');const started=await startUpload(requested,source);const batchId=started.batch_id;document.getElementById('batchId').value=batchId;
-    let next=0,done=0;const workers=Math.min(4,files.length);
-    async function worker(){while(true){const i=next++;if(i>=files.length)return;await sendFile(batchId,files[i],paths[i]);done++;document.getElementById('progressBar').style.width=`${Math.round(done/files.length*92)}%`;status(`正在上传 ${batchId}\n${done} / ${files.length} 个文件`);}}
-    await Promise.all(Array.from({length:workers},()=>worker()));status(`正在校验并生成标准清单：${batchId} …`);const result=await finalize(batchId,source);document.getElementById('progressBar').style.width='100%';status(`上传完成：${result.batch_id}\n图片：${result.image_count}\nManifest：${result.manifest_rows} 行\nfish_manifest：${result.generated_fish_manifest?'已从 metadata/manifest.csv 自动生成':'使用数据包现有文件'}\n状态：${result.status}\n\n下一步：返回“数据批次”，点击“准备审核”。`,'ok');
-  }catch(e){status(`上传中断：${e.message}\n\n已经成功写入 GCS 的文件会保留。若需要重新上传，建议更换新的 Batch ID，避免覆盖历史对象。`,'error')}finally{busy(false)}
-}
-
-async function uploadZip(){const file=document.getElementById('zipInput').files[0];if(!file){status('请先选择 ZIP。','error');return}if(file.size>MAX_SINGLE){status('ZIP 超过 25 MiB。请解压后使用“文件夹上传”，该模式适合数百张图片。','error');return}const source=document.getElementById('source').value;const batchId=document.getElementById('batchId').value.trim();const fd=new FormData();fd.append('file',file,file.name);fd.append('source',source);if(batchId)fd.append('batch_id',batchId);busy(true);try{status('正在上传并处理 ZIP…');const d=await api('/api/batches/upload',{method:'POST',body:fd});document.getElementById('batchId').value=d.batch_id;document.getElementById('progressBar').style.width='100%';status(`ZIP 导入完成：${d.batch_id}\n图片：${d.image_count}\nManifest：${d.manifest_rows} 行\n状态：${d.status}\n\n下一步：返回“数据批次”，点击“准备审核”。`,'ok')}catch(e){status(e.message,'error')}finally{busy(false)}}
+function summaryCounts(){const counts={uploaded:0,skipped:0,conflict:0,failed:0};if(!uploadContext)return counts;Object.values(uploadContext.results).forEach(function(item){const key={UPLOADED:'uploaded',SKIP:'skipped',CONFLICT:'conflict',FAILED:'failed'}[item.status];if(key)counts[key]++});return counts}
+function summaryText(){const c=summaryCounts();return '上传：'+(uploadContext?.paths.length||0)+'\n成功：'+c.uploaded+'\n跳过：'+c.skipped+'\n冲突：'+c.conflict+'\n失败：'+c.failed}
+function renderUploadSummary(){const c=summaryCounts();document.getElementById('uploadSummary').innerHTML='<span>上传：'+(uploadContext?.paths.length||0)+'</span><span>成功：'+c.uploaded+'</span><span>跳过：'+c.skipped+'</span><span>冲突：'+c.conflict+'</span><span>失败：'+c.failed+'</span>';const failed=uploadContext?uploadContext.paths.map(function(path,index){return {path:path,index:index}}).filter(function(x){return uploadContext.results[x.path]?.status==='FAILED'}):[];const retry=document.getElementById('retryFailedBtn');retry.style.display=failed.length?'block':'none';retry.disabled=!failed.length}
+function failedIndexes(){if(!uploadContext)return [];return uploadContext.paths.map(function(path,index){return index}).filter(function(index){return uploadContext.results[uploadContext.paths[index]]?.status==='FAILED'})}
+async function runFileUploads(indices){if(!uploadContext||!indices.length)return;let next=0,done=0;const workers=Math.min(4,indices.length);async function worker(){while(true){const n=next++;if(n>=indices.length)return;const i=indices[n],path=uploadContext.paths[i],file=uploadContext.files[i];try{const result=await sendFile(uploadContext.batchId,file,path);uploadContext.results[path]={status:result.status||'UPLOADED',result:result};}catch(e){uploadContext.results[path]={status:'FAILED',error:e.message};}done++;document.getElementById('progressBar').style.width=Math.round(done/indices.length*92)+'%';renderUploadSummary();status('正在上传 '+uploadContext.batchId+'\n本轮 '+done+' / '+indices.length+' 个文件\n\n'+summaryText());}}await Promise.all(Array.from({length:workers},function(){return worker()}))}
+async function finishFolderUpload(){renderUploadSummary();const c=summaryCounts();if(c.conflict||c.failed){status('上传未完成：'+uploadContext.batchId+'\n\n'+summaryText()+'\n\n请先处理冲突或点击“重试失败文件”。已有对象不会被覆盖。','error');return false}status('正在校验并生成标准清单：'+uploadContext.batchId+' …');const result=await finalize(uploadContext.batchId,uploadContext.source);document.getElementById('progressBar').style.width='100%';status('上传完成：'+result.batch_id+'\n\n'+summaryText()+'\n图片：'+result.image_count+'\nManifest：'+result.manifest_rows+' 行\nfish_manifest：'+(result.generated_fish_manifest?'已从 metadata/manifest.csv 自动生成':'使用数据包现有文件')+'\n状态：'+result.status+'\n\n下一步：返回“数据批次”，点击“准备审核”。','ok');return true}
+async function uploadFolder(){const files=chosenFiles();if(!files.length){status('请先选择统一格式数据文件夹。','error');return}const source=document.getElementById('source').value;const requested=document.getElementById('batchId').value.trim();const rootPath=commonRoot(files);const paths=files.map(function(f){return relativePath(f,rootPath)});if(!paths.some(function(p){return /(^|\/)metadata\/manifest\.csv$/i.test(p)})&&!paths.some(function(p){return /(^|\/)fish_manifest\.csv$/i.test(p)})){status('未发现 metadata/manifest.csv 或 fish_manifest.csv，请确认选择的是统一采集数据根目录。','error');return}if(!paths.some(function(p){return /(^|\/)images\//i.test(p)})){status('未发现 images/ 目录，请确认选择的是统一采集数据根目录。','error');return}busy(true);document.getElementById('progressBar').style.width='0%';try{const started=await startUpload(requested,source);uploadContext={batchId:started.batch_id,source:source,files:files,paths:paths,results:{}};document.getElementById('batchId').value=started.batch_id;renderUploadSummary();await runFileUploads(paths.map(function(_,i){return i}));await finishFolderUpload();}catch(e){status('上传中断：'+e.message+'\n\n已成功写入 GCS 的文件会保留；可以再次点击上传，系统会按 hash 跳过相同对象。','error')}finally{busy(false)}}
+async function retryFailed(){const indices=failedIndexes();if(!indices.length||!uploadContext)return;busy(true);document.getElementById('progressBar').style.width='0%';try{await runFileUploads(indices);await finishFolderUpload();}catch(e){status('重试中断：'+e.message,'error')}finally{busy(false)}}
+async function uploadZip(){const file=document.getElementById('zipInput').files[0];if(!file){status('请先选择 ZIP。','error');return}if(file.size>MAX_SINGLE){status('ZIP 超过 25 MiB。请解压后使用“文件夹上传”，该模式适合数百张图片。','error');return}const source=document.getElementById('source').value;const batchId=document.getElementById('batchId').value.trim();const fd=new FormData();fd.append('file',file,file.name);fd.append('source',source);if(batchId)fd.append('batch_id',batchId);busy(true);try{status('正在上传并处理 ZIP…');const d=await api('/api/batches/upload',{method:'POST',body:fd});document.getElementById('batchId').value=d.batch_id;document.getElementById('progressBar').style.width='100%';const c=d.upload_summary||{};const detail='上传：'+(c.total||d.uploaded_files||0)+'\n成功：'+(c.uploaded||d.uploaded||0)+'\n跳过：'+(c.skipped||d.skipped||0)+'\n冲突：'+(c.conflict||d.conflict||0)+'\n失败：'+(c.failed||d.failed||0);status('ZIP 导入 '+(d.status==='READY_FOR_AUDIT'?'完成':'未完成')+'：'+d.batch_id+'\n\n'+detail+'\nManifest：'+(d.manifest_rows||'-')+' 行\n状态：'+(d.status||'-')+(d.conflicts?.length?'\n\n冲突文件：'+d.conflicts.join(', '):'') ,'READY_FOR_AUDIT'===d.status?'ok':'error')}catch(e){status(e.message,'error')}finally{busy(false)}}
 </script>
 </body>
 </html>

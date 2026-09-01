@@ -1,9 +1,49 @@
 import csv
+import base64
+import hashlib
 import io
 
 import pytest
 
-from app.batch_upload_api import _build_fish_manifest, _safe_relative_path, _validate_batch_id
+from app.batch_upload_api import (
+    _build_fish_manifest,
+    _safe_relative_path,
+    _upload_resumable_blob,
+    _validate_batch_id,
+)
+
+
+class FakeBlob:
+    def __init__(self, data=None):
+        self.data = data
+        self.size = len(data) if data is not None else None
+        self.md5_hash = (
+            base64.b64encode(hashlib.md5(data).digest()).decode("ascii") if data is not None else None
+        )
+        self.uploads = 0
+
+    def exists(self, _client=None):
+        return self.data is not None
+
+    def reload(self, _client=None):
+        return None
+
+    def download_as_bytes(self):
+        return self.data
+
+    def upload_from_string(self, data, **_kwargs):
+        self.data = data
+        self.size = len(data)
+        self.md5_hash = base64.b64encode(hashlib.md5(data).digest()).decode("ascii")
+        self.uploads += 1
+
+
+class FakeBucket:
+    def __init__(self, blob):
+        self._blob = blob
+
+    def blob(self, _name):
+        return self._blob
 
 
 def test_collection_manifest_is_adapted_to_factory_contract():
@@ -43,3 +83,22 @@ def test_batch_id_contract():
     assert _validate_batch_id("BATCH_20260901_P5_001") == "BATCH_20260901_P5_001"
     with pytest.raises(ValueError):
         _validate_batch_id("P5_001")
+
+
+def test_resumable_upload_skips_existing_object_with_same_hash():
+    blob = FakeBlob(b"same bytes")
+    result = _upload_resumable_blob(FakeBucket(blob), object(), "incoming/BATCH/x.jpg", b"same bytes", content_type="image/jpeg")
+
+    assert result["status"] == "SKIP"
+    assert result["skipped"] is True
+    assert blob.uploads == 0
+
+
+def test_resumable_upload_reports_conflict_without_overwrite():
+    blob = FakeBlob(b"old bytes")
+    result = _upload_resumable_blob(FakeBucket(blob), object(), "incoming/BATCH/x.jpg", b"new bytes", content_type="image/jpeg")
+
+    assert result["status"] == "CONFLICT"
+    assert result["conflict"] is True
+    assert blob.data == b"old bytes"
+    assert blob.uploads == 0

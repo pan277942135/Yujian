@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import base64
+import hashlib
 import io
 import json
 import mimetypes
@@ -97,6 +99,92 @@ def _prefix(batch_id: str) -> str:
 
 def _list_blobs(client: storage.Client, bucket_name: str, batch_id: str) -> list[storage.Blob]:
     return [b for b in client.list_blobs(bucket_name, prefix=_prefix(batch_id)) if not b.name.endswith("/")]
+
+
+def _payload_md5(data: bytes) -> str:
+    return base64.b64encode(hashlib.md5(data).digest()).decode("ascii")
+
+
+def _payload_sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _blob_matches_payload(blob: storage.Blob, data: bytes, client: storage.Client) -> bool:
+    """Compare an existing object without ever replacing it."""
+
+    try:
+        blob.reload(client)
+    except Exception:
+        pass
+    remote_md5 = getattr(blob, "md5_hash", None)
+    if remote_md5:
+        return remote_md5 == _payload_md5(data)
+    if getattr(blob, "size", None) is not None and blob.size != len(data):
+        return False
+    try:
+        remote = blob.download_as_bytes()
+    except Exception:
+        return False
+    return _payload_sha256(remote) == _payload_sha256(data)
+
+
+def _upload_resumable_blob(
+    bucket: storage.Bucket,
+    client: storage.Client,
+    object_name: str,
+    data: bytes,
+    *,
+    content_type: str,
+) -> dict:
+    """Upload one object idempotently and report UPLOADED/SKIP/CONFLICT."""
+
+    sha256 = _payload_sha256(data)
+    blob = bucket.blob(object_name)
+    if blob.exists(client):
+        if _blob_matches_payload(blob, data, client):
+            return {
+                "relative_path": object_name.rsplit("/", 1)[-1],
+                "size_bytes": len(data),
+                "sha256": sha256,
+                "status": "SKIP",
+                "skipped": True,
+            }
+        return {
+            "relative_path": object_name.rsplit("/", 1)[-1],
+            "size_bytes": len(data),
+            "sha256": sha256,
+            "status": "CONFLICT",
+            "conflict": True,
+        }
+    try:
+        blob.upload_from_string(data, content_type=content_type, if_generation_match=0)
+    except Exception:
+        # Another worker may have won the race between exists() and the
+        # conditional write. Re-check and report an explicit outcome.
+        if blob.exists(client):
+            if _blob_matches_payload(blob, data, client):
+                return {
+                    "relative_path": object_name.rsplit("/", 1)[-1],
+                    "size_bytes": len(data),
+                    "sha256": sha256,
+                    "status": "SKIP",
+                    "skipped": True,
+                }
+            return {
+                "relative_path": object_name.rsplit("/", 1)[-1],
+                "size_bytes": len(data),
+                "sha256": sha256,
+                "status": "CONFLICT",
+                "conflict": True,
+            }
+        raise
+    return {
+        "relative_path": object_name.rsplit("/", 1)[-1],
+        "size_bytes": len(data),
+        "sha256": sha256,
+        "status": "UPLOADED",
+        "uploaded": True,
+    }
 
 
 def _source_manifest_blob(blobs: list[storage.Blob]) -> storage.Blob | None:
@@ -274,9 +362,12 @@ def start_batch_upload(payload: UploadStartRequest):
         bucket_name = get_bucket_name()
         client = storage.Client()
         existing = next(iter(client.list_blobs(bucket_name, prefix=_prefix(batch_id), max_results=1)), None)
-        if existing is not None:
-            raise ValueError(f"{batch_id} 已存在对象，请更换批次 ID，避免覆盖历史数据")
-        return {"batch_id": batch_id, "source": payload.source, "status": "READY_FOR_FILES"}
+        return {
+            "batch_id": batch_id,
+            "source": payload.source,
+            "status": "RESUME" if existing is not None else "READY_FOR_FILES",
+            "resumed": existing is not None,
+        }
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -302,8 +393,15 @@ async def upload_batch_file(
         client = storage.Client()
         bucket = client.bucket(get_bucket_name())
         object_name = _prefix(batch_id) + relative_path
-        bucket.blob(object_name).upload_from_string(data, content_type=content_type, if_generation_match=0)
-        return {"batch_id": batch_id, "relative_path": relative_path, "size_bytes": len(data), "status": "UPLOADED"}
+        result = _upload_resumable_blob(
+            bucket,
+            client,
+            object_name,
+            data,
+            content_type=content_type,
+        )
+        result.update({"batch_id": batch_id, "relative_path": relative_path})
+        return result
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -348,8 +446,8 @@ async def upload_batch_dataset(
                 raise ValueError("ZIP 为空")
             client = storage.Client()
             bucket = client.bucket(get_bucket_name())
-            if next(iter(client.list_blobs(get_bucket_name(), prefix=_prefix(final_batch), max_results=1)), None) is not None:
-                raise ValueError(f"{final_batch} 已存在对象，请更换批次 ID")
+            upload_counts = {"total": 0, "uploaded": 0, "skipped": 0, "conflict": 0, "failed": 0}
+            conflicts = []
             for info in members:
                 try:
                     name = _safe_relative_path(info.filename)
@@ -359,12 +457,40 @@ async def upload_batch_dataset(
                     raise
                 if info.file_size > MAX_SINGLE_FILE_BYTES:
                     raise ValueError(f"ZIP 内单文件超过 25 MiB：{name}")
-                bucket.blob(_prefix(final_batch) + name).upload_from_string(
-                    archive.read(info),
-                    content_type=mimetypes.guess_type(name)[0] or "application/octet-stream",
-                    if_generation_match=0,
-                )
-        return _finalize_upload(final_batch, source)
+                upload_counts["total"] += 1
+                try:
+                    result = _upload_resumable_blob(
+                        bucket,
+                        client,
+                        _prefix(final_batch) + name,
+                        archive.read(info),
+                        content_type=mimetypes.guess_type(name)[0] or "application/octet-stream",
+                    )
+                    outcome = {"SKIP": "skipped"}.get(result["status"], result["status"].lower())
+                    upload_counts[outcome] = upload_counts.get(outcome, 0) + 1
+                    if result["status"] == "CONFLICT":
+                        conflicts.append(name)
+                except Exception:
+                    upload_counts["failed"] += 1
+            if conflicts or upload_counts["failed"]:
+                return {
+                    "batch_id": final_batch,
+                    "source": source,
+                    "status": "CONFLICT" if conflicts else "FAILED",
+                    "conflicts": conflicts,
+                    "upload_summary": upload_counts,
+                }
+        result = _finalize_upload(final_batch, source)
+        result["upload_summary"] = upload_counts
+        result.update(
+            {
+                "uploaded": upload_counts["uploaded"],
+                "skipped": upload_counts["skipped"],
+                "conflict": upload_counts["conflict"],
+                "failed": upload_counts["failed"],
+            }
+        )
+        return result
     except ManifestNormalizationError as exc:
         return _manifest_error_response(exc)
     except zipfile.BadZipFile as exc:
