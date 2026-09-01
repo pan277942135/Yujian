@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
 
 os.environ.setdefault("REGISTRY_DB_URL", "sqlite:///:memory:")
 
-from app import bulk_review, inference_api, inspect, main, training_api  # noqa: E402
+from app import batch_upload_api, bulk_review, inference_api, inspect, main, training_api  # noqa: E402
 from app.entry import app  # noqa: F401,E402
 from app.unified_nav import UnifiedNavLoader  # noqa: E402
 
@@ -19,6 +19,7 @@ from app.unified_nav import UnifiedNavLoader  # noqa: E402
 EXPECTED_LINKS = [
     ('href="/"', "总览"),
     ('href="/batches"', "数据批次"),
+    ('href="/batches/upload"', "数据导入"),
     ('href="/review/bulk"', "快速审核"),
     ('href="/review"', "单张审核"),
     ('href="/species"', "鱼种管理"),
@@ -34,11 +35,13 @@ TEMPLATE_ENGINES = [
     inspect.templates,
     training_api.templates,
     inference_api.templates,
+    batch_upload_api.templates,
 ]
 
 TEMPLATES = [
     "overview.html",
     "batches.html",
+    "batch_upload.html",
     "bulk_review.html",
     "review.html",
     "species.html",
