@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>数据导入 · 渔见 AI</title>
+  <style>
+    body{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f6f7f8;color:#171717}header{background:#fff;border-bottom:1px solid #e5e7eb;padding:14px 24px;display:flex;gap:22px;align-items:center}header a{text-decoration:none;color:#111827;font-weight:650}main{max-width:1100px;margin:0 auto;padding:24px}.top{display:flex;justify-content:space-between;gap:14px;align-items:flex-end}.muted{color:#6b7280}.section{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:20px;margin-top:18px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.field label{display:block;font-size:13px;font-weight:700;margin-bottom:7px}.field input,.field select{box-sizing:border-box;width:100%;font:inherit;border:1px solid #d1d5db;border-radius:9px;padding:10px;background:#fff}.uploadBox{border:1px dashed #94a3b8;border-radius:12px;padding:18px;background:#f8fafc}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}button,.button{font:inherit;border:1px solid #d1d5db;border-radius:9px;padding:10px 14px;background:#fff;cursor:pointer;font-weight:700;text-decoration:none;color:#111827}.primary{background:#0f172a;color:#fff;border-color:#0f172a}.secondary{background:#eef2ff}.danger{background:#fff1f2}.progress{height:10px;border-radius:999px;background:#e5e7eb;overflow:hidden;margin-top:12px}.progress>div{height:100%;width:0;background:#111827;transition:width .15s}.status{display:none;margin-top:16px;padding:14px;border-radius:10px;background:#eef2ff;white-space:pre-wrap;line-height:1.55}.status.error{background:#fff1f2}.status.ok{background:#ecfdf5}.hint{font-size:13px;line-height:1.55;margin-top:8px}.code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f3f4f6;padding:2px 5px;border-radius:5px}.smallZip{margin-top:16px;padding-top:16px;border-top:1px solid #e5e7eb}.spinner{opacity:.6;pointer-events:none}@media(max-width:760px){.grid{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}}
+  </style>
+</head>
+<body>
+<header><a href="/">总览</a><a href="/batches">数据批次</a></header>
+<main>
+  <div class="top">
+    <div>
+      <h1>导入采集数据</h1>
+      <div class="muted">将统一采集格式直接写入 GCS Incoming，并自动生成 Model Factory 所需的 fish_manifest.csv。</div>
+    </div>
+    <a class="button" href="/batches">返回数据批次</a>
+  </div>
+
+  <div class="section">
+    <h2>文件夹上传（推荐）</h2>
+    <div class="hint muted">适合真实采集包和数百张图片。浏览器会逐文件上传，避免 Cloud Run 单请求大小限制。目录应包含 <span class="code">images/</span>、<span class="code">metadata/manifest.csv</span>，可选 <span class="code">source/</span>、<span class="code">report/</span>。</div>
+    <div class="grid" style="margin-top:16px">
+      <div class="field"><label for="batchId">正式 Batch ID</label><input id="batchId" placeholder="BATCH_20260901_P5_001" /></div>
+      <div class="field"><label for="source">数据来源</label><select id="source"><option value="p5">P5补充采集</option><option value="doubao">豆包</option><option value="bucai">布卡特</option><option value="manual">人工采集</option><option value="other">其他</option></select></div>
+    </div>
+    <div class="uploadBox" style="margin-top:16px">
+      <div class="field"><label for="folderInput">选择统一格式数据文件夹</label><input id="folderInput" type="file" webkitdirectory directory multiple /></div>
+      <div id="folderSummary" class="hint muted">尚未选择文件夹。</div>
+      <div class="actions"><button id="uploadFolderBtn" class="primary" onclick="uploadFolder()">上传并生成 Incoming Batch</button></div>
+      <div class="progress"><div id="progressBar"></div></div>
+    </div>
+
+    <div class="smallZip">
+      <h3>小型 ZIP 快速上传</h3>
+      <div class="hint muted">仅用于 25 MiB 以内的小包。更大的 ZIP 请解压后使用上方“文件夹上传”。</div>
+      <div class="grid" style="margin-top:12px">
+        <div class="field"><label for="zipInput">ZIP 文件</label><input id="zipInput" type="file" accept=".zip,application/zip" /></div>
+        <div class="actions" style="align-items:end"><button class="secondary" onclick="uploadZip()">上传小型 ZIP</button></div>
+      </div>
+    </div>
+
+    <div id="status" class="status"></div>
+  </div>
+
+  <div class="section">
+    <h2>导入后流程</h2>
+    <div class="hint">上传完成后，本页面只负责把数据放入 <span class="code">incoming/&lt;batch_id&gt;/</span> 并生成标准清单。随后回到“数据批次”，继续执行：<b>准备审核 → Audit → Promote → Registry Sync → 重复检测 → 鱼体检测 → 人工审核</b>。采集标签不会自动成为 Ground Truth。</div>
+  </div>
+</main>
+<script>
+const MAX_SINGLE=25*1024*1024;
+function status(text,kind=''){const el=document.getElementById('status');el.style.display='block';el.className='status '+kind;el.textContent=text}
+function busy(on){document.body.classList.toggle('spinner',on)}
+async function api(url,opts={}){const r=await fetch(url,opts);const t=await r.text();let d;try{d=JSON.parse(t)}catch{d=t}if(!r.ok)throw new Error((d&&d.detail)||t||r.statusText);return d}
+function chosenFiles(){return Array.from(document.getElementById('folderInput').files||[])}
+function commonRoot(files){const roots=files.map(f=>(f.webkitRelativePath||'').split('/')[0]).filter(Boolean);return roots.length&&roots.every(x=>x===roots[0])?roots[0]:''}
+function relativePath(file,root){let p=(file.webkitRelativePath||file.name).replace(/\\/g,'/');if(root&&p.startsWith(root+'/'))p=p.slice(root.length+1);return p}
+function updateFolderSummary(){const files=chosenFiles();if(!files.length){document.getElementById('folderSummary').textContent='尚未选择文件夹。';return}const bytes=files.reduce((s,f)=>s+f.size,0);const images=files.filter(f=>/\.(jpe?g|png|webp)$/i.test(f.name)).length;document.getElementById('folderSummary').textContent=`已选择 ${files.length} 个文件，其中图片 ${images} 张，总大小 ${(bytes/1024/1024).toFixed(1)} MiB。`}
+document.getElementById('folderInput').addEventListener('change',updateFolderSummary);
+
+async function startUpload(batchId,source){return api('/api/batches/upload-start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({batch_id:batchId||null,source})})}
+async function sendFile(batchId,file,path){if(file.size>MAX_SINGLE)throw new Error(`单文件超过 25 MiB：${path}`);const fd=new FormData();fd.append('batch_id',batchId);fd.append('relative_path',path);fd.append('file',file,file.name);return api('/api/batches/upload-file',{method:'POST',body:fd})}
+async function finalize(batchId,source){return api('/api/batches/upload-finalize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({batch_id:batchId,source})})}
+
+async function uploadFolder(){const files=chosenFiles();if(!files.length){status('请先选择统一格式数据文件夹。','error');return}const source=document.getElementById('source').value;const requested=document.getElementById('batchId').value.trim();const root=commonRoot(files);const paths=files.map(f=>relativePath(f,root));if(!paths.some(p=>/(^|\/)metadata\/manifest\.csv$/i.test(p))&&!paths.some(p=>/(^|\/)fish_manifest\.csv$/i.test(p))){status('未发现 metadata/manifest.csv 或 fish_manifest.csv，请确认选择的是统一采集数据根目录。','error');return}if(!paths.some(p=>/(^|\/)images\//i.test(p))){status('未发现 images/ 目录，请确认数据包结构。','error');return}
+  busy(true);document.getElementById('progressBar').style.width='0%';
+  try{
+    status('正在建立上传批次…');const started=await startUpload(requested,source);const batchId=started.batch_id;document.getElementById('batchId').value=batchId;
+    let next=0,done=0;const workers=Math.min(4,files.length);
+    async function worker(){while(true){const i=next++;if(i>=files.length)return;await sendFile(batchId,files[i],paths[i]);done++;document.getElementById('progressBar').style.width=`${Math.round(done/files.length*92)}%`;status(`正在上传 ${batchId}\n${done} / ${files.length} 个文件`);}}
+    await Promise.all(Array.from({length:workers},()=>worker()));status(`正在校验并生成标准清单：${batchId} …`);const result=await finalize(batchId,source);document.getElementById('progressBar').style.width='100%';status(`上传完成：${result.batch_id}\n图片：${result.image_count}\nManifest：${result.manifest_rows} 行\nfish_manifest：${result.generated_fish_manifest?'已从 metadata/manifest.csv 自动生成':'使用数据包现有文件'}\n状态：${result.status}\n\n下一步：返回“数据批次”，点击“准备审核”。`,'ok');
+  }catch(e){status(`上传中断：${e.message}\n\n已经成功写入 GCS 的文件会保留。若需要重新上传，建议更换新的 Batch ID，避免覆盖历史对象。`,'error')}finally{busy(false)}
+}
+
+async function uploadZip(){const file=document.getElementById('zipInput').files[0];if(!file){status('请先选择 ZIP。','error');return}if(file.size>MAX_SINGLE){status('ZIP 超过 25 MiB。请解压后使用“文件夹上传”，该模式适合数百张图片。','error');return}const source=document.getElementById('source').value;const batchId=document.getElementById('batchId').value.trim();const fd=new FormData();fd.append('file',file,file.name);fd.append('source',source);if(batchId)fd.append('batch_id',batchId);busy(true);try{status('正在上传并处理 ZIP…');const d=await api('/api/batches/upload',{method:'POST',body:fd});document.getElementById('batchId').value=d.batch_id;document.getElementById('progressBar').style.width='100%';status(`ZIP 导入完成：${d.batch_id}\n图片：${d.image_count}\nManifest：${d.manifest_rows} 行\n状态：${d.status}\n\n下一步：返回“数据批次”，点击“准备审核”。`,'ok')}catch(e){status(e.message,'error')}finally{busy(false)}}
+</script>
+</body>
+</html>
