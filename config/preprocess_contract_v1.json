@@ -1,0 +1,25 @@
+{
+  "contract_version": "PREPROCESS_CONTRACT_V1",
+  "crop": {
+    "expand_ratio": 0.15,
+    "resize": "letterbox",
+    "input_size": 224,
+    "color_order": "RGB",
+    "normalize": {
+      "mean": [0.485, 0.456, 0.406],
+      "std": [0.229, 0.224, 0.225]
+    },
+    "input_source": "crop_image"
+  },
+  "legacy_whole_image": {
+    "pipeline_type": "WHOLE_IMAGE_V1",
+    "resize": "letterbox",
+    "input_size": 224,
+    "color_order": "RGB",
+    "normalize": {
+      "mean": [0.485, 0.456, 0.406],
+      "std": [0.229, 0.224, 0.225]
+    },
+    "input_source": "original_image"
+  }
+}
