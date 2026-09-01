@@ -15,6 +15,7 @@ from app.feedback_ingest_api import router as feedback_ingest_router
 from app.inference_upload_api import router as inference_upload_router
 from app.batch_upload_api import router as batch_upload_router, templates as batch_upload_templates
 from app.intelligence_api import router as intelligence_router, templates as intelligence_templates
+from app.fish_knowledge.api import router as fish_knowledge_router
 from app.p0_automation import install_feedback_automation, router as automation_router
 from app.unified_nav import install_unified_nav
 from app.db import SessionLocal
@@ -86,3 +87,4 @@ app.include_router(inference_upload_router)
 app.include_router(batch_upload_router)
 app.include_router(automation_router)
 app.include_router(intelligence_router)
+app.include_router(fish_knowledge_router)

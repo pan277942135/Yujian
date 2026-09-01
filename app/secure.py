@@ -7,6 +7,10 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 COOKIE_NAME = "yujian_console"
 PUBLIC_PATHS = {"/health", "/health/deploy", "/health/detector", "/login"}
+PUBLIC_GET_PATH_PREFIXES = (
+    "/api/v1/fish/species",
+    "/api/v1/fish/gallery",
+)
 FEEDBACK_INGEST_PATHS = {
     "/api/feedback",
     "/api/feedback/ingest",
@@ -30,7 +34,11 @@ def install_access_guard(app: FastAPI) -> None:
     @app.middleware("http")
     async def console_access_guard(request: Request, call_next):
         key = _configured_key()
-        if not key or request.url.path in PUBLIC_PATHS:
+        public_fish_read = request.method == "GET" and any(
+            request.url.path == prefix or request.url.path.startswith(prefix + "/")
+            for prefix in PUBLIC_GET_PATH_PREFIXES
+        )
+        if not key or request.url.path in PUBLIC_PATHS or public_fish_read:
             return await call_next(request)
 
         ingest_key = _feedback_ingest_key()
