@@ -28,6 +28,8 @@ templates = Jinja2Templates(directory="app/templates")
 
 DEFAULT_MODEL_VERSION = "MODEL_M1_v0.3"
 DEFAULT_EVALUATION_PATHS = (
+    "evaluation_artifacts/{model_version}/metrics.json",
+    "var/evaluation_artifacts/{model_version}/metrics.json",
     "var/intelligence/{model_version}/evaluation.json",
     "var/intelligence/{model_version}/metrics.json",
     "evaluations/{model_version}/metrics.json",
@@ -69,6 +71,62 @@ def _read_json_source(source: str | Path, storage_client: Any = None) -> Any:
             return _parse_csv_artifact(handle.read())
     with path.open("r", encoding="utf-8-sig") as handle:
         return json.load(handle)
+
+
+def _sibling_source(source: str | Path, filename: str) -> str:
+    """Return a sibling artifact URI/path without changing its storage root."""
+
+    value = str(source)
+    if value.startswith("gs://"):
+        bucket_name, object_name = _parse_gs_uri(value)
+        parent = object_name.rsplit("/", 1)[0] if "/" in object_name else ""
+        object_path = f"{parent}/{filename}" if parent else filename
+        return f"gs://{bucket_name}/{object_path}"
+    path = Path(value)
+    return str(path.parent / filename)
+
+
+def _merge_evaluation_artifacts(
+    document: Any,
+    source: str | Path,
+    storage_client: Any = None,
+) -> Any:
+    """Join the five v1 files into the legacy evaluation shape used by Intelligence.
+
+    The training worker writes each artifact independently so an interrupted
+    upload cannot replace an older immutable artifact.  Reads are therefore
+    best-effort and retain whichever files are present.
+    """
+
+    merged = dict(document) if isinstance(document, Mapping) else {}
+    merged.setdefault("source_uri", str(source))
+    siblings = {
+        "confusion_matrix": "confusion_matrix.json",
+        "predictions": "predictions.csv",
+        "errors": "error_samples.json",
+        "report": "report.json",
+    }
+    for kind, filename in siblings.items():
+        try:
+            value = _read_uri_or_path(_sibling_source(source, filename), storage_client)
+        except Exception:
+            continue
+        if kind == "confusion_matrix" and isinstance(value, Mapping):
+            if value.get("labels") is not None:
+                merged["labels"] = value.get("labels")
+            if value.get("matrix") is not None:
+                merged["confusion_matrix"] = value.get("matrix")
+        elif kind == "predictions":
+            rows = value.get("samples") if isinstance(value, Mapping) else value
+            if isinstance(rows, list):
+                merged["samples"] = rows
+        elif kind == "errors":
+            rows = value.get("samples") if isinstance(value, Mapping) else value
+            if isinstance(rows, list):
+                merged["errors"] = rows
+        elif kind == "report" and isinstance(value, Mapping):
+            merged["evaluation_artifact_report"] = value
+    return merged
 
 
 def _parse_csv_artifact(text: str) -> dict[str, Any]:
@@ -122,6 +180,12 @@ def _latest_model_version(db: Session, requested: str | None = None) -> str:
 
 def _candidate_artifacts(db: Session, model_version: str) -> list[str]:
     candidates: list[str] = []
+    artifact_root = os.getenv("EVALUATION_ARTIFACT_ROOT", os.getenv("INTELLIGENCE_ARTIFACT_ROOT", "")).strip()
+    if artifact_root:
+        candidates.append(f"{artifact_root.rstrip('/')}/{model_version}/metrics.json" if "{model_version}" not in artifact_root else artifact_root.format(model_version=model_version).rstrip("/") + "/metrics.json")
+    bucket_name = os.getenv("GCS_BUCKET", os.getenv("YUJIAN_GCS_BUCKET", "")).strip()
+    if bucket_name:
+        candidates.append(f"gs://{bucket_name}/evaluation_artifacts/{model_version}/metrics.json")
     env_path = os.getenv("INTELLIGENCE_EVALUATION_PATH", os.getenv("MODEL_INTELLIGENCE_EVALUATION_PATH", "")).strip()
     if env_path:
         candidates.append(env_path.format(model_version=model_version))
@@ -176,7 +240,8 @@ def load_evaluation_document(db: Session, model_version: str, *, storage_client:
             if isinstance(document, Mapping):
                 document = dict(document)
                 document.setdefault("model_version", model_version)
-            return document, candidate, None
+                document = _merge_evaluation_artifacts(document, candidate, storage_client)
+                return document, candidate, None
         except Exception as exc:
             errors.append(f"{candidate}: {exc}")
     reason = "未找到评估产物；请先上传 metrics.json 或配置 INTELLIGENCE_EVALUATION_PATH。"
@@ -266,6 +331,7 @@ def build_intelligence_payload(
     gaps = analyze_data_gaps(manifest_rows, target_config)
     task = generate_collection_task(confusion, gaps, model_version=resolved_model)
     tasks = [task] if task.get("requirements", {}).get("species") else []
+    artifact_report = evaluation_document.get("evaluation_artifact_report") if isinstance(evaluation_document, Mapping) else None
     return {
         "model": {
             "model_version": resolved_model,
@@ -277,6 +343,10 @@ def build_intelligence_payload(
         "data_gaps": gaps,
         "production_tasks": tasks,
         "manifest": {"source": "registry", "row_count": len(manifest_rows)},
+        "evaluation_artifacts": artifact_report or {
+            "source": source,
+            "available": bool(source),
+        },
     }
 
 
@@ -296,8 +366,12 @@ def analyze_and_write_artifacts(
 ) -> dict[str, Any]:
     resolved_model = _latest_model_version(db, model_version)
     if evaluation_path:
+        source_path = Path(evaluation_path)
+        if source_path.is_dir():
+            evaluation_path = str(source_path / "metrics.json")
         document = _read_uri_or_path(evaluation_path)
         source = evaluation_path
+        document = _merge_evaluation_artifacts(document, source)
     else:
         document, source, warning = load_evaluation_document(db, resolved_model)
         if document is None:

@@ -25,7 +25,8 @@ from torchvision import transforms
 from torchvision.models import MobileNet_V3_Small_Weights, mobilenet_v3_small
 
 from app.db import SessionLocal, init_db
-from app.models import DatasetVersion, ModelVersion, TrainingRun
+from app.models import DatasetVersion, Evaluation, ModelVersion, TrainingRun
+from evaluation.artifact_builder import build_evaluation_artifacts
 
 
 def utcnow() -> datetime:
@@ -226,6 +227,69 @@ def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, num_cla
     metrics = calculate_metrics(targets, predictions, top3_hits, num_classes)
     metrics["loss"] = round(float(np.mean(losses)), 6) if losses else 0.0
     return metrics
+
+
+def build_test_prediction_rows(
+    model: nn.Module,
+    test_rows: list[dict],
+    class_rows: list[dict],
+    image_size: int,
+    batch_size: int,
+) -> list[dict]:
+    """Create provenance-rich rows for the post-training artifact contract.
+
+    This is intentionally a read-only pass over the already evaluated test
+    split.  It does not alter training weights, labels, Dataset Freeze state,
+    or the existing metrics report.
+    """
+
+    if not test_rows:
+        return []
+    _train_transform, eval_transform = build_transforms(image_size)
+    labels = {
+        int(row.get("class_index", index)): str(row.get("species_key") or row.get("common_name_en") or row.get("common_name_zh") or f"class_{index}")
+        for index, row in enumerate(class_rows)
+    }
+    model.eval()
+    result: list[dict] = []
+    with torch.no_grad():
+        for start in range(0, len(test_rows), max(1, int(batch_size))):
+            source_rows = test_rows[start : start + max(1, int(batch_size))]
+            tensors = []
+            usable_rows = []
+            for source in source_rows:
+                try:
+                    with Image.open(source["local_path"]) as image:
+                        tensors.append(eval_transform(image.convert("RGB")))
+                    usable_rows.append(source)
+                except Exception:
+                    # The training/evaluation pass has already applied its
+                    # normal data validation.  Keep this export best-effort so
+                    # a single unreadable provenance row cannot rewrite it.
+                    continue
+            if not tensors:
+                continue
+            logits = model(torch.stack(tensors))
+            probabilities = torch.softmax(logits, dim=1)
+            confidence, predictions = probabilities.max(dim=1)
+            for source, confidence_value, prediction in zip(usable_rows, confidence.tolist(), predictions.tolist()):
+                true_index = int(source.get("class_index", 0))
+                predicted_index = int(prediction)
+                row = {
+                    "image_id": source.get("image_id") or source.get("id"),
+                    "file_name": source.get("file_name"),
+                    "true_species": source.get("species_key") or labels.get(true_index, f"class_{true_index}"),
+                    "pred_species": labels.get(predicted_index, f"class_{predicted_index}"),
+                    "confidence": round(float(confidence_value), 6),
+                    "correct": true_index == predicted_index,
+                    "local_path": source.get("local_path"),
+                    "gcs_uri": source.get("gcs_uri"),
+                    "scene": source.get("scene"),
+                    "angle": source.get("angle"),
+                    "image_quality": source.get("image_quality") or source.get("quality"),
+                }
+                result.append({key: value for key, value in row.items() if value not in (None, "")})
+    return result
 
 
 def train_model(
@@ -458,6 +522,14 @@ def execute() -> dict:
             local_rows = materialize_images(storage_client, manifest, root / "images")
             grouped = split_rows(local_rows)
             model, report = train_model(grouped, class_rows, params)
+            test_source = grouped["test"] or grouped["val"] or grouped["train"]
+            prediction_rows = build_test_prediction_rows(
+                model,
+                test_source,
+                class_rows,
+                int(params.get("image_size", 224)),
+                int(params.get("batch_size", 16)),
+            )
 
             bucket_name = os.getenv("GCS_BUCKET", "").strip() or parse_gs_uri(dataset.manifest_uri)[0]
             bucket = storage_client.bucket(bucket_name)
@@ -510,6 +582,28 @@ def execute() -> dict:
                 confusion_csv(class_rows, report["test"]["confusion_matrix"]),
                 "text/csv",
             )
+            evaluation_artifacts = build_evaluation_artifacts(
+                report,
+                prediction_rows,
+                root / "evaluation_artifacts",
+                model_version=model_version,
+                dataset_version=dataset_version,
+                class_map=class_rows,
+            )
+            evaluation_prefix = os.getenv("EVALUATION_ARTIFACT_PREFIX", "evaluation_artifacts").strip().strip("/") or "evaluation_artifacts"
+            evaluation_root = f"{evaluation_prefix}/{model_version}/"
+            evaluation_uris: dict[str, str] = {}
+            artifact_content_types = {
+                "metrics_path": "application/json",
+                "confusion_matrix_path": "application/json",
+                "predictions_path": "text/csv",
+                "error_samples_path": "application/json",
+                "report_path": "application/json",
+            }
+            for path_key, content_type in artifact_content_types.items():
+                path = Path(evaluation_artifacts[path_key])
+                filename = path.name
+                evaluation_uris[filename] = upload_file(bucket, evaluation_root + filename, path, content_type)
             class_map_uri = upload_text(
                 bucket,
                 prefix + "class_map.json",
@@ -526,6 +620,12 @@ def execute() -> dict:
                 "metrics_uri": metrics_uri,
                 "confusion_matrix_uri": confusion_uri,
                 "class_map_uri": class_map_uri,
+                "evaluation_artifact_root": f"gs://{bucket.name}/{evaluation_root}",
+                "evaluation_metrics_uri": evaluation_uris["metrics.json"],
+                "evaluation_confusion_matrix_uri": evaluation_uris["confusion_matrix.json"],
+                "evaluation_predictions_uri": evaluation_uris["predictions.csv"],
+                "evaluation_errors_uri": evaluation_uris["error_samples.json"],
+                "evaluation_report_uri": evaluation_uris["report.json"],
                 "git_commit": git_commit,
                 "status": "COMPLETED",
                 "created_at": utcnow().isoformat(),
@@ -554,6 +654,24 @@ def execute() -> dict:
                 existing_model.artifact_uri = artifact_uri
                 existing_model.metrics_uri = metrics_uri
                 existing_model.status = "CANDIDATE"
+
+            evaluation_id = f"EVAL_{model_version}_{run_id}"[:128]
+            evaluation_row = db.get(Evaluation, evaluation_id)
+            if not evaluation_row:
+                evaluation_row = Evaluation(
+                    evaluation_id=evaluation_id,
+                    model_version=model_version,
+                    gold_version=dataset_version,
+                    metrics_uri=evaluation_uris["metrics.json"],
+                    confusion_matrix_uri=evaluation_uris["confusion_matrix.json"],
+                    errors_uri=evaluation_uris["error_samples.json"],
+                )
+                db.add(evaluation_row)
+            else:
+                evaluation_row.gold_version = dataset_version
+                evaluation_row.metrics_uri = evaluation_uris["metrics.json"]
+                evaluation_row.confusion_matrix_uri = evaluation_uris["confusion_matrix.json"]
+                evaluation_row.errors_uri = evaluation_uris["error_samples.json"]
 
             run.status = "COMPLETED"
             run.finished_at = utcnow()
