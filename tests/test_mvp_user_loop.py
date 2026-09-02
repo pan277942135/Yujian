@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import bcrypt
 import pytest
 from sqlalchemy import create_engine, select
@@ -98,10 +99,9 @@ def test_login_returns_jwt_and_catches_are_owner_scoped(db, monkeypatch):
 
 def test_user_bearer_guard_does_not_open_admin_paths(monkeypatch):
     from fastapi import FastAPI
-    from fastapi.testclient import TestClient
 
     monkeypatch.setenv("CONSOLE_ACCESS_KEY", "console-secret")
-    monkeypatch.setenv("YUJIAN_JWT_SECRET", "test-jwt-secret")
+    monkeypatch.setenv("YUJIAN_JWT_SECRET", "test-jwt-secret-that-is-long-enough-32")
     app = FastAPI()
     install_access_guard(app)
 
@@ -114,7 +114,35 @@ def test_user_bearer_guard_does_not_open_admin_paths(monkeypatch):
         return {"ok": True}
 
     token = create_access_token(type("UserObject", (), {"id": "u1", "username": "fisher001"})())
-    client = TestClient(app)
-    assert client.get("/api/v1/catches").status_code == 401
-    assert client.get("/api/v1/catches", headers={"Authorization": f"Bearer {token}"}).status_code == 200
-    assert client.get("/api/admin/fish/species", headers={"Authorization": f"Bearer {token}"}).status_code == 401
+
+    async def invoke(path: str, authorization: str = "") -> int:
+        messages = []
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            messages.append(message)
+
+        headers = []
+        if authorization:
+            headers.append((b"authorization", authorization.encode("latin-1")))
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.0"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": path,
+            "raw_path": path.encode("ascii"),
+            "query_string": b"",
+            "headers": headers,
+            "client": ("127.0.0.1", 1),
+            "server": ("testserver", 80),
+        }
+        await app(scope, receive, send)
+        return next(message["status"] for message in messages if message["type"] == "http.response.start")
+
+    assert asyncio.run(invoke("/api/v1/catches")) == 401
+    assert asyncio.run(invoke("/api/v1/catches", f"Bearer {token}")) == 200
+    assert asyncio.run(invoke("/api/admin/fish/species", f"Bearer {token}")) == 401
