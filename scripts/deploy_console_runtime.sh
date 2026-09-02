@@ -33,6 +33,8 @@ PREVIOUS_SERVICE_JSON="$(gcloud run services describe "$SERVICE" \
   --project "$PROJECT_ID" --region "$REGION" --format=json 2>/dev/null || true)"
 FEEDBACK_ENV_PRESENT=0
 FEEDBACK_INGEST_KEY=""
+USER_JWT_ENV_PRESENT=0
+USER_JWT_SECRET=""
 if [[ -n "$PREVIOUS_SERVICE_JSON" ]]; then
   FEEDBACK_ENV_PRESENT="$(printf '%s' "$PREVIOUS_SERVICE_JSON" | python -c '
 import json,sys
@@ -48,6 +50,20 @@ containers=((d.get("spec") or {}).get("template") or {}).get("spec",{}).get("con
 env=(containers[0].get("env") if containers else []) or []
 print(next((x.get("value","") for x in env if x.get("name")=="FEEDBACK_INGEST_KEY"), ""))
 ')"
+  USER_JWT_ENV_PRESENT="$(printf '%s' "$PREVIOUS_SERVICE_JSON" | python -c '
+import json,sys
+d=json.load(sys.stdin)
+containers=((d.get("spec") or {}).get("template") or {}).get("spec",{}).get("containers") or []
+env=(containers[0].get("env") if containers else []) or []
+print(1 if any(x.get("name")=="USER_JWT_SECRET" for x in env) else 0)
+')"
+  USER_JWT_SECRET="$(printf '%s' "$PREVIOUS_SERVICE_JSON" | python -c '
+import json,sys
+d=json.load(sys.stdin)
+containers=((d.get("spec") or {}).get("template") or {}).get("spec",{}).get("containers") or []
+env=(containers[0].get("env") if containers else []) or []
+print(next((x.get("value","") for x in env if x.get("name")=="USER_JWT_SECRET"), ""))
+')"
 fi
 
 DEPLOY_ENV_VARS="APP_GIT_COMMIT=${GIT_SHA}"
@@ -60,6 +76,16 @@ else
 fi
 if [[ -n "$FEEDBACK_INGEST_KEY" && -n "${GITHUB_ACTIONS:-}" ]]; then
   printf '::add-mask::%s\n' "$FEEDBACK_INGEST_KEY"
+fi
+if [[ "$USER_JWT_ENV_PRESENT" == "0" || -z "$USER_JWT_SECRET" ]]; then
+  USER_JWT_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+  DEPLOY_ENV_VARS="${DEPLOY_ENV_VARS},USER_JWT_SECRET=${USER_JWT_SECRET}"
+  printf 'Bootstrapping App JWT secret: yes\n'
+else
+  printf 'Bootstrapping App JWT secret: no (preserving existing configuration)\n'
+fi
+if [[ -n "$USER_JWT_SECRET" && -n "${GITHUB_ACTIONS:-}" ]]; then
+  printf '::add-mask::%s\n' "$USER_JWT_SECRET"
 fi
 
 log "Runtime-only deploy ${SERVICE} @ ${GIT_SHA}"
@@ -159,6 +185,18 @@ if [[ "$FEEDBACK_READY" != "true" ]]; then
   exit 1
 fi
 
+USER_AUTH_READY="$(printf '%s' "$SERVICE_JSON" | python -c '
+import json,sys
+d=json.load(sys.stdin)
+containers=((d.get("spec") or {}).get("template") or {}).get("spec",{}).get("containers") or []
+env=(containers[0].get("env") if containers else []) or []
+print("true" if any(x.get("name")=="USER_JWT_SECRET" and x.get("value") for x in env) else "false")
+')"
+if [[ "$USER_AUTH_READY" != "true" ]]; then
+  echo "User authentication readiness failed: USER_JWT_SECRET is not configured" >&2
+  exit 1
+fi
+
 FEEDBACK_SMOKE='{"status":"skipped","reason":"key value managed by external secret binding"}'
 if [[ -n "$FEEDBACK_INGEST_KEY" ]]; then
   log "Online feedback multipart + GCS + DB smoke"
@@ -209,6 +247,7 @@ printf 'BUILD_SA_RESOURCE=%s\n' "$BUILD_SA_RESOURCE"
 printf 'HEALTH=%s\n' "$BASIC_HEALTH"
 printf 'DEPLOY_HEALTH=%s\n' "$DEPLOY_HEALTH"
 printf 'FEEDBACK_SMOKE=%s\n' "$FEEDBACK_SMOKE"
+printf 'USER_AUTH_JWT_READY=%s\n' "$USER_AUTH_READY"
 
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   {
@@ -217,5 +256,6 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "git_commit=${GIT_SHA}"
     echo "build_service_account=${BUILD_SA}"
     echo "feedback_ingest_ready=${FEEDBACK_READY}"
+    echo "user_auth_jwt_ready=${USER_AUTH_READY}"
   } >> "$GITHUB_OUTPUT"
 fi

@@ -58,6 +58,7 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     _ensure_production_pipeline_columns()
     _ensure_fish_knowledge_crud_constraints()
+    _ensure_user_catch_columns()
 
 
 def _ensure_production_pipeline_columns() -> None:
@@ -139,3 +140,20 @@ def _ensure_fish_knowledge_crud_constraints() -> None:
             'ALTER TABLE "fish_species" ADD CONSTRAINT "ck_fish_species_status" '
             "CHECK (status IN ('ACTIVE', 'DRAFT', 'DELETED'))"
         )
+
+
+def _ensure_user_catch_columns() -> None:
+    """Keep the additive MVP tables safe for deployments upgraded in place.
+
+    New installs receive these tables through SQLAlchemy metadata.  The guard is
+    intentionally non-destructive and only adds the internal object path to an
+    early MVP table should a deployment have created it before this migration.
+    """
+
+    inspector = inspect(engine)
+    if not inspector.has_table("fish_catches"):
+        return
+    existing = {column["name"] for column in inspector.get_columns("fish_catches")}
+    if "image_object_name" not in existing:
+        with engine.begin() as connection:
+            connection.exec_driver_sql('ALTER TABLE "fish_catches" ADD COLUMN "image_object_name" TEXT')

@@ -13,6 +13,8 @@ from app.training_api import router as training_router, templates as training_te
 from app.inference_api import router as inference_router, templates as inference_templates
 from app.feedback_ingest_api import router as feedback_ingest_router
 from app.inference_upload_api import router as inference_upload_router
+from app.auth_api import router as auth_router
+from app.catches_api import router as catches_router
 from app.batch_upload_api import router as batch_upload_router, templates as batch_upload_templates
 from app.intelligence_api import router as intelligence_router, templates as intelligence_templates
 from app.crop_qa import router as crop_qa_router, templates as crop_qa_templates
@@ -70,6 +72,8 @@ def deployment_health() -> dict:
         "service": os.getenv("K_SERVICE", "unknown"),
         "feedback_ingest_path": "/api/feedback/ingest",
         "inference_upload_path": "/api/v1/inference/upload",
+        "user_auth_path": "/api/v1/auth/login",
+        "user_catches_path": "/api/v1/catches",
         "feedback_ingest_key_configured": feedback_ingest_key_configured,
     }
 
@@ -98,6 +102,8 @@ app.include_router(training_router)
 app.include_router(inference_router)
 app.include_router(feedback_ingest_router)
 app.include_router(inference_upload_router)
+app.include_router(auth_router)
+app.include_router(catches_router)
 app.include_router(batch_upload_router)
 app.include_router(automation_router)
 app.include_router(intelligence_router)

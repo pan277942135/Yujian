@@ -43,6 +43,45 @@ class SpeciesCatalog(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
 
 
+class AppUser(Base):
+    """A YuJian App account, deliberately separate from the Model Factory console."""
+
+    __tablename__ = "users"
+
+    id = Column(String(36), primary_key=True)
+    username = Column(String(64), nullable=False, unique=True, index=True)
+    password_hash = Column(String(255), nullable=False)
+    nickname = Column(String(64), nullable=False)
+    avatar_url = Column(Text)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+    catches = relationship("FishCatch", back_populates="user", cascade="all, delete-orphan")
+
+
+class FishCatch(Base):
+    """One user-confirmed recognition result in the MVP fishing archive."""
+
+    __tablename__ = "fish_catches"
+
+    id = Column(String(36), primary_key=True)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    image_url = Column(Text, nullable=False)
+    # The GCS path is internal.  App clients only receive the authenticated
+    # /api/v1/catches/{id}/media gateway URL stored in image_url.
+    image_object_name = Column(Text, nullable=False)
+    species_id = Column(String(128), nullable=False, index=True)
+    species_name = Column(String(128), nullable=False, index=True)
+    confidence = Column(Float, nullable=False)
+    model_version = Column(String(128), nullable=False, index=True)
+    detector_result_json = Column(Text)
+    classifier_result_json = Column(Text)
+    captured_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+
+    user = relationship("AppUser", back_populates="catches")
+
+
 class ImageAsset(Base):
     __tablename__ = "image_assets"
     __table_args__ = (UniqueConstraint("batch_id", "image_id", name="uq_image_batch_image"),)

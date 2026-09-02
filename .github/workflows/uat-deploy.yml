@@ -181,6 +181,7 @@ jobs:
           echo "::add-mask::$INGEST_KEY"
           echo "YUJIAN_FEEDBACK_BASE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
           echo "YUJIAN_FEEDBACK_INGEST_KEY=$INGEST_KEY" >> "$GITHUB_ENV"
+          echo "YUJIAN_API_BASE_URL=$SERVICE_URL" >> "$GITHUB_ENV"
 
       - name: Android API 28 production inference + feedback E2E smoke
         uses: reactivecircus/android-emulator-runner@v2
@@ -208,4 +209,3 @@ jobs:
             echo "- Android API 28 production TFLite runtime: **PASS**"
             echo "- Android authenticated feedback transport: **PASS**"
           } >> "$GITHUB_STEP_SUMMARY"
-

@@ -7,6 +7,12 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 COOKIE_NAME = "yujian_console"
 PUBLIC_PATHS = {"/health", "/health/deploy", "/health/detector", "/login"}
+PUBLIC_API_PATH_PREFIXES = (
+    # These routes authenticate App users with their own Bearer token.  They
+    # must not be intercepted by the Model Factory console-cookie middleware.
+    "/api/v1/auth",
+    "/api/v1/catches",
+)
 PUBLIC_GET_PATH_PREFIXES = (
     "/api/v1/fish/species",
     "/api/v1/fish/gallery",
@@ -40,7 +46,11 @@ def install_access_guard(app: FastAPI) -> None:
             request.url.path == prefix or request.url.path.startswith(prefix + "/")
             for prefix in PUBLIC_GET_PATH_PREFIXES
         )
-        if not key or request.url.path in PUBLIC_PATHS or public_fish_read:
+        app_api_request = any(
+            request.url.path == prefix or request.url.path.startswith(prefix + "/")
+            for prefix in PUBLIC_API_PATH_PREFIXES
+        )
+        if not key or request.url.path in PUBLIC_PATHS or public_fish_read or app_api_request:
             return await call_next(request)
 
         ingest_key = _feedback_ingest_key()
