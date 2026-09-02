@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS dataset_crop_reviews (
     split VARCHAR(16) NOT NULL,
     group_id VARCHAR(256),
     candidate_bbox_json TEXT,
+    detector_version VARCHAR(128),
     accepted_bbox_json TEXT,
     bbox_source VARCHAR(64),
     review_status VARCHAR(32) NOT NULL DEFAULT 'BBOX_REQUIRED',
@@ -21,6 +22,9 @@ CREATE TABLE IF NOT EXISTS dataset_crop_reviews (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_dataset_crop_review_source_image UNIQUE (source_dataset_version, image_id)
 );
+
+ALTER TABLE dataset_crop_reviews
+    ADD COLUMN IF NOT EXISTS detector_version VARCHAR(128);
 
 CREATE TABLE IF NOT EXISTS dataset_crop_review_events (
     id BIGSERIAL PRIMARY KEY,

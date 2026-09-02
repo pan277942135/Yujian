@@ -86,11 +86,32 @@ def _item(base: dict[str, Any], review: DatasetCropReview | None) -> dict[str, A
         "candidate_bbox": _box(review.candidate_bbox_json) if review else None,
         "accepted_bbox": _box(review.accepted_bbox_json) if review else None,
         "bbox_source": review.bbox_source if review else None,
+        "detector_version": review.detector_version if review else None,
         "status": review.review_status if review else "BBOX_REQUIRED",
         "reviewer": review.reviewer if review else None,
         "reviewed_at": review.reviewed_at.isoformat() if review and review.reviewed_at else None,
         "media_url": f"/api/dataset-crop-review/{base['source_dataset_version']}/{base['image_id']}/image",
     }
+
+
+def _populate_candidate(review: DatasetCropReview, base: dict[str, Any], db: Session) -> None:
+    if review.candidate_bbox_json:
+        return
+    try:
+        from io import BytesIO
+        from PIL import Image
+        from app.detector_runtime import detect
+        data, _ = _read_uri(base["source_image_gcs_uri"])
+        with Image.open(BytesIO(data)) as source_image:
+            run = detect(source_image.convert("RGB"))
+        review.detector_version = run.model_version
+        if run.detections:
+            box = run.detections[0].box
+            review.candidate_bbox_json = json.dumps([box.x1, box.y1, box.width, box.height], separators=(",", ":"))
+        db.add(review)
+        db.commit()
+    except Exception:
+        return
 
 
 @router.get("/{dataset_version}/summary")
@@ -103,6 +124,28 @@ def summary(dataset_version: str, db: Session = Depends(get_db)) -> dict[str, An
     ).all()
     counts = {str(status): int(count) for status, count in counts_rows}
     accepted = counts.get("ACCEPTED", 0) + counts.get("TRAINING_READY", 0)
+    candidate_bbox_count = int(
+        db.scalar(
+            select(func.count())
+            .select_from(DatasetCropReview)
+            .where(
+                DatasetCropReview.source_dataset_version == dataset_version,
+                DatasetCropReview.candidate_bbox_json.is_not(None),
+            )
+        )
+        or 0
+    )
+    accepted_bbox_count = int(
+        db.scalar(
+            select(func.count())
+            .select_from(DatasetCropReview)
+            .where(
+                DatasetCropReview.source_dataset_version == dataset_version,
+                DatasetCropReview.accepted_bbox_json.is_not(None),
+            )
+        )
+        or 0
+    )
     return {
         "dataset_version": dataset_version,
         "source_type": "FROZEN_DATASET",
@@ -110,6 +153,8 @@ def summary(dataset_version: str, db: Session = Depends(get_db)) -> dict[str, An
         "bbox_required": max(len(rows) - accepted, 0),
         "accepted": accepted,
         "rejected": counts.get("REJECTED", 0),
+        "candidate_bbox_count": candidate_bbox_count,
+        "accepted_bbox_count": accepted_bbox_count,
         "counts": counts,
     }
 
@@ -118,14 +163,15 @@ def summary(dataset_version: str, db: Session = Depends(get_db)) -> dict[str, An
 def items(
     dataset_version: str,
     status: str = Query(default="BBOX_REQUIRED", max_length=32),
-    limit: int = Query(default=24, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    if not isinstance(limit, int):
-        limit = 24
-    if not isinstance(offset, int):
-        offset = 0
+    # Direct unit callers do not receive FastAPI's coerced query values.
+    if not isinstance(page, int):
+        page = 1
+    if not isinstance(page_size, int):
+        page_size = 50
     rows = _ensure_rows(db, dataset_version)
     reviews = {
         row.image_id: row
@@ -133,6 +179,8 @@ def items(
             select(DatasetCropReview).where(DatasetCropReview.source_dataset_version == dataset_version)
         ).all()
     }
+    if not isinstance(status, str):
+        status = "BBOX_REQUIRED"
     normalized = status.strip().upper()
     allowed = {"BBOX_REQUIRED", "ACCEPTED", "REJECTED", "TRAINING_READY", "ALL"}
     if normalized not in allowed:
@@ -142,7 +190,17 @@ def items(
         for base in rows
         if normalized == "ALL" or (reviews.get(base["image_id"]) is not None and reviews[base["image_id"]].review_status == normalized)
     ]
-    return {"dataset_version": dataset_version, "source_type": "FROZEN_DATASET", "total": len(selected), "items": selected[offset : offset + limit]}
+    total = len(selected)
+    start = (page - 1) * page_size
+    page_items = selected[start : start + page_size]
+    row_by_image_id = {row["image_id"]: row for row in rows}
+    for item in page_items:
+        review = reviews.get(item["image_id"])
+        if review:
+            base = row_by_image_id[item["image_id"]]
+            _populate_candidate(review, base, db)
+            item.update(_item(base, review))
+    return {"dataset_version": dataset_version, "source_type": "FROZEN_DATASET", "total": total, "page": page, "page_size": page_size, "items": page_items}
 
 
 @router.patch("/{dataset_version}/{image_id}")

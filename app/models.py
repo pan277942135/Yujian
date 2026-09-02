@@ -135,6 +135,7 @@ class DatasetCropReview(Base):
     split = Column(String(16), nullable=False, index=True)
     group_id = Column(String(256))
     candidate_bbox_json = Column(Text)
+    detector_version = Column(String(128), index=True)
     accepted_bbox_json = Column(Text)
     bbox_source = Column(String(64))
     review_status = Column(String(32), nullable=False, default="BBOX_REQUIRED", index=True)
