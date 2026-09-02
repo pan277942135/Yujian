@@ -78,6 +78,10 @@ class EvaluationArtifact:
     test_samples: int
     prediction_rows: int
     error_rows: int
+    # Added in Evaluation Artifact Contract v1.1.  A default keeps callers
+    # that construct the v1 dataclass directly source-compatible; the builder
+    # always writes and returns the JSONL path.
+    prediction_rows_path: str = ""
     generated_at: str = ""
     contract_version: str = ARTIFACT_CONTRACT_VERSION
 

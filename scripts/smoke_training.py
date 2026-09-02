@@ -14,6 +14,7 @@ os.environ.setdefault("REGISTRY_DB_URL", "sqlite:///:memory:")
 from app.db import SessionLocal, init_db  # noqa: E402
 from app.entry import app  # noqa: E402
 from app.models import DatasetVersion, TrainingRun  # noqa: E402
+from app.pipeline_contract import CROP_CLASSIFIER_V1  # noqa: E402
 from app.training_api import (  # noqa: E402
     TrainingCreate,
     _enrich_metrics_diagnostics,
@@ -95,6 +96,7 @@ def main() -> None:
                 git_commit="smoke",
                 selection_mode="ALL_APPROVED",
                 status="FROZEN",
+                pipeline_type=CROP_CLASSIFIER_V1,
             )
         )
         db.commit()

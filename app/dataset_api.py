@@ -258,6 +258,31 @@ def audit_dataset(dataset_version: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="dataset manifest 不存在")
     rows = list(csv.DictReader(io.StringIO(blob.download_as_text(encoding="utf-8"))))
 
+    if getattr(dataset, "pipeline_type", "WHOLE_IMAGE_V1") == "CROP_CLASSIFIER_V1":
+        from trainer.crop_dataset_validator import validate_crop_rows
+
+        def image_exists(uri: str) -> bool:
+            try:
+                source_bucket, source_object = _parse_gs_uri(uri)
+                return bool(client.bucket(source_bucket).blob(source_object).exists(client))
+            except Exception:
+                return False
+
+        validation = validate_crop_rows(
+            rows,
+            require_bbox=True,
+            require_metadata=True,
+            check_source_image=True,
+            image_exists=image_exists,
+        )
+        return {
+            "dataset_version": dataset_version,
+            "passed": bool(validation.get("valid")),
+            "checks": validation.get("checks", {}),
+            "validation": validation,
+            "lineage_item_count": None,
+        }
+
     truth_empty = 0
     species_truth_mismatch = 0
     bad_presence = 0
@@ -348,6 +373,8 @@ def detail(dataset_version: str, db: Session = Depends(get_db)):
         "manifest_uri": dataset.manifest_uri,
         "class_map_uri": dataset.class_map_uri,
         "lineage_item_count": item_count,
+        "pipeline_type": getattr(dataset, "pipeline_type", "WHOLE_IMAGE_V1"),
+        "metadata": json.loads(dataset.metadata_json) if getattr(dataset, "metadata_json", None) else None,
     }
 
 

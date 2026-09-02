@@ -35,6 +35,7 @@ def build_evaluation_report(
             "metrics": "metrics.json",
             "confusion_matrix": "confusion_matrix.json",
             "predictions": "predictions.csv",
+            "prediction_rows": "prediction_rows.jsonl",
             "error_samples": "error_samples.json",
             "report": "report.json",
         },

@@ -65,11 +65,20 @@ def _read_json_source(source: str | Path, storage_client: Any = None) -> Any:
     if source.startswith("gs://"):
         bucket_name, object_name = _parse_gs_uri(source)
         client = storage_client or storage.Client()
-        return json.loads(client.bucket(bucket_name).blob(object_name).download_as_text(encoding="utf-8"))
+        text = client.bucket(bucket_name).blob(object_name).download_as_text(encoding="utf-8")
+        if source.lower().endswith(".jsonl"):
+            return [json.loads(line) for line in text.splitlines() if line.strip()]
+        return json.loads(text)
     path = Path(source)
     if path.suffix.lower() == ".csv":
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             return _parse_csv_artifact(handle.read())
+    if path.suffix.lower() == ".jsonl":
+        rows: list[Any] = []
+        for line in path.read_text(encoding="utf-8-sig").splitlines():
+            if line.strip():
+                rows.append(json.loads(line))
+        return rows
     with path.open("r", encoding="utf-8-sig") as handle:
         return json.load(handle)
 
@@ -92,7 +101,7 @@ def _merge_evaluation_artifacts(
     source: str | Path,
     storage_client: Any = None,
 ) -> Any:
-    """Join the five v1 files into the legacy evaluation shape used by Intelligence.
+    """Join standard evaluation files into the legacy Intelligence shape.
 
     The training worker writes each artifact independently so an interrupted
     upload cannot replace an older immutable artifact.  Reads are therefore
@@ -104,8 +113,10 @@ def _merge_evaluation_artifacts(
     siblings = {
         "confusion_matrix": "confusion_matrix.json",
         "predictions": "predictions.csv",
+        "prediction_rows": "prediction_rows.jsonl",
         "errors": "error_samples.json",
         "report": "report.json",
+        "comparison": "MODEL_COMPARE_REPORT.json",
     }
     for kind, filename in siblings.items():
         try:
@@ -121,12 +132,21 @@ def _merge_evaluation_artifacts(
             rows = value.get("samples") if isinstance(value, Mapping) else value
             if isinstance(rows, list):
                 merged["samples"] = rows
+        elif kind == "prediction_rows":
+            rows = value if isinstance(value, list) else []
+            if rows:
+                # JSONL is the canonical stream for hard-case consumers; the
+                # existing confusion analyzer also accepts these aliases.
+                merged["prediction_rows"] = rows
+                merged.setdefault("samples", rows)
         elif kind == "errors":
             rows = value.get("samples") if isinstance(value, Mapping) else value
             if isinstance(rows, list):
                 merged["errors"] = rows
         elif kind == "report" and isinstance(value, Mapping):
             merged["evaluation_artifact_report"] = value
+        elif kind == "comparison" and isinstance(value, Mapping):
+            merged["model_comparison"] = value
     return merged
 
 
@@ -376,6 +396,9 @@ def build_intelligence_payload(
     task = generate_collection_task(confusion, gaps, model_version=resolved_model)
     tasks = [task] if task.get("requirements", {}).get("species") else []
     artifact_report = evaluation_document.get("evaluation_artifact_report") if isinstance(evaluation_document, Mapping) else None
+    model_comparison = evaluation_document.get("model_comparison") if isinstance(evaluation_document, Mapping) else None
+    if isinstance(artifact_report, Mapping) and isinstance(model_comparison, Mapping):
+        artifact_report = {**artifact_report, "model_comparison": model_comparison}
     detector_samples = []
     detector_source = "evaluation_artifact"
     if isinstance(evaluation_document, Mapping):
@@ -403,6 +426,7 @@ def build_intelligence_payload(
             "source": source,
             "available": bool(source),
         },
+        "model_comparison": model_comparison if isinstance(model_comparison, Mapping) else None,
         "detector_errors": detector_report,
     }
 

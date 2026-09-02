@@ -28,7 +28,27 @@ from app.db import SessionLocal, init_db
 from app.models import DatasetVersion, Evaluation, ModelVersion, TrainingRun
 from app.pipeline_contract import CROP_CLASSIFIER_V1, WHOLE_IMAGE_V1, validate_pipeline_type
 from evaluation.artifact_builder import build_evaluation_artifacts
+from evaluation.model_compare import compare_model_artifacts, write_model_compare_report
 from trainer.crop_dataset_validator import validate_crop_rows
+
+
+def load_preprocess_contract() -> dict:
+    """Load the shared Android/trainer preprocessing contract."""
+
+    path = Path(__file__).resolve().parents[1] / "config" / "preprocess_contract_v1.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {
+            "contract_version": "PREPROCESS_CONTRACT_V1",
+            "crop": {
+                "expand_ratio": 0.15,
+                "resize": "letterbox",
+                "input_size": 224,
+                "color_order": "RGB",
+                "input_source": "crop_image",
+            },
+        }
 
 
 def utcnow() -> datetime:
@@ -309,18 +329,37 @@ def build_test_prediction_rows(
                 continue
             logits = model(torch.stack(tensors))
             probabilities = torch.softmax(logits, dim=1)
-            confidence, predictions = probabilities.max(dim=1)
-            for source, confidence_value, prediction in zip(usable_rows, confidence.tolist(), predictions.tolist()):
+            topk_count = min(3, probabilities.shape[1])
+            topk_confidence, topk_indices = probabilities.topk(k=topk_count, dim=1)
+            confidence = topk_confidence[:, 0]
+            predictions = topk_indices[:, 0]
+            for source, confidence_value, prediction, topk_values, topk_scores in zip(
+                usable_rows,
+                confidence.tolist(),
+                predictions.tolist(),
+                topk_indices.tolist(),
+                topk_confidence.tolist(),
+            ):
                 true_index = int(source.get("class_index", 0))
                 predicted_index = int(prediction)
+                top3_predictions = [
+                    {
+                        "species": labels.get(int(index), f"class_{int(index)}"),
+                        "confidence": round(float(score), 6),
+                    }
+                    for index, score in zip(topk_values, topk_scores)
+                ]
                 row = {
                     "image_id": source.get("image_id") or source.get("id"),
                     "file_name": source.get("file_name"),
                     "true_species": source.get("species_key") or labels.get(true_index, f"class_{true_index}"),
                     "pred_species": labels.get(predicted_index, f"class_{predicted_index}"),
+                    "predicted_species": labels.get(predicted_index, f"class_{predicted_index}"),
                     "confidence": round(float(confidence_value), 6),
+                    "top3_predictions": top3_predictions,
                     "correct": true_index == predicted_index,
                     "local_path": source.get("local_path"),
+                    "crop_path": source.get("crop_image_path") or source.get("crop_path") or source.get("local_path"),
                     "gcs_uri": source.get("gcs_uri"),
                     "scene": source.get("scene"),
                     "angle": source.get("angle"),
@@ -480,6 +519,36 @@ def upload_file(bucket: storage.Bucket, object_name: str, path: Path, content_ty
     return f"gs://{bucket.name}/{object_name}"
 
 
+def download_evaluation_bundle(storage_client: storage.Client, source: str, destination: Path) -> Path:
+    """Materialize a local or GCS evaluation artifact directory for comparison."""
+
+    if not source.startswith("gs://"):
+        path = Path(source)
+        if path.is_file():
+            return path.parent
+        if path.is_dir():
+            return path
+        raise FileNotFoundError(source)
+    bucket_name, object_name = parse_gs_uri(source.rstrip("/") + "/metrics.json" if not source.endswith(".json") else source)
+    prefix = object_name.rsplit("/", 1)[0] if "/" in object_name else ""
+    destination.mkdir(parents=True, exist_ok=True)
+    bucket = storage_client.bucket(bucket_name)
+    found = 0
+    for filename in ("metrics.json", "confusion_matrix.json", "confusion_matrix.csv", "report.json", "class_map.json"):
+        blob = bucket.blob(f"{prefix}/{filename}" if prefix else filename)
+        try:
+            exists = bool(blob.exists(storage_client))
+        except TypeError:
+            exists = bool(blob.exists())
+        if not exists:
+            continue
+        blob.download_to_filename(str(destination / filename))
+        found += 1
+    if not found:
+        raise FileNotFoundError(f"no evaluation artifacts found under {source}")
+    return destination
+
+
 def confusion_csv(class_rows: list[dict], matrix: list[list[int]]) -> str:
     buffer = io.StringIO()
     labels = [row.get("common_name_zh") or row.get("species_key") or str(row["class_index"]) for row in class_rows]
@@ -558,8 +627,13 @@ def execute() -> dict:
         dataset = db.get(DatasetVersion, dataset_version)
         if not dataset:
             raise ValueError(f"dataset not found: {dataset_version}")
-        if dataset.status != "FROZEN":
-            raise ValueError(f"dataset is not frozen: {dataset.status}")
+        allowed_statuses = {"FROZEN"}
+        if pipeline_type == CROP_CLASSIFIER_V1:
+            allowed_statuses.add("READY_FOR_TRAINING")
+        if dataset.status not in allowed_statuses:
+            raise ValueError(f"dataset is not ready for training: {dataset.status}")
+        if pipeline_type == CROP_CLASSIFIER_V1 and getattr(dataset, "pipeline_type", CROP_CLASSIFIER_V1) != CROP_CLASSIFIER_V1:
+            raise ValueError("CROP_CLASSIFIER_V1 requires a CROP_CLASSIFIER_V1 dataset")
         if not dataset.class_map_uri:
             raise ValueError("dataset class_map_uri is missing")
 
@@ -573,11 +647,15 @@ def execute() -> dict:
             raise ValueError("dataset class map is empty")
 
         if pipeline_type == CROP_CLASSIFIER_V1:
-            invalid = [row.get("image_id") for row in manifest if row.get("input_type") != "crop" or row.get("pipeline_type") != CROP_CLASSIFIER_V1]
+            invalid = [
+                row.get("image_id")
+                for row in manifest
+                if row.get("input_type") != "crop_image" or row.get("pipeline_type") != CROP_CLASSIFIER_V1
+            ]
             if invalid:
                 raise ValueError(
-                    "CROP_CLASSIFIER_V1 refuses original-image manifest rows; "
-                    f"missing crop contract for {len(invalid)} row(s)"
+                    "CROP_CLASSIFIER_V1 refuses original-image or legacy crop manifest rows; "
+                    f"input_type=crop_image is required for {len(invalid)} row(s)"
                 )
 
         with tempfile.TemporaryDirectory(prefix=f"yujian-{run_id}-") as temp_dir:
@@ -585,7 +663,12 @@ def execute() -> dict:
             local_rows = materialize_images(storage_client, manifest, root / "images", pipeline_type)
             crop_validation = None
             if pipeline_type == CROP_CLASSIFIER_V1:
-                crop_validation = validate_crop_rows(local_rows, require_bbox=True)
+                # ``materialize_images`` has already downloaded every crop
+                # object successfully.  The manifest keeps the immutable
+                # ``crop_gcs_uri`` for provenance, so tell the validator that
+                # those remote references were verified during materialization
+                # rather than re-checking ADC from inside the worker.
+                crop_validation = validate_crop_rows(local_rows, require_bbox=True, allow_remote=True)
                 if not crop_validation["valid"]:
                     first_error = (crop_validation.get("errors") or [{}])[0]
                     raise ValueError(
@@ -625,6 +708,7 @@ def execute() -> dict:
                     "git_commit": git_commit,
                     "created_at": utcnow().isoformat(),
                     "status": "COMPLETED",
+                    "preprocess_contract": load_preprocess_contract(),
                 }
             )
 
@@ -655,6 +739,17 @@ def execute() -> dict:
                 json.dumps(report, ensure_ascii=False, indent=2),
                 "application/json",
             )
+            preprocess_contract_path = root / "preprocess_contract.json"
+            preprocess_contract_path.write_text(
+                json.dumps(report["preprocess_contract"], ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            preprocess_contract_uri = upload_file(
+                bucket,
+                prefix + "preprocess_contract.json",
+                preprocess_contract_path,
+                "application/json",
+            )
             confusion_uri = upload_text(
                 bucket,
                 prefix + "confusion_matrix.csv",
@@ -669,6 +764,36 @@ def execute() -> dict:
                 dataset_version=dataset_version,
                 class_map=class_rows,
             )
+            comparison_report = None
+            comparison_error = None
+            baseline_source = os.getenv("BASELINE_EVALUATION_ARTIFACT_ROOT", "").strip()
+            baseline_version = os.getenv("BASELINE_MODEL_VERSION", "MODEL_M1_v0.5").strip() or "MODEL_M1_v0.5"
+            if not baseline_source:
+                baseline_source = f"gs://{bucket_name}/evaluation_artifacts/{baseline_version}/"
+            baseline_sources = [baseline_source]
+            if not os.getenv("BASELINE_EVALUATION_ARTIFACT_ROOT", "").strip():
+                # Older whole-image runs publish metrics under models/<model>
+                # rather than the v1 evaluation-artifact prefix.  Reuse those
+                # immutable metrics when the new bundle is not present.
+                baseline_sources.append(f"gs://{bucket_name}/models/{baseline_version}/")
+            for candidate_source in baseline_sources:
+                try:
+                    baseline_dir = download_evaluation_bundle(
+                        storage_client,
+                        candidate_source,
+                        root / "baseline_evaluation",
+                    )
+                    comparison_report = compare_model_artifacts(
+                        baseline_dir,
+                        Path(evaluation_artifacts["artifact_root"]),
+                        generated_at=utcnow().isoformat(),
+                    )
+                    comparison_path = Path(evaluation_artifacts["artifact_root"]) / "MODEL_COMPARE_REPORT.json"
+                    write_model_compare_report(comparison_report, comparison_path)
+                    comparison_error = None
+                    break
+                except Exception as exc:
+                    comparison_error = str(exc)
             evaluation_prefix = os.getenv("EVALUATION_ARTIFACT_PREFIX", "evaluation_artifacts").strip().strip("/") or "evaluation_artifacts"
             evaluation_root = f"{evaluation_prefix}/{model_version}/"
             evaluation_uris: dict[str, str] = {}
@@ -676,6 +801,7 @@ def execute() -> dict:
                 "metrics_path": "application/json",
                 "confusion_matrix_path": "application/json",
                 "predictions_path": "text/csv",
+                "prediction_rows_path": "application/jsonl",
                 "error_samples_path": "application/json",
                 "report_path": "application/json",
             }
@@ -683,6 +809,11 @@ def execute() -> dict:
                 path = Path(evaluation_artifacts[path_key])
                 filename = path.name
                 evaluation_uris[filename] = upload_file(bucket, evaluation_root + filename, path, content_type)
+            comparison_uri = None
+            if comparison_report is not None:
+                comparison_path = Path(evaluation_artifacts["artifact_root"]) / "MODEL_COMPARE_REPORT.json"
+                comparison_uri = upload_file(bucket, evaluation_root + comparison_path.name, comparison_path, "application/json")
+            comparison_status = "READY" if comparison_report is not None else "NOT_AVAILABLE"
             class_map_uri = upload_text(
                 bucket,
                 prefix + "class_map.json",
@@ -707,8 +838,13 @@ def execute() -> dict:
                 "evaluation_metrics_uri": evaluation_uris["metrics.json"],
                 "evaluation_confusion_matrix_uri": evaluation_uris["confusion_matrix.json"],
                 "evaluation_predictions_uri": evaluation_uris["predictions.csv"],
+                "evaluation_prediction_rows_uri": evaluation_uris["prediction_rows.jsonl"],
                 "evaluation_errors_uri": evaluation_uris["error_samples.json"],
                 "evaluation_report_uri": evaluation_uris["report.json"],
+                "preprocess_contract_uri": preprocess_contract_uri,
+                "model_comparison_status": comparison_status,
+                "model_comparison_uri": comparison_uri,
+                "model_comparison_reason": comparison_error,
                 "git_commit": git_commit,
                 "status": "COMPLETED",
                 "created_at": utcnow().isoformat(),

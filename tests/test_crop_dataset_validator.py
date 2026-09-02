@@ -139,3 +139,63 @@ def test_crop_qa_item_only_serializes_reviewed_assets():
     assert item["bbox_source"] == "human_review"
     assert item["source_image_id"] == "yj_img_004"
     assert item["crop_available"] is True
+
+
+def test_production_validator_requires_source_and_crop_metadata(tmp_path):
+    crop = tmp_path / "crop.jpg"
+    source = tmp_path / "original.jpg"
+    crop.write_bytes(_jpeg_bytes())
+    source.write_bytes(_jpeg_bytes())
+    row = {
+        "image_id": "yj_img_prod_001",
+        "source_image_id": "yj_img_prod_001",
+        "source_image_path": "original.jpg",
+        "crop_image_path": "crop.jpg",
+        "local_path": "crop.jpg",
+        "species_key": "grass_carp",
+        "species_name": "草鱼",
+        "accepted_bbox": "[0.1,0.1,0.5,0.5]",
+        "expand_ratio": "0.15",
+        "crop_width": "64",
+        "crop_height": "48",
+        "review_status": "ACCEPTED",
+        "created_at": "2026-09-01T00:00:00Z",
+        "input_type": "crop_image",
+        "pipeline_type": "CROP_CLASSIFIER_V1",
+    }
+    report = validate_crop_rows([row], tmp_path, require_metadata=True, check_source_image=True)
+    assert report["valid"] is True
+    assert report["checks"]["source_image_exists"] is True
+    assert report["checks"]["metadata_complete"] is True
+
+    row["source_image_path"] = "missing-original.jpg"
+    report = validate_crop_rows([row], tmp_path, require_metadata=True, check_source_image=True)
+    assert any(error["code"] == "SOURCE_IMAGE_NOT_FOUND" for error in report["errors"])
+
+
+def test_production_validator_rejects_top_level_candidate_bbox(tmp_path):
+    crop = tmp_path / "crop.jpg"
+    source = tmp_path / "original.jpg"
+    crop.write_bytes(_jpeg_bytes())
+    source.write_bytes(_jpeg_bytes())
+    row = {
+        "image_id": "yj_img_prod_candidate",
+        "source_image_id": "yj_img_prod_candidate",
+        "source_image_path": "original.jpg",
+        "crop_image_path": "crop.jpg",
+        "local_path": "crop.jpg",
+        "species_key": "grass_carp",
+        "species_name": "草鱼",
+        "accepted_bbox": "[0.1,0.1,0.5,0.5]",
+        "candidate_bbox": "[0.2,0.2,0.3,0.3]",
+        "expand_ratio": "0.15",
+        "crop_width": "64",
+        "crop_height": "48",
+        "review_status": "ACCEPTED",
+        "created_at": "2026-09-01T00:00:00Z",
+        "input_type": "crop_image",
+        "pipeline_type": "CROP_CLASSIFIER_V1",
+    }
+    report = validate_crop_rows([row], tmp_path, require_metadata=True, check_source_image=True)
+    assert report["valid"] is False
+    assert any(error["code"] == "CANDIDATE_BBOX_FORBIDDEN" for error in report["errors"])

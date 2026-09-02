@@ -13,8 +13,9 @@ import hashlib
 import io
 import json
 import math
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 
 from PIL import Image, ImageOps
 
@@ -23,6 +24,7 @@ from trainer.crop_dataset_validator import validate_crop_dataset
 
 ACCEPTED_STATUSES = {"ACCEPTED", "TRAINING_READY"}
 DEFAULT_EXPAND_RATIO = 0.15
+CROP_INPUT_TYPE = "crop_image"
 
 
 def _value(record: Any, key: str, default: Any = None) -> Any:
@@ -74,14 +76,72 @@ def _accepted_bbox(record: dict[str, Any]) -> list[float] | None:
 
 
 def _accepted_species(record: dict[str, Any]) -> str:
-    for key in ("accepted_species", "truth_species"):
+    for key in ("accepted_species_key", "accepted_species", "species_key", "truth_species", "species_name", "species"):
         value = str(record.get(key) or "").strip()
         if value:
             return value
     review = record.get("review")
     if isinstance(review, dict):
-        return str(review.get("accepted_species") or "").strip()
+        return str(
+            review.get("accepted_species_key")
+            or review.get("accepted_species")
+            or review.get("species_key")
+            or review.get("species_name")
+            or ""
+        ).strip()
     return ""
+
+
+def _species_pair(record: dict[str, Any], species_name_map: Mapping[str, str] | None = None) -> tuple[str, str]:
+    """Resolve stable species key and display name from review exports.
+
+    The DB review endpoint historically stores one ``accepted_species`` field,
+    while batch manifests may provide a key/name pair.  Never infer a label from
+    the detector prediction; only explicit reviewed fields are considered.
+    """
+
+    mapping = dict(species_name_map or {})
+    key_candidates = (
+        record.get("accepted_species_key"),
+        record.get("species_key"),
+        record.get("category_key"),
+        (record.get("review") or {}).get("accepted_species_key") if isinstance(record.get("review"), dict) else None,
+    )
+    name_candidates = (
+        record.get("accepted_species_name"),
+        record.get("species_name"),
+        (record.get("review") or {}).get("accepted_species_name") if isinstance(record.get("review"), dict) else None,
+    )
+    reviewed = _accepted_species(record)
+    key = next((str(value).strip() for value in key_candidates if str(value or "").strip()), "")
+    name = next((str(value).strip() for value in name_candidates if str(value or "").strip()), "")
+    if not key and reviewed:
+        if reviewed in mapping:
+            key = reviewed
+        else:
+            reverse = {value: candidate for candidate, value in mapping.items()}
+            key = reverse.get(reviewed, reviewed)
+    if not name:
+        name = mapping.get(key, "") or (reviewed if reviewed and reviewed != key else key)
+    if not key:
+        key = name
+    return key, name
+
+
+def _created_at(record: dict[str, Any]) -> str:
+    value = record.get("created_at") or record.get("timestamp") or record.get("reviewed_at")
+    return str(value).strip() if value not in (None, "") else datetime.now(timezone.utc).isoformat()
+
+
+def _source_image_ref(record: dict[str, Any]) -> str:
+    return str(
+        _storage_value(record, "source_image_gcs_uri")
+        or _storage_value(record, "source_image_path")
+        or _storage_value(record, "image_gcs_uri")
+        or _storage_value(record, "image_path")
+        or _storage_value(record, "source_image")
+        or ""
+    ).strip()
 
 
 def _split(image_id: str) -> str:
@@ -96,10 +156,19 @@ def _parse_gs_uri(uri: str) -> tuple[str, str]:
 
 
 def _read_image_bytes(record: dict[str, Any], image_loader: Callable[[str], bytes] | None = None) -> bytes:
-    local = _storage_value(record, "source_image_path") or _storage_value(record, "image_path")
+    local = (
+        _storage_value(record, "source_image_path")
+        or _storage_value(record, "image_path")
+        or _storage_value(record, "source_image")
+    )
     if local and not str(local).startswith("gs://"):
         return Path(str(local)).read_bytes()
-    uri = _storage_value(record, "image_gcs_uri") or _storage_value(record, "gcs_uri") or local
+    uri = (
+        _storage_value(record, "source_image_gcs_uri")
+        or _storage_value(record, "image_gcs_uri")
+        or _storage_value(record, "gcs_uri")
+        or local
+    )
     if not uri:
         raise ValueError(f"record {record.get('image_id')} has no source image")
     if image_loader:
@@ -239,24 +308,32 @@ def build_crop_dataset(
     dataset_version: str = "DS_CROP_M1_v0.1",
     expand_ratio: float = DEFAULT_EXPAND_RATIO,
     image_loader: Callable[[str], bytes] | None = None,
+    species_name_map: Mapping[str, str] | None = None,
+    # Keep the Phase C spelling as the low-level helper's default for
+    # backwards-compatible exports.  The production wrapper explicitly passes
+    # ``crop_image`` and is therefore subject to the strict v2 metadata gate.
+    input_type: str = "crop",
 ) -> dict[str, Any]:
     """Regenerate classifier crops from accepted boxes, never App candidate crops."""
 
     if not 0.0 <= expand_ratio <= 1.0:
         raise ValueError("expand_ratio must be between 0 and 1")
+    if input_type not in {"crop", CROP_INPUT_TYPE}:
+        raise ValueError("input_type must be crop_image")
     root = Path(output_root)
     root.mkdir(parents=True, exist_ok=True)
     accepted, excluded = _reviewed_records(records)
-    species_keys = sorted({_accepted_species(record) for record in accepted if _accepted_species(record)})
+    species_keys = sorted({_species_pair(record, species_name_map)[0] for record in accepted if _species_pair(record, species_name_map)[0]})
     class_index = {species: index for index, species in enumerate(species_keys)}
     rows: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
     for record in accepted:
         image_id = _record_id(record)
-        species = _accepted_species(record)
+        species, species_name = _species_pair(record, species_name_map)
         if not species:
             failures.append({"image_id": image_id, "error": "accepted_species is required for crop dataset"})
             continue
+        source_ref = _source_image_ref(record)
         try:
             data = _read_image_bytes(record, image_loader)
             with Image.open(io.BytesIO(data)) as source:
@@ -273,13 +350,18 @@ def build_crop_dataset(
                     "image_id": image_id,
                     "file_name": crop_path.name,
                     "species_key": species,
+                    "species_name": species_name,
                     "class_index": class_index[species],
                     "gcs_uri": "",
                     "local_path": str(crop_path.relative_to(root)),
-                    "input_type": "crop",
+                    "crop_image_path": str(crop_path.relative_to(root)),
+                    "input_type": input_type,
                     "pipeline_type": "CROP_CLASSIFIER_V1",
-                    "source_image_id": image_id,
-                    "source_image_gcs_uri": _storage_value(record, "image_gcs_uri") or "",
+                    "source_image_id": str(record.get("source_image_id") or image_id).strip(),
+                    "source_image": source_ref,
+                    "source_image_path": _storage_value(record, "source_image_path") or "",
+                    "source_image_gcs_uri": _storage_value(record, "source_image_gcs_uri") or _storage_value(record, "image_gcs_uri") or "",
+                    "source_image_exists": "true" if source_ref else "false",
                     "split": _split(image_id),
                     "accepted_bbox": json.dumps(record["accepted_bbox"], separators=(",", ":")),
                     "bbox_source": "accepted_review",
@@ -291,6 +373,8 @@ def build_crop_dataset(
                     "crop_right": right,
                     "crop_bottom": bottom,
                     "crop_path": str(crop_path.relative_to(root)),
+                    "review_status": _status(record),
+                    "created_at": _created_at(record),
                 }
             )
         except Exception as exc:
@@ -300,14 +384,19 @@ def build_crop_dataset(
         "image_id",
         "file_name",
         "species_key",
+        "species_name",
         "class_index",
         "gcs_uri",
         "local_path",
+        "crop_image_path",
         "crop_path",
         "input_type",
         "pipeline_type",
         "source_image_id",
+        "source_image",
+        "source_image_path",
         "source_image_gcs_uri",
+        "source_image_exists",
         "split",
         "accepted_bbox",
         "bbox_source",
@@ -318,6 +407,8 @@ def build_crop_dataset(
         "crop_top",
         "crop_right",
         "crop_bottom",
+        "review_status",
+        "created_at",
     ]
     _write_csv(root / "metadata" / "crop_manifest.csv", fields, rows)
     class_map = {
@@ -326,7 +417,7 @@ def build_crop_dataset(
         "classes": [{"class_index": index, "species_key": species} for species, index in class_index.items()],
     }
     _write_json(root / "metadata" / "class_map.json", class_map)
-    validation = validate_crop_dataset(root)
+    validation = validate_crop_dataset(root, require_metadata=input_type == CROP_INPUT_TYPE, check_source_image=input_type == CROP_INPUT_TYPE)
     # A build failure represents an accepted record that could not become a
     # crop.  Keep the failure visible and make the dataset ineligible instead
     # of allowing a partially written manifest into training.
@@ -342,10 +433,20 @@ def build_crop_dataset(
             for failure in failures
         )
         validation.setdefault("checks", {})["crop_exists"] = False
+    if excluded.get("invalid_accepted"):
+        validation["valid"] = False
+        validation.setdefault("errors", []).append(
+            {
+                "row": None,
+                "image_id": None,
+                "code": "INVALID_ACCEPTED_RECORD",
+                "message": f"{excluded['invalid_accepted']} accepted record(s) lack a valid accepted_bbox",
+            }
+        )
     report = {
         "dataset_version": dataset_version,
         "pipeline_type": "CROP_CLASSIFIER_V1",
-        "input_type": "crop",
+        "input_type": input_type,
         "expand_ratio": expand_ratio,
         "class_count": len(class_index),
         "class_map": "metadata/class_map.json",

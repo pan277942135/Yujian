@@ -61,21 +61,31 @@ source artifact.
 
 - `build_reviewed_detector_dataset` writes one-class YOLO `fish` images and
   labels as `DS_DET_FISH_v0.1`.
-- `build_crop_dataset` regenerates crops from the original image and accepted
-  box, writes species directories and `metadata/crop_manifest.csv` as
-  `DS_CROP_M1_v0.1`, and emits a class map.  The manifest now records
-  `source_image_id`, `bbox_source=accepted_review`, the expanded crop bounds,
-  and the crop pixel dimensions.
+- `build_reviewed_crop_dataset` regenerates crops from the original image and
+  accepted box, writes `images/<species_key>/<image_id>_crop.jpg` and
+  `metadata/crop_manifest.csv` as `DS_CROP_M1_v0.1`, and emits a class map.
+  Production rows use `input_type=crop_image` and include
+  `source_image_id`, `species_name`, `review_status`, `created_at`,
+  `bbox_source=accepted_review`, the expanded crop bounds, and crop pixel
+  dimensions.  `build_crop_dataset` remains available as a legacy-compatible
+  low-level export (`input_type=crop`).
 
 `trainer.crop_dataset_validator` enforces the crop training gate before a
 dataset is used: the crop file must exist, a reviewed species and normalized
 `accepted_bbox` must be present, and `image_id` values must be unique.  A
-`candidate_bbox` is never a valid substitute.  The training worker runs the
-same validator again after materialising remote files, so a missing GCS crop
-cannot enter `CROP_CLASSIFIER_V1` by accident.
+`candidate_bbox` is never a valid substitute.  The production validator also
+checks the source image, metadata completeness, and rejects an original image
+used as the classifier input.  The training worker runs the same validator
+again after materialising remote files, so a missing GCS crop cannot enter
+`CROP_CLASSIFIER_V1` by accident.
 
-Both builders report excluded candidates and safety flags.  Neither changes
-labels, freezes a dataset, creates a batch or starts training.
+`trainer.crop_dataset_pipeline.freeze_crop_dataset` is the explicit Freeze
+step.  It publishes an immutable `datasets/DS_CROP_M1_v0.1/` tree, writes
+`dataset.json` metadata (`source=accepted_bbox`, `pipeline=CROP_CLASSIFIER_V1`,
+`crop_expand_ratio=0.15`) and registers the DatasetVersion as
+`READY_FOR_TRAINING`.  `/api/crop-datasets/build` performs the reviewed build;
+`freeze=true` or the separate `/{dataset_version}/freeze` endpoint is required
+to publish.  Neither action starts training.
 
 The read-only `/crop-qa` page and `/api/crop-qa` endpoint show the original
 image with the human accepted box alongside its crop preview.  Media access
@@ -84,16 +94,22 @@ the page has no label, review, or Freeze mutation controls.
 
 ## Classifier pipelines and preprocessing
 
-`CROP_CLASSIFIER_V1` is the default new training pipeline and refuses rows
-without `input_type=crop` and the matching pipeline marker.  It uses the same
+`CROP_CLASSIFIER_V1` is the default new training pipeline and requires
+`input_type=crop_image` plus the matching pipeline marker.  It uses the same
 224px RGB ImageNet normalization and centered letterbox/padding contract as
 the Android classifier.  `WHOLE_IMAGE_V1` remains available for legacy
 baselines and is explicitly marked in model/run metadata.
 
+Training outputs include the shared preprocessing contract and a
+`prediction_rows.jsonl` stream with `image_id`, `crop_path`, true/predicted
+species, confidence, top-3 predictions and correctness.  If a baseline artifact
+is available, the worker also writes `MODEL_COMPARE_REPORT.json` with overall
+metrics, per-species deltas, the requested hard pairs and Crop Gain lists.
+
 Model registry records carry `pipeline_type`, `detector_version`,
 `crop_version`, `classifier_version` and `dataset_version`.  Training still
-requires a frozen dataset and is never triggered by an inference upload or a
-review action.
+requires a `FROZEN` or crop-specific `READY_FOR_TRAINING` dataset and is never
+triggered by an inference upload or a review action.
 
 ## Intelligence hand-off
 

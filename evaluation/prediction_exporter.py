@@ -123,7 +123,22 @@ def normalize_prediction_rows(
         }
         # Keep paths and capture context for hard-case extraction without
         # changing the fixed CSV columns.
-        for key in ("file_name", "filename", "local_path", "source_uri", "gcs_uri", "image_uri", "scene", "angle", "image_quality", "error_group"):
+        for key in (
+            "file_name",
+            "filename",
+            "local_path",
+            "crop_path",
+            "crop_image_path",
+            "source_uri",
+            "gcs_uri",
+            "image_uri",
+            "scene",
+            "angle",
+            "image_quality",
+            "error_group",
+            "top3_predictions",
+            "predicted_species",
+        ):
             if source.get(key) not in (None, ""):
                 row[key] = source[key]
         result.append(row)
@@ -185,11 +200,47 @@ def write_error_samples(rows: Iterable[Mapping[str, Any]], output_path: str | Pa
     return len(values)
 
 
+def write_prediction_rows_jsonl(rows: Iterable[Mapping[str, Any]], output_path: str | Path) -> int:
+    """Write one provenance-rich prediction object per line.
+
+    JSONL deliberately uses ``predicted_species`` and ``crop_path`` aliases in
+    addition to the fixed CSV names so Hard Case Miner consumers can stream the
+    artifact without loading the complete evaluation bundle.
+    """
+
+    destination = Path(output_path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    count = 0
+    with destination.open("w", encoding="utf-8") as handle:
+        for source in rows:
+            row = dict(source)
+            row.setdefault("predicted_species", row.get("pred_species", ""))
+            row.setdefault("crop_path", row.get("crop_image_path") or row.get("local_path", ""))
+            # Keep the requested contract fields first and omit empty optional
+            # values only when they were never supplied.
+            ordered = {
+                "image_id": row.get("image_id", ""),
+                "crop_path": row.get("crop_path", ""),
+                "true_species": row.get("true_species", ""),
+                "predicted_species": row.get("predicted_species", ""),
+                "confidence": row.get("confidence", 0.0),
+                "top3_predictions": row.get("top3_predictions", []),
+                "correct": bool(row.get("correct", False)),
+            }
+            for key, value in row.items():
+                if key not in ordered and value not in (None, ""):
+                    ordered[key] = value
+            handle.write(json.dumps(ordered, ensure_ascii=False, separators=(",", ":")) + "\n")
+            count += 1
+    return count
+
+
 __all__ = [
     "ERROR_SAMPLE_FIELDS",
     "PREDICTION_FIELDS",
     "build_error_samples",
     "normalize_prediction_rows",
     "write_error_samples",
+    "write_prediction_rows_jsonl",
     "write_predictions_csv",
 ]

@@ -31,7 +31,7 @@ def test_builder_writes_contract_v1_files_and_preserves_metrics(tmp_path):
 
     result = build_evaluation_artifacts(report, predictions, tmp_path)
     root = tmp_path / "MODEL_M1_v0.3"
-    expected = {"metrics.json", "confusion_matrix.json", "predictions.csv", "error_samples.json", "report.json"}
+    expected = {"metrics.json", "confusion_matrix.json", "predictions.csv", "prediction_rows.jsonl", "error_samples.json", "report.json"}
     assert {path.name for path in root.iterdir()} == expected
     assert result["test_samples"] == 107
     assert result["error_rows"] == 3
@@ -61,6 +61,9 @@ def test_builder_writes_contract_v1_files_and_preserves_metrics(tmp_path):
     assert len(errors) == 3
     assert set(ERROR_SAMPLE_FIELDS).issubset(errors[0])
     assert errors[0]["error_group"] == "grass_carp_vs_common_carp"
+    prediction_lines = (root / "prediction_rows.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(prediction_lines) == 4
+    assert '"predicted_species":"common_carp"' in prediction_lines[0]
 
 
 def test_builder_accepts_class_indices_and_object_facade(tmp_path):

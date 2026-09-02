@@ -10,6 +10,7 @@ from .prediction_exporter import (
     build_error_samples,
     normalize_prediction_rows,
     write_error_samples,
+    write_prediction_rows_jsonl,
     write_predictions_csv,
 )
 from .report_generator import build_evaluation_report, write_evaluation_report
@@ -97,7 +98,7 @@ def build_evaluation_artifacts(
     labels: Iterable[Any] | None = None,
     generated_at: str | None = None,
 ) -> dict[str, Any]:
-    """Write all five files in the Evaluation Artifact Contract v1 directory."""
+    """Write the complete Evaluation Artifact Contract v1 directory."""
 
     report = dict(evaluation_report or {})
     resolved_model = _text(model_version or report.get("model_version")) or "unknown"
@@ -143,6 +144,8 @@ def build_evaluation_artifacts(
     write_confusion_matrix(confusion, confusion_path)
     predictions_path = destination / "predictions.csv"
     write_predictions_csv(normalized_predictions, predictions_path)
+    prediction_rows_path = destination / "prediction_rows.jsonl"
+    write_prediction_rows_jsonl(normalized_predictions, prediction_rows_path)
     errors_path = destination / "error_samples.json"
     write_error_samples(errors, errors_path)
     summary = build_evaluation_report(
@@ -163,6 +166,7 @@ def build_evaluation_artifacts(
         metrics_path=str(metrics_path),
         confusion_matrix_path=str(confusion_path),
         predictions_path=str(predictions_path),
+        prediction_rows_path=str(prediction_rows_path),
         error_samples_path=str(errors_path),
         report_path=str(report_path),
         test_samples=test_samples,
@@ -171,7 +175,7 @@ def build_evaluation_artifacts(
         generated_at=generated,
     )
     result = artifact.to_dict()
-    result.update({"metrics": metrics, "confusion_matrix": confusion, "predictions": normalized_predictions, "error_samples": errors, "report": summary})
+    result.update({"metrics": metrics, "confusion_matrix": confusion, "predictions": normalized_predictions, "prediction_rows": normalized_predictions, "error_samples": errors, "report": summary})
     return result
 
 

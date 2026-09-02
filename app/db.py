@@ -70,6 +70,7 @@ def _ensure_production_pipeline_columns() -> None:
     additions = {
         "datasets": {
             "pipeline_type": "VARCHAR(64) NOT NULL DEFAULT 'WHOLE_IMAGE_V1'",
+            "metadata_json": "TEXT",
         },
         "training_runs": {
             "pipeline_type": "VARCHAR(64) NOT NULL DEFAULT 'WHOLE_IMAGE_V1'",

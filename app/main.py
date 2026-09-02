@@ -527,6 +527,8 @@ def datasets(db: Session = Depends(get_db)):
             "source_cutoff_at": row.source_cutoff_at.isoformat() if row.source_cutoff_at else None,
             "git_commit": row.git_commit,
             "status": row.status,
+            "pipeline_type": getattr(row, "pipeline_type", "WHOLE_IMAGE_V1"),
+            "metadata": json.loads(row.metadata_json) if getattr(row, "metadata_json", None) else None,
         }
         for row in rows
     ]

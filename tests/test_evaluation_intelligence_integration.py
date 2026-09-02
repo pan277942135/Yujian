@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from evaluation.artifact_builder import build_evaluation_artifacts
+from evaluation.model_compare import compare_model_artifacts, write_model_compare_report
 from app.intelligence_api import build_intelligence_payload, load_evaluation_document
 
 
@@ -69,6 +70,31 @@ def test_standard_artifact_bundle_is_joined_for_model_intelligence(tmp_path, mon
     assert payload["metrics"]["top1_accuracy"] == 0.645
     assert payload["metrics"]["top3_accuracy"] == 0.879
     assert payload["metrics"]["macro_f1"] == 0.601
+
+
+def test_model_compare_artifact_is_exposed_to_intelligence(tmp_path, monkeypatch):
+    artifact_root = tmp_path / "evaluation_artifacts"
+    baseline = artifact_root / "MODEL_M1_v0.5"
+    candidate = artifact_root / "MODEL_CROP_M1_v0.1"
+    for root, model, accuracy in ((baseline, "MODEL_M1_v0.5", 0.50), (candidate, "MODEL_CROP_M1_v0.1", 0.65)):
+        root.mkdir(parents=True)
+        (root / "metrics.json").write_text(
+            '{"model_version":"%s","metrics":{"top1_accuracy":%s,"macro_f1":0.4}}' % (model, accuracy),
+            encoding="utf-8",
+        )
+        (root / "confusion_matrix.json").write_text(
+            '{"labels":["crucian_carp","common_carp"],"matrix":[[4,3],[1,5]]}',
+            encoding="utf-8",
+        )
+    report = compare_model_artifacts(baseline, candidate)
+    write_model_compare_report(report, candidate / "MODEL_COMPARE_REPORT.json")
+    monkeypatch.setenv("EVALUATION_ARTIFACT_ROOT", str(artifact_root))
+    document, source, warning = load_evaluation_document(EmptyDB(), "MODEL_CROP_M1_v0.1")
+    assert warning is None
+    assert source and source.endswith("MODEL_CROP_M1_v0.1/metrics.json")
+    payload = build_intelligence_payload(EmptyDB(), evaluation_document=document)
+    assert payload["model_comparison"]["report_type"] == "MODEL_COMPARE_REPORT"
+    assert payload["model_comparison"]["metrics"]["top1_accuracy"]["delta"] == 0.15
 
 
 def test_intelligence_dashboard_exposes_artifact_metrics():

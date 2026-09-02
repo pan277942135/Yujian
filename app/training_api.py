@@ -20,6 +20,9 @@ from app.db import get_db
 from app.models import DatasetVersion, ModelVersion, TrainingRun
 from app.pipeline_contract import CROP_CLASSIFIER_V1, PIPELINE_TYPES, WHOLE_IMAGE_V1, validate_pipeline_type
 
+
+CROP_TRAINING_READY_STATUSES = {"FROZEN", "READY_FOR_TRAINING"}
+
 router = APIRouter(tags=["classifier-training"])
 templates = Jinja2Templates(directory="app/templates")
 
@@ -245,14 +248,17 @@ def queue_training_run(
     dataset = db.get(DatasetVersion, payload.dataset_version)
     if not dataset:
         raise ValueError("数据集不存在，请先完成 Dataset Freeze")
-    if dataset.status != "FROZEN":
-        raise ValueError(f"数据集尚未冻结：{dataset.status}")
+    pipeline_type = validate_pipeline_type(payload.pipeline_type)
+    allowed_statuses = CROP_TRAINING_READY_STATUSES if pipeline_type == CROP_CLASSIFIER_V1 else {"FROZEN"}
+    if dataset.status not in allowed_statuses:
+        raise ValueError(f"数据集尚未准备训练：{dataset.status}")
+    dataset_pipeline = getattr(dataset, "pipeline_type", WHOLE_IMAGE_V1)
+    if pipeline_type == CROP_CLASSIFIER_V1 and dataset_pipeline != CROP_CLASSIFIER_V1:
+        raise ValueError("CROP_CLASSIFIER_V1 只能使用 CROP_CLASSIFIER_V1 数据集")
     if dataset.train_count <= 0:
         raise ValueError("训练集为空，不能启动训练")
     if payload.model_family != "mobilenet_v3_small":
         raise ValueError("V0.1 仅支持 mobilenet_v3_small")
-    pipeline_type = validate_pipeline_type(payload.pipeline_type)
-
     run_id, model_version = _names(payload)
     if db.get(TrainingRun, run_id):
         raise ValueError(f"Run ID 已存在：{run_id}")

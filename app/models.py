@@ -104,6 +104,10 @@ class DatasetVersion(Base):
     source_cutoff_at = Column(DateTime(timezone=True))
     status = Column(String(64), nullable=False)
     pipeline_type = Column(String(64), nullable=False, default="WHOLE_IMAGE_V1")
+    # Additive JSON envelope for pipeline-specific Freeze metadata.  Existing
+    # whole-image snapshots leave this null; crop snapshots record the accepted
+    # bbox source, input type and preprocessing contract here as well as in GCS.
+    metadata_json = Column(Text)
 
 
 class FeedbackEvent(Base):
