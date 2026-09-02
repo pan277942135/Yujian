@@ -4,6 +4,7 @@ import re
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import JSONResponse
 from google.cloud import storage
 from pydantic import AliasChoices, BaseModel, Field, field_validator
 from sqlalchemy import func, select
@@ -25,11 +26,16 @@ from app.fish_knowledge.content import card_description, card_display_descriptio
 from app.fish_knowledge.fishing import FishFishing
 from app.fish_knowledge.gallery import (
     GALLERY_TYPES,
+    KNOWLEDGE_ASSET_MAX_BYTES,
+    KNOWLEDGE_ASSET_TYPES,
     MAX_GALLERY_IMAGE_BYTES,
     MAX_GALLERY_IMAGES,
     FishGalleryImage,
     GalleryUploadError,
+    inspect_knowledge_asset,
     inspect_gallery_image,
+    knowledge_asset_url,
+    store_cms_knowledge_asset,
     store_knowledge_asset,
     store_gallery_image,
 )
@@ -1221,6 +1227,150 @@ async def upload_fish_asset(
     }
 
 
+def _cms_asset_error(
+    error: str,
+    message: str,
+    *,
+    status_code: int,
+    reason: str | None = None,
+) -> JSONResponse:
+    payload: dict[str, Any] = {
+        "success": False,
+        "error": error,
+        "message": message,
+    }
+    if reason:
+        payload["reason"] = reason
+    return JSONResponse(status_code=status_code, content=payload)
+
+
+async def upload_cms_fish_asset(
+    species_id: str,
+    asset_type: str,
+    file: UploadFile,
+    db: Session,
+) -> dict[str, Any] | JSONResponse:
+    """Upload and bind one Cover/Card image for the short CMS contract."""
+
+    normalized_type = str(asset_type or "").strip().upper()
+    if normalized_type not in KNOWLEDGE_ASSET_TYPES:
+        return _cms_asset_error(
+            "invalid_asset_type",
+            "asset_type 必须是 COVER、HERO、IDENTIFICATION、ECO、GEAR 或 SKILL",
+            status_code=400,
+        )
+
+    requested_species_id = str(species_id or "").strip()
+    try:
+        species = _require_species(db, requested_species_id)
+    except HTTPException as exc:
+        return _cms_asset_error(
+            "species_not_found",
+            str(exc.detail),
+            status_code=exc.status_code,
+        )
+
+    if file is None:
+        return _cms_asset_error("invalid_file", "请先选择图片文件", status_code=400, reason="empty_file")
+    try:
+        data = await file.read(KNOWLEDGE_ASSET_MAX_BYTES + 1)
+    except Exception:
+        return _cms_asset_error("invalid_file", "图片文件读取失败", status_code=400)
+
+    try:
+        image_metadata = inspect_knowledge_asset(data)
+    except GalleryUploadError as exc:
+        reason = "empty_file" if not data else (
+            "file_too_large" if len(data) > KNOWLEDGE_ASSET_MAX_BYTES else "unsupported_format"
+        )
+        return _cms_asset_error("invalid_file", str(exc), status_code=400, reason=reason)
+
+    try:
+        bucket_name = get_bucket_name()
+        client = storage.Client()
+        bucket = client.bucket(bucket_name)
+        object_name, storage_status = store_cms_knowledge_asset(
+            client=client,
+            bucket=bucket,
+            species_id=species.id,
+            asset_type=normalized_type,
+            data=bytes(image_metadata["webp_data"]),
+            image_metadata=image_metadata,
+        )
+        image_url = knowledge_asset_url(bucket_name, object_name)
+
+        if normalized_type == "COVER":
+            row = _get_species_cover(db, species.id)
+            if row is None:
+                row = FishSpeciesCover(
+                    species_id=species.id,
+                    image_url=image_url,
+                    style="ANIME_CARD",
+                    title=f"{species.name_cn}图鉴卡",
+                    status="DRAFT",
+                )
+                db.add(row)
+            else:
+                row.image_url = image_url
+            binding = "cover.image_url"
+        else:
+            row = next(
+                (
+                    card
+                    for card in db.scalars(
+                        select(FishCard)
+                        .where(FishCard.species_id == species.id)
+                        .order_by(FishCard.id)
+                    ).all()
+                    if normalize_card_type(card.card_type) == normalized_type
+                ),
+                None,
+            )
+            if row is None:
+                row = FishCard(
+                    species_id=species.id,
+                    card_type=normalized_type,
+                    title=f"{species.name_cn}{normalized_type}卡",
+                    image_url=image_url,
+                    description=card_description({"type": normalized_type}),
+                    sort_order=card_type_sort_order(normalized_type),
+                    status="DRAFT",
+                )
+                db.add(row)
+            else:
+                row.image_url = image_url
+            binding = "card.image_url"
+        _commit(db)
+        db.refresh(row)
+    except Exception:
+        db.rollback()
+        return _cms_asset_error("storage_error", "鱼鉴图片上传或绑定失败", status_code=503)
+
+    result = _cover_dict(row) if normalized_type == "COVER" else _card_dict(row)
+    return {
+        "success": True,
+        "url": image_url,
+        "asset_type": normalized_type,
+        "species_id": species.id,
+        "width": image_metadata["width"],
+        "height": image_metadata["height"],
+        "image": {
+            "width": image_metadata["width"],
+            "height": image_metadata["height"],
+            "size_bytes": image_metadata["size_bytes"],
+            "stored_size_bytes": image_metadata["stored_size_bytes"],
+        },
+        "storage": {
+            "bucket": bucket_name,
+            "object_name": object_name,
+            "content_type": "image/webp",
+            "status": storage_status,
+        },
+        "binding": binding,
+        **result,
+    }
+
+
 @router.patch("/species/{species_id}/gallery/{image_id}")
 def update_gallery_item(
     species_id: str,
@@ -1353,6 +1503,16 @@ def delete_similarity(species_id: str, similar_species_id: str, db: Session = De
 # The CMS itself uses the versioned paths above. These aliases keep the
 # documented /api/admin/fish contract available to simple operators and make
 # the CRUD surface independent from the older v1.1 route naming.
+
+
+@compat_router.post("/assets/upload", response_model=None)
+async def compat_upload_cms_fish_asset(
+    file: UploadFile = File(...),
+    species_id: str = Form(...),
+    asset_type: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    return await upload_cms_fish_asset(species_id, asset_type, file, db)
 
 
 @compat_router.get("/species")

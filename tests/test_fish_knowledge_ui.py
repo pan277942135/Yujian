@@ -18,6 +18,8 @@ def test_fish_knowledge_workspace_route_and_template_are_registered():
         "Fishing Video",
         "/api/v1/admin/fish/species",
         "/api/v1/admin/fish/cards/",
+        "/api/admin/fish/assets/upload",
+        "form.append('species_id'",
         "/api/v1/fish/species/",
     ):
         assert marker in source

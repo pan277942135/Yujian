@@ -20,10 +20,107 @@ GALLERY_MIME_SUFFIXES = {
     "image/png": ".png",
     "image/webp": ".webp",
 }
+KNOWLEDGE_ASSET_TYPES = frozenset({"COVER", "HERO", "IDENTIFICATION", "ECO", "GEAR", "SKILL"})
+KNOWLEDGE_ASSET_MAX_BYTES = 10 * 1024 * 1024
 
 
 class GalleryUploadError(ValueError):
     pass
+
+
+def inspect_knowledge_asset(data: bytes) -> dict[str, object]:
+    """Validate and normalize one CMS cover/card upload.
+
+    CMS assets have a canonical WebP storage contract.  The original file is
+    inspected for a real JPEG/PNG/WEBP payload rather than trusting the browser
+    supplied MIME type, then encoded to WebP for the fixed object names used by
+    the Fish Knowledge CMS.  Dimensions are recorded but deliberately do not
+    enforce a product aspect-ratio rule in this first version.
+    """
+
+    if not data:
+        raise GalleryUploadError("图片文件为空")
+    if len(data) > KNOWLEDGE_ASSET_MAX_BYTES:
+        raise GalleryUploadError("图片不能超过 10 MB")
+
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            width, height = image.size
+            image_format = (image.format or "").upper()
+            image.verify()
+    except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
+        raise GalleryUploadError("仅支持 JPEG、PNG 或 WEBP 图片") from exc
+
+    original_content_type = {
+        "JPEG": "image/jpeg",
+        "PNG": "image/png",
+        "WEBP": "image/webp",
+    }.get(image_format)
+    if original_content_type is None:
+        raise GalleryUploadError("仅支持 JPEG、PNG 或 WEBP 图片")
+    if width <= 0 or height <= 0:
+        raise GalleryUploadError("图片尺寸非法")
+
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            has_alpha = "A" in image.getbands() or "transparency" in image.info
+            normalized = image.convert("RGBA" if has_alpha else "RGB")
+            output = io.BytesIO()
+            normalized.save(output, format="WEBP", quality=92, method=6)
+            webp_data = output.getvalue()
+    except (OSError, ValueError) as exc:
+        raise GalleryUploadError("图片无法转换为 WebP") from exc
+
+    return {
+        "content_type": "image/webp",
+        "original_content_type": original_content_type,
+        "width": width,
+        "height": height,
+        "size_bytes": len(data),
+        "stored_size_bytes": len(webp_data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "webp_data": webp_data,
+    }
+
+
+def knowledge_asset_object_name(species_id: str, asset_type: str) -> str:
+    """Return the fixed object name for one CMS cover/card slot."""
+
+    normalized_type = asset_type.strip().upper()
+    if normalized_type == "COVER":
+        return f"fish-assets/{species_id}/cover/cover.webp"
+    return f"fish-assets/{species_id}/cards/{normalized_type.lower()}.webp"
+
+
+def knowledge_asset_url(bucket_name: str, object_name: str) -> str:
+    """Return the canonical GCS HTTPS URL persisted by the CMS contract."""
+
+    return f"https://storage.googleapis.com/{bucket_name}/{object_name}"
+
+
+def store_cms_knowledge_asset(
+    *,
+    client,
+    bucket,
+    species_id: str,
+    asset_type: str,
+    data: bytes,
+    image_metadata: dict[str, object],
+) -> tuple[str, str]:
+    """Write a CMS asset to its canonical, replaceable GCS object."""
+
+    object_name = knowledge_asset_object_name(species_id, asset_type)
+    blob = bucket.blob(object_name)
+    existed = bool(blob.exists(client))
+    blob.metadata = {
+        "width": str(image_metadata["width"]),
+        "height": str(image_metadata["height"]),
+        "original_content_type": str(image_metadata["original_content_type"]),
+    }
+    # The CMS slot is intentionally replaceable: every Cover/Card type has one
+    # stable object name, while GCS bucket versioning remains the recovery path.
+    blob.upload_from_string(data, content_type="image/webp")
+    return object_name, "UPDATED" if existed else "CREATED"
 
 
 def inspect_gallery_image(data: bytes) -> dict[str, str | int]:

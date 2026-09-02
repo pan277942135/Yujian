@@ -97,6 +97,20 @@ DELETE /api/v1/admin/fish/cards/{card_id}
 GET    /api/v1/admin/fish/species/{species_id}/completion
 ```
 
+CMS 素材上传还提供短路径合同：
+
+```text
+POST   /api/admin/fish/assets/upload
+```
+
+Multipart 字段为 `file`、`species_id`、`asset_type`。`asset_type` 支持
+`COVER`、`HERO`、`IDENTIFICATION`、`ECO`、`GEAR`、`SKILL`；图片限制为
+JPEG / PNG / WEBP，单图不超过 10 MB，上传后统一转为 WebP，写入
+`fish-assets/<species_id>/cover/cover.webp` 或
+`fish-assets/<species_id>/cards/<card_type>.webp`，并回写既有
+`fish_species_cover.image_url` 或 `fish_cards.image_url`。首次创建的 Cover/Card
+保持 `DRAFT`，不会绕过现有发布校验。
+
 ### 图片上传合同
 
 - Multipart 字段：`file`, `type`, `order`, `title`。
