@@ -421,7 +421,10 @@ def crop_dataset_sources(db: Session = Depends(get_db)) -> dict[str, Any]:
 
     frozen: list[dict[str, Any]] = []
     for dataset in db.scalars(select(DatasetVersion).where(DatasetVersion.status == "FROZEN").order_by(DatasetVersion.created_at.desc())).all():
-        readiness = crop_readiness(db, dataset.dataset_version)
+        # The selector is a listing endpoint: validate registered manifest and
+        # class-map metadata here, but defer one GCS existence request per image
+        # to the detail/readiness endpoint so the dropdown cannot hang.
+        readiness = crop_readiness(db, dataset.dataset_version, verify_source_images=False)
         readiness["source_dataset"] = dataset.dataset_version
         readiness["review_url"] = f"/crop-review?dataset_version={dataset.dataset_version}"
         frozen.append(readiness)

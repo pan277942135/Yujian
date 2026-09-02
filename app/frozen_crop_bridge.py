@@ -150,9 +150,20 @@ def load_frozen_dataset(db: Any, dataset_version: str, storage_client: Any = Non
     }
 
 
-def crop_readiness(db: Any, dataset_version: str, storage_client: Any = None) -> dict[str, Any]:
+def crop_readiness(
+    db: Any,
+    dataset_version: str,
+    storage_client: Any = None,
+    *,
+    verify_source_images: bool = True,
+) -> dict[str, Any]:
     try:
-        loaded = load_frozen_dataset(db, dataset_version, storage_client, verify_source_images=True)
+        loaded = load_frozen_dataset(
+            db,
+            dataset_version,
+            storage_client,
+            verify_source_images=verify_source_images,
+        )
     except Exception as exc:
         return {
             "dataset_version": dataset_version,
