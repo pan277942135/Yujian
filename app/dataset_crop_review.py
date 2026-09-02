@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import math
+import random
 import re
 from io import BytesIO
 from datetime import datetime, timezone
@@ -11,13 +13,16 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
+from PIL import Image
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.detector_runtime import normalize_android_source
 from app.frozen_crop_bridge import _read_uri, load_frozen_dataset
 from app.models import DatasetCropReview, DatasetCropReviewEvent
+from app.recognition_pipeline import assess_detections, load_contract
 
 router = APIRouter(prefix="/api/dataset-crop-review", tags=["dataset-crop-review"])
 
@@ -43,6 +48,62 @@ def _box(value: Any) -> list[float] | None:
     if result[0] + result[2] > 1.00001 or result[1] + result[3] > 1.00001:
         return None
     return result
+
+
+def _json_value(value: str | None) -> Any:
+    if not value:
+        return None
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _quality_status(assessment: Any) -> str:
+    status = str(getattr(assessment.status, "value", assessment.status)).lower()
+    if status == "ready":
+        return "GOOD"
+    if status in {"uncertain", "incomplete_fish"}:
+        return "WARNING"
+    return "BAD"
+
+
+def _detector_payload(run: Any, assessment: Any) -> tuple[list[float] | None, dict[str, Any]]:
+    primary = assessment.primary
+    candidate = None
+    confidence = None
+    area_ratio = None
+    aspect_ratio = None
+    quality_score = None
+    touch_edge = None
+    if primary is not None:
+        box = primary.box.normalized()
+        candidate = [round(value, 6) for value in (box.x1, box.y1, box.width, box.height)]
+        confidence = float(primary.confidence)
+        area_ratio = float(box.area_ratio)
+        aspect_ratio = float(box.width / box.height) if box.height > 0 else None
+        quality_score = confidence * math.sqrt(max(area_ratio, 0.0))
+        edge_margin = float(load_contract()["quality_gate"]["incomplete_edge_margin_ratio"])
+        touch_edge = bool(box.touches_edge(edge_margin))
+    detections = []
+    for detection in run.detections:
+        box = detection.box.normalized()
+        detections.append(
+            {
+                "confidence": round(float(detection.confidence), 6),
+                "bbox": [box.x1, box.y1, box.width, box.height],
+                "class_name": detection.class_name,
+            }
+        )
+    return candidate, {
+        "detector_confidence": confidence,
+        "bbox_area_ratio": area_ratio,
+        "aspect_ratio": aspect_ratio,
+        "quality_score": quality_score,
+        "quality_status": _quality_status(assessment),
+        "touch_edge": touch_edge,
+        "all_detections": detections,
+    }
 
 
 class DatasetCropReviewUpdate(BaseModel):
@@ -92,6 +153,13 @@ def _item(base: dict[str, Any], review: DatasetCropReview | None) -> dict[str, A
         "accepted_bbox": _box(review.accepted_bbox_json) if review else None,
         "bbox_source": review.bbox_source if review else None,
         "detector_version": review.detector_version if review else None,
+        "detector_confidence": review.detector_confidence if review else None,
+        "bbox_area_ratio": review.bbox_area_ratio if review else None,
+        "aspect_ratio": review.aspect_ratio if review else None,
+        "quality_score": review.quality_score if review else None,
+        "quality_status": review.quality_status if review else None,
+        "all_detections": _json_value(review.all_detections_json) if review else None,
+        "detector_error": review.detector_error if review else None,
         "crop_uri": crop_uri,
         "crop_status": crop_status,
         "crop_error": review.crop_error if review else None,
@@ -160,20 +228,35 @@ def _populate_candidate(review: DatasetCropReview, base: dict[str, Any], db: Ses
     if review.candidate_bbox_json:
         return
     try:
-        from io import BytesIO
         from PIL import Image
         from app.detector_runtime import detect
         data, _ = _read_uri(base["source_image_gcs_uri"])
         with Image.open(BytesIO(data)) as source_image:
-            run = detect(source_image.convert("RGB"))
+            detector_image = normalize_android_source(source_image)
+        try:
+            run = detect(detector_image)
+        finally:
+            detector_image.close()
+        assessment = assess_detections(run.detections)
+        candidate, metadata = _detector_payload(run, assessment)
         review.detector_version = run.model_version
-        if run.detections:
-            box = run.detections[0].box
-            review.candidate_bbox_json = json.dumps([box.x1, box.y1, box.width, box.height], separators=(",", ":"))
+        review.detector_error = None
+        review.detector_confidence = metadata["detector_confidence"]
+        review.bbox_area_ratio = metadata["bbox_area_ratio"]
+        review.aspect_ratio = metadata["aspect_ratio"]
+        review.quality_score = metadata["quality_score"]
+        review.quality_status = metadata["quality_status"]
+        review.all_detections_json = json.dumps(metadata["all_detections"], separators=(",", ":"))
+        if candidate is not None:
+            review.candidate_bbox_json = json.dumps(candidate, separators=(",", ":"))
         db.add(review)
         db.commit()
-    except Exception:
-        return
+    except Exception as exc:
+        db.rollback()
+        review.detector_error = str(exc)[:4000]
+        review.quality_status = "ERROR"
+        db.add(review)
+        db.commit()
 
 
 @router.get("/{dataset_version}/summary")
@@ -218,6 +301,82 @@ def summary(dataset_version: str, db: Session = Depends(get_db)) -> dict[str, An
         "candidate_bbox_count": candidate_bbox_count,
         "accepted_bbox_count": accepted_bbox_count,
         "counts": counts,
+    }
+
+
+@router.get("/{dataset_version}/detector-audit")
+def detector_audit(
+    dataset_version: str,
+    sample_size: int = Query(default=100, ge=1, le=100),
+    seed: int = Query(default=20260902),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Run a bounded, read-only Detector audit over Frozen Dataset images.
+
+    This endpoint intentionally does not call ``_ensure_rows`` and never writes
+    DatasetCropReview rows.  It evaluates the registered Frozen Dataset source
+    with the Android-compatible source normalization and the shared quality gate.
+    """
+
+    loaded = load_frozen_dataset(db, dataset_version, verify_source_images=False)
+    rows = list(loaded["rows"])
+    sample = random.Random(seed).sample(rows, min(sample_size, len(rows)))
+    results: list[dict[str, Any]] = []
+    for base in sample:
+        result: dict[str, Any] = {
+            "image_id": base["image_id"],
+            "source_image_id": base["source_image_id"],
+            "split": base["split"],
+            "species_key": base["species_key"],
+        }
+        try:
+            from app.detector_runtime import detect
+
+            data, _ = _read_uri(base["source_image_gcs_uri"])
+            with Image.open(BytesIO(data)) as source_image:
+                detector_image = normalize_android_source(source_image)
+            try:
+                run = detect(detector_image)
+            finally:
+                detector_image.close()
+            assessment = assess_detections(run.detections)
+            candidate, metadata = _detector_payload(run, assessment)
+            result.update(
+                {
+                    "candidate_bbox": candidate,
+                    "detected": candidate is not None,
+                    "detection_count": len(run.detections),
+                    "detector_version": run.model_version,
+                    "detector_confidence": metadata["detector_confidence"],
+                    "bbox_area_ratio": metadata["bbox_area_ratio"],
+                    "aspect_ratio": metadata["aspect_ratio"],
+                    "touch_edge": metadata["touch_edge"],
+                    "quality_score": metadata["quality_score"],
+                    "quality_status": metadata["quality_status"] if candidate is not None else "BAD",
+                    "all_detections": metadata["all_detections"],
+                }
+            )
+        except Exception as exc:
+            result.update({"detected": False, "quality_status": "ERROR", "error": str(exc)[:4000]})
+        results.append(result)
+
+    counts = {
+        "detected": sum(1 for item in results if item.get("detected")),
+        "no_detection": sum(1 for item in results if not item.get("detected")),
+        "quality_good": sum(1 for item in results if item.get("quality_status") == "GOOD"),
+        "quality_warning": sum(1 for item in results if item.get("quality_status") == "WARNING"),
+        "quality_bad": sum(1 for item in results if item.get("quality_status") == "BAD"),
+        "errors": sum(1 for item in results if item.get("quality_status") == "ERROR"),
+    }
+    return {
+        "dataset_version": dataset_version,
+        "source_type": "FROZEN_DATASET",
+        "total": len(rows),
+        "sample_size": len(results),
+        "seed": seed,
+        **counts,
+        "items": results,
+        "read_only": True,
     }
 
 

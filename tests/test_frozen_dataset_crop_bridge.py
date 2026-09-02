@@ -15,6 +15,7 @@ from app.dataset_crop_review import DatasetCropReviewUpdate, crop_preview, items
 import app.dataset_crop_review as dataset_crop_review
 from app.frozen_crop_bridge import crop_readiness, load_frozen_dataset
 from app.models import DatasetCropReview, DatasetVersion
+from app.recognition_pipeline import BBox, Detection
 from trainer.build_reviewed_datasets import build_crop_dataset
 
 
@@ -125,7 +126,7 @@ def test_frozen_review_paginates_and_generates_candidate_bbox_without_accepting_
             "app.detector_runtime.detect",
             lambda _image: SimpleNamespace(
                 model_version="DET_FISH_v0.1",
-                detections=(SimpleNamespace(box=SimpleNamespace(x1=0.1, y1=0.2, width=0.5, height=0.4)),),
+                detections=(Detection(confidence=0.9, box=BBox(0.1, 0.2, 0.6, 0.6)),),
             ),
         )
         first = items("DS_M1.v0.5", db=db)
@@ -135,6 +136,8 @@ def test_frozen_review_paginates_and_generates_candidate_bbox_without_accepting_
         assert len(first["items"]) == 50
         assert first["items"][0]["candidate_bbox"] == [0.1, 0.2, 0.5, 0.4]
         assert first["items"][0]["detector_version"] == "DET_FISH_v0.1"
+        assert first["items"][0]["detector_confidence"] == 0.9
+        assert first["items"][0]["quality_status"] == "GOOD"
         assert first["items"][0]["accepted_bbox"] is None
         counts = summary("DS_M1.v0.5", db)
         assert counts["candidate_bbox_count"] == 50
@@ -143,6 +146,33 @@ def test_frozen_review_paginates_and_generates_candidate_bbox_without_accepting_
         second = items("DS_M1.v0.5", page=2, page_size=50, db=db)
         assert second["total"] == 55
         assert len(second["items"]) == 5
+    finally:
+        db.close()
+
+
+def test_detector_audit_is_read_only_and_uses_quality_gate(tmp_path: Path, monkeypatch):
+    manifest, class_map = _parent(tmp_path)
+    db = _db(tmp_path)
+    try:
+        db.add(DatasetVersion(dataset_version="DS_M1_v0.5", manifest_uri=str(manifest), class_map_uri=str(class_map), git_commit="sha", status="FROZEN"))
+        db.commit()
+        image_bytes = io.BytesIO()
+        Image.new("RGB", (32, 24), (10, 20, 30)).save(image_bytes, format="JPEG")
+        monkeypatch.setattr(dataset_crop_review, "_read_uri", lambda _uri: (image_bytes.getvalue(), None))
+        monkeypatch.setattr(
+            "app.detector_runtime.detect",
+            lambda _image: SimpleNamespace(
+                model_version="DET_FISH_v0.1",
+                detections=(Detection(confidence=0.9, box=BBox(0.1, 0.2, 0.6, 0.8)),),
+            ),
+        )
+        result = dataset_crop_review.detector_audit("DS_M1_v0.5", sample_size=2, seed=7, db=db)
+        assert result["read_only"] is True
+        assert result["total"] == 2
+        assert result["sample_size"] == 2
+        assert result["detected"] == 2
+        assert result["quality_good"] == 2
+        assert db.query(DatasetCropReview).count() == 0
     finally:
         db.close()
 

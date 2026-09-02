@@ -91,6 +91,13 @@ def _ensure_production_pipeline_columns() -> None:
         },
         "dataset_crop_reviews": {
             "detector_version": "VARCHAR(128)",
+            "detector_confidence": "DOUBLE PRECISION",
+            "bbox_area_ratio": "DOUBLE PRECISION",
+            "aspect_ratio": "DOUBLE PRECISION",
+            "quality_score": "DOUBLE PRECISION",
+            "quality_status": "VARCHAR(32)",
+            "all_detections_json": "TEXT",
+            "detector_error": "TEXT",
             "crop_uri": "TEXT",
             "crop_status": "VARCHAR(32)",
             "crop_error": "TEXT",

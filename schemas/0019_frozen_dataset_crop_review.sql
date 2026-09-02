@@ -29,6 +29,20 @@ CREATE TABLE IF NOT EXISTS dataset_crop_reviews (
 ALTER TABLE dataset_crop_reviews
     ADD COLUMN IF NOT EXISTS detector_version VARCHAR(128);
 ALTER TABLE dataset_crop_reviews
+    ADD COLUMN IF NOT EXISTS detector_confidence DOUBLE PRECISION;
+ALTER TABLE dataset_crop_reviews
+    ADD COLUMN IF NOT EXISTS bbox_area_ratio DOUBLE PRECISION;
+ALTER TABLE dataset_crop_reviews
+    ADD COLUMN IF NOT EXISTS aspect_ratio DOUBLE PRECISION;
+ALTER TABLE dataset_crop_reviews
+    ADD COLUMN IF NOT EXISTS quality_score DOUBLE PRECISION;
+ALTER TABLE dataset_crop_reviews
+    ADD COLUMN IF NOT EXISTS quality_status VARCHAR(32);
+ALTER TABLE dataset_crop_reviews
+    ADD COLUMN IF NOT EXISTS all_detections_json TEXT;
+ALTER TABLE dataset_crop_reviews
+    ADD COLUMN IF NOT EXISTS detector_error TEXT;
+ALTER TABLE dataset_crop_reviews
     ADD COLUMN IF NOT EXISTS crop_uri TEXT;
 ALTER TABLE dataset_crop_reviews
     ADD COLUMN IF NOT EXISTS crop_status VARCHAR(32);

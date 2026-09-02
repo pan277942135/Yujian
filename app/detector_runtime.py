@@ -11,7 +11,7 @@ from typing import Any, Iterable
 
 import numpy as np
 from google.cloud import storage
-from PIL import Image
+from PIL import Image, ImageOps
 
 from app.recognition_pipeline import BBox, Detection, load_contract
 
@@ -19,6 +19,7 @@ from app.recognition_pipeline import BBox, Detection, load_contract
 DETECTOR_MODEL_VERSION = os.getenv("DETECTOR_MODEL_VERSION", "DET_FISH_v0.1").strip()
 DETECTOR_MODEL_FILENAME = "fish_detector_yolox_nano_v0_1.onnx"
 YOLOX_LETTERBOX_FILL = 114
+ANDROID_MAX_SOURCE_DIMENSION = 2048
 
 
 class DetectorRuntimeError(RuntimeError):
@@ -153,6 +154,31 @@ def reset_detector_cache() -> None:
     """Test-only cache reset; production uses a single immutable verified artifact per process."""
     with _MODEL_LOCK:
         load_detector.cache_clear()
+
+
+def normalize_android_source(image: Image.Image) -> Image.Image:
+    """Normalize a source image to the bitmap Android sends to the detector.
+
+    Android applies EXIF orientation and decodes camera/gallery inputs with an
+    ``inSampleSize`` that keeps the longest side at or below 2048 pixels.  The
+    detector contract itself is unchanged; this helper makes the source raster
+    contract explicit for Frozen Dataset inference as well.
+    """
+
+    oriented = ImageOps.exif_transpose(image).convert("RGB")
+    max_dimension = max(oriented.width, oriented.height)
+    sample = 1
+    while max_dimension / sample > ANDROID_MAX_SOURCE_DIMENSION:
+        sample *= 2
+    if sample > 1:
+        target_size = (
+            max(1, oriented.width // sample),
+            max(1, oriented.height // sample),
+        )
+        resized = oriented.resize(target_size, Image.Resampling.BILINEAR)
+        oriented.close()
+        return resized
+    return oriented
 
 
 def _prepare_yolox_input(image: Image.Image, input_size: int) -> tuple[np.ndarray, float, int, int]:
