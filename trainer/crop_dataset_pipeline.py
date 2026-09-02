@@ -179,6 +179,7 @@ def load_reviewed_crop_records(
     *,
     limit: int = 5000,
     batch_id: str | None = None,
+    source_dataset: str | None = None,
 ) -> list[dict[str, Any]]:
     """Load reviewed bridge and App inference records, scoped before limit.
 
@@ -187,6 +188,45 @@ def load_reviewed_crop_records(
     for the existing App path; when ``batch_id`` is supplied, an immutable
     source_batch/batch_id field is required and unmatched records are skipped.
     """
+
+    if source_dataset:
+        from app.frozen_crop_bridge import load_frozen_dataset
+
+        frozen = load_frozen_dataset(db, source_dataset, storage_client)
+        if frozen["errors"]:
+            raise ValueError("Frozen Dataset manifest 校验失败：" + "; ".join(frozen["errors"][:5]))
+        from app.models import DatasetCropReview
+        from sqlalchemy import select
+
+        reviews = {
+            row.image_id: row
+            for row in db.scalars(
+                select(DatasetCropReview).where(DatasetCropReview.source_dataset_version == source_dataset)
+            ).all()
+        }
+        records = []
+        for base in frozen["rows"]:
+            review = reviews.get(base["image_id"])
+            if not review:
+                continue
+            records.append(
+                {
+                    **base,
+                    "status": review.review_status,
+                    "accepted_bbox_json": review.accepted_bbox_json,
+                    "accepted_bbox": review.accepted_bbox_json,
+                    "accepted_species_key": base["species_key"],
+                    "accepted_species_name": base["species_name"],
+                    "source_dataset": source_dataset,
+                    "source_manifest_sha256": frozen["manifest_sha256"],
+                    "source_image": base["source_image_gcs_uri"],
+                    "source_image_gcs_uri": base["source_image_gcs_uri"],
+                    "reviewed_at": review.reviewed_at.isoformat() if review.reviewed_at else None,
+                    "reviewer": review.reviewer,
+                }
+            )
+        records.sort(key=lambda record: str(record.get("image_id") or ""))
+        return records[: max(0, limit)]
 
     records = _bridge_records(db, batch_id=batch_id, limit=None)
     seen = {str(record.get("image_id") or "") for record in records}
@@ -234,6 +274,8 @@ def build_reviewed_crop_dataset(
     expand_ratio: float = CROP_EXPAND_RATIO,
     image_loader: Any = None,
     species_name_map: Mapping[str, str] | None = None,
+    preserve_parent_split: bool = False,
+    preserve_parent_class_map: bool = False,
 ) -> dict[str, Any]:
     """Generate a local, validated crop dataset from reviewed records."""
 
@@ -245,6 +287,8 @@ def build_reviewed_crop_dataset(
         image_loader=image_loader,
         species_name_map=species_name_map,
         input_type=CROP_INPUT_TYPE,
+        preserve_parent_split=preserve_parent_split,
+        preserve_parent_class_map=preserve_parent_class_map,
     )
 
 
@@ -257,16 +301,22 @@ def build_reviewed_crop_dataset_from_db(
     storage_client: Any = None,
     limit: int = 5000,
     batch_id: str | None = None,
+    source_dataset: str | None = None,
 ) -> dict[str, Any]:
-    records = load_reviewed_crop_records(db, storage_client=storage_client, limit=limit, batch_id=batch_id)
+    records = load_reviewed_crop_records(
+        db, storage_client=storage_client, limit=limit, batch_id=batch_id, source_dataset=source_dataset
+    )
     report = build_reviewed_crop_dataset(
         records,
         output_root,
         dataset_version=dataset_version,
         expand_ratio=expand_ratio,
         species_name_map=_species_name_map(db),
+        preserve_parent_split=bool(source_dataset),
+        preserve_parent_class_map=bool(source_dataset),
     )
     report["source_batch"] = batch_id or ""
+    report["source_dataset"] = source_dataset or ""
     report["source_batches"] = sorted({str(record.get("source_batch") or "").strip() for record in records if str(record.get("source_batch") or "").strip()})
     report["records_considered"] = len(records)
     _write_json(Path(output_root) / "metadata" / "report.json", report)
@@ -404,12 +454,22 @@ def freeze_crop_dataset(
     split_counts = Counter(str(row.get("split") or "") for row in rows)
     species_counts = Counter(str(row.get("species_name") or row.get("species_key") or "") for row in rows)
     class_keys = sorted({str(row.get("species_key") or "") for row in rows if str(row.get("species_key") or "")})
+    parent_versions = sorted({str(row.get("source_dataset") or "").strip() for row in rows if str(row.get("source_dataset") or "").strip()})
+    parent_manifests = sorted({str(row.get("source_manifest_uri") or "").strip() for row in rows if str(row.get("source_manifest_uri") or "").strip()})
+    parent_manifest_digests = sorted({str(row.get("source_manifest_sha256") or "").strip() for row in rows if str(row.get("source_manifest_sha256") or "").strip()})
+    source_type = "FROZEN_DATASET" if parent_versions else "RAW_BATCH"
     metadata = {
         "dataset_version": dataset_version,
         "pipeline": CROP_PIPELINE_TYPE,
         "pipeline_type": CROP_PIPELINE_TYPE,
         "input_type": CROP_INPUT_TYPE,
         "source": "accepted_bbox",
+        "source_type": source_type,
+        "parent_dataset_version": parent_versions[0] if len(parent_versions) == 1 else None,
+        "parent_manifest_uri": parent_manifests[0] if len(parent_manifests) == 1 else None,
+        "parent_manifest_sha256": parent_manifest_digests[0] if len(parent_manifest_digests) == 1 else None,
+        "split_strategy": "PRESERVE_PARENT_SPLIT" if source_type == "FROZEN_DATASET" else "HASH_IMAGE_ID",
+        "class_map_strategy": "PRESERVE_PARENT_CLASS_MAP" if source_type == "FROZEN_DATASET" else "DERIVE_SORTED_KEYS",
         "source_batches": sorted({str(value).strip() for value in (source_batches or []) if str(value).strip()})
         or sorted({str(row.get("source_batch") or "").strip() for row in rows if str(row.get("source_batch") or "").strip()}),
         "review_status_required": sorted({str(row.get("review_status") or "") for row in rows}),
@@ -468,7 +528,7 @@ def freeze_crop_dataset(
             raise ValueError(f"dataset already registered: {dataset_version}")
         dataset = DatasetVersion(
             dataset_version=dataset_version,
-            parent_version=None,
+            parent_version=metadata.get("parent_dataset_version"),
             manifest_uri=manifest_uri,
             class_map_uri=class_map_uri,
             train_count=split_counts.get("train", 0),

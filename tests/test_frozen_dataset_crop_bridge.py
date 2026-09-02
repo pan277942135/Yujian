@@ -1,0 +1,90 @@
+from __future__ import annotations
+
+import csv
+import io
+import json
+from pathlib import Path
+
+from PIL import Image
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.db import Base
+from app.dataset_crop_review import DatasetCropReviewUpdate, items, summary, update
+from app.frozen_crop_bridge import crop_readiness, load_frozen_dataset
+from app.models import DatasetVersion
+from trainer.build_reviewed_datasets import build_crop_dataset
+
+
+def _db(tmp_path: Path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'registry.db'}")
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine, autoflush=False, autocommit=False)()
+
+
+def _parent(tmp_path: Path) -> tuple[Path, Path]:
+    manifest = tmp_path / "dataset_manifest.csv"
+    for name in ("img_a.jpg", "img_b.jpg"):
+        (tmp_path / name).write_bytes(b"test-image")
+    manifest.write_text(
+        "batch_id,image_id,gcs_uri,species_key,species,truth_species,review_status,class_index,split,group_id\n"
+        f"BATCH_1,img_a,{tmp_path / 'img_a.jpg'},grass_carp,草鱼,草鱼,approved,4,train,g1\n"
+        f"BATCH_1,img_b,{tmp_path / 'img_b.jpg'},common_carp,鲤鱼,鲤鱼,approved,9,test,g2\n",
+        encoding="utf-8",
+    )
+    class_map = tmp_path / "class_map.json"
+    class_map.write_text(
+        json.dumps({"classes": [{"class_index": 4, "species_key": "grass_carp"}, {"class_index": 9, "species_key": "common_carp"}]}),
+        encoding="utf-8",
+    )
+    return manifest, class_map
+
+
+def test_frozen_manifest_is_the_registered_source_and_readiness_is_dynamic(tmp_path: Path):
+    manifest, class_map = _parent(tmp_path)
+    db = _db(tmp_path)
+    try:
+        db.add(DatasetVersion(dataset_version="DS_M1_v0.5", manifest_uri=str(manifest), class_map_uri=str(class_map), git_commit="sha", status="FROZEN"))
+        db.commit()
+        loaded = load_frozen_dataset(db, "DS_M1_v0.5")
+        assert len(loaded["rows"]) == 2
+        assert loaded["rows"][0]["class_index"] == 4
+        assert loaded["rows"][0]["split"] == "train"
+        ready = crop_readiness(db, "DS_M1_v0.5")
+        assert ready["ground_truth_confirmed"] is True
+        assert ready["crop_ready"] is False
+        assert ready["images"] == 2
+        assert summary("DS_M1_v0.5", db)["bbox_required"] == 2
+    finally:
+        db.close()
+
+
+def test_frozen_review_never_requests_species_and_preserves_parent_metadata(tmp_path: Path):
+    manifest, class_map = _parent(tmp_path)
+    db = _db(tmp_path)
+    try:
+        db.add(DatasetVersion(dataset_version="DS_M1_v0.5", manifest_uri=str(manifest), class_map_uri=str(class_map), git_commit="sha", status="FROZEN"))
+        db.commit()
+        rows = items("DS_M1_v0.5", status="BBOX_REQUIRED", db=db)["items"]
+        assert rows[0]["species_name"] == "草鱼"
+        assert rows[0]["split"] == "train"
+        result = update("DS_M1_v0.5", "img_a", DatasetCropReviewUpdate(decision="ACCEPTED", accepted_bbox=[0.1, 0.1, 0.7, 0.7]), db)
+        assert result["status"] == "ACCEPTED"
+        assert result["species_key"] == "grass_carp"
+        assert summary("DS_M1_v0.5", db)["accepted"] == 1
+    finally:
+        db.close()
+
+
+def test_crop_builder_preserves_frozen_split_and_class_map(tmp_path: Path):
+    image = io.BytesIO()
+    Image.new("RGB", (100, 80), (10, 20, 30)).save(image, format="JPEG")
+    records = [
+        {"image_id": "a", "status": "ACCEPTED", "accepted_bbox": [0.1, 0.1, 0.5, 0.5], "accepted_species_key": "grass_carp", "accepted_species_name": "草鱼", "class_index": 4, "split": "val", "source_image": "gs://b/a.jpg"},
+        {"image_id": "b", "status": "ACCEPTED", "accepted_bbox": [0.1, 0.1, 0.5, 0.5], "accepted_species_key": "common_carp", "accepted_species_name": "鲤鱼", "class_index": 9, "split": "test", "source_image": "gs://b/b.jpg"},
+    ]
+    report = build_crop_dataset(records, tmp_path / "crop", image_loader=lambda _uri: image.getvalue(), preserve_parent_split=True, preserve_parent_class_map=True, input_type="crop_image")
+    assert report["validation"]["valid"] is True
+    rows = list(csv.DictReader((tmp_path / "crop" / "metadata" / "crop_manifest.csv").open(encoding="utf-8")))
+    assert {row["split"] for row in rows} == {"val", "test"}
+    assert {row["class_index"] for row in rows} == {"4", "9"}

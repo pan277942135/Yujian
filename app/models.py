@@ -111,6 +111,52 @@ class BatchCropReview(Base):
     batch = relationship("Batch", back_populates="crop_reviews")
 
 
+class DatasetCropReview(Base):
+    """Human bbox gate for images inherited from an immutable Dataset Freeze.
+
+    Species, class index and split are copied from the parent manifest for
+    traceability; they are never edited by the crop reviewer.
+    """
+
+    __tablename__ = "dataset_crop_reviews"
+    __table_args__ = (
+        UniqueConstraint("source_dataset_version", "image_id", name="uq_dataset_crop_review_source_image"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_dataset_version = Column(String(128), ForeignKey("datasets.dataset_version"), nullable=False, index=True)
+    source_manifest_uri = Column(Text, nullable=False)
+    image_id = Column(String(256), nullable=False, index=True)
+    source_image_id = Column(String(256), nullable=False)
+    source_image_gcs_uri = Column(Text, nullable=False)
+    species_key = Column(String(128), nullable=False, index=True)
+    species_name = Column(String(128), nullable=False)
+    class_index = Column(Integer, nullable=False)
+    split = Column(String(16), nullable=False, index=True)
+    group_id = Column(String(256))
+    candidate_bbox_json = Column(Text)
+    accepted_bbox_json = Column(Text)
+    bbox_source = Column(String(64))
+    review_status = Column(String(32), nullable=False, default="BBOX_REQUIRED", index=True)
+    reviewer = Column(String(256))
+    reviewed_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class DatasetCropReviewEvent(Base):
+    __tablename__ = "dataset_crop_review_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_dataset_version = Column(String(128), nullable=False, index=True)
+    image_id = Column(String(256), nullable=False, index=True)
+    action = Column(String(64), nullable=False)
+    reviewer = Column(String(256))
+    before_json = Column(Text)
+    after_json = Column(Text)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
 class ReviewEvent(Base):
     __tablename__ = "review_events"
 

@@ -26,6 +26,8 @@ router = APIRouter(prefix="/api/crop-datasets", tags=["crop-datasets"])
 
 class CropDatasetBuildRequest(BaseModel):
     batch_id: str | None = Field(default=None, max_length=128)
+    source_type: str = Field(default="RAW_BATCH", max_length=32)
+    source_dataset: str | None = Field(default=None, max_length=128)
     dataset_version: str = Field(default=CROP_DATASET_VERSION, min_length=4, max_length=128)
     pipeline: str = Field(default="CROP_CLASSIFIER_V1", max_length=64)
     pipeline_type: str | None = Field(default=None, max_length=64)
@@ -56,6 +58,13 @@ def _safe_batch(value: str | None) -> str | None:
     return batch_id
 
 
+def _safe_source_type(value: str) -> str:
+    source_type = (value or "RAW_BATCH").strip().upper()
+    if source_type not in {"RAW_BATCH", "FROZEN_DATASET"}:
+        raise HTTPException(status_code=400, detail={"error": "SOURCE_TYPE_NOT_SUPPORTED", "source_type": source_type})
+    return source_type
+
+
 def _safe_pipeline(value: str) -> str:
     pipeline = (value or "").strip().upper()
     if pipeline != "CROP_CLASSIFIER_V1":
@@ -75,6 +84,7 @@ def _invoke_builder(db: Session, root: Path, payload: CropDatasetBuildRequest, v
         "expand_ratio": payload.expand_ratio,
         "limit": payload.limit,
         "batch_id": payload.batch_id,
+        "source_dataset": payload.source_dataset,
     }
     builder = build_reviewed_crop_dataset_from_db
     try:
@@ -218,11 +228,20 @@ def build_crop_dataset_endpoint(payload: CropDatasetBuildRequest, db: Session = 
     """Build reviewed crops; optionally publish/register them when explicitly frozen."""
 
     version = _safe_version(payload.dataset_version)
+    source_type = _safe_source_type(payload.source_type)
     requested_pipeline = payload.pipeline_type or payload.pipeline
     _safe_pipeline(requested_pipeline)
     if payload.pipeline_type and payload.pipeline.strip().upper() != payload.pipeline_type.strip().upper():
         raise HTTPException(status_code=400, detail={"error": "PIPELINE_MISMATCH", "reason": "pipeline 与 pipeline_type 不一致"})
     payload.batch_id = _safe_batch(payload.batch_id)
+    if source_type == "FROZEN_DATASET":
+        if not payload.source_dataset:
+            raise HTTPException(status_code=400, detail={"error": "SOURCE_DATASET_REQUIRED"})
+        payload.source_dataset = _safe_version(payload.source_dataset)
+        if payload.batch_id:
+            raise HTTPException(status_code=400, detail={"error": "SOURCE_SELECTOR_CONFLICT", "reason": "Frozen Dataset 不接受 batch_id"})
+    elif payload.source_dataset:
+        raise HTTPException(status_code=400, detail={"error": "SOURCE_DATASET_ONLY_FOR_FROZEN"})
     root = _staging_root(version)
     manifest_path = _staging_manifest(root)
     existing_validation = (
@@ -242,6 +261,17 @@ def build_crop_dataset_endpoint(payload: CropDatasetBuildRequest, db: Session = 
                 "message": "validated or frozen Crop Dataset cannot be overwritten",
             },
         )
+    if source_type == "FROZEN_DATASET":
+        from app.frozen_crop_bridge import crop_readiness
+
+        readiness = crop_readiness(db, payload.source_dataset)
+        if not readiness.get("ground_truth_confirmed"):
+            raise HTTPException(status_code=400, detail={"error": "FROZEN_DATASET_NOT_READY", "readiness": readiness})
+        if not readiness.get("crop_ready"):
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "BBOX_REVIEW_INCOMPLETE", "source_dataset": payload.source_dataset, "readiness": readiness},
+            )
     resuming_failed_staging = manifest_path.is_file()
     try:
         report = _invoke_builder(db, root, payload, version)
@@ -279,6 +309,8 @@ def build_crop_dataset_endpoint(payload: CropDatasetBuildRequest, db: Session = 
         result: dict = {
             "dataset_version": version,
             "batch_id": payload.batch_id,
+            "source_type": source_type,
+            "source_dataset": payload.source_dataset,
             "pipeline": "CROP_CLASSIFIER_V1",
             "state": "VALIDATED",
             "status": "BUILT_NOT_FROZEN",
@@ -384,7 +416,21 @@ def crop_dataset_sources(db: Session = Depends(get_db)) -> dict[str, Any]:
                 "review_url": f"/crop-review?batch_id={batch.batch_id}",
             }
         )
-    return {"items": result, "count": len(result), "contract": {"pipeline": "CROP_CLASSIFIER_V1", "source": "accepted_bbox"}}
+    from app.frozen_crop_bridge import crop_readiness
+    from app.models import DatasetVersion
+
+    frozen: list[dict[str, Any]] = []
+    for dataset in db.scalars(select(DatasetVersion).where(DatasetVersion.status == "FROZEN").order_by(DatasetVersion.created_at.desc())).all():
+        readiness = crop_readiness(db, dataset.dataset_version)
+        readiness["source_dataset"] = dataset.dataset_version
+        readiness["review_url"] = f"/crop-review?dataset_version={dataset.dataset_version}"
+        frozen.append(readiness)
+    return {
+        "items": result,
+        "frozen_datasets": frozen,
+        "count": len(result),
+        "contract": {"pipeline": "CROP_CLASSIFIER_V1", "source": "accepted_bbox", "source_types": ["RAW_BATCH", "FROZEN_DATASET"]},
+    }
 
 
 @router.get("/{dataset_version}/validation")

@@ -18,6 +18,7 @@ from app.intelligence_api import router as intelligence_router, templates as int
 from app.crop_qa import router as crop_qa_router, templates as crop_qa_templates
 from app.crop_dataset_api import router as crop_dataset_router
 from app.crop_review import router as crop_review_router, templates as crop_review_templates
+from app.dataset_crop_review import router as dataset_crop_review_router
 from app.fish_knowledge.api import router as fish_knowledge_router
 from app.fish_knowledge.admin import (
     compat_router as fish_knowledge_admin_compat_router,
@@ -103,6 +104,7 @@ app.include_router(intelligence_router)
 app.include_router(crop_qa_router)
 app.include_router(crop_dataset_router)
 app.include_router(crop_review_router)
+app.include_router(dataset_crop_review_router)
 app.include_router(fish_knowledge_router)
 app.include_router(fish_knowledge_admin_router)
 app.include_router(fish_knowledge_admin_compat_router)

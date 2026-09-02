@@ -539,6 +539,13 @@ def datasets(db: Session = Depends(get_db)):
     ]
 
 
+@app.get("/api/datasets/{dataset_version}/crop-readiness")
+def dataset_crop_readiness(dataset_version: str, db: Session = Depends(get_db)):
+    from app.frozen_crop_bridge import crop_readiness
+
+    return crop_readiness(db, dataset_version)
+
+
 @app.post("/api/datasets/freeze")
 def dataset_freeze(payload: DatasetFreeze, db: Session = Depends(get_db)):
     try:

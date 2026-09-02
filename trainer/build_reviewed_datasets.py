@@ -329,6 +329,8 @@ def build_crop_dataset(
     # backwards-compatible exports.  The production wrapper explicitly passes
     # ``crop_image`` and is therefore subject to the strict v2 metadata gate.
     input_type: str = "crop",
+    preserve_parent_split: bool = False,
+    preserve_parent_class_map: bool = False,
 ) -> dict[str, Any]:
     """Regenerate classifier crops from accepted boxes, never App candidate crops."""
 
@@ -340,7 +342,16 @@ def build_crop_dataset(
     root.mkdir(parents=True, exist_ok=True)
     accepted, excluded = _reviewed_records(records)
     species_keys = sorted({_species_pair(record, species_name_map)[0] for record in accepted if _species_pair(record, species_name_map)[0]})
-    class_index = {species: index for index, species in enumerate(species_keys)}
+    if preserve_parent_class_map:
+        class_index = {}
+        for record in accepted:
+            species, _ = _species_pair(record, species_name_map)
+            if species and record.get("class_index") not in (None, ""):
+                class_index[species] = int(record["class_index"])
+        if set(class_index) != set(species_keys) or len(set(class_index.values())) != len(class_index):
+            raise ValueError("Frozen Dataset class_map cannot be preserved: missing or conflicting class_index")
+    else:
+        class_index = {species: index for index, species in enumerate(species_keys)}
     rows: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
     for record in accepted:
@@ -375,11 +386,14 @@ def build_crop_dataset(
                     "pipeline_type": "CROP_CLASSIFIER_V1",
                     "source_image_id": str(record.get("source_image_id") or image_id).strip(),
                     "source_batch": _source_batch(record),
+                    "source_dataset": str(record.get("source_dataset") or record.get("source_dataset_version") or "").strip(),
+                    "source_manifest_uri": str(record.get("source_manifest_uri") or "").strip(),
+                    "source_manifest_sha256": str(record.get("source_manifest_sha256") or "").strip(),
                     "source_image": source_ref,
                     "source_image_path": _storage_value(record, "source_image_path") or "",
                     "source_image_gcs_uri": _storage_value(record, "source_image_gcs_uri") or _storage_value(record, "image_gcs_uri") or "",
                     "source_image_exists": "true" if source_ref else "false",
-                    "split": _split(image_id),
+                    "split": str(record.get("split") or "").strip() if preserve_parent_split else _split(image_id),
                     "accepted_bbox": json.dumps(record["accepted_bbox"], separators=(",", ":")),
                     "bbox_source": "accepted_review",
                     "expand_ratio": expand_ratio,
@@ -411,6 +425,9 @@ def build_crop_dataset(
         "pipeline_type",
         "source_image_id",
         "source_batch",
+        "source_dataset",
+        "source_manifest_uri",
+        "source_manifest_sha256",
         "source_image",
         "source_image_path",
         "source_image_gcs_uri",
@@ -470,6 +487,8 @@ def build_crop_dataset(
         "source_batches": sorted({batch for batch in (_source_batch(record) for record in accepted) if batch}),
         "accepted": excluded["accepted"],
         "class_map": "metadata/class_map.json",
+        "parent_split_strategy": "PRESERVE_PARENT_SPLIT" if preserve_parent_split else "HASH_IMAGE_ID",
+        "parent_class_map_strategy": "PRESERVE_PARENT_CLASS_MAP" if preserve_parent_class_map else "DERIVE_SORTED_KEYS",
         "written": len(rows),
         "excluded": excluded,
         "failures": failures,
