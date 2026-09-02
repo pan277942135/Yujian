@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 from PIL import Image
@@ -118,6 +119,32 @@ def test_crop_builder_writes_provenance_metadata_and_validation(tmp_path):
     assert validate_crop_manifest(manifest_path)["valid"] is True
     saved_report = json.loads((root / "metadata" / "report.json").read_text(encoding="utf-8"))
     assert saved_report["safety"]["candidate_bbox_used"] is False
+
+
+def test_validator_does_not_duplicate_a_rooted_relative_manifest(tmp_path, monkeypatch):
+    """Legacy callers may pass root and root-relative manifest together."""
+
+    monkeypatch.chdir(tmp_path)
+    root = Path("var/crop_datasets/DS_CROP_M1_v0.1")
+    build_crop_dataset(
+        [
+            {
+                "image_id": "yj_img_rooted_manifest",
+                "status": "ACCEPTED",
+                "accepted_bbox": [0.1, 0.2, 0.5, 0.5],
+                "accepted_species": "grass_carp",
+                "image_gcs_uri": "gs://bucket/original.jpg",
+            }
+        ],
+        root,
+        image_loader=lambda _uri: _jpeg_bytes(),
+    )
+    manifest_path = root / "metadata" / "crop_manifest.csv"
+
+    report = validate_crop_dataset(root, manifest_path)
+
+    assert report["valid"] is True
+    assert not (root / root / "metadata" / "crop_manifest.csv").is_file()
 
 
 def test_crop_qa_item_only_serializes_reviewed_assets():

@@ -14,6 +14,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
@@ -71,10 +72,59 @@ def _parse_bbox(value: Any) -> list[float] | None:
     return values
 
 
+def _path_has_prefix(path: Path, prefix: Path) -> bool:
+    """Return whether *path* already contains *prefix* lexically.
+
+    Staging roots are intentionally allowed to be relative (the production
+    default is ``var/crop_datasets/...``).  ``Path.is_relative_to`` cannot
+    distinguish a relative path that already includes that root from a
+    manifest path relative to the root, so compare normalized path parts
+    before joining.  This keeps both forms backwards compatible::
+
+        root = var/crop_datasets/DS_CROP_M1_v0.1
+        metadata/crop_manifest.csv       -> root / metadata/...
+        root/metadata/crop_manifest.csv  -> unchanged
+    """
+
+    normalized_path = Path(os.path.normpath(str(path)))
+    normalized_prefix = Path(os.path.normpath(str(prefix)))
+    prefix_parts = normalized_prefix.parts
+    if bool(prefix_parts) and normalized_path.parts[: len(prefix_parts)] == prefix_parts:
+        return True
+    # A deployment may configure an absolute root (for example
+    # ``/app/var/crop_datasets/...``) while a legacy caller supplies the same
+    # path relative to the process working directory.  Compare those forms
+    # only for detection; the original relative spelling is retained so error
+    # messages and API responses stay stable.
+    if not normalized_path.is_absolute():
+        try:
+            candidate = (Path.cwd() / normalized_path).resolve(strict=False)
+            absolute_prefix = normalized_prefix.resolve(strict=False)
+            return candidate == absolute_prefix or absolute_prefix in candidate.parents
+        except OSError:
+            return False
+    return False
+
+
+def _dataset_relative_path(value: str | Path, dataset_root: Path) -> Path:
+    """Resolve a path against a dataset root exactly once.
+
+    Callers historically passed either ``metadata/crop_manifest.csv`` or the
+    already-rooted ``var/crop_datasets/<version>/metadata/crop_manifest.csv``.
+    Treat the latter as an idempotent input instead of producing the invalid
+    ``<root>/<root>/metadata/...`` path seen in production.
+    """
+
+    path = Path(value)
+    if path.is_absolute() or _path_has_prefix(path, dataset_root):
+        return path
+    return dataset_root / path
+
+
 def _resolve_local_path(value: str, dataset_root: Path | None) -> Path:
     path = Path(value)
     if not path.is_absolute() and dataset_root is not None:
-        path = dataset_root / path
+        path = _dataset_relative_path(path, dataset_root)
     return path
 
 
@@ -322,9 +372,15 @@ def validate_crop_dataset(
     """Load and validate a dataset's crop manifest."""
 
     root = Path(dataset_root)
-    path = Path(manifest_path) if manifest_path is not None else root / "metadata" / "crop_manifest.csv"
-    if not path.is_absolute():
-        path = root / path
+    # The production contract has one canonical manifest location.  Keep an
+    # optional explicit path for legacy callers, but resolve it idempotently
+    # so passing ``root/metadata/crop_manifest.csv`` does not become
+    # ``root/root/metadata/crop_manifest.csv``.
+    path = (
+        _dataset_relative_path(manifest_path, root)
+        if manifest_path is not None
+        else root / "metadata" / "crop_manifest.csv"
+    )
     try:
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             rows = list(csv.DictReader(handle))
