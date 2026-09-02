@@ -10,6 +10,8 @@ PUBLIC_PATHS = {"/health", "/health/deploy", "/health/detector", "/login"}
 PUBLIC_GET_PATH_PREFIXES = (
     "/api/v1/fish/species",
     "/api/v1/fish/gallery",
+    # Fish Knowledge cover/card assets are public read-only resources for App clients.
+    "/api/v1/fish/knowledge-media",
 )
 FEEDBACK_INGEST_PATHS = {
     "/api/feedback",
