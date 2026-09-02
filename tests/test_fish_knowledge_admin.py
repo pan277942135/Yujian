@@ -6,13 +6,13 @@ import io
 import pytest
 from fastapi import HTTPException
 from PIL import Image
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from starlette.datastructures import Headers, UploadFile
 
 from app import models  # noqa: F401
 from app.db import Base
-from app.fish_knowledge import FishFishing, FishGalleryImage, FishProfile, FishSimilarity, FishSpecies, FishVideo
+from app.fish_knowledge import FishCard, FishFishing, FishGalleryImage, FishProfile, FishSimilarity, FishSpecies, FishVideo
 from app.fish_knowledge.admin import (
     FishingUpsert,
     GalleryCreate,
@@ -36,8 +36,9 @@ from app.fish_knowledge.admin import (
     upsert_fishing,
     upsert_profile,
     upsert_similarity,
+    upload_fish_asset,
 )
-from app.fish_knowledge.api import get_fish_species, get_gallery_media
+from app.fish_knowledge.api import get_fish_species, get_gallery_media, get_knowledge_media
 from app.models import SpeciesCatalog
 
 
@@ -250,6 +251,54 @@ def test_admin_uploads_managed_gallery_image_idempotently_and_serves_it(monkeypa
         response = get_gallery_media(first["id"], db)
         assert response.body == data
         assert response.media_type == "image/png"
+    finally:
+        db.close()
+
+
+def test_admin_uploads_knowledge_asset_and_binds_draft_card(monkeypatch, tmp_path):
+    db = _session(tmp_path)
+    bucket = FakeBucket()
+    client = FakeStorageClient(bucket)
+    monkeypatch.setattr("app.fish_knowledge.admin.storage.Client", lambda: client)
+    monkeypatch.setattr("app.fish_knowledge.admin.get_bucket_name", lambda: "test-bucket")
+    monkeypatch.setattr("app.fish_knowledge.api.storage.Client", lambda: client)
+    monkeypatch.setattr("app.fish_knowledge.api.get_bucket_name", lambda: "test-bucket")
+    try:
+        create_admin_species(_species_payload(), db)
+        data = _png_bytes()
+        result = asyncio.run(
+            upload_fish_asset(
+                "grass_carp",
+                asset_type="HERO",
+                file=UploadFile(
+                    file=io.BytesIO(data),
+                    filename="hero.png",
+                    headers=Headers({"content-type": "image/png"}),
+                ),
+                db=db,
+            )
+        )
+        assert result["asset_type"] == "HERO"
+        assert result["status"] == "DRAFT"
+        assert result["image_url"].startswith("/api/v1/fish/knowledge-media/grass_carp/hero/")
+        assert result["storage"] == "CREATED"
+
+        card = db.scalar(select(FishCard).where(FishCard.species_id == "grass_carp"))
+        assert card is not None
+        key = result["image_url"].rsplit("/", 1)[-1]
+        response = get_knowledge_media("grass_carp", "HERO", key, db)
+        assert response.body == data
+
+        duplicate = asyncio.run(
+            upload_fish_asset(
+                "grass_carp",
+                asset_type="HERO",
+                file=UploadFile(file=io.BytesIO(data), filename="hero.png"),
+                db=db,
+            )
+        )
+        assert duplicate["storage"] == "SKIP"
+        assert db.query(FishCard).count() == 1
     finally:
         db.close()
 

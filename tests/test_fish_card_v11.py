@@ -210,6 +210,55 @@ def test_detail_aggregate_contains_cover_cards_and_filters_draft(tmp_path):
         db.close()
 
 
+def test_structured_card_content_round_trips_through_admin_and_public_detail(tmp_path):
+    db = _session(tmp_path)
+    try:
+        create_admin_species(_species_payload(), db)
+        create_species_cover(
+            "grass_carp",
+            CoverCreate(image_url="https://cdn.example/grass-cover.png", status="ACTIVE"),
+            db,
+        )
+        create_species_card(
+            "grass_carp",
+            CardCreate(
+                card_type="HERO",
+                title="草鱼英雄卡",
+                image_url="https://cdn.example/grass-hero.png",
+                content={"type": "HERO", "tag": "中上层快鱼", "rarity": 2, "power": 4, "challenge": 3},
+                status="ACTIVE",
+            ),
+            db,
+        )
+        create_species_card(
+            "grass_carp",
+            CardCreate(
+                card_type="ECO",
+                title="草鱼生态卡",
+                image_url="https://cdn.example/grass-eco.png",
+                content={
+                    "type": "ECO",
+                    "habitat": ["江河", "水库"],
+                    "water_layer": "中下层",
+                    "season": "夏季",
+                    "behavior": "沿岸觅食",
+                    "diet": "植物性食物",
+                },
+                status="ACTIVE",
+            ),
+            db,
+        )
+
+        admin_cards = list_species_cards("grass_carp", db)
+        assert admin_cards[0]["content"]["tag"] == "中上层快鱼"
+        detail = get_fish_species_full_detail("grass_carp", db)
+        assert detail.cards[0].content["rarity"] == 2
+        assert detail.knowledge["ecology"]["water_layer"] == "中下层"
+        assert detail.knowledge["gear"]["bait"] == []
+    finally:
+        db.close()
+
+
 def test_draft_species_is_not_public_and_baitiao_alias_resolves(tmp_path):
     db = _session(tmp_path)
     try:
@@ -254,13 +303,20 @@ def test_completion_counts_content_without_publishing_draft_cards(tmp_path):
                 db,
             )
         result = species_completion("grass_carp", db)
-        assert result == {
-            "species_complete": True,
-            "cover": True,
-            "cards": {"completed": 2, "total": 5},
-            "gallery": {"completed": 5, "total": 5},
-            "video": False,
+        assert result["species_complete"] is True
+        assert result["cover"] is True
+        assert result["cards"] == {
+            "completed": 2,
+            "total": 5,
+            "HERO": True,
+            "IDENTIFICATION": True,
+            "ECO": False,
+            "GEAR": False,
+            "SKILL": False,
         }
+        assert result["gallery"] == {"completed": 5, "total": 5}
+        assert result["video"] is False
+        assert result["knowledge"] is False
     finally:
         db.close()
 

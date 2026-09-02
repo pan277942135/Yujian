@@ -89,6 +89,41 @@ def store_gallery_image(
     return object_name, "CREATED"
 
 
+def store_knowledge_asset(
+    *,
+    client,
+    bucket,
+    species_id: str,
+    asset_type: str,
+    data: bytes,
+    metadata: dict[str, str | int],
+) -> tuple[str, str]:
+    """Store a reviewed cover/card image under a deterministic GCS path."""
+
+    digest = str(metadata["sha256"])
+    suffix = str(metadata["suffix"])
+    object_name = f"fish_knowledge/{species_id}/{asset_type.lower()}/{digest}{suffix}"
+    blob = bucket.blob(object_name)
+    if blob.exists(client):
+        existing = blob.download_as_bytes()
+        if hashlib.sha256(existing).hexdigest() != digest:
+            raise GalleryUploadError("同名知识库素材已存在但内容不一致")
+        return object_name, "SKIP"
+    try:
+        blob.upload_from_string(
+            data,
+            content_type=str(metadata["content_type"]),
+            if_generation_match=0,
+        )
+    except Exception:
+        if blob.exists(client):
+            existing = blob.download_as_bytes()
+            if hashlib.sha256(existing).hexdigest() == digest:
+                return object_name, "SKIP"
+        raise
+    return object_name, "CREATED"
+
+
 class FishGalleryImage(Base):
     __tablename__ = "fish_gallery"
     __table_args__ = (

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from google.cloud import storage
@@ -21,6 +21,7 @@ from app.fish_knowledge.cards import (
     normalize_card_type,
 )
 from app.fish_knowledge.cover import FishSpeciesCover
+from app.fish_knowledge.content import card_description, card_display_description, parse_card_content
 from app.fish_knowledge.fishing import FishFishing
 from app.fish_knowledge.gallery import (
     GALLERY_TYPES,
@@ -29,6 +30,7 @@ from app.fish_knowledge.gallery import (
     FishGalleryImage,
     GalleryUploadError,
     inspect_gallery_image,
+    store_knowledge_asset,
     store_gallery_image,
 )
 from app.fish_knowledge.profile import FishProfile
@@ -314,6 +316,7 @@ class CardCreate(BaseModel):
     title: str = Field(default="", max_length=256)
     image_url: str = Field(default="", max_length=2048)
     description: str = Field(default="", max_length=2000)
+    content: dict[str, Any] | None = None
     sort_order: int | None = Field(default=None, ge=0, le=10000)
     status: Literal["ACTIVE", "DRAFT"] = "DRAFT"
 
@@ -347,6 +350,7 @@ class CardPatch(BaseModel):
     title: str | None = Field(default=None, max_length=256)
     image_url: str | None = Field(default=None, max_length=2048)
     description: str | None = Field(default=None, max_length=2000)
+    content: dict[str, Any] | None = None
     sort_order: int | None = Field(default=None, ge=0, le=10000)
     status: Literal["ACTIVE", "DRAFT"] | None = None
 
@@ -435,6 +439,7 @@ def _cover_dict(row: FishSpeciesCover) -> dict:
 
 def _card_dict(row: FishCard) -> dict:
     card_type = normalize_card_type(row.card_type)
+    content = parse_card_content(row.description)
     return {
         "id": row.id,
         "species_id": row.species_id,
@@ -444,7 +449,8 @@ def _card_dict(row: FishCard) -> dict:
         "type": card_type,
         "title": row.title,
         "image_url": row.image_url,
-        "description": row.description,
+        "description": card_display_description(content, row.description),
+        "content": content,
         "sort_order": row.sort_order,
         "status": row.status,
     }
@@ -526,6 +532,18 @@ def list_admin_species(db: Session = Depends(get_db)) -> list[dict]:
             "video_count": len(row.videos),
             "profile_ready": row.profile is not None,
             "fishing_ready": row.fishing is not None,
+            "knowledge_ready": row.profile is not None and row.fishing is not None,
+            "publish_ready": bool(
+                row.status == "ACTIVE"
+                and row.cover is not None
+                and row.cover.status == "ACTIVE"
+                and row.cover.image_url.strip()
+                and len({
+                    normalize_card_type(card.card_type)
+                    for card in row.cards
+                    if card.status == "ACTIVE" and card.image_url.strip()
+                }) == len(CARD_TYPE_ORDER)
+            ),
         }
         for row in rows
     ]
@@ -665,7 +683,9 @@ def create_species_card(species_id: str, payload: CardCreate, db: Session = Depe
     card_type = normalize_card_type(payload.card_type)
     if payload.status == "ACTIVE":
         _ensure_active_card_type(db, species.id, card_type)
-    values = payload.model_dump(exclude={"card_type", "sort_order"})
+    values = payload.model_dump(exclude={"card_type", "sort_order", "content"})
+    if payload.content is not None:
+        values["description"] = card_description(payload.content)
     row = FishCard(
         species_id=species.id,
         card_type=card_type,
@@ -693,11 +713,18 @@ def update_species_card(card_id: int, payload: CardPatch, db: Session = Depends(
         value = getattr(payload, field)
         if field == "card_type":
             value = new_type
+        elif field == "content":
+            row.description = card_description(value or {})
+            continue
         elif field in {"title", "image_url", "description"} and value is None:
             value = ""
         setattr(row, field, value)
     if "card_type" in payload.model_fields_set and "sort_order" not in payload.model_fields_set:
         row.sort_order = card_type_sort_order(new_type)
+    # Structured content is the editor's source of truth. If an older client
+    # sends both fields, do not let its legacy description overwrite content.
+    if "content" in payload.model_fields_set:
+        row.description = card_description(payload.content or {})
     _commit(db)
     return _card_dict(row)
 
@@ -731,12 +758,28 @@ def species_completion(species_id: str, db: Session = Depends(get_db)) -> dict:
         if (card.image_url or "").strip()
         and normalize_card_type(card.card_type) in CARD_TYPE_ORDER
     }
+    cards_by_type = {card_type: card_type in completed_types for card_type in CARD_TYPE_ORDER}
+    knowledge_ready = bool(
+        species.profile
+        and species.fishing
+        and (
+            species.profile.body_shape
+            or species.profile.features
+            or species.profile.habitat
+            or species.profile.food
+            or species.profile.season
+            or species.fishing.water_layer
+            or species.fishing.bait
+            or species.fishing.method
+        )
+    )
     return {
         "species_complete": bool(species.name_cn.strip() and species.category.strip() and species.summary.strip()),
         "cover": bool(cover is not None and (cover.image_url or "").strip()),
-        "cards": {"completed": len(completed_types), "total": len(CARD_TYPE_ORDER)},
+        "cards": {"completed": len(completed_types), "total": len(CARD_TYPE_ORDER), **cards_by_type},
         "gallery": {"completed": min(gallery_count, MAX_GALLERY_IMAGES), "total": MAX_GALLERY_IMAGES},
         "video": video_count > 0,
+        "knowledge": knowledge_ready,
     }
 
 
@@ -851,6 +894,92 @@ async def upload_gallery_image(
     return {
         **_gallery_dict(row),
         "duplicate": False,
+        "storage": storage_status,
+        "image": {"width": metadata["width"], "height": metadata["height"]},
+    }
+
+
+@router.post("/species/{species_id}/assets/upload", status_code=201)
+async def upload_fish_asset(
+    species_id: str,
+    asset_type: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Upload a real cover/card asset and bind it to the existing row."""
+
+    species = _require_species(db, species_id)
+    normalized_type = "cover" if asset_type.strip().lower() == "cover" else normalize_card_type(asset_type)
+    if normalized_type != "cover" and normalized_type not in CARD_TYPE_ORDER:
+        raise HTTPException(status_code=400, detail="asset_type 必须是 cover 或五种鱼鉴卡类型")
+
+    data = await file.read(MAX_GALLERY_IMAGE_BYTES + 1)
+    try:
+        metadata = inspect_gallery_image(data)
+    except GalleryUploadError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        client = storage.Client()
+        bucket = client.bucket(get_bucket_name())
+        object_name, storage_status = store_knowledge_asset(
+            client=client,
+            bucket=bucket,
+            species_id=species.id,
+            asset_type=normalized_type,
+            data=data,
+            metadata=metadata,
+        )
+        asset_key = object_name.rsplit("/", 1)[-1]
+        managed_url = f"/api/v1/fish/knowledge-media/{species.id}/{normalized_type.lower()}/{asset_key}"
+
+        if normalized_type == "cover":
+            row = _get_species_cover(db, species.id)
+            if row is None:
+                row = FishSpeciesCover(
+                    species_id=species.id,
+                    image_url=managed_url,
+                    style="ANIME_CARD",
+                    title=f"{species.name_cn}图鉴卡",
+                    status="DRAFT",
+                )
+                db.add(row)
+            else:
+                row.image_url = managed_url
+        else:
+            row = next(
+                (
+                    card
+                    for card in db.scalars(select(FishCard).where(FishCard.species_id == species.id)).all()
+                    if normalize_card_type(card.card_type) == normalized_type
+                ),
+                None,
+            )
+            if row is None:
+                row = FishCard(
+                    species_id=species.id,
+                    card_type=normalized_type,
+                    title=f"{species.name_cn}{normalized_type}卡",
+                    image_url=managed_url,
+                    description="",
+                    sort_order=card_type_sort_order(normalized_type),
+                    status="DRAFT",
+                )
+                db.add(row)
+            else:
+                row.image_url = managed_url
+        _commit(db)
+        db.refresh(row)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=503, detail="鱼鉴素材存储失败") from exc
+
+    result = _cover_dict(row) if normalized_type == "cover" else _card_dict(row)
+    return {
+        **result,
+        "asset_type": normalized_type,
         "storage": storage_status,
         "image": {"width": metadata["width"], "height": metadata["height"]},
     }
