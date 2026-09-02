@@ -225,7 +225,12 @@ def _persist_crop_preview(base: dict[str, Any], box: list[float]) -> str:
 
 
 def _populate_candidate(review: DatasetCropReview, base: dict[str, Any], db: Session) -> None:
-    if review.candidate_bbox_json:
+    # Rows created by the pre-C.5-E path may already contain a candidate bbox
+    # without the detector contract/quality metadata.  Treat those as stale
+    # and recompute from the registered source image.  This deliberately does
+    # not touch accepted_bbox_json or review_status, so a human decision remains
+    # immutable while the read-only candidate evidence is refreshed.
+    if review.candidate_bbox_json and review.detector_version and review.quality_status and review.all_detections_json:
         return
     try:
         from PIL import Image

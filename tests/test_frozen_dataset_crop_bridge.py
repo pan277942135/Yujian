@@ -177,6 +177,42 @@ def test_detector_audit_is_read_only_and_uses_quality_gate(tmp_path: Path, monke
         db.close()
 
 
+def test_legacy_candidate_is_refreshed_without_touching_human_decision(tmp_path: Path, monkeypatch):
+    manifest, class_map = _parent(tmp_path)
+    db = _db(tmp_path)
+    try:
+        db.add(DatasetVersion(dataset_version="DS_M1_v0.5", manifest_uri=str(manifest), class_map_uri=str(class_map), git_commit="sha", status="FROZEN"))
+        db.commit()
+        items("DS_M1_v0.5", status="BBOX_REQUIRED", db=db)
+        row = db.scalar(
+            select(DatasetCropReview).where(
+                DatasetCropReview.source_dataset_version == "DS_M1_v0.5",
+                DatasetCropReview.image_id == "img_a",
+            )
+        )
+        row.candidate_bbox_json = "[0.01,0.01,0.1,0.1]"
+        row.accepted_bbox_json = "[0.2,0.2,0.5,0.5]"
+        row.review_status = "ACCEPTED"
+        db.commit()
+        image_bytes = io.BytesIO()
+        Image.new("RGB", (32, 24), (10, 20, 30)).save(image_bytes, format="JPEG")
+        monkeypatch.setattr(dataset_crop_review, "_read_uri", lambda _uri: (image_bytes.getvalue(), None))
+        monkeypatch.setattr(
+            "app.detector_runtime.detect",
+            lambda _image: SimpleNamespace(
+                model_version="DET_FISH_v0.1",
+                detections=(Detection(confidence=0.9, box=BBox(0.1, 0.2, 0.6, 0.6)),),
+            ),
+        )
+        result = items("DS_M1_v0.5", status="ALL", page_size=50, db=db)
+        refreshed = next(item for item in result["items"] if item["image_id"] == "img_a")
+        assert refreshed["candidate_bbox"] == [0.1, 0.2, 0.5, 0.4]
+        assert refreshed["accepted_bbox"] == [0.2, 0.2, 0.5, 0.5]
+        assert refreshed["status"] == "ACCEPTED"
+    finally:
+        db.close()
+
+
 def test_accept_keeps_human_bbox_when_preview_materialization_fails(tmp_path: Path, monkeypatch):
     manifest, class_map = _parent(tmp_path)
     db = _db(tmp_path)
