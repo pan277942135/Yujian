@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
+from io import BytesIO
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -80,6 +83,8 @@ def _ensure_rows(db: Session, dataset_version: str) -> list[dict[str, Any]]:
 
 
 def _item(base: dict[str, Any], review: DatasetCropReview | None) -> dict[str, Any]:
+    crop_uri = review.crop_uri if review else None
+    crop_status = (review.crop_status if review else None) or ("READY" if crop_uri else "NOT_GENERATED")
     return {
         **base,
         "source_type": "FROZEN_DATASET",
@@ -87,11 +92,68 @@ def _item(base: dict[str, Any], review: DatasetCropReview | None) -> dict[str, A
         "accepted_bbox": _box(review.accepted_bbox_json) if review else None,
         "bbox_source": review.bbox_source if review else None,
         "detector_version": review.detector_version if review else None,
+        "crop_uri": crop_uri,
+        "crop_status": crop_status,
+        "crop_error": review.crop_error if review else None,
+        "preview_url": f"/api/dataset-crop-review/{base['source_dataset_version']}/{base['image_id']}/crop"
+        if crop_uri and crop_status == "READY"
+        else None,
         "status": review.review_status if review else "BBOX_REQUIRED",
         "reviewer": review.reviewer if review else None,
         "reviewed_at": review.reviewed_at.isoformat() if review and review.reviewed_at else None,
         "media_url": f"/api/dataset-crop-review/{base['source_dataset_version']}/{base['image_id']}/image",
     }
+
+
+def _safe_component(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or "").strip()).strip("._") or "image"
+
+
+def _crop_preview_bytes(data: bytes, box: list[float], expand_ratio: float = 0.15) -> bytes:
+    from PIL import Image
+
+    with Image.open(BytesIO(data)) as source:
+        image = source.convert("RGB")
+    x, y, width, height = box
+    left = max(0.0, x - width * expand_ratio)
+    top = max(0.0, y - height * expand_ratio)
+    right = min(1.0, x + width + width * expand_ratio)
+    bottom = min(1.0, y + height + height * expand_ratio)
+    pixel_box = (
+        max(0, int(left * image.width)),
+        max(0, int(top * image.height)),
+        min(image.width, max(1, int(round(right * image.width)))),
+        min(image.height, max(1, int(round(bottom * image.height)))),
+    )
+    if pixel_box[2] <= pixel_box[0] or pixel_box[3] <= pixel_box[1]:
+        raise ValueError("accepted bbox produced an empty crop")
+    output = BytesIO()
+    image.crop(pixel_box).save(output, format="JPEG", quality=92)
+    return output.getvalue()
+
+
+def _persist_crop_preview(base: dict[str, Any], box: list[float]) -> str:
+    """Materialize a review-only crop preview without invoking Dataset Build."""
+
+    source_uri = str(base["source_image_gcs_uri"])
+    source_bytes, _ = _read_uri(source_uri)
+    crop_bytes = _crop_preview_bytes(source_bytes, box)
+    if source_uri.startswith("gs://"):
+        from google.cloud import storage
+        from app.factory import get_bucket_name
+
+        bucket_name = get_bucket_name()
+        object_name = (
+            f"crop_review/{_safe_component(base['source_dataset_version'])}/"
+            f"{_safe_component(base['image_id'])}_preview.jpg"
+        )
+        client = storage.Client()
+        client.bucket(bucket_name).blob(object_name).upload_from_string(crop_bytes, content_type="image/jpeg")
+        return f"gs://{bucket_name}/{object_name}"
+    source_path = Path(source_uri)
+    crop_path = source_path.with_name(f"{source_path.stem}_crop_preview.jpg")
+    crop_path.write_bytes(crop_bytes)
+    return str(crop_path)
 
 
 def _populate_candidate(review: DatasetCropReview, base: dict[str, Any], db: Session) -> None:
@@ -232,6 +294,21 @@ def update(
     row.accepted_bbox_json = json.dumps(box, separators=(",", ":")) if box is not None else None
     row.bbox_source = "accepted_review" if box is not None else None
     row.review_status = decision
+    if decision in {"ACCEPTED", "TRAINING_READY"} and box is not None:
+        row.crop_status = "PROCESSING"
+        row.crop_error = None
+        db.flush()
+        try:
+            row.crop_uri = _persist_crop_preview(base, box)
+            row.crop_status = "READY"
+        except Exception as exc:
+            row.crop_uri = None
+            row.crop_status = "ERROR"
+            row.crop_error = str(exc)[:4000]
+    elif decision in {"BBOX_REQUIRED", "REJECTED"}:
+        row.crop_uri = None
+        row.crop_status = "NOT_GENERATED"
+        row.crop_error = None
     row.reviewer = payload.reviewer.strip() or "crop-review"
     row.reviewed_at = _now()
     row.updated_at = _now()
@@ -266,6 +343,23 @@ def image(dataset_version: str, image_id: str, db: Session = Depends(get_db)) ->
     elif uri.endswith(".webp"):
         media_type = "image/webp"
     return Response(content=data, media_type=media_type)
+
+
+@router.get("/{dataset_version}/{image_id}/crop")
+def crop_preview(dataset_version: str, image_id: str, db: Session = Depends(get_db)) -> Response:
+    row = db.scalar(
+        select(DatasetCropReview).where(
+            DatasetCropReview.source_dataset_version == dataset_version,
+            DatasetCropReview.image_id == image_id,
+        )
+    )
+    if not row or not row.crop_uri or row.crop_status != "READY":
+        raise HTTPException(status_code=404, detail="crop preview is not ready")
+    try:
+        data, _ = _read_uri(row.crop_uri)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="crop preview unavailable") from exc
+    return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300"})
 
 
 __all__ = ["router"]

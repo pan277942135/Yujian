@@ -15,6 +15,9 @@ CREATE TABLE IF NOT EXISTS dataset_crop_reviews (
     detector_version VARCHAR(128),
     accepted_bbox_json TEXT,
     bbox_source VARCHAR(64),
+    crop_uri TEXT,
+    crop_status VARCHAR(32),
+    crop_error TEXT,
     review_status VARCHAR(32) NOT NULL DEFAULT 'BBOX_REQUIRED',
     reviewer VARCHAR(256),
     reviewed_at TIMESTAMPTZ,
@@ -25,6 +28,12 @@ CREATE TABLE IF NOT EXISTS dataset_crop_reviews (
 
 ALTER TABLE dataset_crop_reviews
     ADD COLUMN IF NOT EXISTS detector_version VARCHAR(128);
+ALTER TABLE dataset_crop_reviews
+    ADD COLUMN IF NOT EXISTS crop_uri TEXT;
+ALTER TABLE dataset_crop_reviews
+    ADD COLUMN IF NOT EXISTS crop_status VARCHAR(32);
+ALTER TABLE dataset_crop_reviews
+    ADD COLUMN IF NOT EXISTS crop_error TEXT;
 
 CREATE TABLE IF NOT EXISTS dataset_crop_review_events (
     id BIGSERIAL PRIMARY KEY,

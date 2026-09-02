@@ -91,6 +91,9 @@ def _ensure_production_pipeline_columns() -> None:
         },
         "dataset_crop_reviews": {
             "detector_version": "VARCHAR(128)",
+            "crop_uri": "TEXT",
+            "crop_status": "VARCHAR(32)",
+            "crop_error": "TEXT",
         },
         "inference_assets": {
             "source_batch": "VARCHAR(128)",

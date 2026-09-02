@@ -7,14 +7,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from PIL import Image
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
-from app.dataset_crop_review import DatasetCropReviewUpdate, items, summary, update
+from app.dataset_crop_review import DatasetCropReviewUpdate, crop_preview, items, summary, update
 import app.dataset_crop_review as dataset_crop_review
 from app.frozen_crop_bridge import crop_readiness, load_frozen_dataset
-from app.models import DatasetVersion
+from app.models import DatasetCropReview, DatasetVersion
 from trainer.build_reviewed_datasets import build_crop_dataset
 
 
@@ -61,7 +61,7 @@ def test_frozen_manifest_is_the_registered_source_and_readiness_is_dynamic(tmp_p
         db.close()
 
 
-def test_frozen_review_never_requests_species_and_preserves_parent_metadata(tmp_path: Path):
+def test_frozen_review_never_requests_species_and_preserves_parent_metadata(tmp_path: Path, monkeypatch):
     manifest, class_map = _parent(tmp_path)
     db = _db(tmp_path)
     try:
@@ -70,9 +70,28 @@ def test_frozen_review_never_requests_species_and_preserves_parent_metadata(tmp_
         rows = items("DS_M1_v0.5", status="BBOX_REQUIRED", db=db)["items"]
         assert rows[0]["species_name"] == "草鱼"
         assert rows[0]["split"] == "train"
+        image_bytes = io.BytesIO()
+        Image.new("RGB", (32, 24), (10, 20, 30)).save(image_bytes, format="JPEG")
+        monkeypatch.setattr(dataset_crop_review, "_read_uri", lambda _uri: (image_bytes.getvalue(), None))
         result = update("DS_M1_v0.5", "img_a", DatasetCropReviewUpdate(decision="ACCEPTED", accepted_bbox=[0.1, 0.1, 0.7, 0.7]), db)
         assert result["status"] == "ACCEPTED"
         assert result["species_key"] == "grass_carp"
+        assert result["accepted_bbox"] == [0.1, 0.1, 0.7, 0.7]
+        assert result["bbox_source"] == "accepted_review"
+        assert result["crop_status"] == "READY"
+        assert result["crop_uri"].endswith("img_a_crop_preview.jpg")
+        assert result["preview_url"].endswith("/DS_M1_v0.5/img_a/crop")
+        preview = crop_preview("DS_M1_v0.5", "img_a", db)
+        assert preview.media_type == "image/jpeg"
+        assert preview.body
+        persisted = db.scalar(
+            select(DatasetCropReview).where(
+                DatasetCropReview.source_dataset_version == "DS_M1_v0.5",
+                DatasetCropReview.image_id == "img_a",
+            )
+        )
+        assert persisted.accepted_bbox_json == "[0.1,0.1,0.7,0.7]"
+        assert persisted.crop_status == "READY"
         assert summary("DS_M1_v0.5", db)["accepted"] == 1
     finally:
         db.close()
@@ -124,6 +143,25 @@ def test_frozen_review_paginates_and_generates_candidate_bbox_without_accepting_
         second = items("DS_M1.v0.5", page=2, page_size=50, db=db)
         assert second["total"] == 55
         assert len(second["items"]) == 5
+    finally:
+        db.close()
+
+
+def test_accept_keeps_human_bbox_when_preview_materialization_fails(tmp_path: Path, monkeypatch):
+    manifest, class_map = _parent(tmp_path)
+    db = _db(tmp_path)
+    try:
+        db.add(DatasetVersion(dataset_version="DS_M1_v0.5", manifest_uri=str(manifest), class_map_uri=str(class_map), git_commit="sha", status="FROZEN"))
+        db.commit()
+        items("DS_M1_v0.5", status="BBOX_REQUIRED", db=db)
+        monkeypatch.setattr(dataset_crop_review, "_persist_crop_preview", lambda _base, _box: (_ for _ in ()).throw(RuntimeError("source unavailable")))
+        result = update("DS_M1_v0.5", "img_a", DatasetCropReviewUpdate(decision="ACCEPTED", accepted_bbox=[0.1, 0.1, 0.7, 0.7]), db)
+        assert result["status"] == "ACCEPTED"
+        assert result["accepted_bbox"] == [0.1, 0.1, 0.7, 0.7]
+        assert result["crop_status"] == "ERROR"
+        assert result["crop_uri"] is None
+        assert "source unavailable" in result["crop_error"]
+        assert result["preview_url"] is None
     finally:
         db.close()
 
