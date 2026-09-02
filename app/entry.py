@@ -18,7 +18,10 @@ from app.intelligence_api import router as intelligence_router, templates as int
 from app.crop_qa import router as crop_qa_router, templates as crop_qa_templates
 from app.crop_dataset_api import router as crop_dataset_router
 from app.fish_knowledge.api import router as fish_knowledge_router
-from app.fish_knowledge.admin import router as fish_knowledge_admin_router
+from app.fish_knowledge.admin import (
+    compat_router as fish_knowledge_admin_compat_router,
+    router as fish_knowledge_admin_router,
+)
 from app.fish_knowledge.content_seed import seed_fish_knowledge_content
 from app.fish_knowledge.seed import seed_initial_fish_knowledge
 from app.p0_automation import install_feedback_automation, router as automation_router
@@ -99,3 +102,4 @@ app.include_router(crop_qa_router)
 app.include_router(crop_dataset_router)
 app.include_router(fish_knowledge_router)
 app.include_router(fish_knowledge_admin_router)
+app.include_router(fish_knowledge_admin_compat_router)

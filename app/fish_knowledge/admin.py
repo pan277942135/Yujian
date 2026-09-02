@@ -41,6 +41,9 @@ from app.models import SpeciesCatalog
 
 
 router = APIRouter(prefix="/api/v1/admin/fish", tags=["fish-knowledge-admin"])
+# Keep the original v1 admin paths for the CMS while also exposing the shorter
+# CRUD contract requested by lightweight operators and integrations.
+compat_router = APIRouter(prefix="/api/admin/fish", tags=["fish-knowledge-admin"])
 SPECIES_ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,127}$")
 
 
@@ -69,14 +72,38 @@ def _validate_url(value: str | None, *, optional: bool = False) -> str | None:
 
 
 class SpeciesCreate(BaseModel):
-    id: str = Field(min_length=2, max_length=128)
-    name_cn: str = Field(min_length=1, max_length=128)
+    model_config = {"populate_by_name": True}
+
+    id: str = Field(
+        validation_alias=AliasChoices("id", "species_id"),
+        min_length=2,
+        max_length=128,
+    )
+    name_cn: str = Field(
+        validation_alias=AliasChoices("name_cn", "name"),
+        min_length=1,
+        max_length=128,
+    )
     alias: list[str] = Field(default_factory=list)
     scientific_name: str | None = Field(default=None, max_length=256)
-    category: str = Field(min_length=1, max_length=64)
+    category: str = Field(default="淡水鱼", min_length=1, max_length=64)
     family: str | None = Field(default=None, max_length=128)
     genus: str | None = Field(default=None, max_length=128)
-    summary: str = Field(min_length=1, max_length=500)
+    summary: str = Field(
+        default="",
+        validation_alias=AliasChoices("summary", "description"),
+        max_length=500,
+    )
+    display_tag: str | None = Field(default=None, max_length=128)
+    rarity: int | None = Field(default=None, ge=0, le=5)
+    power: int | None = Field(default=None, ge=0, le=5)
+    challenge: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("challenge", "target_difficulty"),
+        ge=0,
+        le=5,
+    )
+    recommendation: int | None = Field(default=None, ge=0, le=5)
     status: Literal["ACTIVE", "DRAFT"] = "DRAFT"
 
     @field_validator("id")
@@ -87,13 +114,18 @@ class SpeciesCreate(BaseModel):
             raise ValueError("id 必须是小写字母开头的 snake_case")
         return result
 
-    @field_validator("name_cn", "category", "summary")
+    @field_validator("name_cn", "category")
     @classmethod
     def required_text(cls, value: str) -> str:
         result = value.strip()
         if not result:
             raise ValueError("字段不能为空")
         return result
+
+    @field_validator("summary")
+    @classmethod
+    def summary_text(cls, value: str) -> str:
+        return value.strip()
 
     @field_validator("scientific_name", "family", "genus")
     @classmethod
@@ -108,16 +140,37 @@ class SpeciesCreate(BaseModel):
 
 
 class SpeciesPatch(BaseModel):
-    name_cn: str | None = Field(default=None, min_length=1, max_length=128)
+    model_config = {"populate_by_name": True}
+
+    name_cn: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("name_cn", "name"),
+        min_length=1,
+        max_length=128,
+    )
     alias: list[str] | None = None
     scientific_name: str | None = Field(default=None, max_length=256)
     category: str | None = Field(default=None, min_length=1, max_length=64)
     family: str | None = Field(default=None, max_length=128)
     genus: str | None = Field(default=None, max_length=128)
-    summary: str | None = Field(default=None, min_length=1, max_length=500)
+    summary: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("summary", "description"),
+        max_length=500,
+    )
+    display_tag: str | None = Field(default=None, max_length=128)
+    rarity: int | None = Field(default=None, ge=0, le=5)
+    power: int | None = Field(default=None, ge=0, le=5)
+    challenge: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("challenge", "target_difficulty"),
+        ge=0,
+        le=5,
+    )
+    recommendation: int | None = Field(default=None, ge=0, le=5)
     status: Literal["ACTIVE", "DRAFT"] | None = None
 
-    @field_validator("name_cn", "category", "summary")
+    @field_validator("name_cn", "category")
     @classmethod
     def required_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -126,6 +179,11 @@ class SpeciesPatch(BaseModel):
         if not result:
             raise ValueError("字段不能为空")
         return result
+
+    @field_validator("summary")
+    @classmethod
+    def summary_text(cls, value: str | None) -> str | None:
+        return None if value is None else value.strip()
 
     @field_validator("scientific_name", "family", "genus")
     @classmethod
@@ -378,6 +436,34 @@ class CardPatch(BaseModel):
         return None if value is None else value.strip()
 
 
+class CoverPut(BaseModel):
+    """Short-form upsert payload used by the public CMS CRUD contract."""
+
+    model_config = {"populate_by_name": True}
+
+    url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("url", "image_url"),
+        max_length=2048,
+    )
+    style: str | None = Field(default=None, min_length=1, max_length=64)
+    title: str | None = Field(default=None, max_length=256)
+    status: Literal["ACTIVE", "DRAFT"] | None = None
+
+    @field_validator("url")
+    @classmethod
+    def valid_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        result = value.strip()
+        return "" if not result else str(_validate_url(result))
+
+    @field_validator("style", "title")
+    @classmethod
+    def clean_text(cls, value: str | None) -> str | None:
+        return None if value is None else value.strip()
+
+
 def _commit(db: Session) -> None:
     try:
         db.commit()
@@ -386,9 +472,14 @@ def _commit(db: Session) -> None:
         raise HTTPException(status_code=409, detail="fish knowledge data conflicts with an existing record") from exc
 
 
-def _require_species(db: Session, species_id: str) -> FishSpecies:
+def _require_species(
+    db: Session,
+    species_id: str,
+    *,
+    include_deleted: bool = False,
+) -> FishSpecies:
     row = db.get(FishSpecies, species_id)
-    if row is None:
+    if row is None or (row.status == "DELETED" and not include_deleted):
         raise HTTPException(status_code=404, detail="fish species not found")
     return row
 
@@ -435,6 +526,128 @@ def _cover_dict(row: FishSpeciesCover) -> dict:
         "title": row.title,
         "status": row.status,
     }
+
+
+def _hero_card(db: Session, species_id: str) -> FishCard | None:
+    rows = db.scalars(
+        select(FishCard)
+        .where(FishCard.species_id == species_id)
+        .order_by(FishCard.id)
+    ).all()
+    return next((card for card in rows if normalize_card_type(card.card_type) == "HERO"), None)
+
+
+def _admin_species_dict(row: FishSpecies, *, hero: FishCard | None = None) -> dict:
+    content = parse_card_content(hero.description if hero else "")
+    return {
+        "id": row.id,
+        "species_id": row.id,
+        "name_cn": row.name_cn,
+        "name": row.name_cn,
+        "alias": row.alias or [],
+        "scientific_name": row.scientific_name,
+        "category": row.category,
+        "family": row.family,
+        "genus": row.genus,
+        "summary": row.summary,
+        "description": row.summary,
+        "status": row.status,
+        "display_tag": content.get("tag"),
+        "rarity": content.get("rarity"),
+        "power": content.get("power"),
+        "challenge": content.get("challenge"),
+        "target_difficulty": content.get("challenge"),
+        "recommendation": content.get("recommendation"),
+    }
+
+
+def _species_model_values(payload: SpeciesCreate) -> dict[str, Any]:
+    return {
+        "id": payload.id,
+        "name_cn": payload.name_cn,
+        "alias": payload.alias,
+        "scientific_name": payload.scientific_name,
+        "category": payload.category,
+        "family": payload.family,
+        "genus": payload.genus,
+        "summary": payload.summary,
+        "status": payload.status,
+    }
+
+
+def _sync_hero_fields(
+    db: Session,
+    species: FishSpecies,
+    payload: SpeciesCreate | SpeciesPatch,
+) -> FishCard | None:
+    field_names = ("display_tag", "rarity", "power", "challenge", "recommendation")
+    changes = {
+        field: getattr(payload, field)
+        for field in field_names
+        if field in payload.model_fields_set
+    }
+    if not changes:
+        return _hero_card(db, species.id)
+
+    hero = _hero_card(db, species.id)
+    if hero is None:
+        hero = FishCard(
+            species_id=species.id,
+            card_type="HERO",
+            title=f"{species.name_cn}英雄卡",
+            image_url="",
+            description=card_description({"type": "HERO"}),
+            sort_order=card_type_sort_order("HERO"),
+            status="DRAFT",
+        )
+        db.add(hero)
+        db.flush()
+    content = parse_card_content(hero.description)
+    content["type"] = "HERO"
+    for field, value in changes.items():
+        if value is None:
+            key = "tag" if field == "display_tag" else field
+            content.pop(key, None)
+        else:
+            key = "tag" if field == "display_tag" else field
+            content[key] = value
+    hero.description = card_description(content)
+    return hero
+
+
+def _publication_missing(db: Session, species: FishSpecies) -> list[str]:
+    missing: list[str] = []
+    if not species.name_cn.strip() or not species.category.strip() or not species.summary.strip():
+        missing.append("species")
+
+    cover = _get_species_cover(db, species.id)
+    if cover is None or cover.status != "ACTIVE" or not (cover.image_url or "").strip():
+        missing.append("cover")
+
+    active_types = {
+        normalize_card_type(card.card_type)
+        for card in db.scalars(select(FishCard).where(FishCard.species_id == species.id)).all()
+        if card.status == "ACTIVE" and (card.image_url or "").strip()
+    }
+    missing.extend(card_type.lower() for card_type in CARD_TYPE_ORDER if card_type not in active_types)
+
+    knowledge_ready = bool(
+        species.profile
+        and species.fishing
+        and (
+            species.profile.body_shape
+            or species.profile.features
+            or species.profile.habitat
+            or species.profile.food
+            or species.profile.season
+            or species.fishing.water_layer
+            or species.fishing.bait
+            or species.fishing.method
+        )
+    )
+    if not knowledge_ready:
+        missing.append("knowledge")
+    return missing
 
 
 def _card_dict(row: FishCard) -> dict:
@@ -504,6 +717,7 @@ def list_admin_species(db: Session = Depends(get_db)) -> list[dict]:
     rows = db.scalars(
         select(FishSpecies)
         .join(SpeciesCatalog, SpeciesCatalog.species_key == FishSpecies.id)
+        .where(FishSpecies.status != "DELETED")
         .options(
             selectinload(FishSpecies.gallery),
             selectinload(FishSpecies.cover),
@@ -552,7 +766,7 @@ def list_admin_species(db: Session = Depends(get_db)) -> list[dict]:
 @router.get("/species/{species_id}")
 def get_admin_species(species_id: str, db: Session = Depends(get_db)):
     row = load_species_with_knowledge(db, species_id, active_only=False)
-    if row is None:
+    if row is None or row.status == "DELETED":
         raise HTTPException(status_code=404, detail="fish species not found")
     return build_species_detail(row, include_inactive_similarity=True)
 
@@ -578,43 +792,65 @@ def create_admin_species(payload: SpeciesCreate, db: Session = Depends(get_db)) 
             notes="由 Fish Knowledge Admin 创建；训练状态需在 Species Catalog 独立确认",
         )
         db.add(catalog)
-    row = FishSpecies(**payload.model_dump())
+    row = FishSpecies(**_species_model_values(payload))
     db.add(row)
+    db.flush()
+    hero = _sync_hero_fields(db, row, payload)
     _commit(db)
     db.refresh(row)
-    return {
-        "id": row.id,
-        "name_cn": row.name_cn,
-        "alias": row.alias,
-        "scientific_name": row.scientific_name,
-        "category": row.category,
-        "family": row.family,
-        "genus": row.genus,
-        "summary": row.summary,
-        "status": row.status,
-    }
+    return _admin_species_dict(row, hero=hero)
 
 
 @router.patch("/species/{species_id}")
 def update_admin_species(species_id: str, payload: SpeciesPatch, db: Session = Depends(get_db)) -> dict:
     row = _require_species(db, species_id)
+    species_fields = {
+        "name_cn",
+        "alias",
+        "scientific_name",
+        "category",
+        "family",
+        "genus",
+        "summary",
+        "status",
+    }
     for field in payload.model_fields_set:
+        if field not in species_fields:
+            continue
         value = getattr(payload, field)
-        if field in {"name_cn", "category", "summary", "status"} and value is None:
+        if field in {"name_cn", "category", "status"} and value is None:
             raise HTTPException(status_code=400, detail=f"{field} 不能为空")
         setattr(row, field, value)
+    hero = _sync_hero_fields(db, row, payload)
     _commit(db)
-    return {
-        "id": row.id,
-        "name_cn": row.name_cn,
-        "alias": row.alias,
-        "scientific_name": row.scientific_name,
-        "category": row.category,
-        "family": row.family,
-        "genus": row.genus,
-        "summary": row.summary,
-        "status": row.status,
-    }
+    return _admin_species_dict(row, hero=hero)
+
+
+@router.delete("/species/{species_id}")
+def delete_admin_species(species_id: str, db: Session = Depends(get_db)) -> dict:
+    """Soft-delete a species while retaining its content for audit/recovery."""
+
+    row = _require_species(db, species_id, include_deleted=True)
+    if row.status == "DELETED":
+        raise HTTPException(status_code=404, detail="fish species not found")
+    row.status = "DELETED"
+    _commit(db)
+    return {"deleted": True, "id": row.id, "species_id": row.id, "status": row.status}
+
+
+def _publish_species(species_id: str, db: Session) -> dict:
+    row = _require_species(db, species_id)
+    missing = _publication_missing(db, row)
+    if missing:
+        raise HTTPException(status_code=409, detail={"success": False, "missing": missing})
+    row.status = "ACTIVE"
+    _commit(db)
+    return {"success": True, "id": row.id, "species_id": row.id, "status": row.status, "missing": []}
+
+
+@router.post("/species/{species_id}/publish")
+def publish_admin_species(species_id: str, db: Session = Depends(get_db)) -> dict:
+    return _publish_species(species_id, db)
 
 
 @router.get("/species/{species_id}/cover")
@@ -1109,3 +1345,150 @@ def delete_similarity(species_id: str, similar_species_id: str, db: Session = De
     db.delete(row)
     _commit(db)
     return {"deleted": True, "species_id": species_id, "similar_species_id": similar_species_id}
+
+
+# ---------------------------------------------------------------------------
+# Short CRUD contract aliases
+# ---------------------------------------------------------------------------
+# The CMS itself uses the versioned paths above. These aliases keep the
+# documented /api/admin/fish contract available to simple operators and make
+# the CRUD surface independent from the older v1.1 route naming.
+
+
+@compat_router.get("/species")
+def compat_list_admin_species(db: Session = Depends(get_db)) -> list[dict]:
+    return list_admin_species(db)
+
+
+@compat_router.get("/species/{species_id}")
+def compat_get_admin_species(species_id: str, db: Session = Depends(get_db)):
+    return get_admin_species(species_id, db)
+
+
+@compat_router.post("/species", status_code=201)
+def compat_create_admin_species(payload: SpeciesCreate, db: Session = Depends(get_db)) -> dict:
+    return create_admin_species(payload, db)
+
+
+@compat_router.put("/species/{species_id}")
+def compat_update_admin_species(species_id: str, payload: SpeciesPatch, db: Session = Depends(get_db)) -> dict:
+    if payload.status != "ACTIVE":
+        return update_admin_species(species_id, payload, db)
+    values = payload.model_dump(exclude_unset=True, exclude={"status"})
+    updated = update_admin_species(species_id, SpeciesPatch(**values), db)
+    # The short CRUD contract treats an ACTIVE update as a publish action, so
+    # it receives the same completeness validation as the explicit publish
+    # endpoint. The legacy PATCH endpoint remains backward compatible.
+    return _publish_species(species_id, db) | {"species": updated}
+
+
+@compat_router.delete("/species/{species_id}")
+def compat_delete_admin_species(species_id: str, db: Session = Depends(get_db)) -> dict:
+    return delete_admin_species(species_id, db)
+
+
+@compat_router.post("/species/{species_id}/publish")
+def compat_publish_admin_species(species_id: str, db: Session = Depends(get_db)) -> dict:
+    return _publish_species(species_id, db)
+
+
+@compat_router.get("/species/{species_id}/completion")
+def compat_species_completion(species_id: str, db: Session = Depends(get_db)) -> dict:
+    return species_completion(species_id, db)
+
+
+@compat_router.get("/species/{species_id}/cover")
+def compat_get_species_cover(species_id: str, db: Session = Depends(get_db)) -> dict:
+    return get_species_cover(species_id, db)
+
+
+@compat_router.put("/species/{species_id}/cover")
+def compat_put_species_cover(species_id: str, payload: CoverPut, db: Session = Depends(get_db)) -> dict:
+    existing = _get_species_cover(db, _require_species(db, species_id).id)
+    if existing is None:
+        return create_species_cover(
+            species_id,
+            CoverCreate(
+                image_url=payload.url or "",
+                style=payload.style or "ANIME_CARD",
+                title=payload.title or "",
+                status=payload.status or "DRAFT",
+            ),
+            db,
+        )
+
+    values = {}
+    if "url" in payload.model_fields_set:
+        values["image_url"] = payload.url
+    if "style" in payload.model_fields_set:
+        values["style"] = payload.style
+    if "title" in payload.model_fields_set:
+        values["title"] = payload.title
+    if "status" in payload.model_fields_set:
+        values["status"] = payload.status
+    return update_species_cover(species_id, CoverPatch(**values), db)
+
+
+@compat_router.delete("/species/{species_id}/cover")
+def compat_delete_species_cover(species_id: str, db: Session = Depends(get_db)) -> dict:
+    return delete_species_cover(species_id, db)
+
+
+def _compat_card_type(value: str) -> str:
+    normalized = normalize_card_type(value)
+    if normalized not in CARD_TYPE_ORDER:
+        raise HTTPException(status_code=400, detail="card_type 必须是 HERO、IDENTIFICATION、ECO、GEAR 或 SKILL")
+    return normalized
+
+
+@compat_router.put("/species/{species_id}/cards/{card_type}")
+def compat_put_species_card(
+    species_id: str,
+    card_type: str,
+    payload: CardPatch,
+    db: Session = Depends(get_db),
+) -> dict:
+    normalized = _compat_card_type(card_type)
+    species = _require_species(db, species_id)
+    existing = next(
+        (
+            card
+            for card in db.scalars(
+                select(FishCard)
+                .where(FishCard.species_id == species.id)
+                .order_by(FishCard.id)
+            ).all()
+            if normalize_card_type(card.card_type) == normalized
+        ),
+        None,
+    )
+    values = payload.model_dump(exclude_unset=True)
+    values.pop("card_type", None)
+    if existing is not None:
+        values["card_type"] = normalized
+        return update_species_card(existing.id, CardPatch(**values), db)
+    return create_species_card(
+        species.id,
+        CardCreate(card_type=normalized, **values),
+        db,
+    )
+
+
+@compat_router.get("/species/{species_id}/cards")
+def compat_list_species_cards(species_id: str, db: Session = Depends(get_db)) -> list[dict]:
+    return list_species_cards(species_id, db)
+
+
+@compat_router.delete("/cards/{card_id}")
+def compat_delete_species_card(card_id: int, db: Session = Depends(get_db)) -> dict:
+    return delete_species_card(card_id, db)
+
+
+@compat_router.put("/species/{species_id}/profile")
+def compat_put_profile(species_id: str, payload: ProfileUpsert, db: Session = Depends(get_db)) -> dict:
+    return upsert_profile(species_id, payload, db)
+
+
+@compat_router.put("/species/{species_id}/fishing")
+def compat_put_fishing(species_id: str, payload: FishingUpsert, db: Session = Depends(get_db)) -> dict:
+    return upsert_fishing(species_id, payload, db)

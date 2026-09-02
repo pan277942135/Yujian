@@ -57,6 +57,7 @@ def init_db():
 
     Base.metadata.create_all(bind=engine)
     _ensure_production_pipeline_columns()
+    _ensure_fish_knowledge_crud_constraints()
 
 
 def _ensure_production_pipeline_columns() -> None:
@@ -95,3 +96,27 @@ def _ensure_production_pipeline_columns() -> None:
             for name, definition in columns.items():
                 if name not in existing:
                     connection.exec_driver_sql(f'ALTER TABLE "{table}" ADD COLUMN "{name}" {definition}')
+
+
+def _ensure_fish_knowledge_crud_constraints() -> None:
+    """Allow Fish Knowledge species to be soft-deleted on existing installs.
+
+    ``create_all`` does not alter a pre-existing CHECK constraint.  Cloud SQL
+    deployments use PostgreSQL, so apply the additive status change at startup
+    while leaving SQLite test databases to the current declarative metadata.
+    The operation is idempotent and does not touch any other model or state
+    machine.
+    """
+
+    if not inspect(engine).has_table("fish_species"):
+        return
+    if engine.dialect.name != "postgresql":
+        return
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            'ALTER TABLE "fish_species" DROP CONSTRAINT IF EXISTS "ck_fish_species_status"'
+        )
+        connection.exec_driver_sql(
+            'ALTER TABLE "fish_species" ADD CONSTRAINT "ck_fish_species_status" '
+            "CHECK (status IN ('ACTIVE', 'DRAFT', 'DELETED'))"
+        )

@@ -21,7 +21,7 @@ class FishSpecies(Base):
 
     __tablename__ = "fish_species"
     __table_args__ = (
-        CheckConstraint("status IN ('ACTIVE', 'DRAFT')", name="ck_fish_species_status"),
+        CheckConstraint("status IN ('ACTIVE', 'DRAFT', 'DELETED')", name="ck_fish_species_status"),
     )
 
     id = Column(

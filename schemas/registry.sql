@@ -164,7 +164,7 @@ CREATE TABLE IF NOT EXISTS fish_species (
   family TEXT,
   genus TEXT,
   summary TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'DRAFT' CHECK(status IN ('ACTIVE', 'DRAFT')),
+  status TEXT NOT NULL DEFAULT 'DRAFT' CHECK(status IN ('ACTIVE', 'DRAFT', 'DELETED')),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY(id) REFERENCES species_catalog(species_key) ON DELETE RESTRICT

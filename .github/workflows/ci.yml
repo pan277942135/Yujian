@@ -89,6 +89,8 @@ jobs:
         run: test -f schemas/0014_fish_knowledge_v1.sql
       - name: Validate Fish Knowledge V1.1 migrations exist
         run: test -f schemas/0015_fish_cards_v11.sql && test -f schemas/0016_fish_species_cover_v11.sql
+      - name: Validate Fish Knowledge CRUD migration exists
+        run: test -f schemas/0017_fish_knowledge_crud_v1.sql
       - name: Validate classifier trainer assets exist
         run: test -f Dockerfile.trainer && test -f requirements-training.txt && test -f infra/cloudbuild.trainer.yaml
       - name: Validate inference runtime image configuration
