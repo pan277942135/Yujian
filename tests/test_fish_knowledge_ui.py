@@ -1,3 +1,6 @@
+import shutil
+import subprocess
+
 from app.entry import app
 from app.main import templates
 
@@ -27,3 +30,19 @@ def test_fish_knowledge_nav_is_present_in_shared_template_source():
     source, _filename, _uptodate = templates.env.loader.get_source(templates.env, "overview.html")
     assert 'href="/fish-knowledge"' in source
     assert "鱼鉴内容" in source
+
+
+def test_fish_knowledge_workspace_javascript_parses():
+    node = shutil.which("node")
+    if node is None:
+        return
+    source, _filename, _uptodate = templates.env.loader.get_source(templates.env, "fish_knowledge.html")
+    script = source.split("<script>", 1)[1].split("</script>", 1)[0]
+    result = subprocess.run(
+        [node, "--check"],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
