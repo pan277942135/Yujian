@@ -1233,6 +1233,7 @@ def _cms_asset_error(
     *,
     status_code: int,
     reason: str | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> JSONResponse:
     payload: dict[str, Any] = {
         "success": False,
@@ -1241,6 +1242,8 @@ def _cms_asset_error(
     }
     if reason:
         payload["reason"] = reason
+    if extra:
+        payload.update(extra)
     return JSONResponse(status_code=status_code, content=payload)
 
 
@@ -1285,6 +1288,9 @@ async def upload_cms_fish_asset(
         )
         return _cms_asset_error("invalid_file", str(exc), status_code=400, reason=reason)
 
+    asset_written = False
+    object_name: str | None = None
+    image_url: str | None = None
     try:
         bucket_name = get_bucket_name()
         client = storage.Client()
@@ -1297,6 +1303,7 @@ async def upload_cms_fish_asset(
             data=bytes(image_metadata["webp_data"]),
             image_metadata=image_metadata,
         )
+        asset_written = True
         image_url = knowledge_asset_url(bucket_name, object_name)
 
         if normalized_type == "COVER":
@@ -1342,9 +1349,36 @@ async def upload_cms_fish_asset(
             binding = "card.image_url"
         _commit(db)
         db.refresh(row)
+    except HTTPException as exc:
+        db.rollback()
+        if asset_written:
+            return _cms_asset_error(
+                "binding_error",
+                "图片已上传，但绑定保存失败",
+                status_code=503,
+                extra={
+                    "url": image_url,
+                    "asset_type": normalized_type,
+                    "species_id": species.id,
+                    "storage": {"bucket": bucket_name, "object_name": object_name},
+                },
+            )
+        return _cms_asset_error("storage_error", "鱼鉴图片上传失败", status_code=503)
     except Exception:
         db.rollback()
-        return _cms_asset_error("storage_error", "鱼鉴图片上传或绑定失败", status_code=503)
+        if asset_written:
+            return _cms_asset_error(
+                "binding_error",
+                "图片已上传，但绑定保存失败",
+                status_code=503,
+                extra={
+                    "url": image_url,
+                    "asset_type": normalized_type,
+                    "species_id": species.id,
+                    "storage": {"bucket": bucket_name, "object_name": object_name},
+                },
+            )
+        return _cms_asset_error("storage_error", "鱼鉴图片上传失败", status_code=503)
 
     result = _cover_dict(row) if normalized_type == "COVER" else _card_dict(row)
     return {

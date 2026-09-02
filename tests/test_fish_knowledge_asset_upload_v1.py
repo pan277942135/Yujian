@@ -161,6 +161,29 @@ def test_short_cms_upload_replaces_existing_slot_without_creating_duplicate_card
         db.close()
 
 
+def test_short_cms_upload_reports_binding_failure_after_storage(monkeypatch, tmp_path):
+    db = _session(tmp_path)
+    bucket = FakeBucket()
+    client = FakeStorageClient(bucket)
+    monkeypatch.setattr("app.fish_knowledge.admin.storage.Client", lambda: client)
+    monkeypatch.setattr("app.fish_knowledge.admin.get_bucket_name", lambda: "test-bucket")
+    try:
+        _create_species(db)
+        monkeypatch.setattr(
+            "app.fish_knowledge.admin._commit",
+            lambda _db: (_ for _ in ()).throw(RuntimeError("db down")),
+        )
+        response = _call(db, "COVER", _png_bytes())
+        assert response.status_code == 503
+        payload = json.loads(response.body)
+        assert payload["error"] == "binding_error"
+        assert payload["message"] == "图片已上传，但绑定保存失败"
+        assert payload["url"].endswith("/fish-assets/grass_carp/cover/cover.webp")
+        assert payload["storage"]["object_name"] == "fish-assets/grass_carp/cover/cover.webp"
+    finally:
+        db.close()
+
+
 def test_short_cms_upload_rejects_empty_non_image_and_oversized_files(monkeypatch, tmp_path):
     db = _session(tmp_path)
     bucket = FakeBucket()
@@ -191,4 +214,3 @@ def test_short_cms_upload_route_contract_is_registered():
     schema_ref = route["requestBody"]["content"]["multipart/form-data"]["schema"]["$ref"]
     schema = app.openapi()["components"]["schemas"][schema_ref.rsplit("/", 1)[-1]]
     assert set(schema["required"]) == {"file", "species_id", "asset_type"}
-

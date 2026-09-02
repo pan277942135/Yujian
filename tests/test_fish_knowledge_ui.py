@@ -48,3 +48,20 @@ def test_fish_knowledge_workspace_javascript_parses():
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_fish_knowledge_upload_ui_binds_url_and_reports_persistence_state():
+    source, _filename, _uptodate = templates.env.loader.get_source(templates.env, "fish_knowledge.html")
+    for marker in (
+        "function applyUploadedAsset",
+        "document.getElementById('coverUrl').value=url",
+        "cards[index].image_url=url",
+        "function updateCardImage",
+        "return uploadedUrl",
+        "上传中...",
+        "图片已上传，但绑定保存失败",
+        "上传成功，已保存并回显",
+        "error.code=data&&typeof data==='object'?data.error:null",
+        "await refreshSelected()",
+    ):
+        assert marker in source
