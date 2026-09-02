@@ -1,0 +1,329 @@
+{
+  "schema": "FISH_KNOWLEDGE_CONTENT_V2",
+  "version": 1,
+  "species": [
+    {
+      "id": "sharpbelly",
+      "name": "白条",
+      "display_tag": "中上层快鱼",
+      "scientific_name": "Hemiculter leucisculus",
+      "alias": ["餐条", "白鲦"],
+      "category": "淡水鱼",
+      "family": "鲤科",
+      "genus": "Hemiculter",
+      "summary": "体侧银亮、腹缘较锐，常在近岸中上层快速成群抢食。",
+      "status": "ACTIVE",
+      "cover": {
+        "image_url": null,
+        "style": "ANIME_CARD",
+        "title": "白条图鉴卡",
+        "status": "DRAFT"
+      },
+      "cards": [
+        {
+          "type": "HERO",
+          "title": "白条英雄卡",
+          "image_url": null,
+          "status": "DRAFT",
+          "tag": "中上层快鱼",
+          "rarity": 1,
+          "power": 1,
+          "challenge": 2,
+          "description": "小而灵活的银色快鱼，适合用轻量装备体验高频鱼口。"
+        },
+        {
+          "type": "IDENTIFICATION",
+          "title": "白条识别卡",
+          "image_url": null,
+          "status": "DRAFT",
+          "features": [
+            {"title": "体色", "text": "体侧银白发亮，背部颜色略深。"},
+            {"title": "口型", "text": "口略向上，常在水面或中上层追食。"},
+            {"title": "腹棱", "text": "腹部有较明显的锐利腹棱，尾鳍深叉。"}
+          ],
+          "similar": [
+            {"name": "翘嘴鲌", "difference": "翘嘴鲌下颌突出更明显、个体通常更大；白条体型小且腹棱更锐。"},
+            {"name": "鲫鱼", "difference": "鲫鱼体高而厚、口边无明显上翘；白条体型修长、游速更快。"}
+          ]
+        },
+        {
+          "type": "ECOLOGY",
+          "title": "白条生态卡",
+          "image_url": null,
+          "status": "DRAFT",
+          "habitat": ["江河近岸", "湖泊湾区", "水库浅湾", "池塘表层"],
+          "water_layer": "中上层",
+          "season": "春夏秋，暖水期更活跃",
+          "behavior": "常成群巡游，遇到饵料会快速聚集抢食。",
+          "diet": "浮游生物、水生昆虫、藻类和细小有机颗粒。"
+        },
+        {
+          "type": "GEAR",
+          "title": "白条装备卡",
+          "image_url": null,
+          "status": "DRAFT",
+          "method": "短竿快节奏浮钓或拉饵钓浮",
+          "rod": "3.6–4.5 米轻量竿",
+          "line": "主线 0.6–0.8 号，子线 0.2–0.4 号",
+          "hook": "袖钩 1–3 号等小钩",
+          "bait": ["小粒腥香饵", "麸类饵", "小昆虫"]
+        },
+        {
+          "type": "SKILL",
+          "title": "白条作钓技术卡",
+          "image_url": null,
+          "status": "DRAFT",
+          "find": "寻找有风、有光照变化或水流汇入的近岸中上层。",
+          "attract": "保持饵团轻、小、连续雾化，快速建立诱鱼层。",
+          "action": "鱼群进窝后保持抛投节奏，鱼口变慢时重新找水层。",
+          "tip": "小钩轻漂，快而不乱；看到接口就及时提竿。"
+        }
+      ],
+      "knowledge": {
+        "profile": {
+          "body_shape": "小型修长侧扁，腹缘呈明显棱线",
+          "features": ["体侧银白发亮", "口略向上", "腹部有锐利腹棱", "尾鳍深叉"],
+          "habitat": ["江河近岸", "湖泊", "水库湾区", "池塘表层"],
+          "food": "杂食性，摄食浮游生物、水生昆虫、藻类和细小有机颗粒。",
+          "season": ["春", "夏", "秋"]
+        },
+        "fishing": {
+          "water_layer": "中上层",
+          "season": ["春", "夏", "秋"],
+          "bait": ["小粒腥香饵", "麸类饵", "小昆虫"],
+          "method": ["短竿浮钓", "小钩快频率", "拉饵钓浮"],
+          "summary": "鱼群进窝后适合小钩轻漂和稳定节奏，避免过大饵团拖慢入口。"
+        }
+      },
+      "similarity": [
+        {"species_id": "topmouth_culter", "difference": "翘嘴鲌下颌突出更明显、个体通常更大；白条体型小且腹棱更锐。"},
+        {"species_id": "crucian_carp", "difference": "鲫鱼体高而厚；白条体型修长，常在中上层快速成群活动。"}
+      ]
+    },
+    {
+      "id": "crucian_carp",
+      "name": "鲫鱼",
+      "display_tag": "四季常见鱼",
+      "scientific_name": "Carassius auratus",
+      "alias": ["野鲫", "土鲫"],
+      "category": "淡水鱼",
+      "family": "鲤科",
+      "genus": "Carassius",
+      "summary": "体型较高、口边无须，是淡水垂钓中最常见的目标鱼之一。",
+      "status": "ACTIVE",
+      "cover": {"image_url": null, "style": "ANIME_CARD", "title": "鲫鱼图鉴卡", "status": "DRAFT"},
+      "cards": [
+        {"type": "HERO", "title": "鲫鱼英雄卡", "image_url": null, "status": "DRAFT", "tag": "四季常见鱼", "rarity": 1, "power": 2, "challenge": 2, "description": "亲近、稳定又有变化，是新手和老钓手都熟悉的淡水目标鱼。"},
+        {"type": "IDENTIFICATION", "title": "鲫鱼识别卡", "image_url": null, "status": "DRAFT", "features": [{"title": "体型", "text": "体高侧扁，背部隆起较明显。"}, {"title": "口边", "text": "口边无须，吻部圆钝。"}, {"title": "鳍形", "text": "背鳍基部较长，尾柄相对较短。"}], "similar": [{"name": "鲤鱼", "difference": "鲤鱼口角有须、身体更厚；鲫鱼无须，体型更高更扁。"}, {"name": "白条", "difference": "白条体型修长、常在中上层游动；鲫鱼体高，更多在近底层觅食。"}]},
+        {"type": "ECOLOGY", "title": "鲫鱼生态卡", "image_url": null, "status": "DRAFT", "habitat": ["池塘", "湖泊", "河汊", "水库湾区"], "water_layer": "底层和近底层", "season": "全年，春秋更活跃", "behavior": "警惕性较高，水温变化时会贴近水草和缓坡。", "diet": "藻类、底栖小动物、昆虫幼体和谷物碎屑。"},
+        {"type": "GEAR", "title": "鲫鱼装备卡", "image_url": null, "status": "DRAFT", "method": "台钓、传统底钓或轻量逗钓", "rod": "3.6–4.5 米轻量竿", "line": "主线 0.8–1.0 号，子线 0.3–0.6 号", "hook": "袖钩 2–5 号", "bait": ["蚯蚓", "红虫", "谷物饵", "商品鲫鱼饵"]},
+        {"type": "SKILL", "title": "鲫鱼作钓技术卡", "image_url": null, "status": "DRAFT", "find": "优先找水草边、缓坡、进出水口和安静的浅湾。", "attract": "窝量少而持续，保持饵料入口轻、状态软。", "action": "低温或鱼口轻时降低线组和饵团规格，必要时轻逗。", "tip": "先找鱼层，再调浮漂；鱼口轻时动作不要过大。"}
+      ],
+      "knowledge": {
+        "profile": {"body_shape": "体高而侧扁，背部隆起较明显", "features": ["口边无须", "背鳍基部较长", "体色多为银灰或黄褐", "尾柄相对较短"], "habitat": ["池塘", "湖泊", "河汊", "水库湾区"], "food": "杂食性，摄食藻类、底栖小动物、昆虫幼体和谷物碎屑。", "season": ["春", "夏", "秋", "冬"]},
+        "fishing": {"water_layer": "底层和近底层", "season": ["全年", "春秋更活跃"], "bait": ["蚯蚓", "红虫", "谷物饵", "商品鲫鱼饵"], "method": ["台钓", "传统底钓", "轻量逗钓"], "summary": "根据水温和鱼口调整饵团大小、味型与钓层，低温时宜用小钩细线。"}
+      },
+      "similarity": [{"species_id": "common_carp", "difference": "鲤鱼口角有须、身体更厚；鲫鱼无须，体型更高更扁。"}, {"species_id": "sharpbelly", "difference": "白条体型修长、常在中上层游动；鲫鱼体高，更多在近底层觅食。"}]
+    },
+    {
+      "id": "grass_carp",
+      "name": "草鱼",
+      "display_tag": "大型草食鱼",
+      "scientific_name": "Ctenopharyngodon idella",
+      "alias": ["鲩鱼", "草鲩"],
+      "category": "淡水鱼",
+      "family": "鲤科",
+      "genus": "Ctenopharyngodon",
+      "summary": "体型修长、鳞片整齐，是常见的大型淡水目标鱼。",
+      "status": "ACTIVE",
+      "cover": {"image_url": null, "style": "ANIME_CARD", "title": "草鱼图鉴卡", "status": "DRAFT"},
+      "cards": [
+        {"type": "HERO", "title": "草鱼英雄卡", "image_url": null, "status": "DRAFT", "tag": "大型草食鱼", "rarity": 2, "power": 4, "challenge": 3, "description": "沿草线和岸边植物巡游的大型目标鱼，力量感来自持续冲刺。"},
+        {"type": "IDENTIFICATION", "title": "草鱼识别卡", "image_url": null, "status": "DRAFT", "features": [{"title": "头型", "text": "头部宽平，口端位且没有鲤鱼一样的口须。"}, {"title": "鳞片", "text": "鳞片较大、排列整齐，背部多为青灰色。"}, {"title": "尾鳍", "text": "尾鳍深叉，体型整体修长有力。"}], "similar": [{"name": "青鱼", "difference": "青鱼颜色更深、头部更尖，主要摄食螺蚌；草鱼体色较浅，偏植物食性。"}, {"name": "鲤鱼", "difference": "鲤鱼口角有须、体形更厚；草鱼无须，身体更修长。"}]},
+        {"type": "ECOLOGY", "title": "草鱼生态卡", "image_url": null, "status": "DRAFT", "habitat": ["江河中下游", "湖泊", "水库", "池塘"], "water_layer": "中下层，摄食时可进入中上层", "season": "晚春至初秋更活跃", "behavior": "水温升高后沿草线、浅滩和岸边植物带巡游摄食。", "diet": "水草、岸边植物嫩叶及其他植物性食物。"},
+        {"type": "GEAR", "title": "草鱼装备卡", "image_url": null, "status": "DRAFT", "method": "浮钓、离底钓、底钓或草窝守钓", "rod": "5.4–7.2 米中硬调竿", "line": "主线 2–4 号，子线 1.5–3 号", "hook": "伊势尼 6–10 号或同等强度钩", "bait": ["嫩玉米", "发酵玉米", "青草嫩叶", "商品草鱼饵"]},
+        {"type": "SKILL", "title": "草鱼作钓技术卡", "image_url": null, "status": "DRAFT", "find": "观察草线、浮叶、岸边植物和水面鱼星，先判断鱼层。", "attract": "用玉米或植物饵形成稳定窝点，避免一次性投放过量。", "action": "水温高时先试离底或浮钓，鱼层变化后及时调整。", "tip": "先看鱼在哪里吃，再决定钓多深；中鱼后尽快远离障碍。"}
+      ],
+      "knowledge": {
+        "profile": {"body_shape": "纺锤形，体长而略侧扁", "features": ["背部青灰、腹部较浅", "鳞片较大且边缘整齐", "头部宽平、口端位且无须", "尾鳍深叉"], "habitat": ["江河中下游", "湖泊", "水库及池塘"], "food": "成鱼以水草和岸边植物为主，也会摄食嫩叶等植物性食物。", "season": ["春", "夏", "秋"]},
+        "fishing": {"water_layer": "中下层，摄食时也会进入中上层", "season": ["晚春", "夏", "初秋"], "bait": ["嫩玉米", "发酵玉米", "青草或芦苇嫩叶", "商品草鱼饵"], "method": ["浮钓", "离底钓", "底钓", "打草窝或玉米窝"], "summary": "水温升高后摄食更积极，可先观察草线、浮叶和鱼星再选择水层。"}
+      },
+      "similarity": [{"species_id": "black_carp", "difference": "青鱼颜色更深、头部更尖，主要摄食螺蚌；草鱼体色较浅，偏植物食性。"}, {"species_id": "common_carp", "difference": "鲤鱼口角有须、体形更厚；草鱼无须，身体更修长。"}]
+    },
+    {
+      "id": "common_carp",
+      "name": "鲤鱼",
+      "display_tag": "底层大物",
+      "scientific_name": "Cyprinus carpio",
+      "alias": ["鲤拐子", "黄鲤"],
+      "category": "淡水鱼",
+      "family": "鲤科",
+      "genus": "Cyprinus",
+      "summary": "口角有须、背鳍较长，是分布广泛的底层杂食性鱼。",
+      "status": "ACTIVE",
+      "cover": {"image_url": null, "style": "ANIME_CARD", "title": "鲤鱼图鉴卡", "status": "DRAFT"},
+      "cards": [
+        {"type": "HERO", "title": "鲤鱼英雄卡", "image_url": null, "status": "DRAFT", "tag": "底层大物", "rarity": 2, "power": 4, "challenge": 4, "description": "贴着底部寻找食物的经典大物，稳重、狡猾且爆发力强。"},
+        {"type": "IDENTIFICATION", "title": "鲤鱼识别卡", "image_url": null, "status": "DRAFT", "features": [{"title": "口须", "text": "口角有两对须，是与鲫鱼、草鱼区分的重要观察点。"}, {"title": "体型", "text": "身体较厚、腹部圆，背鳍基部较长。"}, {"title": "体色", "text": "常见黄褐、青褐或金褐色，鳞片较大。"}], "similar": [{"name": "鲫鱼", "difference": "鲫鱼口边无须、体型更高更扁；鲤鱼有须且身体更厚长。"}, {"name": "草鱼", "difference": "草鱼无须、体型修长并偏植物食性；鲤鱼有须，常在底部杂食。"}]},
+        {"type": "ECOLOGY", "title": "鲤鱼生态卡", "image_url": null, "status": "DRAFT", "habitat": ["江河缓流区", "湖泊", "水库", "池塘"], "water_layer": "底层和近底层", "season": "春夏秋活跃，冬季仍可进食", "behavior": "沿坎位、缓流和软硬底交界拱底觅食，警惕性较高。", "diet": "底栖动物、谷物、植物碎屑和水生昆虫。"},
+        {"type": "GEAR", "title": "鲤鱼装备卡", "image_url": null, "status": "DRAFT", "method": "底钓、离底钓或窝料守钓", "rod": "5.4 米以上中硬调竿", "line": "主线 2–4 号，子线 1.2–2.5 号", "hook": "伊势尼 5–10 号", "bait": ["玉米", "小麦", "蚯蚓", "螺肉", "商品鲤鱼饵"]},
+        {"type": "SKILL", "title": "鲤鱼作钓技术卡", "image_url": null, "status": "DRAFT", "find": "寻找坎位、回水湾、软硬底交界和有拱底痕迹的位置。", "attract": "窝料宁可分次补，不要用过大的声响和投喂量惊鱼。", "action": "钓钝一些观察真实入口，守住有效窝点并减少频繁抛投。", "tip": "鲤鱼吃口慢、力道足；先稳住竿，再利用水面控鱼。"}
+      ],
+      "knowledge": {
+        "profile": {"body_shape": "体厚、略呈纺锤形，腹部圆", "features": ["口角有两对须", "背鳍基部较长", "体色多为黄褐或青褐", "鳞片较大"], "habitat": ["江河缓流区", "湖泊", "水库", "池塘"], "food": "杂食性，摄食底栖动物、谷物、植物碎屑和水生昆虫。", "season": ["春", "夏", "秋", "冬"]},
+        "fishing": {"water_layer": "底层和近底层", "season": ["春", "夏", "秋"], "bait": ["玉米", "小麦", "蚯蚓", "螺肉", "商品鲤鱼饵"], "method": ["底钓", "离底钓", "窝料守钓"], "summary": "常沿坎位、缓流和软硬底交界觅食，作钓时宜减少频繁惊扰。"}
+      },
+      "similarity": [{"species_id": "crucian_carp", "difference": "鲫鱼口边无须、体型更高更扁；鲤鱼有须且身体更厚长。"}, {"species_id": "grass_carp", "difference": "草鱼无须、体型修长并偏植物食性；鲤鱼有须，常在底部杂食。"}]
+    },
+    {
+      "id": "snakehead",
+      "name": "黑鱼",
+      "display_tag": "草区伏击者",
+      "scientific_name": "Channa argus",
+      "alias": ["乌鳢", "财鱼", "生鱼"],
+      "category": "淡水鱼",
+      "family": "鳢科",
+      "genus": "Channa",
+      "summary": "身体细长、头似蛇形，常伏击水草区的小鱼和蛙类。",
+      "status": "ACTIVE",
+      "cover": {"image_url": null, "style": "ANIME_CARD", "title": "黑鱼图鉴卡", "status": "DRAFT"},
+      "cards": [
+        {"type": "HERO", "title": "黑鱼英雄卡", "image_url": null, "status": "DRAFT", "tag": "草区伏击者", "rarity": 3, "power": 4, "challenge": 4, "description": "潜伏在草洞和障碍边的强悍掠食者，咬口直接，控鱼要果断。"},
+        {"type": "IDENTIFICATION", "title": "黑鱼识别卡", "image_url": null, "status": "DRAFT", "features": [{"title": "头型", "text": "头部宽扁，轮廓有明显的蛇形感。"}, {"title": "鳍形", "text": "背鳍和臀鳍都很长，身体呈圆筒状细长。"}, {"title": "斑纹", "text": "体侧有深色不规则斑块，口大且具细齿。"}], "similar": [{"name": "加州鲈", "difference": "加州鲈体高侧扁、口裂大但背臀鳍较短；黑鱼体长，背臀鳍连续较长。"}, {"name": "鳜鱼", "difference": "鳜鱼体高侧扁且斑纹碎；黑鱼体型细长，常在水草区伏击。"}]},
+        {"type": "ECOLOGY", "title": "黑鱼生态卡", "image_url": null, "status": "DRAFT", "habitat": ["水草密集湖湾", "池塘", "沼泽", "缓流河汊"], "water_layer": "浅水和水草表层，也会潜伏近底", "season": "晚春至初秋更活跃", "behavior": "依靠草洞、浮萍边和障碍物隐蔽伏击，常守在饵鱼经过的位置。", "diet": "鱼、虾、蛙和其他小型水生动物。"},
+        {"type": "GEAR", "title": "黑鱼装备卡", "image_url": null, "status": "DRAFT", "method": "水面路亚、草洞定点或贴障碍搜索", "rod": "强度较高的雷强或中重型路亚竿", "line": "PE 4–8 号，按障碍密度调整", "hook": "雷蛙双钩或强力宽腹钩", "bait": ["雷蛙", "软蛙", "软鱼", "米诺"]},
+        {"type": "SKILL", "title": "黑鱼作钓技术卡", "image_url": null, "status": "DRAFT", "find": "重点观察草洞、浮萍边、浅滩障碍和水面换气迹象。", "attract": "让拟饵贴近草边自然经过，水面饵可保留短暂停顿。", "action": "咬口后给出稳定刺鱼动作，第一时间把鱼带离重障碍。", "tip": "黑鱼不是只看炸水；草洞边的安静停顿同样重要。"}
+      ],
+      "knowledge": {
+        "profile": {"body_shape": "圆筒状细长，头部宽扁", "features": ["头部似蛇形", "体侧有深色不规则斑块", "背鳍和臀鳍都很长", "口大且具细齿"], "habitat": ["水草密集的湖湾", "池塘", "沼泽和缓流河汊"], "food": "肉食性，捕食鱼、虾、蛙和其他小型水生动物。", "season": ["春", "夏", "秋"]},
+        "fishing": {"water_layer": "浅水和水草表层，也会潜伏近底", "season": ["晚春", "夏", "初秋"], "bait": ["雷蛙", "软蛙", "软鱼", "米诺"], "method": ["水面路亚", "草洞定点", "贴障碍搜索"], "summary": "重点寻找草洞、浮萍边和浅滩障碍，命中后需尽快控鱼离开重障碍。"}
+      },
+      "similarity": [{"species_id": "largemouth_bass", "difference": "加州鲈体高侧扁、口裂大但背臀鳍较短；黑鱼体长，背臀鳍连续较长。"}, {"species_id": "mandarin_fish", "difference": "鳜鱼体高侧扁且斑纹碎；黑鱼体型细长，常在水草区伏击。"}]
+    },
+    {
+      "id": "topmouth_culter",
+      "name": "翘嘴",
+      "display_tag": "开阔水面猎手",
+      "scientific_name": "Culter alburnus",
+      "alias": ["翘嘴鲌", "翘嘴红鲌"],
+      "category": "淡水鱼",
+      "family": "鲤科",
+      "genus": "Culter",
+      "summary": "口向上翘、身体修长，是大水面常见的中上层掠食鱼。",
+      "status": "ACTIVE",
+      "cover": {"image_url": null, "style": "ANIME_CARD", "title": "翘嘴图鉴卡", "status": "DRAFT"},
+      "cards": [
+        {"type": "HERO", "title": "翘嘴英雄卡", "image_url": null, "status": "DRAFT", "tag": "开阔水面猎手", "rarity": 3, "power": 4, "challenge": 4, "description": "追逐饵鱼、穿梭水面的速度型掠食鱼，适合用路亚主动搜索。"},
+        {"type": "IDENTIFICATION", "title": "翘嘴识别卡", "image_url": null, "status": "DRAFT", "features": [{"title": "口型", "text": "下颌突出，口明显向上翘。"}, {"title": "体型", "text": "身体修长侧扁，背部较平，腹缘较锐。"}, {"title": "尾鳍", "text": "尾鳍深叉，体侧通常呈银白色。"}], "similar": [{"name": "白条", "difference": "白条体型更小、腹棱更明显；翘嘴下颌突出更强，常见大型个体。"}, {"name": "鳜鱼", "difference": "鳜鱼体高、头大且斑纹明显；翘嘴体型修长、体色更银亮。"}]},
+        {"type": "ECOLOGY", "title": "翘嘴生态卡", "image_url": null, "status": "DRAFT", "habitat": ["大型江河", "湖泊开阔区", "水库主湖面", "湾口"], "water_layer": "中上层，追饵时接近水面", "season": "晚春至秋季，水温适中时追食明显", "behavior": "跟随饵鱼群移动，常在湾口、风浪交界或水面炸水。", "diet": "主要追食小鱼和虾。"},
+        {"type": "GEAR", "title": "翘嘴装备卡", "image_url": null, "status": "DRAFT", "method": "远投路亚、搜索炸水或浮钓活饵", "rod": "2.1–2.4 米中快调路亚竿", "line": "PE 0.8–1.5 号，前导线按障碍调整", "hook": "拟饵原装三本钩或单钩改装", "bait": ["米诺", "亮片", "铅笔", "软鱼", "虾"]},
+        {"type": "SKILL", "title": "翘嘴作钓技术卡", "image_url": null, "status": "DRAFT", "find": "找饵鱼群、湾口、风浪交界和鸟群聚集的开阔水面。", "attract": "先用远投拟饵覆盖水层，再根据追口调整泳层和速度。", "action": "保持连续搜索，炸水消失后不要立刻离开，鱼群可能短暂下潜。", "tip": "先定位饵鱼，再选择拟饵；追口快时回收节奏不要过慢。"}
+      ],
+      "knowledge": {
+        "profile": {"body_shape": "修长侧扁，背部较平、腹缘锐利", "features": ["下颌突出、口明显向上", "体侧银白", "胸鳍较长", "尾鳍深叉"], "habitat": ["大型江河", "湖泊开阔区", "水库主湖面和湾口"], "food": "肉食性，主要追食小鱼和虾。", "season": ["春", "夏", "秋"]},
+        "fishing": {"water_layer": "中上层，追饵时接近水面", "season": ["晚春", "夏", "秋"], "bait": ["米诺", "亮片", "铅笔", "软鱼", "虾"], "method": ["远投路亚", "搜索炸水和鸟群", "浮钓活饵"], "summary": "先寻找饵鱼群、湾口和风浪交界，再根据鱼群深度选择拟饵和泳层。"}
+      },
+      "similarity": [{"species_id": "sharpbelly", "difference": "白条体型更小、腹棱更明显；翘嘴下颌突出更强，常见大型个体。"}, {"species_id": "mandarin_fish", "difference": "鳜鱼体高、头大且斑纹明显；翘嘴体型修长、体色更银亮。"}]
+    },
+    {
+      "id": "mandarin_fish",
+      "name": "鳜鱼",
+      "display_tag": "石区伏击者",
+      "scientific_name": "Siniperca chuatsi",
+      "alias": ["桂鱼", "桂花鱼"],
+      "category": "淡水鱼",
+      "family": "鳜科",
+      "genus": "Siniperca",
+      "summary": "口大、斑纹伪装明显，常在石缝和结构边伏击小鱼。",
+      "status": "ACTIVE",
+      "cover": {"image_url": null, "style": "ANIME_CARD", "title": "鳜鱼图鉴卡", "status": "DRAFT"},
+      "cards": [
+        {"type": "HERO", "title": "鳜鱼英雄卡", "image_url": null, "status": "DRAFT", "tag": "石区伏击者", "rarity": 4, "power": 4, "challenge": 5, "description": "藏在乱石、桥墩和陡坎阴影中的伏击型掠食鱼，关键是把饵送到结构边。"},
+        {"type": "IDENTIFICATION", "title": "鳜鱼识别卡", "image_url": null, "status": "DRAFT", "features": [{"title": "口裂", "text": "口大，头部比例明显，捕食能力强。"}, {"title": "斑纹", "text": "体侧有褐色不规则斑块，具有结构环境伪装色。"}, {"title": "硬棘", "text": "背鳍前部硬棘明显，鳃盖后缘也有棘。"}], "similar": [{"name": "黑鱼", "difference": "黑鱼体型细长、背臀鳍很长；鳜鱼体高侧扁，头大且斑纹碎。"}, {"name": "加州鲈", "difference": "加州鲈体侧常有纵带、上颌后端较靠后；鳜鱼斑纹不规则且鳃盖有棘。"}]},
+        {"type": "ECOLOGY", "title": "鳜鱼生态卡", "image_url": null, "status": "DRAFT", "habitat": ["清洁江河", "水库乱石区", "湖泊结构区", "桥墩和陡坎"], "water_layer": "中下层，紧贴石缝和障碍物", "season": "春夏秋，水温适中时伏击活性较高", "behavior": "依靠石缝、陡坎和阴影藏身，等待小鱼靠近后短距离突袭。", "diet": "主要捕食活鱼和虾。"},
+        {"type": "GEAR", "title": "鳜鱼装备卡", "image_url": null, "status": "DRAFT", "method": "贴底跳跃、贴结构慢搜或桥墩定点", "rod": "2.1–2.4 米中快调路亚竿", "line": "PE 1–2 号，搭配耐磨前导线", "hook": "铅头钩或德州钩，强度匹配结构环境", "bait": ["软鱼", "米诺", "铅头钩", "合规使用的活虾或小鱼"]},
+        {"type": "SKILL", "title": "鳜鱼作钓技术卡", "image_url": null, "status": "DRAFT", "find": "把乱石、陡坎、桥墩和水下落差作为第一批搜索目标。", "attract": "让拟饵贴近底部或结构边缓慢通过，制造容易捕捉的轨迹。", "action": "挂底与中鱼都要及时控线，避免让鱼钻入石缝。", "tip": "鳜鱼的窗口往往很短；位置比盲目加快回收更重要。"}
+      ],
+      "knowledge": {
+        "profile": {"body_shape": "体高侧扁，头大、背部隆起", "features": ["口裂大", "体侧有褐色不规则斑块", "背鳍前部硬棘明显", "鳃盖后缘有棘"], "habitat": ["清洁江河", "水库乱石区", "湖泊结构区", "桥墩和陡坎"], "food": "肉食性，主要捕食活鱼和虾。", "season": ["春", "夏", "秋"]},
+        "fishing": {"water_layer": "中下层，紧贴石缝和障碍物", "season": ["春", "夏", "秋"], "bait": ["软鱼", "米诺", "铅头钩", "合规使用的活虾或小鱼"], "method": ["贴底跳跃", "贴结构慢搜", "桥墩和石坎定点"], "summary": "重点搜索乱石、陡坎和桥墩阴影，需防止中鱼后钻入障碍。"}
+      },
+      "similarity": [{"species_id": "snakehead", "difference": "黑鱼体型细长、背臀鳍很长；鳜鱼体高侧扁，头大且斑纹碎。"}, {"species_id": "largemouth_bass", "difference": "加州鲈体侧常有纵带、上颌后端较靠后；鳜鱼斑纹不规则且鳃盖有棘。"}]
+    },
+    {
+      "id": "black_carp",
+      "name": "青鱼",
+      "display_tag": "深水硬底大物",
+      "scientific_name": "Mylopharyngodon piceus",
+      "alias": ["螺蛳青", "青鲩"],
+      "category": "淡水鱼",
+      "family": "鲤科",
+      "genus": "Mylopharyngodon",
+      "summary": "体色深青、头部较尖，是偏好螺蚌的大型底层鱼。",
+      "status": "ACTIVE",
+      "cover": {"image_url": null, "style": "ANIME_CARD", "title": "青鱼图鉴卡", "status": "DRAFT"},
+      "cards": [
+        {"type": "HERO", "title": "青鱼英雄卡", "image_url": null, "status": "DRAFT", "tag": "深水硬底大物", "rarity": 4, "power": 5, "challenge": 5, "description": "沉稳潜行在深水硬底的力量型目标鱼，考验耐心、线组和控鱼。"},
+        {"type": "IDENTIFICATION", "title": "青鱼识别卡", "image_url": null, "status": "DRAFT", "features": [{"title": "体色", "text": "背部和体侧颜色较深，各鳍多呈灰黑色。"}, {"title": "头型", "text": "头部较草鱼尖长，吻部轮廓更利落。"}, {"title": "体形", "text": "身体长而厚，鳞片大，整体力量感强。"}], "similar": [{"name": "草鱼", "difference": "草鱼体色偏青黄、头部较宽圆；青鱼色深、头尖，偏好螺蚌。"}, {"name": "鲤鱼", "difference": "鲤鱼口角有须且体色变化大；青鱼色深，体型更长，常在深水硬底。"}]},
+        {"type": "ECOLOGY", "title": "青鱼生态卡", "image_url": null, "status": "DRAFT", "habitat": ["江河深水区", "大型湖泊", "水库深坎", "硬底区"], "water_layer": "底层", "season": "夏秋更适合寻找深水大物", "behavior": "沿深坎、硬底和螺蚌丰富区域活动，移动距离可能较大。", "diet": "以螺、蚌等软体动物为主，也摄食甲壳动物。"},
+        {"type": "GEAR", "title": "青鱼装备卡", "image_url": null, "status": "DRAFT", "method": "重装备底钓、螺蛳窝守钓或深坎定点", "rod": "7.2 米以上大物竿或同等强度竿", "line": "主线 4–8 号，子线 3–6 号", "hook": "伊势尼 10–15 号或大物钩", "bait": ["螺蛳", "蚌肉", "玉米", "颗粒饵"]},
+        {"type": "SKILL", "title": "青鱼作钓技术卡", "image_url": null, "status": "DRAFT", "find": "通过水深、底质和螺蚌资源判断深坎硬底是否有鱼。", "attract": "用螺蛳或颗粒分次做窝，尽量减少抛投落水的惊扰。", "action": "中鱼后先控制鱼头，利用深水空间消耗体力，不急于硬拔。", "tip": "青鱼拼的是准备；竿、线、抄网和卸力都要提前匹配。"}
+      ],
+      "knowledge": {
+        "profile": {"body_shape": "长筒形，体厚而略侧扁", "features": ["背部和体侧颜色较深", "头部较草鱼尖长", "鳞片大且色深", "各鳍多呈灰黑色"], "habitat": ["江河深水区", "大型湖泊", "水库深坎和硬底区"], "food": "以螺、蚌等软体动物为主，也摄食甲壳动物。", "season": ["春", "夏", "秋"]},
+        "fishing": {"water_layer": "底层", "season": ["夏", "秋"], "bait": ["螺蛳", "蚌肉", "玉米", "颗粒饵"], "method": ["重装备底钓", "螺蛳窝守钓", "深坎和硬底定点"], "summary": "多在深水硬底和螺蚌丰富区域活动，线组与抄鱼装备需匹配大体型。"}
+      },
+      "similarity": [{"species_id": "grass_carp", "difference": "草鱼体色偏青黄、头部较宽圆；青鱼色深、头尖，偏好螺蚌。"}, {"species_id": "common_carp", "difference": "鲤鱼口角有须且体色变化大；青鱼色深，体型更长，常在深水硬底。"}]
+    },
+    {
+      "id": "tilapia",
+      "name": "罗非鱼",
+      "display_tag": "暖水活跃鱼",
+      "scientific_name": "Oreochromis spp.",
+      "alias": ["非洲鲫", "福寿鱼"],
+      "category": "淡水鱼",
+      "family": "慈鲷科",
+      "genus": "Oreochromis",
+      "summary": "喜温、适应性强，常在南方暖水河湖和池塘近岸活动。",
+      "status": "ACTIVE",
+      "cover": {"image_url": null, "style": "ANIME_CARD", "title": "罗非鱼图鉴卡", "status": "DRAFT"},
+      "cards": [
+        {"type": "HERO", "title": "罗非鱼英雄卡", "image_url": null, "status": "DRAFT", "tag": "暖水活跃鱼", "rarity": 2, "power": 3, "challenge": 2, "description": "暖水期活性高、适应力强，是南方近岸作钓中常见的目标鱼。"},
+        {"type": "IDENTIFICATION", "title": "罗非鱼识别卡", "image_url": null, "status": "DRAFT", "features": [{"title": "体型", "text": "体高侧扁，背部隆起，背鳍基部较长。"}, {"title": "尾鳍", "text": "尾鳍常见纵向条纹，体侧可能有深浅横纹。"}, {"title": "鳍棘", "text": "背鳍前部具硬棘，处理时要注意鳍刺。"}], "similar": [{"name": "鲫鱼", "difference": "鲫鱼体色偏银灰或黄褐且没有明显背鳍硬棘特征；罗非鱼体高、鳍棘明显。"}, {"name": "加州鲈", "difference": "加州鲈口裂大、体侧常有纵带；罗非鱼体高，尾鳍条纹更常见。"}]},
+        {"type": "ECOLOGY", "title": "罗非鱼生态卡", "image_url": null, "status": "DRAFT", "habitat": ["南方河湖", "水库浅湾", "养殖池塘", "温暖缓流水域"], "water_layer": "中下层和近岸浅水", "season": "晚春至初秋，水温高时活跃", "behavior": "喜温，常在近岸浅水和结构边觅食，密度高时抢食明显。", "diet": "藻类、有机碎屑、水生昆虫和人工饲料。"},
+        {"type": "GEAR", "title": "罗非鱼装备卡", "image_url": null, "status": "DRAFT", "method": "浮钓近底、底钓或近岸结构区搜索", "rod": "3.6–5.4 米轻中量竿", "line": "主线 1–2 号，子线 0.6–1.2 号", "hook": "袖钩 4–7 号或伊势尼 3–6 号", "bait": ["腥味商品饵", "蚯蚓", "虾肉", "颗粒饲料"]},
+        {"type": "SKILL", "title": "罗非鱼作钓技术卡", "image_url": null, "status": "DRAFT", "find": "先从背风向阳的浅湾、进水口和近岸结构开始搜索。", "attract": "利用稳定雾化和少量补窝聚鱼，观察抢食速度。", "action": "鱼密度高时加快频率，鱼口轻时降低饵团和动作幅度。", "tip": "暖水期鱼口快，线组和钩型要兼顾入口与鳍刺处理。"}
+      ],
+      "knowledge": {
+        "profile": {"body_shape": "体高侧扁，背部隆起", "features": ["背鳍基部长且前部具硬棘", "尾鳍常见纵向条纹", "体侧可有深浅相间横纹", "口端位"], "habitat": ["南方河湖", "水库浅湾", "养殖池塘", "温暖缓流水域"], "food": "杂食性，摄食藻类、有机碎屑、水生昆虫和人工饲料。", "season": ["春", "夏", "秋"]},
+        "fishing": {"water_layer": "中下层和近岸浅水", "season": ["晚春", "夏", "初秋"], "bait": ["腥味商品饵", "蚯蚓", "虾肉", "颗粒饲料"], "method": ["浮钓近底", "底钓", "近岸结构区搜索"], "summary": "温暖水域鱼口更积极，可根据密度和抢食程度调整饵料雾化与钓层。"}
+      },
+      "similarity": [{"species_id": "crucian_carp", "difference": "鲫鱼体色偏银灰或黄褐；罗非鱼体高，背鳍硬棘和尾鳍条纹更明显。"}, {"species_id": "largemouth_bass", "difference": "加州鲈口裂大、体侧常有纵带；罗非鱼体高，尾鳍条纹更常见。"}]
+    },
+    {
+      "id": "largemouth_bass",
+      "name": "加州鲈",
+      "display_tag": "结构区路亚鱼",
+      "scientific_name": "Micropterus salmoides",
+      "alias": ["大口黑鲈", "加州鲈鱼"],
+      "category": "淡水鱼",
+      "family": "太阳鱼科",
+      "genus": "Micropterus",
+      "summary": "口裂大、体侧有深色纵带，是常见的伏击型淡水掠食鱼。",
+      "status": "ACTIVE",
+      "cover": {"image_url": null, "style": "ANIME_CARD", "title": "加州鲈图鉴卡", "status": "DRAFT"},
+      "cards": [
+        {"type": "HERO", "title": "加州鲈英雄卡", "image_url": null, "status": "DRAFT", "tag": "结构区路亚鱼", "rarity": 3, "power": 4, "challenge": 4, "description": "围绕水草、倒木和石坎伏击饵鱼的经典路亚目标鱼。"},
+        {"type": "IDENTIFICATION", "title": "加州鲈识别卡", "image_url": null, "status": "DRAFT", "features": [{"title": "口裂", "text": "上颌后端通常超过眼后缘，口裂大。"}, {"title": "纵带", "text": "体侧常有一条较明显的深色纵向斑带。"}, {"title": "背鳍", "text": "背鳍前部具硬棘，尾鳍呈浅凹形。"}], "similar": [{"name": "鳜鱼", "difference": "鳜鱼体侧斑纹不规则、鳃盖有棘；加州鲈常见纵带，体形更流线。"}, {"name": "黑鱼", "difference": "黑鱼身体细长、背臀鳍很长；加州鲈体高侧扁，纵带更明显。"}]},
+        {"type": "ECOLOGY", "title": "加州鲈生态卡", "image_url": null, "status": "DRAFT", "habitat": ["水库岸线", "池塘", "湖泊水草区", "倒木和乱石结构区"], "water_layer": "中上层至近底层，随结构和饵鱼移动", "season": "春夏秋，结构区活性随水温变化", "behavior": "依靠结构和阴影埋伏，饵鱼靠近时短距离追击。", "diet": "小鱼、虾、蛙类和大型水生昆虫。"},
+        {"type": "GEAR", "title": "加州鲈装备卡", "image_url": null, "status": "DRAFT", "method": "路亚搜索、贴结构抛投或慢拖跳底", "rod": "1.98–2.13 米中快调路亚竿", "line": "PE 0.8–1.5 号或同等强度碳线", "hook": "德州钩、曲柄钩或拟饵原装钩", "bait": ["软虫", "米诺", "铅头钩软鱼", "复合亮片"]},
+        {"type": "SKILL", "title": "加州鲈作钓技术卡", "image_url": null, "status": "DRAFT", "find": "优先搜索水草边、倒木、石坎和明暗交界。", "attract": "让拟饵沿结构边自然通过，速度根据水温和鱼活性调整。", "action": "发现跟口或轻触后保留停顿，再完成稳定刺鱼。", "tip": "结构越复杂越要精确落点；先保护鱼线，再追求更深的标点。"}
+      ],
+      "knowledge": {
+        "profile": {"body_shape": "体侧扁，头大、尾柄有力", "features": ["上颌后端通常超过眼后缘", "体侧有深色纵向斑带", "背鳍前部具硬棘", "尾鳍浅凹"], "habitat": ["水库岸线", "池塘", "湖泊水草区", "倒木和乱石结构区"], "food": "肉食性，主要捕食小鱼、虾、蛙类和大型水生昆虫。", "season": ["春", "夏", "秋"]},
+        "fishing": {"water_layer": "中上层至近底层，随结构和饵鱼移动", "season": ["春", "夏", "秋"], "bait": ["软虫", "米诺", "铅头钩软鱼", "复合亮片"], "method": ["路亚搜索", "贴结构抛投", "慢拖和跳底"], "summary": "优先搜索水草边、倒木、石坎和明暗交界，并按活性调整回收速度。"}
+      },
+      "similarity": [{"species_id": "mandarin_fish", "difference": "鳜鱼体侧斑纹不规则、鳃盖有棘；加州鲈常见纵带，体形更流线。"}, {"species_id": "snakehead", "difference": "黑鱼身体细长、背臀鳍很长；加州鲈体高侧扁，纵带更明显。"}]
+    }
+  ]
+}

@@ -19,6 +19,7 @@ from app.crop_qa import router as crop_qa_router, templates as crop_qa_templates
 from app.crop_dataset_api import router as crop_dataset_router
 from app.fish_knowledge.api import router as fish_knowledge_router
 from app.fish_knowledge.admin import router as fish_knowledge_admin_router
+from app.fish_knowledge.content_seed import seed_fish_knowledge_content
 from app.fish_knowledge.seed import seed_initial_fish_knowledge
 from app.p0_automation import install_feedback_automation, router as automation_router
 from app.unified_nav import install_unified_nav
@@ -47,6 +48,7 @@ def seed_target_species_catalog() -> None:
     try:
         ensure_target_species(db)
         seed_initial_fish_knowledge(db)
+        seed_fish_knowledge_content(db)
     finally:
         db.close()
 
