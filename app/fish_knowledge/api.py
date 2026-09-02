@@ -30,6 +30,7 @@ router = APIRouter(prefix="/api/v1/fish", tags=["fish-knowledge"])
 class SpeciesListItem(BaseModel):
     id: str
     name_cn: str
+    category: str
     cover_image: str | None
     summary: str
 
@@ -368,6 +369,7 @@ def list_fish_species(db: Session = Depends(get_db)) -> list[SpeciesListItem]:
         SpeciesListItem(
             id=row.id,
             name_cn=row.name_cn,
+            category=row.category,
             cover_image=_cover_image(row),
             summary=row.summary,
         )

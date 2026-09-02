@@ -198,10 +198,12 @@ def test_species_list_returns_active_species_and_gallery_cover(tmp_path, monkeyp
     assert body[0] == {
         "id": "grass_carp",
         "name_cn": "草鱼",
+        "category": "淡水鱼",
         "cover_image": "https://cdn.example/grass-standard.jpg",
         "summary": "体型修长，是常见的大型淡水目标鱼",
     }
     assert body[1]["cover_image"] is None
+    assert body[1]["category"] == "淡水鱼"
 
 
 def test_species_detail_returns_all_knowledge_sections(tmp_path, monkeypatch):
