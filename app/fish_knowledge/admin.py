@@ -34,7 +34,7 @@ from app.fish_knowledge.gallery import (
     GalleryUploadError,
     inspect_knowledge_asset,
     inspect_gallery_image,
-    knowledge_asset_url,
+    managed_knowledge_asset_url,
     store_cms_knowledge_asset,
     store_knowledge_asset,
     store_gallery_image,
@@ -70,8 +70,12 @@ def _validate_url(value: str | None, *, optional: bool = False) -> str | None:
     if value is None and optional:
         return None
     result = (value or "").strip()
-    if not result.startswith("https://"):
-        raise ValueError("URL 必须使用 https://")
+    # Uploaded Fish Knowledge assets are served through the public read-only
+    # media endpoint. Keep accepting normal HTTPS URLs for manually managed
+    # content, while allowing the managed URL to round-trip through the CMS
+    # save forms after an upload.
+    if not result.startswith("https://") and not result.startswith("/api/v1/fish/knowledge-media/"):
+        raise ValueError("URL 必须使用 https:// 或 YuJian 托管素材地址")
     if len(result) > 2048:
         raise ValueError("URL 过长")
     return result
@@ -527,7 +531,7 @@ def _cover_dict(row: FishSpeciesCover) -> dict:
     return {
         "id": row.id,
         "species_id": row.species_id,
-        "image_url": row.image_url,
+        "image_url": managed_knowledge_asset_url(row.species_id, "COVER", row.image_url),
         "style": row.style,
         "title": row.title,
         "status": row.status,
@@ -627,15 +631,15 @@ def _publication_missing(db: Session, species: FishSpecies) -> list[str]:
         missing.append("species")
 
     cover = _get_species_cover(db, species.id)
-    if cover is None or cover.status != "ACTIVE" or not (cover.image_url or "").strip():
+    if cover is None or not (cover.image_url or "").strip():
         missing.append("cover")
 
-    active_types = {
+    available_types = {
         normalize_card_type(card.card_type)
         for card in db.scalars(select(FishCard).where(FishCard.species_id == species.id)).all()
-        if card.status == "ACTIVE" and (card.image_url or "").strip()
+        if (card.image_url or "").strip()
     }
-    missing.extend(card_type.lower() for card_type in CARD_TYPE_ORDER if card_type not in active_types)
+    missing.extend(card_type.lower() for card_type in CARD_TYPE_ORDER if card_type not in available_types)
 
     knowledge_ready = bool(
         species.profile
@@ -667,7 +671,7 @@ def _card_dict(row: FishCard) -> dict:
         # the database field name explicit for Admin clients.
         "type": card_type,
         "title": row.title,
-        "image_url": row.image_url,
+        "image_url": managed_knowledge_asset_url(row.species_id, card_type, row.image_url),
         "description": card_display_description(content, row.description),
         "content": content,
         "sort_order": row.sort_order,
@@ -849,6 +853,25 @@ def _publish_species(species_id: str, db: Session) -> dict:
     missing = _publication_missing(db, row)
     if missing:
         raise HTTPException(status_code=409, detail={"success": False, "missing": missing})
+
+    # Publishing is the DRAFT -> ACTIVE transition for the complete asset
+    # package. Operators can upload/save content in DRAFT first and use this
+    # single action to publish the Cover and one image-backed card per type.
+    cover = _get_species_cover(db, row.id)
+    if cover is not None:
+        cover.status = "ACTIVE"
+    cards = db.scalars(
+        select(FishCard).where(FishCard.species_id == row.id).order_by(FishCard.sort_order, FishCard.id)
+    ).all()
+    for card_type in CARD_TYPE_ORDER:
+        candidates = [
+            card
+            for card in cards
+            if normalize_card_type(card.card_type) == card_type and (card.image_url or "").strip()
+        ]
+        active = next((card for card in candidates if card.status == "ACTIVE"), None)
+        if active is None and candidates:
+            candidates[0].status = "ACTIVE"
     row.status = "ACTIVE"
     _commit(db)
     return {"success": True, "id": row.id, "species_id": row.id, "status": row.status, "missing": []}
@@ -1304,7 +1327,12 @@ async def upload_cms_fish_asset(
             image_metadata=image_metadata,
         )
         asset_written = True
-        image_url = knowledge_asset_url(bucket_name, object_name)
+        # The runtime service account can read the bucket, but the bucket is
+        # intentionally not public. Persist a same-origin managed URL so the
+        # CMS preview and the App can read the image through YuJian's public
+        # Fish Knowledge media endpoint.
+        asset_key = object_name.rsplit("/", 1)[-1]
+        image_url = f"/api/v1/fish/knowledge-media/{species.id}/{normalized_type.lower()}/{asset_key}"
 
         if normalized_type == "COVER":
             row = _get_species_cover(db, species.id)

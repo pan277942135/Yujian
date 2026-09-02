@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+from urllib.parse import urlsplit
 
 from PIL import Image, UnidentifiedImageError
 from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
@@ -96,6 +97,42 @@ def knowledge_asset_url(bucket_name: str, object_name: str) -> str:
     """Return the canonical GCS HTTPS URL persisted by the CMS contract."""
 
     return f"https://storage.googleapis.com/{bucket_name}/{object_name}"
+
+
+def managed_knowledge_asset_url(species_id: str, asset_type: str, image_url: str | None) -> str:
+    """Map a legacy private GCS URL to the public managed media endpoint.
+
+    The first CMS upload implementation persisted ``storage.googleapis.com``
+    URLs. The bucket is private by design, so those values cannot be rendered
+    by a browser or Android client. Keep old database rows readable while new
+    uploads use the managed URL directly.
+    """
+
+    value = (image_url or "").strip()
+    if not value:
+        return value
+    if value.startswith("/api/v1/fish/knowledge-media/"):
+        return value
+
+    normalized_type = "cover" if str(asset_type).strip().upper() == "COVER" else str(asset_type).strip().lower()
+    fixed_asset_key = "cover.webp" if normalized_type == "cover" else f"{normalized_type}.webp"
+    fixed_asset_directory = "cover" if normalized_type == "cover" else "cards"
+    parsed = urlsplit(value)
+    parts = [part for part in parsed.path.split("/") if part]
+    try:
+        marker = parts.index("fish-assets")
+    except ValueError:
+        return value
+    if (
+        parsed.scheme == "https"
+        and parsed.netloc == "storage.googleapis.com"
+        and len(parts) == marker + 4
+        and parts[marker + 1] == species_id
+        and parts[marker + 2] == fixed_asset_directory
+        and parts[marker + 3] == fixed_asset_key
+    ):
+        return f"/api/v1/fish/knowledge-media/{species_id}/{normalized_type}/{fixed_asset_key}"
+    return value
 
 
 def store_cms_knowledge_asset(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app import models  # noqa: F401
@@ -207,6 +207,49 @@ def test_completion_and_publish_validate_all_required_content(tmp_path):
         published = publish_admin_species("crud_test_fish", db)
         assert published["success"] is True
         assert db.get(FishSpecies, "crud_test_fish").status == "ACTIVE"
+    finally:
+        db.close()
+
+
+def test_publish_promotes_complete_draft_asset_package(tmp_path):
+    db = _session(tmp_path)
+    try:
+        _create_species(db)
+        compat_put_species_cover(
+            "crud_test_fish",
+            CoverPut(url="/api/v1/fish/knowledge-media/crud_test_fish/cover/cover.webp", status="DRAFT"),
+            db,
+        )
+        for card_type in CARD_TYPE_ORDER:
+            compat_put_species_card(
+                "crud_test_fish",
+                card_type,
+                CardPatch(
+                    image_url=f"/api/v1/fish/knowledge-media/crud_test_fish/{card_type.lower()}/{card_type.lower()}.webp",
+                    status="DRAFT",
+                ),
+                db,
+            )
+        compat_put_profile(
+            "crud_test_fish",
+            ProfileUpsert(body_shape="体型修长", features=["鳞片明显"]),
+            db,
+        )
+        compat_put_fishing(
+            "crud_test_fish",
+            FishingUpsert(water_layer="中上层", bait=["玉米"]),
+            db,
+        )
+
+        published = publish_admin_species("crud_test_fish", db)
+        assert published["success"] is True
+        assert db.get(FishSpecies, "crud_test_fish").status == "ACTIVE"
+        cover = db.scalar(select(FishSpeciesCover).where(FishSpeciesCover.species_id == "crud_test_fish"))
+        assert cover is not None and cover.status == "ACTIVE"
+        cards = db.scalars(
+            select(FishCard).where(FishCard.species_id == "crud_test_fish").order_by(FishCard.sort_order)
+        ).all()
+        assert [card.status for card in cards] == ["ACTIVE"] * 5
     finally:
         db.close()
 

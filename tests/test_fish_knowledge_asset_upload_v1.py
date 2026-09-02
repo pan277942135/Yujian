@@ -53,6 +53,9 @@ class FakeBlob:
         self.content_type = content_type
         self.uploads += 1
 
+    def download_as_bytes(self, **_kwargs):
+        return self.data or b""
+
 
 class FakeBucket:
     def __init__(self):
@@ -103,7 +106,9 @@ def test_short_cms_upload_binds_cover_and_cards_to_fixed_gcs_objects(monkeypatch
             ("SKILL", "fish-assets/grass_carp/cards/skill.webp"),
         ):
             result = _call(db, asset_type, _png_bytes())
-            expected_url = f"https://storage.googleapis.com/test-bucket/{object_name}"
+            storage_type = "cover" if asset_type == "COVER" else asset_type.lower()
+            asset_key = object_name.rsplit("/", 1)[-1]
+            expected_url = f"/api/v1/fish/knowledge-media/grass_carp/{storage_type}/{asset_key}"
             assert result["success"] is True
             assert result["url"] == expected_url
             assert result["asset_type"] == asset_type
@@ -131,12 +136,41 @@ def test_short_cms_upload_binds_cover_and_cards_to_fixed_gcs_objects(monkeypatch
         skill = db.scalar(
             select(FishCard).where(FishCard.species_id == "grass_carp", FishCard.card_type == "SKILL")
         )
-        assert cover is not None and cover.image_url.endswith("/cover/cover.webp")
-        assert hero is not None and hero.image_url.endswith("/cards/hero.webp")
-        assert skill is not None and skill.image_url.endswith("/cards/skill.webp")
+        assert cover is not None and cover.image_url == "/api/v1/fish/knowledge-media/grass_carp/cover/cover.webp"
+        assert hero is not None and hero.image_url == "/api/v1/fish/knowledge-media/grass_carp/hero/hero.webp"
+        assert skill is not None and skill.image_url == "/api/v1/fish/knowledge-media/grass_carp/skill/skill.webp"
         assert cover.status == "DRAFT"
         assert hero.status == "DRAFT"
         assert skill.status == "DRAFT"
+    finally:
+        db.close()
+
+
+def test_short_cms_upload_url_is_readable_through_managed_media_route(monkeypatch, tmp_path):
+    db = _session(tmp_path)
+    bucket = FakeBucket()
+    client = FakeStorageClient(bucket)
+    monkeypatch.setattr("app.fish_knowledge.admin.storage.Client", lambda: client)
+    monkeypatch.setattr("app.fish_knowledge.admin.get_bucket_name", lambda: "test-bucket")
+    monkeypatch.setattr("app.fish_knowledge.api.storage.Client", lambda: client)
+    monkeypatch.setattr("app.fish_knowledge.api.get_bucket_name", lambda: "test-bucket")
+    try:
+        _create_species(db)
+        result = _call(db, "COVER", _png_bytes())
+        assert result["url"] == "/api/v1/fish/knowledge-media/grass_carp/cover/cover.webp"
+        from app.fish_knowledge.api import get_knowledge_media
+
+        response = get_knowledge_media("grass_carp", "cover", "cover.webp", db)
+        assert response.media_type == "image/webp"
+        with Image.open(io.BytesIO(response.body)) as rendered:
+            assert rendered.size == (32, 20)
+
+        card_result = _call(db, "HERO", _png_bytes((20, 60, 120)))
+        card_response = get_knowledge_media("grass_carp", "hero", "hero.webp", db)
+        assert card_result["url"] == "/api/v1/fish/knowledge-media/grass_carp/hero/hero.webp"
+        assert card_response.media_type == "image/webp"
+        with Image.open(io.BytesIO(card_response.body)) as rendered:
+            assert rendered.size == (32, 20)
     finally:
         db.close()
 
@@ -178,7 +212,7 @@ def test_short_cms_upload_reports_binding_failure_after_storage(monkeypatch, tmp
         payload = json.loads(response.body)
         assert payload["error"] == "binding_error"
         assert payload["message"] == "图片已上传，但绑定保存失败"
-        assert payload["url"].endswith("/fish-assets/grass_carp/cover/cover.webp")
+        assert payload["url"] == "/api/v1/fish/knowledge-media/grass_carp/cover/cover.webp"
         assert payload["storage"]["object_name"] == "fish-assets/grass_carp/cover/cover.webp"
     finally:
         db.close()

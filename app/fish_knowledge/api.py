@@ -16,7 +16,7 @@ from app.fish_knowledge.cards import FishCard, normalize_card_type
 from app.fish_knowledge.cover import FishSpeciesCover
 from app.fish_knowledge.content import card_display_description, parse_card_content
 from app.fish_knowledge.fishing import FishFishing
-from app.fish_knowledge.gallery import FishGalleryImage
+from app.fish_knowledge.gallery import FishGalleryImage, managed_knowledge_asset_url
 from app.fish_knowledge.profile import FishProfile
 from app.fish_knowledge.similarity import FishSimilarity
 from app.fish_knowledge.species import SPECIES_ID_ALIASES, FishSpecies
@@ -192,7 +192,7 @@ def _cover_dict(row: FishSpeciesCover | None, *, active_only: bool = True) -> di
     return {
         "id": row.id,
         "species_id": row.species_id,
-        "image_url": row.image_url,
+        "image_url": managed_knowledge_asset_url(row.species_id, "COVER", row.image_url),
         "style": row.style,
         "title": row.title,
         "status": row.status,
@@ -201,7 +201,7 @@ def _cover_dict(row: FishSpeciesCover | None, *, active_only: bool = True) -> di
 
 def _cover_image(species: FishSpecies) -> str | None:
     if species.cover is not None and species.cover.status == "ACTIVE" and species.cover.image_url.strip():
-        return species.cover.image_url
+        return managed_knowledge_asset_url(species.id, "COVER", species.cover.image_url)
     return species.gallery[0].url if species.gallery else None
 
 
@@ -214,7 +214,7 @@ def _card(row: FishCard) -> CardOut:
         card_type=card_type,
         type=card_type,
         title=row.title,
-        image_url=row.image_url,
+        image_url=managed_knowledge_asset_url(row.species_id, card_type, row.image_url),
         description=card_display_description(content, row.description),
         content=content,
         sort_order=row.sort_order,
@@ -435,7 +435,9 @@ def get_knowledge_media(species_id: str, asset_type: str, asset_key: str, db: Se
     normalized_type = normalize_card_type(asset_type) if asset_type.upper() != "COVER" else "cover"
     if normalized_type != "cover" and normalized_type not in {"HERO", "IDENTIFICATION", "ECO", "GEAR", "SKILL"}:
         raise HTTPException(status_code=404, detail="knowledge asset not found")
-    if not re.fullmatch(r"[a-f0-9]{64}\.(?:jpg|png|webp)", asset_key):
+    is_hashed_asset = bool(re.fullmatch(r"[a-f0-9]{64}\.(?:jpg|png|webp)", asset_key))
+    fixed_asset_key = "cover.webp" if normalized_type == "cover" else f"{normalized_type.lower()}.webp"
+    if not is_hashed_asset and asset_key != fixed_asset_key:
         raise HTTPException(status_code=404, detail="knowledge asset not found")
     row = load_species_with_knowledge(db, species_id, active_only=False)
     if row is None:
@@ -443,10 +445,14 @@ def get_knowledge_media(species_id: str, asset_type: str, asset_key: str, db: Se
     storage_type = "cover" if normalized_type == "cover" else normalized_type.lower()
     expected_url = f"/api/v1/fish/knowledge-media/{row.id}/{storage_type}/{asset_key}"
     if normalized_type == "cover":
-        is_referenced = row.cover is not None and row.cover.image_url == expected_url
+        is_referenced = (
+            row.cover is not None
+            and managed_knowledge_asset_url(row.id, "COVER", row.cover.image_url) == expected_url
+        )
     else:
         is_referenced = any(
-            normalize_card_type(card.card_type) == normalized_type and card.image_url == expected_url
+            normalize_card_type(card.card_type) == normalized_type
+            and managed_knowledge_asset_url(row.id, normalized_type, card.image_url) == expected_url
             for card in row.cards
         )
     if not is_referenced:
@@ -454,9 +460,9 @@ def get_knowledge_media(species_id: str, asset_type: str, asset_key: str, db: Se
 
     try:
         client = storage.Client()
-        blob = client.bucket(get_bucket_name()).blob(
-            f"fish_knowledge/{row.id}/{storage_type}/{asset_key}"
-        )
+        object_prefix = "fish_knowledge" if is_hashed_asset else "fish-assets"
+        object_directory = storage_type if is_hashed_asset else ("cover" if storage_type == "cover" else "cards")
+        blob = client.bucket(get_bucket_name()).blob(f"{object_prefix}/{row.id}/{object_directory}/{asset_key}")
         if not blob.exists(client):
             raise HTTPException(status_code=404, detail="knowledge asset not found")
         content = blob.download_as_bytes(timeout=120, retry=DOWNLOAD_RETRY)
@@ -469,5 +475,7 @@ def get_knowledge_media(species_id: str, asset_type: str, asset_key: str, db: Se
     return Response(
         content=content,
         media_type=media_type,
-        headers={"Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff"},
+        # Cover/Card slots are replaceable. Do not let a browser keep an old
+        # image after an operator uploads a replacement to the same slot URL.
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
     )
