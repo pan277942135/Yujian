@@ -5,6 +5,7 @@
 CREATE TABLE IF NOT EXISTS inference_assets (
     image_id VARCHAR(256) PRIMARY KEY,
     source VARCHAR(64) NOT NULL DEFAULT 'android_detector',
+    source_batch VARCHAR(128),
     status VARCHAR(32) NOT NULL DEFAULT 'RECEIVED',
     record_gcs_uri TEXT NOT NULL,
     image_gcs_uri TEXT NOT NULL,
@@ -23,6 +24,7 @@ CREATE TABLE IF NOT EXISTS inference_assets (
 );
 
 ALTER TABLE datasets ADD COLUMN IF NOT EXISTS pipeline_type VARCHAR(64) NOT NULL DEFAULT 'WHOLE_IMAGE_V1';
+ALTER TABLE inference_assets ADD COLUMN IF NOT EXISTS source_batch VARCHAR(128);
 ALTER TABLE training_runs ADD COLUMN IF NOT EXISTS pipeline_type VARCHAR(64) NOT NULL DEFAULT 'WHOLE_IMAGE_V1';
 ALTER TABLE training_runs ADD COLUMN IF NOT EXISTS detector_version VARCHAR(128);
 ALTER TABLE training_runs ADD COLUMN IF NOT EXISTS crop_version VARCHAR(128);

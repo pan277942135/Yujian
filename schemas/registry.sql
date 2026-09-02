@@ -61,6 +61,26 @@ CREATE TABLE IF NOT EXISTS review_events (
   FOREIGN KEY(image_asset_id) REFERENCES image_assets(id)
 );
 
+CREATE TABLE IF NOT EXISTS batch_crop_reviews (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  batch_id TEXT NOT NULL,
+  image_asset_id INTEGER NOT NULL UNIQUE,
+  image_id TEXT NOT NULL,
+  candidate_bbox_json TEXT,
+  accepted_bbox_json TEXT,
+  detector_version TEXT,
+  species_key TEXT,
+  species_name TEXT,
+  status TEXT NOT NULL DEFAULT 'REVIEW_REQUIRED',
+  reviewer TEXT,
+  reviewed_at TEXT,
+  notes TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(batch_id) REFERENCES batches(batch_id),
+  FOREIGN KEY(image_asset_id) REFERENCES image_assets(id)
+);
+
 CREATE TABLE IF NOT EXISTS fish_presence_results (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   image_asset_id INTEGER NOT NULL UNIQUE,
@@ -138,6 +158,7 @@ CREATE TABLE IF NOT EXISTS feedback_events (
 CREATE TABLE IF NOT EXISTS inference_assets (
   image_id TEXT PRIMARY KEY,
   source TEXT NOT NULL DEFAULT 'android_detector',
+  source_batch TEXT,
   status TEXT NOT NULL DEFAULT 'RECEIVED',
   record_gcs_uri TEXT NOT NULL,
   image_gcs_uri TEXT NOT NULL,
@@ -352,6 +373,8 @@ CREATE INDEX IF NOT EXISTS idx_batches_status ON batches(status);
 CREATE INDEX IF NOT EXISTS idx_species_status ON species_catalog(status);
 CREATE INDEX IF NOT EXISTS idx_images_review ON image_assets(review_status);
 CREATE INDEX IF NOT EXISTS idx_images_truth ON image_assets(truth_species);
+CREATE INDEX IF NOT EXISTS idx_batch_crop_review_batch ON batch_crop_reviews(batch_id);
+CREATE INDEX IF NOT EXISTS idx_batch_crop_review_status ON batch_crop_reviews(status);
 CREATE INDEX IF NOT EXISTS idx_presence_batch ON fish_presence_results(batch_id);
 CREATE INDEX IF NOT EXISTS idx_presence_status ON fish_presence_results(status);
 CREATE INDEX IF NOT EXISTS idx_fingerprint_batch ON image_fingerprints(batch_id);

@@ -215,6 +215,11 @@ def batches_page(request: Request):
     return templates.TemplateResponse(request=request, name="batches.html", context={})
 
 
+@app.get("/crop-datasets", response_class=HTMLResponse)
+def crop_datasets_page(request: Request):
+    return templates.TemplateResponse(request=request, name="crop_datasets.html", context={})
+
+
 @app.get("/review", response_class=HTMLResponse)
 def review_page(request: Request):
     return templates.TemplateResponse(request=request, name="review.html", context={})

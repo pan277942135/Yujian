@@ -23,6 +23,7 @@ CROP_VALIDATOR_VERSION = "CROP_DATASET_VALIDATOR_V1"
 CROP_PIPELINE_TYPE = "CROP_CLASSIFIER_V1"
 CROP_INPUT_TYPES = {"crop", "crop_image"}
 REVIEWED_STATUSES = {"ACCEPTED", "TRAINING_READY"}
+PRODUCTION_EXPAND_RATIO = 0.15
 
 
 class CropDatasetValidationError(ValueError):
@@ -305,6 +306,9 @@ def validate_crop_rows(
                     raise ValueError
             except (TypeError, ValueError):
                 add(index, image_id, "INVALID_EXPAND_RATIO", "expand_ratio must be between 0 and 1")
+            else:
+                if abs(ratio - PRODUCTION_EXPAND_RATIO) > 1e-6:
+                    add(index, image_id, "EXPAND_RATIO_MISMATCH", f"production crop manifests require expand_ratio={PRODUCTION_EXPAND_RATIO}")
             for dimension in ("crop_width", "crop_height"):
                 try:
                     if int(row.get(dimension)) <= 0:
@@ -333,6 +337,7 @@ def validate_crop_rows(
                 "REVIEW_STATUS_INVALID",
                 "MISSING_CREATED_AT",
                 "INVALID_EXPAND_RATIO",
+                "EXPAND_RATIO_MISMATCH",
                 "INVALID_CROP_WIDTH",
                 "INVALID_CROP_HEIGHT",
                 "INPUT_TYPE_INVALID",
@@ -342,6 +347,7 @@ def validate_crop_rows(
         )
         checks["candidate_bbox_absent"] = bool(materialized) and "CANDIDATE_BBOX_FORBIDDEN" not in codes
         checks["classifier_input_is_crop"] = bool(materialized) and "ORIGINAL_INPUT_FORBIDDEN" not in codes and "INPUT_TYPE_INVALID" not in codes
+        checks["expand_ratio_contract"] = bool(materialized) and "EXPAND_RATIO_MISMATCH" not in codes and "INVALID_EXPAND_RATIO" not in codes
     valid_rows = len(materialized) - len({error["row"] for error in errors})
     return {
         "validator_version": CROP_VALIDATOR_VERSION,

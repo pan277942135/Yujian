@@ -16,6 +16,7 @@ _NAV_ITEMS = [
     ("/fish-knowledge", "鱼鉴内容", "prefix"),
     ("/feedback", "用户反馈", "prefix"),
     ("/datasets", "数据集", "prefix"),
+    ("/crop-datasets", "Crop Dataset", "prefix"),
     ("/training", "模型训练", "prefix"),
     ("/inference", "模型实测", "prefix"),
     ("/intelligence", "模型智能分析", "prefix"),

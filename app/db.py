@@ -86,6 +86,12 @@ def _ensure_production_pipeline_columns() -> None:
             "classifier_version": "VARCHAR(128)",
             "dataset_version": "VARCHAR(128)",
         },
+        "batch_crop_reviews": {
+            "detector_version": "VARCHAR(128)",
+        },
+        "inference_assets": {
+            "source_batch": "VARCHAR(128)",
+        },
     }
     inspector = inspect(engine)
     with engine.begin() as connection:

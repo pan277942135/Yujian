@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, synonym
 
 from app.db import Base
 
@@ -23,6 +23,7 @@ class Batch(Base):
     notes = Column(Text)
 
     images = relationship("ImageAsset", back_populates="batch", cascade="all, delete-orphan")
+    crop_reviews = relationship("BatchCropReview", back_populates="batch", cascade="all, delete-orphan")
 
 
 class SpeciesCatalog(Base):
@@ -70,6 +71,44 @@ class ImageAsset(Base):
 
     batch = relationship("Batch", back_populates="images")
     review_events = relationship("ReviewEvent", back_populates="image", cascade="all, delete-orphan")
+    crop_review = relationship("BatchCropReview", back_populates="image", uselist=False, cascade="all, delete-orphan")
+
+
+class BatchCropReview(Base):
+    """Human gate for turning a normal Batch image into a reviewed crop.
+
+    ``candidate_bbox_json`` is a detector/presence suggestion only.  The
+    builder consumes ``accepted_bbox_json`` and rows in ACCEPTED or
+    TRAINING_READY state; it never promotes the candidate implicitly.
+    """
+
+    __tablename__ = "batch_crop_reviews"
+    __table_args__ = (
+        UniqueConstraint("image_asset_id", name="uq_batch_crop_review_image"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    batch_id = Column(String(128), ForeignKey("batches.batch_id"), nullable=False, index=True)
+    image_asset_id = Column(Integer, ForeignKey("image_assets.id"), nullable=False, index=True)
+    image_id = Column(String(256), nullable=False, index=True)
+    candidate_bbox_json = Column(Text)
+    accepted_bbox_json = Column(Text)
+    detector_version = Column(String(128), index=True)
+    species_key = Column(String(128), index=True)
+    species_name = Column(String(128))
+    # Contract aliases keep the physical schema compact while accepting the
+    # explicit names used by API clients and review exports.
+    accepted_species_key = synonym("species_key")
+    accepted_species_name = synonym("species_name")
+    status = Column(String(32), nullable=False, default="REVIEW_REQUIRED", index=True)
+    reviewer = Column(String(256))
+    reviewed_at = Column(DateTime(timezone=True))
+    notes = Column(Text)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+    image = relationship("ImageAsset", back_populates="crop_review")
+    batch = relationship("Batch", back_populates="crop_reviews")
 
 
 class ReviewEvent(Base):
@@ -142,6 +181,7 @@ class InferenceAsset(Base):
 
     image_id = Column(String(256), primary_key=True)
     source = Column(String(64), nullable=False, default="android_detector")
+    source_batch = Column(String(128), index=True)
     status = Column(String(32), nullable=False, default="RECEIVED", index=True)
     record_gcs_uri = Column(Text, nullable=False)
     image_gcs_uri = Column(Text, nullable=False)

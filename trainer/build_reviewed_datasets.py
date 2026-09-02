@@ -133,6 +133,22 @@ def _created_at(record: dict[str, Any]) -> str:
     return str(value).strip() if value not in (None, "") else datetime.now(timezone.utc).isoformat()
 
 
+def _source_batch(record: dict[str, Any]) -> str:
+    """Resolve the immutable source Batch without guessing from an image id."""
+
+    for key in ("source_batch", "batch_id", "source_batch_id"):
+        value = record.get(key)
+        if value not in (None, ""):
+            return str(value).strip()
+    provenance = record.get("provenance")
+    if isinstance(provenance, dict):
+        for key in ("source_batch", "batch_id", "source_batch_id"):
+            value = provenance.get(key)
+            if value not in (None, ""):
+                return str(value).strip()
+    return ""
+
+
 def _source_image_ref(record: dict[str, Any]) -> str:
     return str(
         _storage_value(record, "source_image_gcs_uri")
@@ -358,6 +374,7 @@ def build_crop_dataset(
                     "input_type": input_type,
                     "pipeline_type": "CROP_CLASSIFIER_V1",
                     "source_image_id": str(record.get("source_image_id") or image_id).strip(),
+                    "source_batch": _source_batch(record),
                     "source_image": source_ref,
                     "source_image_path": _storage_value(record, "source_image_path") or "",
                     "source_image_gcs_uri": _storage_value(record, "source_image_gcs_uri") or _storage_value(record, "image_gcs_uri") or "",
@@ -393,6 +410,7 @@ def build_crop_dataset(
         "input_type",
         "pipeline_type",
         "source_image_id",
+        "source_batch",
         "source_image",
         "source_image_path",
         "source_image_gcs_uri",
@@ -449,6 +467,8 @@ def build_crop_dataset(
         "input_type": input_type,
         "expand_ratio": expand_ratio,
         "class_count": len(class_index),
+        "source_batches": sorted({batch for batch in (_source_batch(record) for record in accepted) if batch}),
+        "accepted": excluded["accepted"],
         "class_map": "metadata/class_map.json",
         "written": len(rows),
         "excluded": excluded,
@@ -480,14 +500,24 @@ def load_record_directory(root: str | Path) -> list[dict[str, Any]]:
     return records
 
 
-def load_reviewed_inference_records(db: Any, storage_client: Any = None, limit: int = 5000) -> list[dict[str, Any]]:
+def load_reviewed_inference_records(
+    db: Any,
+    storage_client: Any = None,
+    limit: int | None = 5000,
+    source_batch: str | None = None,
+) -> list[dict[str, Any]]:
     """Join the immutable GCS record with DB review fields for a dataset job."""
 
     from sqlalchemy import select
 
     from app.models import InferenceAsset
 
-    rows = db.scalars(select(InferenceAsset).order_by(InferenceAsset.created_at).limit(limit)).all()
+    stmt = select(InferenceAsset).order_by(InferenceAsset.created_at)
+    if source_batch:
+        from sqlalchemy import or_
+
+        stmt = stmt.where(or_(InferenceAsset.source_batch == source_batch, InferenceAsset.source_batch.is_(None)))
+    rows = db.scalars(stmt.limit(limit)).all()
     result: list[dict[str, Any]] = []
     for asset in rows:
         try:
@@ -506,6 +536,7 @@ def load_reviewed_inference_records(db: Any, storage_client: Any = None, limit: 
         if not isinstance(document, dict):
             continue
         document["status"] = asset.status
+        document.setdefault("source_batch", getattr(asset, "source_batch", None))
         if asset.accepted_bbox_json:
             document["accepted_bbox_json"] = asset.accepted_bbox_json
         if asset.accepted_species:

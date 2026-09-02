@@ -17,6 +17,7 @@ from app.batch_upload_api import router as batch_upload_router, templates as bat
 from app.intelligence_api import router as intelligence_router, templates as intelligence_templates
 from app.crop_qa import router as crop_qa_router, templates as crop_qa_templates
 from app.crop_dataset_api import router as crop_dataset_router
+from app.crop_review import router as crop_review_router, templates as crop_review_templates
 from app.fish_knowledge.api import router as fish_knowledge_router
 from app.fish_knowledge.admin import (
     compat_router as fish_knowledge_admin_compat_router,
@@ -39,6 +40,7 @@ for template_engine in (
     batch_upload_templates,
     intelligence_templates,
     crop_qa_templates,
+    crop_review_templates,
 ):
     install_unified_nav(template_engine)
 
@@ -100,6 +102,7 @@ app.include_router(automation_router)
 app.include_router(intelligence_router)
 app.include_router(crop_qa_router)
 app.include_router(crop_dataset_router)
+app.include_router(crop_review_router)
 app.include_router(fish_knowledge_router)
 app.include_router(fish_knowledge_admin_router)
 app.include_router(fish_knowledge_admin_compat_router)

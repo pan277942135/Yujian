@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import inspect
 import os
 import re
 from pathlib import Path
@@ -24,7 +25,10 @@ router = APIRouter(prefix="/api/crop-datasets", tags=["crop-datasets"])
 
 
 class CropDatasetBuildRequest(BaseModel):
+    batch_id: str | None = Field(default=None, max_length=128)
     dataset_version: str = Field(default=CROP_DATASET_VERSION, min_length=4, max_length=128)
+    pipeline: str = Field(default="CROP_CLASSIFIER_V1", max_length=64)
+    pipeline_type: str | None = Field(default=None, max_length=64)
     expand_ratio: float = Field(default=0.15, ge=0.0, le=1.0)
     limit: int = Field(default=5000, ge=1, le=100000)
     freeze: bool = False
@@ -41,6 +45,44 @@ def _safe_version(value: str) -> str:
     if not re.fullmatch(r"DS_[A-Za-z0-9_.-]{1,120}", value):
         raise HTTPException(status_code=400, detail="dataset_version 格式不合法")
     return value
+
+
+def _safe_batch(value: str | None) -> str | None:
+    if value is None or not value.strip():
+        return None
+    batch_id = value.strip()
+    if not re.fullmatch(r"BATCH_[A-Za-z0-9_.-]{1,120}", batch_id):
+        raise HTTPException(status_code=400, detail={"error": "INVALID_BATCH_ID", "reason": "batch_id 格式不合法"})
+    return batch_id
+
+
+def _safe_pipeline(value: str) -> str:
+    pipeline = (value or "").strip().upper()
+    if pipeline != "CROP_CLASSIFIER_V1":
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "PIPELINE_NOT_SUPPORTED", "pipeline": pipeline, "reason": "Crop Dataset 只支持 CROP_CLASSIFIER_V1"},
+        )
+    return pipeline
+
+
+def _invoke_builder(db: Session, root: Path, payload: CropDatasetBuildRequest, version: str):
+    """Call old test doubles and the new batch-scoped builder safely."""
+
+    kwargs = {
+        "dataset_version": version,
+        "pipeline": payload.pipeline,
+        "expand_ratio": payload.expand_ratio,
+        "limit": payload.limit,
+        "batch_id": payload.batch_id,
+    }
+    builder = build_reviewed_crop_dataset_from_db
+    try:
+        parameters = inspect.signature(builder).parameters
+        kwargs = {key: value for key, value in kwargs.items() if key in parameters or any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values())}
+    except (TypeError, ValueError):
+        kwargs.pop("batch_id", None)
+    return builder(db, root, **kwargs)
 
 
 def _staging_root(dataset_version: str) -> Path:
@@ -117,11 +159,12 @@ def _staging_state(
     if _freeze_marker_exists(root):
         return "READY_FOR_TRAINING"
     manifest = _staging_manifest(root)
-    if manifest.is_file():
-        if validation is None:
-            validation = validate_crop_dataset(root, require_metadata=True, check_source_image=True)
-        if validation.get("valid"):
-            return "VALIDATED"
+    if not manifest.is_file():
+        return "NEW"
+    if validation is None:
+        validation = validate_crop_dataset(root, require_metadata=True, check_source_image=True)
+    if validation.get("valid"):
+        return "VALIDATED"
     return "STAGING"
 
 
@@ -138,6 +181,20 @@ def _manifest_classes(manifest_path: Path) -> list[str]:
     except (OSError, csv.Error):
         return []
     return sorted(value for value in values if value)
+
+
+def _manifest_source_batches(manifest_path: Path) -> set[str]:
+    if not manifest_path.is_file():
+        return set()
+    try:
+        with manifest_path.open("r", encoding="utf-8-sig", newline="") as handle:
+            return {
+                str(row.get("source_batch") or "").strip()
+                for row in csv.DictReader(handle)
+                if str(row.get("source_batch") or "").strip()
+            }
+    except (OSError, csv.Error):
+        return set()
 
 
 def _build_validation(root: Path, report: Mapping[str, Any]) -> dict[str, Any]:
@@ -161,6 +218,11 @@ def build_crop_dataset_endpoint(payload: CropDatasetBuildRequest, db: Session = 
     """Build reviewed crops; optionally publish/register them when explicitly frozen."""
 
     version = _safe_version(payload.dataset_version)
+    requested_pipeline = payload.pipeline_type or payload.pipeline
+    _safe_pipeline(requested_pipeline)
+    if payload.pipeline_type and payload.pipeline.strip().upper() != payload.pipeline_type.strip().upper():
+        raise HTTPException(status_code=400, detail={"error": "PIPELINE_MISMATCH", "reason": "pipeline 与 pipeline_type 不一致"})
+    payload.batch_id = _safe_batch(payload.batch_id)
     root = _staging_root(version)
     manifest_path = _staging_manifest(root)
     existing_validation = (
@@ -182,19 +244,42 @@ def build_crop_dataset_endpoint(payload: CropDatasetBuildRequest, db: Session = 
         )
     resuming_failed_staging = manifest_path.is_file()
     try:
-        report = build_reviewed_crop_dataset_from_db(
-            db,
-            root,
-            dataset_version=version,
-            expand_ratio=payload.expand_ratio,
-            limit=payload.limit,
-        )
+        report = _invoke_builder(db, root, payload, version)
+        if payload.batch_id and int(report.get("accepted", 0) or 0) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "NO_ACCEPTED_BBOX_ASSETS",
+                    "batch_id": payload.batch_id,
+                    "reason": "指定 Batch 没有 ACCEPTED/TRAINING_READY 的 accepted_bbox 资产；candidate_bbox 不可直接训练",
+                },
+            )
+        if payload.batch_id:
+            source_batches = set(report.get("source_batches") or [])
+            manifest_batches = _manifest_source_batches(manifest_path)
+            if source_batches and source_batches != {payload.batch_id}:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": "BATCH_SCOPE_VIOLATION", "batch_id": payload.batch_id, "source_batches": sorted(source_batches)},
+                )
+            if manifest_batches != {payload.batch_id}:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "BATCH_SCOPE_VIOLATION",
+                        "batch_id": payload.batch_id,
+                        "source_batches": sorted(manifest_batches),
+                        "reason": "manifest 每一行必须保留指定 source_batch",
+                    },
+                )
         validation = _build_validation(root, report)
         if not validation.get("valid"):
             raise CropDatasetValidationError(validation)
         classes = _manifest_classes(manifest_path)
         result: dict = {
             "dataset_version": version,
+            "batch_id": payload.batch_id,
+            "pipeline": "CROP_CLASSIFIER_V1",
             "state": "VALIDATED",
             "status": "BUILT_NOT_FROZEN",
             "staging_root": str(root),
@@ -216,6 +301,7 @@ def build_crop_dataset_endpoint(payload: CropDatasetBuildRequest, db: Session = 
                 bucket_name=get_bucket_name(),
                 db=db,
                 git_commit=(payload.git_commit or os.getenv("APP_GIT_COMMIT", "unknown")).strip() or "unknown",
+                source_batches=report.get("source_batches") or ([payload.batch_id] if payload.batch_id else []),
             )
             result["state"] = "READY_FOR_TRAINING"
             result["status"] = "READY_FOR_TRAINING"
@@ -231,18 +317,95 @@ def build_crop_dataset_endpoint(payload: CropDatasetBuildRequest, db: Session = 
         raise HTTPException(status_code=400, detail={"error": "CROP_DATASET_BUILD_FAILED", "reason": str(exc)}) from exc
 
 
+@router.get("/sources")
+def crop_dataset_sources(db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Return Batch readiness without mutating review or dataset state."""
+
+    from sqlalchemy import func, select
+
+    from app.models import Batch, BatchCropReview, ImageAsset
+
+    batches = db.scalars(select(Batch).order_by(Batch.created_at.desc())).all()
+    result: list[dict[str, Any]] = []
+    for batch in batches:
+        total = int(db.scalar(select(func.count()).select_from(ImageAsset).where(ImageAsset.batch_id == batch.batch_id)) or 0)
+        review_rows = db.execute(
+            select(BatchCropReview.status, func.count())
+            .where(BatchCropReview.batch_id == batch.batch_id)
+            .group_by(BatchCropReview.status)
+        ).all()
+        counts = {str(status): int(count) for status, count in review_rows}
+        accepted = counts.get("ACCEPTED", 0) + counts.get("TRAINING_READY", 0)
+        valid_accepted = int(
+            db.scalar(
+                select(func.count())
+                .select_from(BatchCropReview)
+                .where(
+                    BatchCropReview.batch_id == batch.batch_id,
+                    BatchCropReview.status.in_({"ACCEPTED", "TRAINING_READY"}),
+                    BatchCropReview.accepted_bbox_json.is_not(None),
+                    (BatchCropReview.species_key.is_not(None) | BatchCropReview.species_name.is_not(None)),
+                )
+            )
+            or 0
+        )
+        missing_species = max(accepted - int(
+            db.scalar(
+                select(func.count())
+                .select_from(BatchCropReview)
+                .where(
+                    BatchCropReview.batch_id == batch.batch_id,
+                    BatchCropReview.status.in_({"ACCEPTED", "TRAINING_READY"}),
+                    BatchCropReview.species_key.is_not(None) | BatchCropReview.species_name.is_not(None),
+                )
+            )
+            or 0
+        ), 0)
+        if valid_accepted:
+            readiness = "READY_TO_BUILD"
+        elif total:
+            readiness = "REVIEW_REQUIRED"
+        else:
+            readiness = "NO_IMAGES"
+        result.append(
+            {
+                "batch_id": batch.batch_id,
+                "source": batch.source,
+                "status": batch.status,
+                "image_count": total,
+                "accepted_bbox_count": accepted,
+                "valid_accepted_bbox_count": valid_accepted,
+                "missing_species_count": missing_species,
+                "review_required_count": max(total - counts.get("ACCEPTED", 0) - counts.get("TRAINING_READY", 0) - counts.get("REJECTED", 0), 0),
+                "rejected_count": counts.get("REJECTED", 0),
+                "counts": counts,
+                "readiness": readiness,
+                "buildable": valid_accepted > 0,
+                "review_url": f"/crop-review?batch_id={batch.batch_id}",
+            }
+        )
+    return {"items": result, "count": len(result), "contract": {"pipeline": "CROP_CLASSIFIER_V1", "source": "accepted_bbox"}}
+
+
 @router.get("/{dataset_version}/validation")
-def validate_crop_dataset_endpoint(dataset_version: str) -> dict:
+def validate_crop_dataset_endpoint(dataset_version: str, db: Session = Depends(get_db)) -> dict:
     version = _safe_version(dataset_version)
     root = _staging_root(version)
     manifest_path = _staging_manifest(root)
     validation = validate_crop_dataset(root, require_metadata=True, check_source_image=True)
     return {
         "dataset_version": version,
-        "state": _staging_state(root, version, None, validation),
+        "state": _staging_state(root, version, db, validation),
         "manifest_path": str(manifest_path),
         "validation": validation,
     }
+
+
+@router.get("/{dataset_version}/status")
+def crop_dataset_status_endpoint(dataset_version: str) -> dict:
+    """Human-friendly status alias retained for console polling."""
+
+    return validate_crop_dataset_endpoint(dataset_version)
 
 
 @router.post("/{dataset_version}/freeze")

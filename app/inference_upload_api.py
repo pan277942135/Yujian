@@ -203,6 +203,7 @@ def _asset_dict(row: InferenceAsset, *, duplicate: bool = False) -> dict[str, An
         "status": row.status,
         "duplicate": duplicate,
         "source": row.source,
+        "source_batch": getattr(row, "source_batch", None),
         "record_gcs_uri": row.record_gcs_uri,
         "image_gcs_uri": row.image_gcs_uri,
         "crop_gcs_uri": row.crop_gcs_uri,
@@ -297,6 +298,12 @@ async def upload_inference_asset(
 
         detector = document.get("detection") or {}
         classifier = document.get("classification") or {}
+        source_batch = str(
+            document.get("source_batch")
+            or document.get("batch_id")
+            or document.get("source_batch_id")
+            or ""
+        ).strip() or None
         storage_results = {
             "record": _put_if_absent(bucket.blob(record_name), record_bytes, content_type="application/json", client=storage_client, digest=record_digest),
             "image": _put_if_absent(bucket.blob(image_name), image_bytes, content_type=image_type, client=storage_client, digest=image_digest),
@@ -313,6 +320,7 @@ async def upload_inference_asset(
         row = InferenceAsset(
             image_id=image_id,
             source=str(document.get("source") or "android_detector"),
+            source_batch=source_batch,
             status="REVIEW_REQUIRED" if detector.get("candidate_bbox") else "CANDIDATE",
             record_gcs_uri=_uri(bucket_name, record_name),
             image_gcs_uri=_uri(bucket_name, image_name),

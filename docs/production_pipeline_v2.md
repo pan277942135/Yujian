@@ -66,7 +66,7 @@ source artifact.
   `metadata/crop_manifest.csv` as `DS_CROP_M1_v0.1`, and emits a class map.
   Production rows use `input_type=crop_image` and include
   `source_image_id`, `species_name`, `review_status`, `created_at`,
-  `bbox_source=accepted_review`, the expanded crop bounds, and crop pixel
+  `source_batch`, `bbox_source=accepted_review`, the expanded crop bounds, and crop pixel
   dimensions.  `build_crop_dataset` remains available as a legacy-compatible
   low-level export (`input_type=crop`).
 
@@ -91,6 +91,15 @@ The read-only `/crop-qa` page and `/api/crop-qa` endpoint show the original
 image with the human accepted box alongside its crop preview.  Media access
 is limited to `ACCEPTED`/`TRAINING_READY` assets with a valid accepted box;
 the page has no label, review, or Freeze mutation controls.
+
+Normal uploaded Batches use the additive `BatchCropReview` bridge.  The
+`/crop-review` page exposes presence/detector candidates for inspection, but
+requires an explicit reviewer bbox and species before writing an
+`ACCEPTED` row.  `/crop-datasets` then scopes Build to that Batch, reports the
+canonical `var/crop_datasets/<version>/metadata/crop_manifest.csv` path, and
+keeps Validation → Freeze → Training as separate operator gates.  A failed
+staging manifest can be resumed; a validated or frozen version remains
+immutable.  No page action starts a training run automatically.
 
 ## Classifier pipelines and preprocessing
 

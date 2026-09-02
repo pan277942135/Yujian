@@ -28,6 +28,7 @@ CROP_INPUT_TYPE = "crop_image"
 CROP_READY_STATUS = "READY_FOR_TRAINING"
 CROP_SELECTION_MODE = "ACCEPTED_BBOX_CROP"
 CROP_EXPAND_RATIO = 0.15
+ACCEPTED_REVIEW_STATUSES = {"ACCEPTED", "TRAINING_READY"}
 
 
 def utcnow_iso() -> str:
@@ -102,10 +103,116 @@ def _species_name_map(db: Any) -> dict[str, str]:
     }
 
 
-def load_reviewed_crop_records(db: Any, storage_client: Any = None, *, limit: int = 5000) -> list[dict[str, Any]]:
-    """Load only ACCEPTED/TRAINING_READY inference records and join catalog names."""
+def _bridge_records(db: Any, *, batch_id: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
+    """Materialise accepted normal-Batch reviews as builder records.
 
-    records = load_reviewed_inference_records(db, storage_client=storage_client, limit=limit)
+    The bridge is deliberately queried before applying ``limit`` so a build
+    scoped to one Batch cannot consume rows from another Batch.
+    """
+
+    try:
+        from sqlalchemy import select
+        from app.models import BatchCropReview, ImageAsset
+        from app.presence import FishPresenceResult
+    except Exception:
+        return []
+    stmt = (
+        select(BatchCropReview, ImageAsset, FishPresenceResult)
+        .join(ImageAsset, ImageAsset.id == BatchCropReview.image_asset_id)
+        .outerjoin(FishPresenceResult, FishPresenceResult.image_asset_id == ImageAsset.id)
+    )
+    stmt = stmt.where(BatchCropReview.status.in_(ACCEPTED_REVIEW_STATUSES))
+    if batch_id:
+        stmt = stmt.where(BatchCropReview.batch_id == batch_id)
+    stmt = stmt.order_by(BatchCropReview.created_at)
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    try:
+        pairs = db.execute(stmt).all()
+    except Exception:
+        return []
+    records: list[dict[str, Any]] = []
+    for review, image, presence in pairs:
+        records.append(
+            {
+                "image_id": image.image_id,
+                "source_image_id": image.image_id,
+                "source_batch": review.batch_id,
+                "status": review.status,
+                "accepted_bbox_json": review.accepted_bbox_json,
+                "accepted_species_key": review.species_key,
+                "accepted_species_name": review.species_name,
+                "accepted_species": review.species_key or review.species_name,
+                "detector_version": review.detector_version or (presence.model_version if presence else None),
+                "source_image": image.gcs_uri,
+                "source_image_gcs_uri": image.gcs_uri,
+                "source_image_path": "",
+                "image_gcs_uri": image.gcs_uri,
+                "file_name": image.file_name,
+                "created_at": review.reviewed_at.isoformat()
+                if review.reviewed_at
+                else (image.created_at.isoformat() if getattr(image, "created_at", None) else utcnow_iso()),
+                "reviewed_at": review.reviewed_at.isoformat() if review.reviewed_at else None,
+                "reviewer": review.reviewer,
+            }
+        )
+    return records
+
+
+def _document_source_batch(record: Mapping[str, Any]) -> str:
+    for key in ("source_batch", "batch_id", "source_batch_id"):
+        value = record.get(key)
+        if value not in (None, ""):
+            return str(value).strip()
+    provenance = record.get("provenance")
+    if isinstance(provenance, Mapping):
+        for key in ("source_batch", "batch_id", "source_batch_id"):
+            value = provenance.get(key)
+            if value not in (None, ""):
+                return str(value).strip()
+    return ""
+
+
+def load_reviewed_crop_records(
+    db: Any,
+    storage_client: Any = None,
+    *,
+    limit: int = 5000,
+    batch_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Load reviewed bridge and App inference records, scoped before limit.
+
+    A normal Batch only becomes eligible after a ``BatchCropReview`` row is
+    explicitly ACCEPTED/TRAINING_READY.  InferenceAsset documents are included
+    for the existing App path; when ``batch_id`` is supplied, an immutable
+    source_batch/batch_id field is required and unmatched records are skipped.
+    """
+
+    records = _bridge_records(db, batch_id=batch_id, limit=None)
+    seen = {str(record.get("image_id") or "") for record in records}
+    try:
+        inference_records = load_reviewed_inference_records(
+            db,
+            storage_client=storage_client,
+            limit=None,
+            source_batch=batch_id,
+        )
+    except TypeError:
+        # A lightweight test double may retain the historical positional
+        # signature; this fallback preserves it without weakening Batch scope.
+        inference_records = load_reviewed_inference_records(db, storage_client=storage_client, limit=None)
+    for record in inference_records:
+        source_batch = _document_source_batch(record)
+        if batch_id and source_batch != batch_id:
+            continue
+        image_id = str(record.get("image_id") or "").strip()
+        if not image_id or image_id in seen:
+            continue
+        record["source_batch"] = source_batch
+        records.append(record)
+        seen.add(image_id)
+    records.sort(key=lambda record: str(record.get("created_at") or record.get("reviewed_at") or ""))
+    records = records[: max(0, limit)]
     names = _species_name_map(db)
     reverse = {name: key for key, name in names.items()}
     for record in records:
@@ -149,15 +256,21 @@ def build_reviewed_crop_dataset_from_db(
     expand_ratio: float = CROP_EXPAND_RATIO,
     storage_client: Any = None,
     limit: int = 5000,
+    batch_id: str | None = None,
 ) -> dict[str, Any]:
-    records = load_reviewed_crop_records(db, storage_client=storage_client, limit=limit)
-    return build_reviewed_crop_dataset(
+    records = load_reviewed_crop_records(db, storage_client=storage_client, limit=limit, batch_id=batch_id)
+    report = build_reviewed_crop_dataset(
         records,
         output_root,
         dataset_version=dataset_version,
         expand_ratio=expand_ratio,
         species_name_map=_species_name_map(db),
     )
+    report["source_batch"] = batch_id or ""
+    report["source_batches"] = sorted({str(record.get("source_batch") or "").strip() for record in records if str(record.get("source_batch") or "").strip()})
+    report["records_considered"] = len(records)
+    _write_json(Path(output_root) / "metadata" / "report.json", report)
+    return report
 
 
 def _content_type(path: Path) -> str:
@@ -212,6 +325,7 @@ def freeze_crop_dataset(
     git_commit: str = "unknown",
     status: str = CROP_READY_STATUS,
     preprocess_contract: Mapping[str, Any] | None = None,
+    source_batches: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     """Explicitly publish and register a reviewed crop dataset.
 
@@ -296,6 +410,8 @@ def freeze_crop_dataset(
         "pipeline_type": CROP_PIPELINE_TYPE,
         "input_type": CROP_INPUT_TYPE,
         "source": "accepted_bbox",
+        "source_batches": sorted({str(value).strip() for value in (source_batches or []) if str(value).strip()})
+        or sorted({str(row.get("source_batch") or "").strip() for row in rows if str(row.get("source_batch") or "").strip()}),
         "review_status_required": sorted({str(row.get("review_status") or "") for row in rows}),
         "crop_expand_ratio": CROP_EXPAND_RATIO,
         "image_count": len(rows),
@@ -374,6 +490,7 @@ def freeze_crop_dataset(
         "status": status,
         "pipeline": CROP_PIPELINE_TYPE,
         "source": "accepted_bbox",
+        "source_batches": metadata["source_batches"],
         "image_count": len(rows),
         "class_count": len(class_keys),
         "split_counts": {name: split_counts.get(name, 0) for name in ("train", "val", "test")},
