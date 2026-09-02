@@ -25,6 +25,7 @@ from app.fish_knowledge.admin import (
     router as fish_knowledge_admin_router,
 )
 from app.fish_knowledge.content_seed import seed_fish_knowledge_content
+from app.user_api import router as user_router
 from app.fish_knowledge.seed import seed_initial_fish_knowledge
 from app.p0_automation import install_feedback_automation, router as automation_router
 from app.unified_nav import install_unified_nav
@@ -105,6 +106,7 @@ app.include_router(crop_qa_router)
 app.include_router(crop_dataset_router)
 app.include_router(crop_review_router)
 app.include_router(dataset_crop_review_router)
+app.include_router(user_router)
 app.include_router(fish_knowledge_router)
 app.include_router(fish_knowledge_admin_router)
 app.include_router(fish_knowledge_admin_compat_router)

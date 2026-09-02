@@ -319,3 +319,40 @@ class ErrorCase(Base):
     status = Column(String(64), nullable=False, default="OPEN")
     source_uri = Column(Text)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(String(64), primary_key=True)
+    username = Column(String(128), nullable=False, unique=True, index=True)
+    password_hash = Column(String(256), nullable=False)
+    nickname = Column(String(128), nullable=False)
+    avatar_url = Column(Text)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+    catches = relationship(
+        "FishCatch",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class FishCatch(Base):
+    __tablename__ = "fish_catches"
+
+    id = Column(String(64), primary_key=True)
+    user_id = Column(String(64), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    image_url = Column(Text, nullable=False, default="")
+    species_id = Column(String(128), nullable=False, index=True)
+    species_name = Column(String(128), nullable=False)
+    confidence = Column(Float, nullable=False, default=0.0)
+    model_version = Column(String(128), nullable=False, default="")
+    detector_result_json = Column(Text)
+    classifier_result_json = Column(Text)
+    captured_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    user = relationship("User", back_populates="catches")

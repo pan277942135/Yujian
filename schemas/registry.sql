@@ -395,3 +395,33 @@ CREATE INDEX IF NOT EXISTS idx_fish_ranking_user ON fish_ranking(user_id);
 CREATE INDEX IF NOT EXISTS idx_runs_dataset ON training_runs(dataset_version);
 CREATE INDEX IF NOT EXISTS idx_models_status ON models(status);
 CREATE INDEX IF NOT EXISTS idx_error_pool_status ON error_pool(status);
+
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  nickname TEXT NOT NULL,
+  avatar_url TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS fish_catches (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  image_url TEXT NOT NULL DEFAULT '',
+  species_id TEXT NOT NULL,
+  species_name TEXT NOT NULL,
+  confidence REAL NOT NULL DEFAULT 0,
+  model_version TEXT NOT NULL DEFAULT '',
+  detector_result_json TEXT,
+  classifier_result_json TEXT,
+  captured_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_fish_catches_user ON fish_catches(user_id);
+CREATE INDEX IF NOT EXISTS idx_fish_catches_species ON fish_catches(species_id);
+CREATE INDEX IF NOT EXISTS idx_fish_catches_created ON fish_catches(created_at);

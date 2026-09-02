@@ -13,6 +13,10 @@ PUBLIC_GET_PATH_PREFIXES = (
     # Fish Knowledge cover/card assets are public read-only resources for App clients.
     "/api/v1/fish/knowledge-media",
 )
+PUBLIC_USER_AUTH_PREFIXES = ("/api/v1/auth",)
+USER_BEARER_PREFIXES = ("/api/v1/catches",)
+
+
 FEEDBACK_INGEST_PATHS = {
     "/api/feedback",
     "/api/feedback/ingest",
@@ -40,7 +44,11 @@ def install_access_guard(app: FastAPI) -> None:
             request.url.path == prefix or request.url.path.startswith(prefix + "/")
             for prefix in PUBLIC_GET_PATH_PREFIXES
         )
-        if not key or request.url.path in PUBLIC_PATHS or public_fish_read:
+        public_user_auth = any(
+            request.url.path == prefix or request.url.path.startswith(prefix + "/")
+            for prefix in PUBLIC_USER_AUTH_PREFIXES
+        )
+        if not key or request.url.path in PUBLIC_PATHS or public_fish_read or public_user_auth:
             return await call_next(request)
 
         ingest_key = _feedback_ingest_key()
@@ -48,6 +56,18 @@ def install_access_guard(app: FastAPI) -> None:
             supplied = request.headers.get("X-YuJian-Ingest-Key", "")
             if supplied and secrets.compare_digest(supplied, ingest_key):
                 return await call_next(request)
+
+        user_bearer_path = any(
+            request.url.path == prefix or request.url.path.startswith(prefix + "/")
+            for prefix in USER_BEARER_PREFIXES
+        )
+        if user_bearer_path:
+            authorization = request.headers.get("Authorization", "")
+            if authorization.lower().startswith("bearer "):
+                from app.auth import decode_access_token
+
+                if decode_access_token(authorization[7:].strip()):
+                    return await call_next(request)
 
         expected = _cookie_value(key)
         actual = request.cookies.get(COOKIE_NAME, "")
