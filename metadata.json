@@ -1,6 +1,0 @@
-{
-  "name": "渔见 AI · 模型工厂",
-  "description": "渔见 AI 模型工厂数据与审核控制台",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}

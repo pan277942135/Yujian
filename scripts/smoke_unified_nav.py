@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+os.environ.setdefault("REGISTRY_DB_URL", "sqlite:///:memory:")
+
+from app import batch_upload_api, bulk_review, crop_qa, crop_review, inference_api, inspect, main, training_api  # noqa: E402
+from app import intelligence_api  # noqa: E402
+from app.entry import app  # noqa: F401,E402
+from app.unified_nav import UnifiedNavLoader  # noqa: E402
+
+
+EXPECTED_LINKS = [
+    ('href="/"', "总览"),
+    ('href="/batches"', "数据批次"),
+    ('href="/batches/upload"', "数据导入"),
+    ('href="/review/bulk"', "快速审核"),
+    ('href="/review"', "单张审核"),
+    ('href="/species"', "鱼种管理"),
+    ('href="/fish-knowledge"', "鱼鉴内容"),
+    ('href="/feedback"', "用户反馈"),
+    ('href="/datasets"', "数据集"),
+    ('href="/crop-datasets"', "Crop Dataset"),
+    ('href="/training"', "模型训练"),
+    ('href="/inference"', "模型实测"),
+    ('href="/intelligence"', "模型智能分析"),
+    ('href="/crop-qa"', "Crop QA"),
+]
+
+TEMPLATE_ENGINES = [
+    main.templates,
+    bulk_review.templates,
+    inspect.templates,
+    training_api.templates,
+    inference_api.templates,
+    batch_upload_api.templates,
+    intelligence_api.templates,
+    crop_qa.templates,
+    crop_review.templates,
+]
+
+TEMPLATES = [
+    "overview.html",
+    "batches.html",
+    "batch_upload.html",
+    "bulk_review.html",
+    "review.html",
+    "species.html",
+    "fish_knowledge.html",
+    "feedback.html",
+    "datasets.html",
+    "training.html",
+    "inference.html",
+    "inspect.html",
+    "intelligence.html",
+    "crop_qa.html",
+    "crop_datasets.html",
+    "crop_review.html",
+]
+
+
+def main_test() -> None:
+    for engine in TEMPLATE_ENGINES:
+        assert isinstance(engine.env.loader, UnifiedNavLoader), type(engine.env.loader)
+
+    loader = main.templates.env.loader
+    rendered_sources: dict[str, str] = {}
+    for template_name in TEMPLATES:
+        source, _filename, _uptodate = loader.get_source(main.templates.env, template_name)
+        rendered_sources[template_name] = source
+        assert source.count('class="app-nav"') == 1, template_name
+        positions = []
+        for href, label in EXPECTED_LINKS:
+            token = f"{href}"
+            assert token in source, (template_name, href)
+            assert label in source, (template_name, label)
+            positions.append(source.index(token))
+        assert positions == sorted(positions), (template_name, positions)
+        assert "aria-current=\"page\"" in source, template_name
+
+    review_source = rendered_sources["review.html"]
+    assert 'class="filters"' in review_source, "single-review filters were removed by unified nav"
+    for control_id in ["status", "batch", "species", "q"]:
+        assert f'id="{control_id}"' in review_source, ("review.html", control_id)
+
+    print("Unified top navigation smoke OK", len(TEMPLATES), "templates", len(EXPECTED_LINKS), "items")
+    print("Single-review header controls preserved", "status batch species q")
+
+
+if __name__ == "__main__":
+    main_test()

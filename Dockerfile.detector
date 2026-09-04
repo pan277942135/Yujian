@@ -1,0 +1,31 @@
+FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/opt/YOLOX:/app
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-detector.txt .
+RUN python -m pip install --upgrade pip setuptools wheel \
+    && pip install --no-cache-dir -r requirements-detector.txt \
+    && pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu128 torchvision==0.22.1
+
+RUN git clone --depth 1 --branch 0.3.0 https://github.com/Megvii-BaseDetection/YOLOX.git /opt/YOLOX
+
+# YOLOX 0.3 exposes a FastCOCOEvalOp that JIT-compiles a C++14 extension at
+# evaluation time. The production image uses PyTorch 2.7/C++17, and this
+# bootstrap validation set is small, so force the standard pycocotools
+# evaluator and avoid a runtime compiler dependency.
+RUN python -c "from pathlib import Path; p=Path('/opt/YOLOX/yolox/layers/__init__.py'); t=p.read_text(encoding='utf-8'); n='try:\\n    from .fast_coco_eval_api import COCOeval_opt\\nexcept ImportError:  #  exception will be raised when users build yolox from source\\n    pass\\n'; assert n in t, 'YOLOX 0.3 COCOeval_opt hook changed'; p.write_text(t.replace(n, '# Production detector training uses standard pycocotools COCOeval.\\n'), encoding='utf-8')"
+RUN PYTHONPATH=/opt/YOLOX python -c "import yolox.layers; from pycocotools.cocoeval import COCOeval; assert not hasattr(yolox.layers, 'COCOeval_opt'); assert COCOeval is not None; print('STANDARD_COCOEVAL_READY')"
+
+COPY config ./config
+COPY trainer ./trainer
+
+CMD ["python", "-m", "trainer.train_detector"]

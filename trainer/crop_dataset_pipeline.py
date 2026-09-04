@@ -1,0 +1,576 @@
+"""Production builder and explicit Freeze step for reviewed crop datasets.
+
+This module is intentionally separate from the cumulative whole-image Freeze
+policy.  A crop classifier dataset is a derivative of reviewed inference
+assets, so its only admissible label source is ``accepted_bbox`` plus an
+explicit human-reviewed species.  Building a dataset never changes review
+state; calling :func:`freeze_crop_dataset` is the explicit operator gate.
+"""
+
+from __future__ import annotations
+
+import csv
+import io
+import json
+import mimetypes
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable, Mapping
+
+from trainer.build_reviewed_datasets import build_crop_dataset, load_reviewed_inference_records
+from trainer.crop_dataset_validator import CropDatasetValidationError, validate_crop_dataset
+
+
+CROP_DATASET_VERSION = "DS_CROP_M1_v0.1"
+CROP_PIPELINE_TYPE = "CROP_CLASSIFIER_V1"
+CROP_INPUT_TYPE = "crop_image"
+CROP_READY_STATUS = "READY_FOR_TRAINING"
+CROP_SELECTION_MODE = "ACCEPTED_BBOX_CROP"
+CROP_EXPAND_RATIO = 0.15
+ACCEPTED_REVIEW_STATUSES = {"ACCEPTED", "TRAINING_READY"}
+
+
+def utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_gs_uri(uri: str) -> tuple[str, str]:
+    if not uri.startswith("gs://") or "/" not in uri[5:]:
+        raise ValueError(f"invalid GCS URI: {uri}")
+    return tuple(uri[5:].split("/", 1))  # type: ignore[return-value]
+
+
+def _blob_exists(blob: Any, client: Any = None) -> bool:
+    try:
+        return bool(blob.exists(client))
+    except TypeError:
+        return bool(blob.exists())
+
+
+def _upload_bytes(blob: Any, data: bytes, *, content_type: str) -> None:
+    try:
+        blob.upload_from_string(data, content_type=content_type, if_generation_match=0)
+    except TypeError:  # lightweight test doubles may not accept generation guards
+        blob.upload_from_string(data, content_type=content_type)
+
+
+def _upload_file(blob: Any, path: Path, *, content_type: str) -> None:
+    try:
+        blob.upload_from_filename(str(path), content_type=content_type, if_generation_match=0)
+    except TypeError:  # lightweight test doubles may not accept generation guards
+        blob.upload_from_filename(str(path), content_type=content_type)
+
+
+def _read_rows(path: Path) -> list[dict[str, str]]:
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        return list(csv.DictReader(handle))
+
+
+def _write_rows(path: Path, rows: list[dict[str, Any]]) -> list[str]:
+    fields: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in fields:
+                fields.append(key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows({field: row.get(field, "") for field in fields} for row in rows)
+    return fields
+
+
+def _write_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _species_name_map(db: Any) -> dict[str, str]:
+    if db is None:
+        return {}
+    try:
+        from app.models import SpeciesCatalog
+        from sqlalchemy import select
+
+        rows = db.scalars(select(SpeciesCatalog)).all()
+    except Exception:
+        return {}
+    return {
+        str(row.species_key).strip(): str(row.common_name_zh).strip()
+        for row in rows
+        if str(row.species_key or "").strip() and str(row.common_name_zh or "").strip()
+    }
+
+
+def _bridge_records(db: Any, *, batch_id: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
+    """Materialise accepted normal-Batch reviews as builder records.
+
+    The bridge is deliberately queried before applying ``limit`` so a build
+    scoped to one Batch cannot consume rows from another Batch.
+    """
+
+    try:
+        from sqlalchemy import select
+        from app.models import BatchCropReview, ImageAsset
+        from app.presence import FishPresenceResult
+    except Exception:
+        return []
+    stmt = (
+        select(BatchCropReview, ImageAsset, FishPresenceResult)
+        .join(ImageAsset, ImageAsset.id == BatchCropReview.image_asset_id)
+        .outerjoin(FishPresenceResult, FishPresenceResult.image_asset_id == ImageAsset.id)
+    )
+    stmt = stmt.where(BatchCropReview.status.in_(ACCEPTED_REVIEW_STATUSES))
+    if batch_id:
+        stmt = stmt.where(BatchCropReview.batch_id == batch_id)
+    stmt = stmt.order_by(BatchCropReview.created_at)
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    try:
+        pairs = db.execute(stmt).all()
+    except Exception:
+        return []
+    records: list[dict[str, Any]] = []
+    for review, image, presence in pairs:
+        records.append(
+            {
+                "image_id": image.image_id,
+                "source_image_id": image.image_id,
+                "source_batch": review.batch_id,
+                "status": review.status,
+                "accepted_bbox_json": review.accepted_bbox_json,
+                "accepted_species_key": review.species_key,
+                "accepted_species_name": review.species_name,
+                "accepted_species": review.species_key or review.species_name,
+                "detector_version": review.detector_version or (presence.model_version if presence else None),
+                "source_image": image.gcs_uri,
+                "source_image_gcs_uri": image.gcs_uri,
+                "source_image_path": "",
+                "image_gcs_uri": image.gcs_uri,
+                "file_name": image.file_name,
+                "created_at": review.reviewed_at.isoformat()
+                if review.reviewed_at
+                else (image.created_at.isoformat() if getattr(image, "created_at", None) else utcnow_iso()),
+                "reviewed_at": review.reviewed_at.isoformat() if review.reviewed_at else None,
+                "reviewer": review.reviewer,
+            }
+        )
+    return records
+
+
+def _document_source_batch(record: Mapping[str, Any]) -> str:
+    for key in ("source_batch", "batch_id", "source_batch_id"):
+        value = record.get(key)
+        if value not in (None, ""):
+            return str(value).strip()
+    provenance = record.get("provenance")
+    if isinstance(provenance, Mapping):
+        for key in ("source_batch", "batch_id", "source_batch_id"):
+            value = provenance.get(key)
+            if value not in (None, ""):
+                return str(value).strip()
+    return ""
+
+
+def load_reviewed_crop_records(
+    db: Any,
+    storage_client: Any = None,
+    *,
+    limit: int = 5000,
+    batch_id: str | None = None,
+    source_dataset: str | None = None,
+) -> list[dict[str, Any]]:
+    """Load reviewed bridge and App inference records, scoped before limit.
+
+    A normal Batch only becomes eligible after a ``BatchCropReview`` row is
+    explicitly ACCEPTED/TRAINING_READY.  InferenceAsset documents are included
+    for the existing App path; when ``batch_id`` is supplied, an immutable
+    source_batch/batch_id field is required and unmatched records are skipped.
+    """
+
+    if source_dataset:
+        from app.frozen_crop_bridge import load_frozen_dataset
+
+        frozen = load_frozen_dataset(db, source_dataset, storage_client)
+        if frozen["errors"]:
+            raise ValueError("Frozen Dataset manifest 校验失败：" + "; ".join(frozen["errors"][:5]))
+        from app.models import DatasetCropReview
+        from sqlalchemy import select
+
+        reviews = {
+            row.image_id: row
+            for row in db.scalars(
+                select(DatasetCropReview).where(DatasetCropReview.source_dataset_version == source_dataset)
+            ).all()
+        }
+        records = []
+        for base in frozen["rows"]:
+            review = reviews.get(base["image_id"])
+            if not review:
+                continue
+            records.append(
+                {
+                    **base,
+                    "status": review.review_status,
+                    "accepted_bbox_json": review.accepted_bbox_json,
+                    "accepted_bbox": review.accepted_bbox_json,
+                    "accepted_species_key": base["species_key"],
+                    "accepted_species_name": base["species_name"],
+                    "source_dataset": source_dataset,
+                    "source_manifest_sha256": frozen["manifest_sha256"],
+                    "source_image": base["source_image_gcs_uri"],
+                    "source_image_gcs_uri": base["source_image_gcs_uri"],
+                    "reviewed_at": review.reviewed_at.isoformat() if review.reviewed_at else None,
+                    "reviewer": review.reviewer,
+                }
+            )
+        records.sort(key=lambda record: str(record.get("image_id") or ""))
+        return records[: max(0, limit)]
+
+    records = _bridge_records(db, batch_id=batch_id, limit=None)
+    seen = {str(record.get("image_id") or "") for record in records}
+    try:
+        inference_records = load_reviewed_inference_records(
+            db,
+            storage_client=storage_client,
+            limit=None,
+            source_batch=batch_id,
+        )
+    except TypeError:
+        # A lightweight test double may retain the historical positional
+        # signature; this fallback preserves it without weakening Batch scope.
+        inference_records = load_reviewed_inference_records(db, storage_client=storage_client, limit=None)
+    for record in inference_records:
+        source_batch = _document_source_batch(record)
+        if batch_id and source_batch != batch_id:
+            continue
+        image_id = str(record.get("image_id") or "").strip()
+        if not image_id or image_id in seen:
+            continue
+        record["source_batch"] = source_batch
+        records.append(record)
+        seen.add(image_id)
+    records.sort(key=lambda record: str(record.get("created_at") or record.get("reviewed_at") or ""))
+    records = records[: max(0, limit)]
+    names = _species_name_map(db)
+    reverse = {name: key for key, name in names.items()}
+    for record in records:
+        reviewed = str(record.get("accepted_species") or "").strip()
+        if reviewed and reviewed in reverse:
+            record.setdefault("accepted_species_key", reverse[reviewed])
+            record.setdefault("accepted_species_name", reviewed)
+        elif reviewed and reviewed in names:
+            record.setdefault("accepted_species_key", reviewed)
+            record.setdefault("accepted_species_name", names[reviewed])
+    return records
+
+
+def build_reviewed_crop_dataset(
+    records: Iterable[Mapping[str, Any]],
+    output_root: str | Path,
+    *,
+    dataset_version: str = CROP_DATASET_VERSION,
+    expand_ratio: float = CROP_EXPAND_RATIO,
+    image_loader: Any = None,
+    species_name_map: Mapping[str, str] | None = None,
+    preserve_parent_split: bool = False,
+    preserve_parent_class_map: bool = False,
+) -> dict[str, Any]:
+    """Generate a local, validated crop dataset from reviewed records."""
+
+    return build_crop_dataset(
+        [dict(record) for record in records],
+        output_root,
+        dataset_version=dataset_version,
+        expand_ratio=expand_ratio,
+        image_loader=image_loader,
+        species_name_map=species_name_map,
+        input_type=CROP_INPUT_TYPE,
+        preserve_parent_split=preserve_parent_split,
+        preserve_parent_class_map=preserve_parent_class_map,
+    )
+
+
+def build_reviewed_crop_dataset_from_db(
+    db: Any,
+    output_root: str | Path,
+    *,
+    dataset_version: str = CROP_DATASET_VERSION,
+    expand_ratio: float = CROP_EXPAND_RATIO,
+    storage_client: Any = None,
+    limit: int = 5000,
+    batch_id: str | None = None,
+    source_dataset: str | None = None,
+) -> dict[str, Any]:
+    records = load_reviewed_crop_records(
+        db, storage_client=storage_client, limit=limit, batch_id=batch_id, source_dataset=source_dataset
+    )
+    report = build_reviewed_crop_dataset(
+        records,
+        output_root,
+        dataset_version=dataset_version,
+        expand_ratio=expand_ratio,
+        species_name_map=_species_name_map(db),
+        preserve_parent_split=bool(source_dataset),
+        preserve_parent_class_map=bool(source_dataset),
+    )
+    report["source_batch"] = batch_id or ""
+    report["source_dataset"] = source_dataset or ""
+    report["source_batches"] = sorted({str(record.get("source_batch") or "").strip() for record in records if str(record.get("source_batch") or "").strip()})
+    report["records_considered"] = len(records)
+    _write_json(Path(output_root) / "metadata" / "report.json", report)
+    return report
+
+
+def _content_type(path: Path) -> str:
+    return mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+
+
+def _prepare_published_manifest(root: Path, bucket_name: str, dataset_version: str) -> tuple[Path, list[dict[str, Any]]]:
+    manifest_path = root / "metadata" / "crop_manifest.csv"
+    rows = _read_rows(manifest_path)
+    prefix = f"datasets/{dataset_version}/"
+    for row in rows:
+        crop_rel = str(
+            row.get("crop_image_path")
+            or row.get("crop_path")
+            or row.get("local_path")
+            or ""
+        ).replace("\\", "/").lstrip("/")
+        if not crop_rel:
+            raise CropDatasetValidationError(
+                {
+                    "valid": False,
+                    "errors": [
+                        {
+                            "row": None,
+                            "image_id": row.get("image_id"),
+                            "code": "MISSING_CROP_IMAGE_PATH",
+                            "message": "crop_image_path is required before Freeze",
+                        }
+                    ],
+                }
+            )
+        crop_uri = f"gs://{bucket_name}/{prefix}{crop_rel}"
+        row["crop_image_path"] = crop_rel
+        row["crop_path"] = crop_rel
+        row["gcs_uri"] = crop_uri
+        row["crop_gcs_uri"] = crop_uri
+        # The trainer may materialize a local copy, but the immutable manifest
+        # must identify the crop object as its classifier input.
+        row["input_type"] = CROP_INPUT_TYPE
+        row["pipeline_type"] = CROP_PIPELINE_TYPE
+    _write_rows(manifest_path, rows)
+    return manifest_path, rows
+
+
+def freeze_crop_dataset(
+    dataset_root: str | Path,
+    *,
+    dataset_version: str = CROP_DATASET_VERSION,
+    bucket_name: str | None = None,
+    storage_client: Any = None,
+    db: Any = None,
+    git_commit: str = "unknown",
+    status: str = CROP_READY_STATUS,
+    preprocess_contract: Mapping[str, Any] | None = None,
+    source_batches: Iterable[str] | None = None,
+) -> dict[str, Any]:
+    """Explicitly publish and register a reviewed crop dataset.
+
+    The function refuses to publish an invalid manifest.  It never changes an
+    inference review status and never starts a training job.
+    """
+
+    if not dataset_version.startswith("DS_"):
+        raise ValueError("dataset_version must start with DS_")
+    if status != CROP_READY_STATUS:
+        raise ValueError(f"crop dataset Freeze status must be {CROP_READY_STATUS}")
+    root = Path(dataset_root)
+    manifest_path = root / "metadata" / "crop_manifest.csv"
+    validation = validate_crop_dataset(root, require_metadata=True, check_source_image=True)
+    ratios: set[float] = set()
+    invalid_ratio = False
+    if manifest_path.is_file():
+        for row in _read_rows(manifest_path):
+            try:
+                ratios.add(round(float(row.get("expand_ratio")), 6))
+            except (TypeError, ValueError):
+                invalid_ratio = True
+    if invalid_ratio or any(abs(ratio - CROP_EXPAND_RATIO) > 1e-6 for ratio in ratios):
+        validation["valid"] = False
+        validation.setdefault("checks", {})["expand_ratio_contract"] = False
+        validation.setdefault("checks", {})["metadata_complete"] = False
+        validation.setdefault("errors", []).append(
+            {
+                "row": None,
+                "image_id": None,
+                "code": "EXPAND_RATIO_MISMATCH",
+                "message": f"production crop Freeze requires expand_ratio={CROP_EXPAND_RATIO}",
+            }
+        )
+    else:
+        validation.setdefault("checks", {})["expand_ratio_contract"] = True
+    if not validation.get("valid"):
+        raise CropDatasetValidationError(validation)
+    rows = _read_rows(manifest_path)
+    if not rows:
+        raise CropDatasetValidationError(
+            {"valid": False, "errors": [{"code": "MANIFEST_EMPTY", "message": "crop manifest is empty"}]}
+        )
+
+    published_manifest = manifest_path
+    manifest_uri = str(manifest_path)
+    class_map_uri = str(root / "metadata" / "class_map.json")
+    now = utcnow_iso()
+    if bucket_name:
+        if storage_client is None:
+            from google.cloud import storage
+
+            storage_client = storage.Client()
+        bucket = storage_client.bucket(bucket_name)
+        prefix = f"datasets/{dataset_version}/"
+        marker = bucket.blob(prefix + "dataset.json")
+        if _blob_exists(marker, storage_client):
+            raise ValueError(f"dataset already exists in GCS: gs://{bucket_name}/{prefix}")
+
+        published_manifest, rows = _prepare_published_manifest(root, bucket_name, dataset_version)
+        # Upload crops and metadata.  The marker is written last and is the
+        # immutable publication point consumed by operators and training.
+        for path in sorted(root.rglob("*")):
+            if not path.is_file() or path == published_manifest:
+                continue
+            rel = path.relative_to(root).as_posix()
+            _upload_file(bucket.blob(prefix + rel), path, content_type=_content_type(path))
+        manifest_uri = f"gs://{bucket_name}/{prefix}metadata/crop_manifest.csv"
+        class_map_uri = f"gs://{bucket_name}/{prefix}metadata/class_map.json"
+        _upload_file(bucket.blob(prefix + "metadata/crop_manifest.csv"), published_manifest, content_type="text/csv")
+    else:
+        # Local mode is useful for CI and operator dry-runs.  It still writes
+        # the same metadata contract, but cannot register a trainable GCS URI.
+        _prepare_published_manifest(root, "local", dataset_version)
+
+    split_counts = Counter(str(row.get("split") or "") for row in rows)
+    species_counts = Counter(str(row.get("species_name") or row.get("species_key") or "") for row in rows)
+    class_keys = sorted({str(row.get("species_key") or "") for row in rows if str(row.get("species_key") or "")})
+    parent_versions = sorted({str(row.get("source_dataset") or "").strip() for row in rows if str(row.get("source_dataset") or "").strip()})
+    parent_manifests = sorted({str(row.get("source_manifest_uri") or "").strip() for row in rows if str(row.get("source_manifest_uri") or "").strip()})
+    parent_manifest_digests = sorted({str(row.get("source_manifest_sha256") or "").strip() for row in rows if str(row.get("source_manifest_sha256") or "").strip()})
+    source_type = "FROZEN_DATASET" if parent_versions else "RAW_BATCH"
+    metadata = {
+        "dataset_version": dataset_version,
+        "pipeline": CROP_PIPELINE_TYPE,
+        "pipeline_type": CROP_PIPELINE_TYPE,
+        "input_type": CROP_INPUT_TYPE,
+        "source": "accepted_bbox",
+        "source_type": source_type,
+        "parent_dataset_version": parent_versions[0] if len(parent_versions) == 1 else None,
+        "parent_manifest_uri": parent_manifests[0] if len(parent_manifests) == 1 else None,
+        "parent_manifest_sha256": parent_manifest_digests[0] if len(parent_manifest_digests) == 1 else None,
+        "split_strategy": "PRESERVE_PARENT_SPLIT" if source_type == "FROZEN_DATASET" else "HASH_IMAGE_ID",
+        "class_map_strategy": "PRESERVE_PARENT_CLASS_MAP" if source_type == "FROZEN_DATASET" else "DERIVE_SORTED_KEYS",
+        "source_batches": sorted({str(value).strip() for value in (source_batches or []) if str(value).strip()})
+        or sorted({str(row.get("source_batch") or "").strip() for row in rows if str(row.get("source_batch") or "").strip()}),
+        "review_status_required": sorted({str(row.get("review_status") or "") for row in rows}),
+        "crop_expand_ratio": CROP_EXPAND_RATIO,
+        "image_count": len(rows),
+        "class_count": len(class_keys),
+        "classes": class_keys,
+        "species_counts": dict(species_counts),
+        "split_counts": {name: split_counts.get(name, 0) for name in ("train", "val", "test")},
+        "manifest_uri": manifest_uri,
+        "class_map_uri": class_map_uri,
+        "created_at": now,
+        "git_commit": git_commit or "unknown",
+        "status": status,
+        "immutable": True,
+        "validation": validation,
+        "preprocess_contract": dict(preprocess_contract or {}),
+        "safety": {
+            "source_is_accepted_bbox": True,
+            "candidate_bbox_used": False,
+            "original_image_classifier_input": False,
+            "auto_train": False,
+        },
+    }
+
+    if bucket_name:
+        prefix = f"datasets/{dataset_version}/"
+        bucket = storage_client.bucket(bucket_name)
+        _upload_bytes(
+            bucket.blob(prefix + "metadata/dataset.json"),
+            json.dumps(metadata, ensure_ascii=False, indent=2).encode("utf-8"),
+            content_type="application/json",
+        )
+        _upload_bytes(
+            bucket.blob(prefix + "metadata/freeze_report.json"),
+            json.dumps(metadata, ensure_ascii=False, indent=2).encode("utf-8"),
+            content_type="application/json",
+        )
+        _upload_bytes(
+            bucket.blob(prefix + "dataset.json"),
+            json.dumps(metadata, ensure_ascii=False, indent=2).encode("utf-8"),
+            content_type="application/json",
+        )
+    else:
+        # Keep local dry-runs inspectable with the same Freeze markers as the
+        # published GCS tree.  This does not register or train anything.
+        _write_json(root / "metadata" / "dataset.json", metadata)
+        _write_json(root / "metadata" / "freeze_report.json", metadata)
+        _write_json(root / "dataset.json", metadata)
+
+    if db is not None:
+        from app.models import DatasetVersion
+
+        existing = db.get(DatasetVersion, dataset_version)
+        if existing:
+            raise ValueError(f"dataset already registered: {dataset_version}")
+        dataset = DatasetVersion(
+            dataset_version=dataset_version,
+            parent_version=metadata.get("parent_dataset_version"),
+            manifest_uri=manifest_uri,
+            class_map_uri=class_map_uri,
+            train_count=split_counts.get("train", 0),
+            val_count=split_counts.get("val", 0),
+            test_count=split_counts.get("test", 0),
+            species_count=len(class_keys),
+            git_commit=git_commit or "unknown",
+            selection_mode=CROP_SELECTION_MODE,
+            source_cutoff_at=datetime.now(timezone.utc),
+            status=status,
+            pipeline_type=CROP_PIPELINE_TYPE,
+            metadata_json=json.dumps(metadata, ensure_ascii=False),
+        )
+        db.add(dataset)
+        db.commit()
+
+    return {
+        "dataset_version": dataset_version,
+        "status": status,
+        "pipeline": CROP_PIPELINE_TYPE,
+        "source": "accepted_bbox",
+        "source_batches": metadata["source_batches"],
+        "image_count": len(rows),
+        "class_count": len(class_keys),
+        "split_counts": {name: split_counts.get(name, 0) for name in ("train", "val", "test")},
+        "manifest_uri": manifest_uri,
+        "class_map_uri": class_map_uri,
+        "freeze_metadata": metadata,
+        "validation": validation,
+        "auto_train": False,
+    }
+
+
+__all__ = [
+    "CROP_DATASET_VERSION",
+    "CROP_EXPAND_RATIO",
+    "CROP_INPUT_TYPE",
+    "CROP_PIPELINE_TYPE",
+    "CROP_READY_STATUS",
+    "CROP_SELECTION_MODE",
+    "build_reviewed_crop_dataset",
+    "build_reviewed_crop_dataset_from_db",
+    "freeze_crop_dataset",
+    "load_reviewed_crop_records",
+]
