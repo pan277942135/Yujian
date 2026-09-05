@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.crop_contract import canonical_crop
 from app.db import get_db
 from app.detector_runtime import normalize_android_source
 from app.frozen_crop_bridge import _read_uri, load_frozen_dataset
@@ -178,26 +179,7 @@ def _safe_component(value: str) -> str:
 
 
 def _crop_preview_bytes(data: bytes, box: list[float], expand_ratio: float = 0.15) -> bytes:
-    from PIL import Image
-
-    with Image.open(BytesIO(data)) as source:
-        image = source.convert("RGB")
-    x, y, width, height = box
-    left = max(0.0, x - width * expand_ratio)
-    top = max(0.0, y - height * expand_ratio)
-    right = min(1.0, x + width + width * expand_ratio)
-    bottom = min(1.0, y + height + height * expand_ratio)
-    pixel_box = (
-        max(0, int(left * image.width)),
-        max(0, int(top * image.height)),
-        min(image.width, max(1, int(round(right * image.width)))),
-        min(image.height, max(1, int(round(bottom * image.height)))),
-    )
-    if pixel_box[2] <= pixel_box[0] or pixel_box[3] <= pixel_box[1]:
-        raise ValueError("accepted bbox produced an empty crop")
-    output = BytesIO()
-    image.crop(pixel_box).save(output, format="JPEG", quality=92)
-    return output.getvalue()
+    return canonical_crop(data, box, expand_ratio=expand_ratio).jpeg_bytes
 
 
 def _persist_crop_preview(base: dict[str, Any], box: list[float]) -> str:
