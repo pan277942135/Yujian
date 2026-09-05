@@ -19,11 +19,11 @@ from typing import Any, Callable, Iterable, Mapping
 
 from PIL import Image, ImageOps
 
+from app.crop_contract import DEFAULT_EXPAND_RATIO, canonical_crop, crop_pixel_box
 from trainer.crop_dataset_validator import validate_crop_dataset
 
 
 ACCEPTED_STATUSES = {"ACCEPTED", "TRAINING_READY"}
-DEFAULT_EXPAND_RATIO = 0.15
 CROP_INPUT_TYPE = "crop_image"
 
 
@@ -305,16 +305,7 @@ def build_reviewed_detector_dataset(
 
 
 def _crop_pixels(bbox: list[float], width: int, height: int, expand_ratio: float) -> tuple[int, int, int, int]:
-    x, y, w, h = bbox
-    x1 = max(0.0, x - w * expand_ratio)
-    y1 = max(0.0, y - h * expand_ratio)
-    x2 = min(1.0, x + w + w * expand_ratio)
-    y2 = min(1.0, y + h + h * expand_ratio)
-    left = max(0, min(width - 1, math.floor(x1 * width)))
-    top = max(0, min(height - 1, math.floor(y1 * height)))
-    right = max(left + 1, min(width, math.ceil(x2 * width)))
-    bottom = max(top + 1, min(height, math.ceil(y2 * height)))
-    return left, top, right, bottom
+    return crop_pixel_box(bbox, width, height, expand_ratio=expand_ratio)
 
 
 def build_crop_dataset(
@@ -363,15 +354,13 @@ def build_crop_dataset(
         source_ref = _source_image_ref(record)
         try:
             data = _read_image_bytes(record, image_loader)
-            with Image.open(io.BytesIO(data)) as source:
-                image = ImageOps.exif_transpose(source).convert("RGB")
-                left, top, right, bottom = _crop_pixels(record["accepted_bbox"], image.width, image.height, expand_ratio)
-                crop = image.crop((left, top, right, bottom))
-                crop_width, crop_height = crop.size
-                safe_species = species.replace("/", "_").replace("\\", "_").strip() or "unknown"
-                crop_path = root / "images" / safe_species / f"{image_id}_crop.jpg"
-                crop_path.parent.mkdir(parents=True, exist_ok=True)
-                crop.save(crop_path, format="JPEG", quality=92)
+            crop_result = canonical_crop(data, record["accepted_bbox"], expand_ratio=expand_ratio)
+            left, top, right, bottom = crop_result.pixel_box
+            crop_width, crop_height = crop_result.width, crop_result.height
+            safe_species = species.replace("/", "_").replace("\\", "_").strip() or "unknown"
+            crop_path = root / "images" / safe_species / f"{image_id}_crop.jpg"
+            crop_path.parent.mkdir(parents=True, exist_ok=True)
+            crop_path.write_bytes(crop_result.jpeg_bytes)
             rows.append(
                 {
                     "image_id": image_id,
