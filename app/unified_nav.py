@@ -21,6 +21,7 @@ _NAV_ITEMS = [
     ("/inference", "模型实测", "prefix"),
     ("/intelligence", "模型智能分析", "prefix"),
     ("/crop-qa", "Crop QA", "prefix"),
+    ("/debug/detector-parity", "Detector Parity", "prefix"),
 ]
 _NAV_HREFS = {href for href, _label, _mode in _NAV_ITEMS}
 
