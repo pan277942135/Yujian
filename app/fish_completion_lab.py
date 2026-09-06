@@ -69,9 +69,10 @@ def _persist(test_id: str, name: str, content: bytes, content_type: str = "appli
 
 def _read_persist(uri: str) -> bytes:
     if uri.startswith("gs://"):
-        _, bucket_name, object_name = uri.split("/", 2)
+        remainder = uri[len("gs://"):]
+        bucket_name, object_name = remainder.split("/", 1)
         return storage.Client().bucket(bucket_name).blob(object_name).download_as_bytes()
-    with open(uri.removeprefix("local://"), "rb") as handle:
+    with open(uri.removeprefix("local://"), "rb"):
         return handle.read()
 
 
@@ -230,10 +231,10 @@ async def prepare(file: UploadFile = File(...), case_label: str = ""):
             "primary_selection": "confidence × sqrt(area)",
         }
         test_id_uri = _persist(test_id, "01_original_image.png", original, "image/png")
-        _persist(test_id, "02_detector_metadata.json", json.dumps(detector).encode(), "application/json")
-        _persist(test_id, "03_sam_raw_mask.png", _mask_bytes(raw_mask), "image/png")
+        detector_uri = _persist(test_id, "02_detector_metadata.json", json.dumps(detector).encode(), "application/json")
+        raw_mask_uri = _persist(test_id, "03_sam_raw_mask.png", _mask_bytes(raw_mask), "image/png")
         raw_transparent = result.cutout_png
-        _persist(test_id, "04_sam_transparent_raw.png", raw_transparent, "image/png")
+        raw_transparent_uri = _persist(test_id, "04_sam_transparent_raw.png", raw_transparent, "image/png")
         state = {
             "report_version": LAB_VERSION,
             "runtime": _runtime(test_id),
@@ -247,7 +248,7 @@ async def prepare(file: UploadFile = File(...), case_label: str = ""):
             "human_review": {},
             "cost": {"gpu_active_seconds": None, "estimated_compute_cost_usd": None, "cost_reason": "PRICING_NOT_CONFIGURED"},
             "errors": {},
-            "assets": {"original": test_id_uri, "sam_raw_mask": f"{PREFIX}/{test_id}/03_sam_raw_mask.png", "sam_transparent": f"{PREFIX}/{test_id}/04_sam_transparent_raw.png"},
+            "assets": {"original": test_id_uri, "detector_metadata": detector_uri, "sam_raw_mask": raw_mask_uri, "sam_transparent": raw_transparent_uri},
         }
         _save_state(test_id, state)
         return {**state, "test_id": test_id, "original": _data_url(original, "image/png"), "sam_raw_mask": _data_url(_mask_bytes(raw_mask), "image/png"), "sam_transparent": _data_url(raw_transparent, "image/png")}
@@ -260,11 +261,12 @@ async def save_masks(payload: MaskPayload):
     state = _load_state(payload.test_id)
     width, height = state["input"]["width"], state["input"]["height"]
     masks = {name: _decode_mask(payload.masks.get(name, ""), width, height) if payload.masks.get(name) else np.zeros((height, width), dtype=bool) for name in ("visible_add", "remove", "occluder", "completion_canonical")}
-    stats = _stats(np.asarray(_read_persist(state["assets"]["sam_raw_mask"] if state["assets"]["sam_raw_mask"].startswith(("gs://", "local://")) else f"local://var/fish_completion_lab/{payload.test_id}/03_sam_raw_mask.png"), dtype=bool), masks["visible_add"], masks["remove"], masks["occluder"], masks["completion_canonical"])
+    raw_mask = np.asarray(Image.open(io.BytesIO(_read_persist(state["assets"]["sam_raw_mask"]))).convert("L")) > 127
+    stats = _stats(raw_mask, masks["visible_add"], masks["remove"], masks["occluder"], masks["completion_canonical"])
     if not stats["completion_mask_valid"]:
         raise HTTPException(422, {"error_code": "COMPLETION_MASK_NOT_SUBSET_OF_OCCLUDER", "illegal_pixels": stats["illegal_completion_pixels"]})
     original = Image.open(io.BytesIO(_read_persist(state["assets"]["original"]))).convert("RGB")
-    refined = (np.asarray(Image.open(io.BytesIO(_read_persist(state["assets"]["sam_raw_mask"]))).convert("L")) > 127 | masks["visible_add"]) & ~masks["remove"]
+    refined = (raw_mask | masks["visible_add"]) & ~masks["remove"]
     refined_png = _png(Image.fromarray(np.where(refined, 255, 0).astype("uint8"), "L"))
     refined_fish = _png(Image.fromarray(np.dstack([np.asarray(original), np.where(refined, 255, 0).astype("uint8")]), "RGBA"))
     for name, mask in (("05_visible_add_mask.png", masks["visible_add"]), ("06_remove_mask.png", masks["remove"]), ("07_refined_visible_mask.png", refined), ("09_occluder_mask.png", masks["occluder"]), ("10_completion_mask_canonical.png", masks["completion_canonical"])):
