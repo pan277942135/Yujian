@@ -235,6 +235,7 @@ async def fish_segmentation(file: UploadFile = File(..., alias="image")) -> dict
             "executed": True,
             "model": "SAM_VIT_B",
             "prompt_type": "DETECTOR_PRIMARY_BBOX",
+            "prompt": "DET_FISH_v0.1 primary bbox",
             "quality": result.quality.value,
             "quality_reason": result.reason,
             "mask_area_ratio": round(result.mask_area_ratio, 6),
