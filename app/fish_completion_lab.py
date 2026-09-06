@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from google.cloud import storage
@@ -201,7 +201,7 @@ def _save_state(test_id: str, state: dict[str, Any]) -> None:
 
 
 @router.get("/debug/fish-completion-lab", response_class=HTMLResponse)
-def fish_completion_lab_page(request):
+def fish_completion_lab_page(request: Request):
     return templates.TemplateResponse(request=request, name="fish_completion_lab.html", context={})
 
 
