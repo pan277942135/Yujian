@@ -25,6 +25,52 @@ from app.segmentation.service import generate_fish_cutout
 MAX_DEBUG_IMAGE_BYTES = 25 * 1024 * 1024
 DEMO_VERSION = "FISH_HERO_PREVIEW_DEMO_v0.2-A"
 CHECKPOINT_LABEL = "sam_vit_b_01ec64"
+
+SUBJECT_PREVIEW_PADDING_RATIO = 0.06
+
+
+def _transparent_subject_preview(png_bytes: bytes) -> tuple[bytes, dict[str, Any]]:
+    """Crop only transparent canvas around the existing alpha subject."""
+    image = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+    alpha_bbox = image.getchannel("A").getbbox()
+    if not alpha_bbox:
+        return png_bytes, {
+            "full_canvas_width": image.width,
+            "full_canvas_height": image.height,
+            "alpha_bbox_pixels": None,
+            "alpha_bbox_normalized": None,
+            "subject_crop_bbox_pixels": [0, 0, image.width, image.height],
+            "subject_crop_bbox_normalized": [0.0, 0.0, 1.0, 1.0],
+            "subject_preview_padding_ratio": SUBJECT_PREVIEW_PADDING_RATIO,
+            "subject_width": image.width,
+            "subject_height": image.height,
+            "subject_aspect_ratio": round(image.width / max(1, image.height), 6),
+            "subject_orientation": "BALANCED",
+        }
+    left, top, right, bottom = alpha_bbox
+    subject_width, subject_height = right - left, bottom - top
+    pad_x = max(1, round(subject_width * SUBJECT_PREVIEW_PADDING_RATIO))
+    pad_y = max(1, round(subject_height * SUBJECT_PREVIEW_PADDING_RATIO))
+    crop_left, crop_top = max(0, left - pad_x), max(0, top - pad_y)
+    crop_right, crop_bottom = min(image.width, right + pad_x), min(image.height, bottom + pad_y)
+    cropped = image.crop((crop_left, crop_top, crop_right, crop_bottom))
+    output = io.BytesIO()
+    cropped.save(output, format="PNG", optimize=True)
+    aspect_ratio = subject_width / max(1, subject_height)
+    orientation = "VERTICAL" if aspect_ratio < 0.65 else ("HORIZONTAL" if aspect_ratio > 1.5 else "BALANCED")
+    return output.getvalue(), {
+        "full_canvas_width": image.width,
+        "full_canvas_height": image.height,
+        "alpha_bbox_pixels": [left, top, right, bottom],
+        "alpha_bbox_normalized": [left / image.width, top / image.height, right / image.width, bottom / image.height],
+        "subject_crop_bbox_pixels": [crop_left, crop_top, crop_right, crop_bottom],
+        "subject_crop_bbox_normalized": [crop_left / image.width, crop_top / image.height, crop_right / image.width, crop_bottom / image.height],
+        "subject_preview_padding_ratio": SUBJECT_PREVIEW_PADDING_RATIO,
+        "subject_width": subject_width,
+        "subject_height": subject_height,
+        "subject_aspect_ratio": round(aspect_ratio, 6),
+        "subject_orientation": orientation,
+    }
 router = APIRouter(tags=["fish-segmentation-demo"])
 templates = Jinja2Templates(directory="app/templates")
 
@@ -246,7 +292,11 @@ async def fish_segmentation(file: UploadFile = File(..., alias="image")) -> dict
             "processing_ms": result.processing_ms,
         }
         response["hero_preview"]["transparent"] = "READY"
-        response["transparent_fish"] = _data_url(result.cutout_png, "image/png")
+        transparent_full_url = _data_url(result.cutout_png, "image/png")
+        transparent_subject_png, subject_meta = _transparent_subject_preview(result.cutout_png)
+        response["transparent_fish"] = transparent_full_url
+        response["transparent_full_fish"] = transparent_full_url
+        response["transparent_subject_fish"] = _data_url(transparent_subject_png, "image/png")
         response["mask_overlay"] = _mask_overlay(source, result.mask, primary.box)
         response["transparent_hero_meta"] = {
             "transparent_source": "SAM_MASK",
@@ -254,6 +304,7 @@ async def fish_segmentation(file: UploadFile = File(..., alias="image")) -> dict
             "hero_background": "MORNING_LAKE_V1",
             "fish_rgb_modified": False,
             "fish_generated": False,
+            **subject_meta,
         }
         return response
     except HTTPException:
