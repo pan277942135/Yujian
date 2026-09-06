@@ -19,6 +19,10 @@ PUBLIC_GET_PATH_PREFIXES = (
     # Fish Knowledge cover/card assets are public read-only resources for App clients.
     "/api/v1/fish/knowledge-media",
 )
+SEGMENTATION_DEMO_PATHS = {
+    "/debug/fish-segmentation",
+    "/api/debug/fish-segmentation",
+}
 FEEDBACK_INGEST_PATHS = {
     "/api/feedback",
     "/api/feedback/ingest",
@@ -32,6 +36,10 @@ def _configured_key() -> str:
 
 def _feedback_ingest_key() -> str:
     return os.getenv("FEEDBACK_INGEST_KEY", "").strip()
+
+
+def _segmentation_demo_auth_disabled() -> bool:
+    return os.getenv("SEGMENTATION_DEMO_AUTH_DISABLED", "").strip().lower() == "true"
 
 
 def _cookie_value(key: str) -> str:
@@ -50,7 +58,13 @@ def install_access_guard(app: FastAPI) -> None:
             request.url.path == prefix or request.url.path.startswith(prefix + "/")
             for prefix in PUBLIC_API_PATH_PREFIXES
         )
-        if not key or request.url.path in PUBLIC_PATHS or public_fish_read or app_api_request:
+        if (
+            not key
+            or request.url.path in PUBLIC_PATHS
+            or public_fish_read
+            or app_api_request
+            or (_segmentation_demo_auth_disabled() and request.url.path in SEGMENTATION_DEMO_PATHS)
+        ):
             return await call_next(request)
 
         ingest_key = _feedback_ingest_key()
