@@ -13,7 +13,8 @@ from PIL import Image, ImageDraw
 
 from app.detector_runtime import detect, normalize_android_source
 from app.recognition_pipeline import assess_detections
-from app.segmentation.service import FishSegmentationResult, generate_fish_cutout
+from app.segmentation.mask_generator import SegmentationModelNotConfigured
+from app.segmentation.service import generate_fish_cutout
 
 MAX_DEBUG_IMAGE_BYTES = 25 * 1024 * 1024
 router = APIRouter(tags=["fish-segmentation-demo"])
@@ -106,8 +107,10 @@ async def fish_segmentation(file: UploadFile = File(..., alias="image")) -> dict
         }
     except HTTPException:
         raise
+    except SegmentationModelNotConfigured as exc:
+        raise HTTPException(status_code=503, detail={"error_code": "SEGMENTATION_MODEL_UNAVAILABLE", "message": str(exc)}) from exc
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Fish segmentation demo failed: {exc}") from exc
+        raise HTTPException(status_code=503, detail={"error_code": "SEGMENTATION_FAILED", "message": str(exc)}) from exc
     finally:
         if source is not None:
             source.close()
