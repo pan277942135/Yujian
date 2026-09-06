@@ -22,6 +22,7 @@ PUBLIC_GET_PATH_PREFIXES = (
 SEGMENTATION_DEMO_PATHS = {
     "/debug/fish-segmentation",
     "/api/debug/fish-segmentation",
+    "/api/debug/fish-hero-review",
 }
 FEEDBACK_INGEST_PATHS = {
     "/api/feedback",
