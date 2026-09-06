@@ -31,7 +31,22 @@ SUBJECT_PREVIEW_PADDING_RATIO = 0.06
 
 def _transparent_subject_preview(png_bytes: bytes) -> tuple[bytes, dict[str, Any]]:
     """Crop only transparent canvas around the existing alpha subject."""
-    image = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+    try:
+        image = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+    except Exception:
+        return png_bytes, {
+            "full_canvas_width": None,
+            "full_canvas_height": None,
+            "alpha_bbox_pixels": None,
+            "alpha_bbox_normalized": None,
+            "subject_crop_bbox_pixels": None,
+            "subject_crop_bbox_normalized": None,
+            "subject_preview_padding_ratio": SUBJECT_PREVIEW_PADDING_RATIO,
+            "subject_width": None,
+            "subject_height": None,
+            "subject_aspect_ratio": None,
+            "subject_orientation": "UNKNOWN",
+        }
     alpha_bbox = image.getchannel("A").getbbox()
     if not alpha_bbox:
         return png_bytes, {
