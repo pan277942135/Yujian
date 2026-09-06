@@ -23,6 +23,12 @@ SEGMENTATION_DEMO_PATHS = {
     "/debug/fish-segmentation",
     "/api/debug/fish-segmentation",
     "/api/debug/fish-hero-review",
+    "/debug/fish-completion-lab",
+    "/api/debug/fish-completion-lab/prepare",
+    "/api/debug/fish-completion-lab/masks",
+    "/api/debug/fish-completion-lab/run",
+    "/api/debug/fish-completion-lab/review",
+    "/api/debug/fish-completion-lab/report",
 }
 FEEDBACK_INGEST_PATHS = {
     "/api/feedback",
