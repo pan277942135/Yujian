@@ -24,6 +24,7 @@ from app.dataset_crop_review import router as dataset_crop_review_router
 from app.crop_audit_api import router as crop_audit_router
 from app.detector_parity_api import router as detector_parity_router, templates as detector_parity_templates
 from app.segmentation_api import router as segmentation_router, templates as segmentation_templates
+from app.segmentation.mask_generator import initialize_segmentation_model
 from app.fish_knowledge.api import router as fish_knowledge_router
 from app.fish_knowledge.admin import (
     compat_router as fish_knowledge_admin_compat_router,
@@ -57,6 +58,7 @@ install_feedback_automation(app)
 
 @app.on_event("startup")
 def seed_target_species_catalog() -> None:
+    initialize_segmentation_model()
     db = SessionLocal()
     try:
         ensure_target_species(db)
