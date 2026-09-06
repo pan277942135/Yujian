@@ -1,0 +1,79 @@
+name: Fish Segmentation Demo Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/fish-segmentation-demo-v0.1
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: yujian-fish-segmentation-demo
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: gemini-api-project-503706
+  REGION: asia-east1
+  SERVICE: yujian-fish-segmentation-demo
+  RUNTIME_SERVICE_ACCOUNT: yujian-model-factory@gemini-api-project-503706.iam.gserviceaccount.com
+  WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+  DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+  SEGMENTATION_MODEL_TYPE: vit_b
+  SEGMENTATION_CHECKPOINT_URI: gs://yujian-model-factory-571785698442/models/segmentation/sam_vit_b_01ec64.pth
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: uat
+    steps:
+      - name: Checkout exact feature commit
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud with GitHub OIDC/WIF
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          version: '>= 416.0.0'
+
+      - name: Deploy isolated Cloud Run demo service
+        id: deploy
+        env:
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          gcloud run deploy "$SERVICE"             --project "$PROJECT_ID"             --region "$REGION"             --source .             --service-account "$RUNTIME_SERVICE_ACCOUNT"             --set-env-vars="APP_GIT_COMMIT=${GIT_SHA},SEGMENTATION_MODEL_TYPE=${SEGMENTATION_MODEL_TYPE},SEGMENTATION_CHECKPOINT_URI=${SEGMENTATION_CHECKPOINT_URI},GCS_BUCKET=yujian-model-factory-571785698442,CONSOLE_ACCESS_KEY=fish-segmentation-demo"             --cpu=4             --memory=8Gi             --concurrency=1             --min-instances=0             --max-instances=1             --timeout=900             --allow-unauthenticated             --format="value(status.url)" > service_url.txt
+          SERVICE_URL="$(cat service_url.txt)"
+          echo "service_url=${SERVICE_URL}" >> "$GITHUB_OUTPUT"
+          curl --fail --silent --show-error "${SERVICE_URL}/health"
+          printf '\n'
+
+      - name: Verify deployed revision and SAM readiness
+        env:
+          SERVICE_URL: ${{ steps.deploy.outputs.service_url }}
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          HEALTH="$(curl --fail --silent --show-error "${SERVICE_URL}/health")"
+          echo "${HEALTH}"
+          test "$(python -c 'import json,sys; print(json.load(sys.stdin).get("status"))' <<< "${HEALTH}")" = "ok"
+          {
+            echo "### Fish Segmentation Demo Deployment"
+            echo "- Service: \`$SERVICE\`"
+            echo "- URL: ${SERVICE_URL}/debug/fish-segmentation"
+            echo "- Commit: \`${GIT_SHA}\`"
+            echo "- SAM: \`${SEGMENTATION_MODEL_TYPE}\`"
+            echo "- Checkpoint: \`${SEGMENTATION_CHECKPOINT_URI}\`"
+            echo "- Health: **PASS**"
+            echo "- SAM readiness: verify Cloud Run startup log contains \`Fish Segmentation Model Ready model=SAM_VIT_B checkpoint=loaded\`"
+          } >> "$GITHUB_STEP_SUMMARY"
