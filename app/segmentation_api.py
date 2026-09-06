@@ -172,6 +172,7 @@ async def fish_segmentation(file: UploadFile = File(..., alias="image")) -> dict
                 "strong_detection_count": len(detector_run.detections),
                 "primary_detection_found": primary is not None,
                 "primary_confidence": round(float(primary.confidence), 6) if primary else None,
+                "bbox_normalized": ([primary.box.normalized().x1, primary.box.normalized().y1, primary.box.normalized().x2, primary.box.normalized().y2] if primary else None),
                 "primary_bbox_normalized": (
                     [primary.box.normalized().x1, primary.box.normalized().y1, primary.box.normalized().x2, primary.box.normalized().y2]
                     if primary else None
