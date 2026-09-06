@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 from functools import lru_cache
@@ -11,6 +12,9 @@ import numpy as np
 from PIL import Image
 
 from app.recognition_pipeline import BBox
+
+
+logger = logging.getLogger(__name__)
 
 
 class SegmentationModelNotConfigured(RuntimeError):
@@ -56,6 +60,20 @@ def _load_predictor():
     model.eval()
     return SamPredictor(model)
 
+
+def initialize_segmentation_model() -> bool:
+    """Warm-load SAM when configured, without making startup dependent on it."""
+    try:
+        _load_predictor()
+        model_name = os.getenv("SEGMENTATION_MODEL_TYPE", "vit_b").strip().upper()
+        logger.info("Fish Segmentation Model Ready model=SAM_%s checkpoint=loaded", model_name)
+        return True
+    except SegmentationModelNotConfigured as exc:
+        logger.warning("Segmentation unavailable: %s", exc)
+        return False
+    except Exception:
+        logger.exception("Segmentation unavailable: SAM checkpoint load failed")
+        return False
 
 def generate_mask(image: Image.Image, bbox: BBox) -> np.ndarray:
     predictor = _load_predictor()
