@@ -24,6 +24,7 @@ from app.dataset_crop_review import router as dataset_crop_review_router
 from app.crop_audit_api import router as crop_audit_router
 from app.detector_parity_api import router as detector_parity_router, templates as detector_parity_templates
 from app.segmentation_api import router as segmentation_router, templates as segmentation_templates
+from app.fish_completion_lab import router as fish_completion_router, templates as fish_completion_templates
 from app.segmentation.mask_generator import initialize_segmentation_model
 from app.fish_knowledge.api import router as fish_knowledge_router
 from app.fish_knowledge.admin import (
@@ -50,6 +51,7 @@ for template_engine in (
     crop_review_templates,
     detector_parity_templates,
     segmentation_templates,
+    fish_completion_templates,
 ):
     install_unified_nav(template_engine)
 
@@ -121,6 +123,7 @@ app.include_router(dataset_crop_review_router)
 app.include_router(crop_audit_router)
 app.include_router(detector_parity_router)
 app.include_router(segmentation_router)
+app.include_router(fish_completion_router)
 app.include_router(fish_knowledge_router)
 app.include_router(fish_knowledge_admin_router)
 app.include_router(fish_knowledge_admin_compat_router)
