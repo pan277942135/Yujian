@@ -11,7 +11,6 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from PIL import Image, ImageDraw
 
-from app.detector_runtime import MAX_DEBUG_IMAGE_BYTES if False else None
 from app.detector_runtime import detect, normalize_android_source
 from app.recognition_pipeline import assess_detections
 from app.segmentation.service import FishSegmentationResult, generate_fish_cutout
