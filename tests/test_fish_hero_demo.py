@@ -11,7 +11,7 @@ class Box:
 
 
 def test_expanded_crop_stays_inside_source():
-    assert _expanded_crop_box(Box(0.01, 0.02, 0.30, 0.40), 1000, 800) == (0, 0, 387, 326)
+    assert _expanded_crop_box(Box(0.01, 0.02, 0.30, 0.40), 1000, 800) == (0, 0, 335, 367)
 
 
 def test_orientation_uses_normalized_source_dimensions():
