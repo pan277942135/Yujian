@@ -6,7 +6,7 @@ import base64
 import io
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from PIL import Image, ImageDraw
@@ -55,7 +55,7 @@ def _mask_overlay(source: Image.Image, mask: Any, bbox: Any) -> str:
 
 
 @router.get("/debug/fish-segmentation", response_class=HTMLResponse)
-def fish_segmentation_page(request):
+def fish_segmentation_page(request: Request):
     return templates.TemplateResponse(request=request, name="fish_segmentation.html", context={})
 
 
