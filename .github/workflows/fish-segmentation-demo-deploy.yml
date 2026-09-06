@@ -23,6 +23,7 @@ env:
   DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
   SEGMENTATION_MODEL_TYPE: vit_b
   SEGMENTATION_CHECKPOINT_URI: gs://yujian-model-factory-571785698442/models/segmentation/sam_vit_b_01ec64.pth
+  SEGMENTATION_DEMO_AUTH_DISABLED: "true"
 
 jobs:
   deploy:
@@ -52,7 +53,7 @@ jobs:
           GIT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          gcloud run deploy "$SERVICE"             --project "$PROJECT_ID"             --region "$REGION"             --source .             --service-account "$RUNTIME_SERVICE_ACCOUNT"             --set-env-vars="APP_GIT_COMMIT=${GIT_SHA},SEGMENTATION_MODEL_TYPE=${SEGMENTATION_MODEL_TYPE},SEGMENTATION_CHECKPOINT_URI=${SEGMENTATION_CHECKPOINT_URI},GCS_BUCKET=yujian-model-factory-571785698442,CONSOLE_ACCESS_KEY=fish-segmentation-demo"             --cpu=4             --memory=8Gi             --concurrency=1             --min-instances=0             --max-instances=1             --timeout=900             --allow-unauthenticated             --format="value(status.url)" > service_url.txt
+          gcloud run deploy "$SERVICE"             --project "$PROJECT_ID"             --region "$REGION"             --source .             --service-account "$RUNTIME_SERVICE_ACCOUNT"             --set-env-vars="APP_GIT_COMMIT=${GIT_SHA},SEGMENTATION_MODEL_TYPE=${SEGMENTATION_MODEL_TYPE},SEGMENTATION_CHECKPOINT_URI=${SEGMENTATION_CHECKPOINT_URI},GCS_BUCKET=yujian-model-factory-571785698442,CONSOLE_ACCESS_KEY=fish-segmentation-demo,SEGMENTATION_DEMO_AUTH_DISABLED=${SEGMENTATION_DEMO_AUTH_DISABLED}"             --cpu=4             --memory=8Gi             --concurrency=1             --min-instances=0             --max-instances=1             --timeout=900             --allow-unauthenticated             --format="value(status.url)" > service_url.txt
           SERVICE_URL="$(cat service_url.txt)"
           echo "service_url=${SERVICE_URL}" >> "$GITHUB_OUTPUT"
           curl --fail --silent --show-error "${SERVICE_URL}/health"
