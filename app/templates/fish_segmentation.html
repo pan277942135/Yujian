@@ -1,33 +1,101 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Fish Segmentation Preview · 渔见 AI</title>
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fish Hero Preview · 渔见 AI</title>
 <style>
-*{box-sizing:border-box}body{font-family:Inter,system-ui,sans-serif;margin:0;background:#f6f7f8;color:#171717}
-main{max-width:1200px;margin:auto;padding:24px}.card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin-top:18px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.muted{color:#6b7280}.actions{display:flex;gap:10px;align-items:center;margin-top:14px}
-button{border:0;border-radius:9px;padding:10px 16px;background:#111827;color:#fff;font-weight:700;cursor:pointer}
-.preview{min-height:320px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:12px;display:grid;place-items:center;overflow:hidden;margin-top:14px}
-.preview img{max-width:100%;max-height:560px;object-fit:contain}pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#e5e7eb;border-radius:10px;padding:14px;font-size:12px;overflow:auto}
-.result{display:none}.result.show{display:block}.pill{display:inline-block;background:#ecfdf5;color:#047857;border-radius:999px;padding:5px 10px;font-weight:700}
-@media(max-width:800px){main{padding:14px}.grid{grid-template-columns:1fr}}
-</style></head>
+*{box-sizing:border-box}body{font-family:Inter,system-ui,sans-serif;margin:0;background:#f3f6f5;color:#17211f}
+main{max-width:1400px;margin:auto;padding:24px}.card{background:#fff;border:1px solid #dfe8e4;border-radius:16px;padding:18px;margin-top:18px;box-shadow:0 5px 22px #173d2b0b}
+h1,h2,h3{margin:0 0 10px}.muted{color:#66736f}.actions,.toolbar,.review-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px}
+button,select,input,textarea{font:inherit;border:1px solid #cbd8d3;border-radius:9px;padding:10px}button{border:0;background:#123b2e;color:#fff;font-weight:700;cursor:pointer}button.secondary{background:#e7efeb;color:#123b2e}button:disabled{opacity:.55;cursor:wait}
+input[type=file]{max-width:100%}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}.three{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.preview{min-height:280px;background:#f7faf9;border:1px dashed #c7d5cf;border-radius:12px;display:grid;place-items:center;overflow:hidden;margin-top:12px}
+.preview img{max-width:100%;max-height:560px;object-fit:contain}.preview img.pixelated{image-rendering:auto}
+pre,.report{white-space:pre-wrap;word-break:break-word;background:#10241d;color:#e8f4ef;border-radius:12px;padding:14px;font-size:12px;overflow:auto}
+.pill{display:inline-block;background:#e7f5ee;color:#08734d;border-radius:999px;padding:5px 10px;font-weight:700}.hidden{display:none!important}
+.hero-card{border:1px solid #dbe7e1;border-radius:14px;padding:12px;background:#fbfdfc}.hero-shell{height:430px;border-radius:13px;overflow:hidden;position:relative;background:#d8e7e3;margin-bottom:12px}
+.hero-shell .hero-bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:blur(18px) brightness(.82);transform:scale(1.08)}
+.hero-shell .hero-fg{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;padding:30px}
+.hero-shell.original .hero-fg{object-fit:cover;padding:0}.hero-shell.original .hero-bg{display:none}
+.hero-shell.crop .hero-fg{padding:18px}.hero-shell.lake{background:linear-gradient(155deg,#bcd5d1,#eaf0ec 55%,#a9c5be)}
+.hero-shell.lake:after{content:"";position:absolute;inset:auto 0 0;height:35%;background:linear-gradient(transparent,#9abbb277);pointer-events:none}
+.mobile-mode .hero-shell{height:620px}.mobile-mode .three{grid-template-columns:1fr}.mobile-frame{max-width:390px;margin:auto}
+.inspect{background:#fff;border-radius:12px;padding:12px}.edge-stage{height:360px;border-radius:12px;display:grid;place-items:center;overflow:hidden}.edge-stage img{max-width:92%;max-height:92%;object-fit:contain}.edge-lake{background:linear-gradient(160deg,#b9d4cf,#edf3ee)}.edge-white{background:#fff}.edge-dark{background:#17211f}
+.metrics{line-height:1.8;font-size:13px}.note{font-size:12px;color:#62736c}.review-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.review-grid label{display:block;font-weight:700;margin-bottom:6px}.review-grid select,.review-grid textarea{width:100%}.review-grid textarea{min-height:100px;resize:vertical}.wide{grid-column:1/-1}
+@media(max-width:900px){main{padding:14px}.grid,.three,.review-grid{grid-template-columns:1fr}.hero-shell{height:360px}}
+</style>
+</head>
 <body><header>{% include "_mobile_ux.html" %}</header>
-<main><h1>Fish Segmentation Preview</h1>
-<p class="muted">实验页面：真实 DET_FISH_v0.1 主框 → SAM bbox prompt → mask → transparent fish。</p>
-<div class="card"><input id="file" type="file" accept="image/jpeg,image/png,image/webp">
-<div class="actions"><button onclick="run()">运行 Fish Segmentation</button><span id="status" class="muted"></span></div></div>
-<div class="grid"><div class="card"><h2>Mask Overlay</h2><div id="mask" class="preview"><span class="muted">尚未运行</span></div>
-<h2>Transparent Fish</h2><div id="cutout" class="preview"><span class="muted">尚未运行</span></div></div>
-<div class="card"><h2>Metrics</h2><div id="summary" class="muted">上传图片后显示 detector bbox、mask quality 与处理时间。</div><pre id="json" class="result"></pre></div></div></main>
+<main>
+<h1>Fish Segmentation + Fish Hero Preview</h1>
+<p class="muted">FISH_HERO_PREVIEW_DEMO_v0.2-A · 真实 Detector → SAM → 三种识别结果页对照台</p>
+<div class="card">
+  <input id="file" type="file" accept="image/jpeg,image/png,image/webp">
+  <input id="caseLabel" placeholder="Case Label（可选，如 Test 06 / 夜钓）">
+  <div class="actions"><button id="runBtn" onclick="run()">Run Fish Segmentation</button><span id="status" class="muted"></span></div>
+</div>
+<div id="result" class="hidden">
+  <div class="grid">
+    <div class="card"><h2>Detector Overlay</h2><div id="mask" class="preview"><span class="muted">尚未运行</span></div></div>
+    <div class="card"><h2>Transparent Fish</h2><div id="cutout" class="preview"><span class="muted">尚未运行</span></div></div>
+  </div>
+  <div class="card"><h2>Detector / Segmentation Metrics</h2><div id="summary" class="metrics"></div><pre id="rawJson"></pre></div>
+
+  <div class="card">
+    <h2>Fish Hero Visual Validation</h2>
+    <p class="note">Demo Data：识别结果 / 黄骨鱼 / 42.6 cm / 1.28 kg / 浙江 · 千岛湖。三套页面只改变 Hero 图片表达。</p>
+    <div class="toolbar">
+      <button class="secondary" onclick="setView('tabs')">Tab Mode</button>
+      <button class="secondary" onclick="setView('compare')">Compare Mode</button>
+      <button class="secondary" onclick="toggleMobile()">390 × 844 Mobile Preview</button>
+    </div>
+    <div id="heroCompare" class="three">
+      <div class="hero-card" data-hero="original"><h3>A · Original</h3><div class="hero-shell original"><img class="hero-fg originalImg"><div class="hero-copy">识别结果 · 黄骨鱼<br><small>42.6 cm · 1.28 kg · 浙江 · 千岛湖</small></div></div><button class="secondary" onclick="showOnly('original')">查看 Original</button></div>
+      <div class="hero-card" data-hero="crop"><h3>B · Smart Crop</h3><div class="hero-shell crop"><img class="hero-bg originalImg"><img class="hero-fg cropImg"><div class="hero-copy">识别结果 · 黄骨鱼<br><small>42.6 cm · 1.28 kg · 浙江 · 千岛湖</small></div></div><button class="secondary" onclick="showOnly('crop')">查看 Smart Crop</button></div>
+      <div class="hero-card" data-hero="transparent"><h3>C · Transparent Fish Hero</h3><div class="hero-shell lake"><img class="hero-fg transparentImg"><div class="hero-copy">识别结果 · 黄骨鱼<br><small>42.6 cm · 1.28 kg · 浙江 · 千岛湖</small></div></div><button class="secondary" onclick="showOnly('transparent')">查看 Transparent</button></div>
+    </div>
+    <p class="note">Automatic FishHeroQualityGate: <b>DISABLED_IN_V0.2-A</b></p>
+  </div>
+
+  <div class="card"><h2>Edge Inspection</h2><div class="toolbar"><button class="secondary" onclick="edge('lake')">Lake</button><button class="secondary" onclick="edge('white')">White</button><button class="secondary" onclick="edge('dark')">Dark</button></div><div id="edgeStage" class="edge-stage edge-lake"><img id="edgeImg" class="transparentImg"></div></div>
+
+  <div class="card"><h2>Human Visual Review</h2>
+    <div class="review-grid">
+      <div><label>Source Hero Capability</label><select id="sourceCap"><option>NOT_RATED</option><option value="YES">YES</option><option value="UNCERTAIN">UNCERTAIN</option><option value="NO">NO</option></select></div>
+      <div><label>Transparent Hero Quality</label><select id="heroQuality"><option>NOT_RATED</option><option value="HERO_OK">可以直接用</option><option value="BORDERLINE">勉强可用</option><option value="HERO_BAD">不可用</option></select></div>
+      <div><label>Visual Lift vs Smart Crop</label><select id="visualLift"><option>NOT_RATED</option><option value="MUCH_BETTER">明显更好</option><option value="BETTER">略好</option><option value="SAME">持平</option><option value="WORSE">略差</option><option value="MUCH_WORSE">明显更差</option></select></div>
+      <div class="wide"><label>Issue Tags（可多选）</label><select id="issues" multiple size="5">
+        <option>FISH_COMPLETE</option><option>FISH_BODY_MISSING</option><option>FISH_HEAD_ABNORMAL</option><option>FISH_TAIL_MISSING</option><option>FISH_FIN_MISSING</option><option>BARBEL_MISSING</option><option>HAND_RESIDUE</option><option>ARM_RESIDUE</option><option>BACKGROUND_RESIDUE</option><option>FLOATING_FRAGMENT</option><option>INTERNAL_ALPHA_HOLE</option><option>EDGE_ARTIFACT</option><option>EDGE_HALO</option><option>SUBJECT_TOO_SMALL</option><option>UPSCALE_BLUR</option><option>BAD_COMPOSITION</option><option>SOURCE_OCCLUDED</option><option>SOURCE_NOT_SUITABLE_FOR_TRANSPARENT_HERO</option><option>TRANSPARENT_NOT_BETTER_THAN_SMART_CROP</option>
+      </select></div>
+      <div class="wide"><label>Reviewer Notes（最多500字符）</label><textarea id="notes" maxlength="500" placeholder="记录手机尺寸下的真实视觉判断"></textarea></div>
+    </div>
+    <div class="review-actions"><button onclick="saveReview()">Save Human Review</button><span id="reviewStatus" class="muted"></span></div>
+  </div>
+
+  <div class="card"><h2>Test Debug Report</h2><div class="actions"><button onclick="copyReport()">Copy Test Report</button><button class="secondary" onclick="copyRaw()">Copy Raw JSON</button><span id="copyStatus" class="muted"></span></div><pre id="report" class="report"></pre></div>
+</div>
+</main>
 <script>
-const $=id=>document.getElementById(id);
-function esc(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
-async function run(){const f=$("file").files[0];if(!f){$("status").textContent="请先选择图片";return}
-$("status").textContent="推理中…";try{const fd=new FormData();fd.append("image",f,f.name);
-const r=await fetch("/api/debug/fish-segmentation",{method:"POST",body:fd});const d=await r.json();if(!r.ok)throw Error(typeof d.detail==="string"?d.detail:JSON.stringify(d.detail));
-$("mask").innerHTML='<img src="'+d.mask_overlay+'" alt="mask overlay">';
-$("cutout").innerHTML='<img src="'+d.transparent_fish+'" alt="transparent fish">';
-$("summary").innerHTML='<span class="pill">'+esc(d.segmentation.quality)+'</span><p>Detector bbox: '+esc(JSON.stringify(d.detector.bbox_normalized))+'<br>Mask area ratio: '+esc(d.segmentation.mask_area_ratio)+' · edge ratio: '+esc(d.segmentation.edge_ratio)+'<br>Processing: '+esc(d.segmentation.processing_ms)+' ms</p>';
-$("json").textContent=JSON.stringify(d,null,2);$("json").classList.add("show");$("status").textContent="完成"}catch(e){$("status").textContent=e.message;$("mask").innerHTML="<span class='muted'>运行失败</span>";$("cutout").innerHTML="<span class='muted'>运行失败</span>"}}
-</script></body></html>
+const $=id=>document.getElementById(id), state={};
+const esc=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function testId(){const d=new Date(),p=n=>String(n).padStart(2,"0");return "FH_"+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+"_"+Math.floor(Math.random()*900+100)}
+function selected(id){return [...$(id).selectedOptions].map(x=>x.value)}
+function setView(mode){$("heroCompare").classList.toggle("three",mode==="compare");$("heroCompare").classList.toggle("tabs",mode==="tabs")}
+function showOnly(name){document.querySelectorAll(".hero-card").forEach(x=>x.classList.toggle("hidden",x.dataset.hero!==name))}
+function toggleMobile(){ $("heroCompare").classList.toggle("mobile-mode") }
+function edge(name){$("edgeStage").className="edge-stage edge-"+name}
+function dataUrlImage(selector,url){document.querySelectorAll(selector).forEach(x=>x.src=url)}
+function alphaBbox(url){return new Promise(resolve=>{const im=new Image();im.onload=()=>{const c=document.createElement("canvas"),x=c.getContext("2d");c.width=im.width;c.height=im.height;x.drawImage(im,0,0);const a=x.getImageData(0,0,c.width,c.height).data;let l=c.width,t=c.height,r=0,b=0,n=0;for(let y=0;y<c.height;y++)for(let z=0;z<c.width;z++){if(a[(y*c.width+z)*4+3]>8){l=Math.min(l,z);t=Math.min(t,y);r=Math.max(r,z+1);b=Math.max(b,y+1);n++}}resolve(n?{x1:l/c.width,y1:t/c.height,x2:r/c.width,y2:b/c.height}:null)};im.src=url})}
+function makeReport(){const d=state.data,h={source_hero_capable:$("sourceCap").value,transparent_hero_quality:$("heroQuality").value,visual_lift_vs_smart_crop:$("visualLift").value,issues:selected("issues"),reviewer_notes:$("notes").value};
+const j={report_version:"YUJIAN_FISH_HERO_TEST_REPORT_V0.2-A",runtime:d.runtime,input:d.input,detector:d.detector,segmentation:d.segmentation||{executed:false,skip_reason:"not_available"},eligibility:d.eligibility||{},hero_preview:d.hero_preview||{},human_review:h,errors:d.errors||{}};
+j.hero_preview.smart_crop_source=d.smart_crop_meta?.source||null;j.hero_preview.transparent_source=d.transparent_hero_meta?.transparent_source||null;
+j.hero_preview.smart_crop_meta=d.smart_crop_meta||null;j.hero_preview.transparent_hero_meta=d.transparent_hero_meta||null;
+$("report").textContent=textReport(j);state.report=j;return j}
+function textReport(j){const line=(k,v)=>k+": "+(typeof v==="object"?JSON.stringify(v):String(v??"null"));let s=j.report_version+"\n\n";
+for(const [section,obj] of Object.entries({RUNTIME:j.runtime,INPUT:j.input,DETECTOR:j.detector,SEGMENTATION:j.segmentation,ELIGIBILITY:j.eligibility,HERO_PREVIEW:j.hero_preview,HUMAN_REVIEW:j.human_review,ERRORS:j.errors})){s+="=== "+section+" ===\n";for(const [k,v] of Object.entries(obj||{}))s+=line(k,v)+"\n";s+="\n"}return s+"END_REPORT"}
+async function run(){const f=$("file").files[0];if(!f){$("status").textContent="请先选择图片";return}$("runBtn").disabled=true;$("status").textContent="推理中…";try{const fd=new FormData();fd.append("image",f,f.name);const r=await fetch("/api/debug/fish-segmentation",{method:"POST",body:fd}),d=await r.json();if(!r.ok)throw Error(typeof d.detail==="string"?d.detail:JSON.stringify(d.detail));state.data=d;state.testId=testId();state.timestamp=new Date().toISOString();dataUrlImage(".originalImg",d.original);dataUrlImage(".cropImg",d.smart_crop);dataUrlImage(".transparentImg",d.transparent_fish);$("mask").innerHTML='<img src="'+d.mask_overlay+'" alt="mask overlay">';$("cutout").innerHTML='<img src="'+d.transparent_fish+'" alt="transparent fish">';$("summary").innerHTML="<b>Detector:</b> "+esc(JSON.stringify(d.detector))+"<br><b>Segmentation:</b> "+esc(JSON.stringify(d.segmentation||{}))+"<br><b>Eligibility:</b> "+esc(JSON.stringify(d.eligibility||{}));$("rawJson").textContent=JSON.stringify(d,null,2);$("result").classList.remove("hidden");await alphaBbox(d.transparent_fish).then(x=>d.transparent_hero_meta.alpha_bbox_normalized=x);makeReport();$("status").textContent="完成"}catch(e){$("status").textContent=e.message;$("result").classList.remove("hidden")}finally{$("runBtn").disabled=false}}
+async function saveReview(){if(!state.data){$("reviewStatus").textContent="请先运行测试";return}const j=makeReport();try{const r=await fetch("/api/debug/fish-hero-review",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({test_id:state.testId,image_id:state.data.input.image_id,timestamp:state.timestamp,detector_summary:j.detector,segmentation_summary:j.segmentation,eligibility:j.eligibility,human:j.human_review})});const d=await r.json();if(!r.ok)throw Error(JSON.stringify(d));$("reviewStatus").textContent="Saved: "+d.test_id}catch(e){$("reviewStatus").textContent=e.message}}
+async function copyReport(){makeReport();await navigator.clipboard.writeText($("report").textContent);$("copyStatus").textContent="Copied"}
+async function copyRaw(){makeReport();await navigator.clipboard.writeText(JSON.stringify(state.report,null,2));$("copyStatus").textContent="Copied"}
+</script>
+</body></html>
