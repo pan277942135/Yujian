@@ -16,6 +16,14 @@ pre,.report{white-space:pre-wrap;word-break:break-word;background:#10241d;color:
 .hero-card{border:1px solid #dbe7e1;border-radius:14px;padding:12px;background:#fbfdfc}.hero-shell{height:430px;border-radius:13px;overflow:hidden;position:relative;background:#d8e7e3;margin-bottom:12px}
 .hero-shell .hero-bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:blur(18px) brightness(.82);transform:scale(1.08)}
 .hero-shell .hero-fg{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;padding:30px}
+.hero-shell.lake .hero-fg{padding:22px}
+.hero-shell.lake .hero-fg,.edge-stage img{object-fit:contain;object-position:center}
+.edge-stage img{width:90%;height:90%;max-width:90%;max-height:90%}
+.metrics-card summary{cursor:pointer;font-weight:800;list-style:none}
+.metrics-card summary::-webkit-details-marker{display:none}
+.metrics-card summary:before{content:"＋";display:inline-block;width:22px;color:#123b2e}
+.metrics-card[open] summary:before{content:"－"}
+
 .hero-shell.original .hero-fg{object-fit:cover;padding:0}.hero-shell.original .hero-bg{display:none}
 .hero-shell.crop .hero-fg{padding:18px}.hero-shell.lake{background:linear-gradient(155deg,#bcd5d1,#eaf0ec 55%,#a9c5be)}
 .hero-shell.lake:after{content:"";position:absolute;inset:auto 0 0;height:35%;background:linear-gradient(transparent,#9abbb277);pointer-events:none}
@@ -39,7 +47,7 @@ pre,.report{white-space:pre-wrap;word-break:break-word;background:#10241d;color:
     <div class="card"><h2>Detector Overlay</h2><div id="mask" class="preview"><span class="muted">尚未运行</span></div></div>
     <div class="card"><h2>Transparent Fish</h2><div id="cutout" class="preview"><span class="muted">尚未运行</span></div></div>
   </div>
-  <div class="card"><h2>Detector / Segmentation Metrics</h2><div id="summary" class="metrics"></div><pre id="rawJson"></pre></div>
+  <details class="card metrics-card"><summary>Detector / Segmentation Metrics</summary><div id="summary" class="metrics"></div><pre id="rawJson"></pre></details>
 
   <div class="card">
     <h2>Fish Hero Visual Validation</h2>
@@ -80,7 +88,7 @@ const $=id=>document.getElementById(id), state={};
 const esc=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 function testId(){const d=new Date(),p=n=>String(n).padStart(2,"0");return "FH_"+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+"_"+Math.floor(Math.random()*900+100)}
 function selected(id){return [...$(id).selectedOptions].map(x=>x.value)}
-function setView(mode){$("heroCompare").classList.toggle("three",mode==="compare");$("heroCompare").classList.toggle("tabs",mode==="tabs")}
+function setView(mode){const cards=document.querySelectorAll(".hero-card");$("heroCompare").classList.toggle("three",mode==="compare");$("heroCompare").classList.toggle("tabs",mode==="tabs");cards.forEach(x=>x.classList.toggle("hidden",mode==="tabs" && x.dataset.hero!=="original"));}
 function showOnly(name){document.querySelectorAll(".hero-card").forEach(x=>x.classList.toggle("hidden",x.dataset.hero!==name))}
 function toggleMobile(){ $("heroCompare").classList.toggle("mobile-mode") }
 function edge(name){$("edgeStage").className="edge-stage edge-"+name}
@@ -93,7 +101,7 @@ j.hero_preview.smart_crop_meta=d.smart_crop_meta||null;j.hero_preview.transparen
 $("report").textContent=textReport(j);state.report=j;return j}
 function textReport(j){const line=(k,v)=>k+": "+(typeof v==="object"?JSON.stringify(v):String(v??"null"));let s=j.report_version+"\n\n";
 for(const [section,obj] of Object.entries({RUNTIME:j.runtime,INPUT:j.input,DETECTOR:j.detector,SEGMENTATION:j.segmentation,ELIGIBILITY:j.eligibility,HERO_PREVIEW:j.hero_preview,HUMAN_REVIEW:j.human_review,ERRORS:j.errors})){s+="=== "+section+" ===\n";for(const [k,v] of Object.entries(obj||{}))s+=line(k,v)+"\n";s+="\n"}return s+"END_REPORT"}
-async function run(){const f=$("file").files[0];if(!f){$("status").textContent="请先选择图片";return}$("runBtn").disabled=true;$("status").textContent="推理中…";try{const fd=new FormData();fd.append("image",f,f.name);const r=await fetch("/api/debug/fish-segmentation",{method:"POST",body:fd}),d=await r.json();if(!r.ok)throw Error(typeof d.detail==="string"?d.detail:JSON.stringify(d.detail));state.data=d;state.testId=testId();state.timestamp=new Date().toISOString();dataUrlImage(".originalImg",d.original);dataUrlImage(".cropImg",d.smart_crop);dataUrlImage(".transparentImg",d.transparent_fish);$("mask").innerHTML='<img src="'+d.mask_overlay+'" alt="mask overlay">';$("cutout").innerHTML='<img src="'+d.transparent_fish+'" alt="transparent fish">';$("summary").innerHTML="<b>Detector:</b> "+esc(JSON.stringify(d.detector))+"<br><b>Segmentation:</b> "+esc(JSON.stringify(d.segmentation||{}))+"<br><b>Eligibility:</b> "+esc(JSON.stringify(d.eligibility||{}));$("rawJson").textContent=JSON.stringify(d,null,2);$("result").classList.remove("hidden");await alphaBbox(d.transparent_fish).then(x=>d.transparent_hero_meta.alpha_bbox_normalized=x);makeReport();$("status").textContent="完成"}catch(e){$("status").textContent=e.message;$("result").classList.remove("hidden")}finally{$("runBtn").disabled=false}}
+async function run(){const f=$("file").files[0];if(!f){$("status").textContent="请先选择图片";return}$("runBtn").disabled=true;$("status").textContent="推理中…";try{const fd=new FormData();fd.append("image",f,f.name);const r=await fetch("/api/debug/fish-segmentation",{method:"POST",body:fd}),d=await r.json();if(!r.ok)throw Error(typeof d.detail==="string"?d.detail:JSON.stringify(d.detail));state.data=d;state.testId=testId();state.timestamp=new Date().toISOString();dataUrlImage(".originalImg",d.original);dataUrlImage(".cropImg",d.smart_crop);dataUrlImage(".transparentImg",d.transparent_subject_fish||d.transparent_fish);$("mask").innerHTML='<img src="'+d.mask_overlay+'" alt="mask overlay">';$("cutout").innerHTML='<img src="'+d.transparent_fish+'" alt="transparent fish">';$("summary").innerHTML="<b>Detector:</b> "+esc(JSON.stringify(d.detector))+"<br><b>Segmentation:</b> "+esc(JSON.stringify(d.segmentation||{}))+"<br><b>Eligibility:</b> "+esc(JSON.stringify(d.eligibility||{}));$("rawJson").textContent=JSON.stringify(d,null,2);$("result").classList.remove("hidden");await alphaBbox(d.transparent_fish).then(x=>d.transparent_hero_meta.alpha_bbox_normalized=x);makeReport();$("status").textContent="完成"}catch(e){$("status").textContent=e.message;$("result").classList.remove("hidden")}finally{$("runBtn").disabled=false}}
 async function saveReview(){if(!state.data){$("reviewStatus").textContent="请先运行测试";return}const j=makeReport();try{const r=await fetch("/api/debug/fish-hero-review",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({test_id:state.testId,image_id:state.data.input.image_id,timestamp:state.timestamp,detector_summary:j.detector,segmentation_summary:j.segmentation,eligibility:j.eligibility,human:j.human_review})});const d=await r.json();if(!r.ok)throw Error(JSON.stringify(d));$("reviewStatus").textContent="Saved: "+d.test_id}catch(e){$("reviewStatus").textContent=e.message}}
 async function copyReport(){makeReport();await navigator.clipboard.writeText($("report").textContent);$("copyStatus").textContent="Copied"}
 async function copyRaw(){makeReport();await navigator.clipboard.writeText(JSON.stringify(state.report,null,2));$("copyStatus").textContent="Copied"}
