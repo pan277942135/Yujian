@@ -16,7 +16,7 @@ def test_completion_mask_must_be_subset_of_occluder():
     assert result["illegal_completion_pixels"] == 1
 
 
-@pytest.mark.parametrize(("area", "level"), [(0, "LIGHT"), (1, "LIGHT"), (2, "MEDIUM"), (3, "HEAVY")])
+@pytest.mark.parametrize(("area", "level"), [(0, "LIGHT"), (5, "LIGHT"), (6, "MEDIUM"), (12, "HEAVY")])
 def test_generated_ratio_levels(area, level):
     raw = np.ones((10, 10), dtype=bool)
     completion = np.zeros((10, 10), dtype=bool)
