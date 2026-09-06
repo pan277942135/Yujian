@@ -212,6 +212,7 @@ async def fish_segmentation(file: UploadFile = File(..., alias="image")) -> dict
                 "review_save_error": None,
             },
         }
+        response["original"] = _data_url(_png_bytes(source), "image/png")
         if primary is None:
             response["smart_crop_reason"] = "NO_RELIABLE_PRIMARY_FISH"
             response["transparent_fish"] = None
