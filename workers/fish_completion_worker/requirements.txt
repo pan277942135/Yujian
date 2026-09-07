@@ -1,4 +1,5 @@
 # Runtime-frozen direct dependencies for PowerPaint v1 / ppt-v1.
+# CUDA runtime: 12.4; PyTorch wheels: cu124.
 fastapi==0.141.1
 uvicorn[standard]==0.50.1
 google-cloud-storage==3.13.1
