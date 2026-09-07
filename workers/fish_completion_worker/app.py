@@ -31,7 +31,7 @@ def _load_controller()->None:
     checkpoint_dir=os.getenv("POWERPAINT_CHECKPOINT_DIR","/models/ppt-v1").strip()
     if not Path(checkpoint_dir).is_dir(): _model_error=f"PowerPaint checkpoint directory does not exist: {checkpoint_dir}"; return
     try:
-        spec = importlib.util.spec_from_file_location("powerpaint_official_app", "/opt/PowerPaint/app.py")
+        spec = importlib.util.spec_from_file_location("powerpaint_official_app", os.path.join(os.getenv("POWERPAINT_SOURCE_DIR", "/opt/PowerPaint"), "app.py"))
         if spec is None or spec.loader is None:
             raise ImportError("cannot load official PowerPaint app")
         official_app = importlib.util.module_from_spec(spec)
