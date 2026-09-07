@@ -57,15 +57,17 @@ jobs:
           gcloud run deploy "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --source . --service-account "$RUNTIME_SERVICE_ACCOUNT" --set-env-vars="APP_GIT_COMMIT=${GIT_SHA},GCS_BUCKET=${GCS_BUCKET},SEGMENTATION_MODEL_TYPE=${SEGMENTATION_MODEL_TYPE},SEGMENTATION_CHECKPOINT_URI=${SEGMENTATION_CHECKPOINT_URI},SEGMENTATION_DEMO_AUTH_DISABLED=${SEGMENTATION_DEMO_AUTH_DISABLED},FISH_COMPLETION_ENABLED=${FISH_COMPLETION_ENABLED},FISH_COMPLETION_WORKER_URL=${FISH_COMPLETION_WORKER_URL},FISH_COMPLETION_WORKER_TOKEN=${FISH_COMPLETION_WORKER_TOKEN}" --cpu=4 --memory=8Gi --concurrency=1 --min-instances=0 --max-instances=1 --timeout=900 --allow-unauthenticated --format="value(status.url)" > service_url.txt
           SERVICE_URL="$(cat service_url.txt)"
           echo "service_url=${SERVICE_URL}" >> "$GITHUB_OUTPUT"
-          curl --fail --silent --show-error "${SERVICE_URL}/health"
+          ID_TOKEN="$(gcloud auth print-identity-token --audiences="${SERVICE_URL}")"
+          curl --fail --silent --show-error -H "Authorization: Bearer ${ID_TOKEN}" "${SERVICE_URL}/health"
       - name: Verify lab routes
         env:
           SERVICE_URL: ${{ steps.deploy.outputs.service_url }}
           GIT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error "${SERVICE_URL}/health"
-          curl --fail --silent --show-error "${SERVICE_URL}/debug/fish-completion-lab" | grep -q "Fish Completion Lab v0.1"
+          ID_TOKEN="$(gcloud auth print-identity-token --audiences="${SERVICE_URL}")"
+          curl --fail --silent --show-error -H "Authorization: Bearer ${ID_TOKEN}" "${SERVICE_URL}/health"
+          curl --fail --silent --show-error -H "Authorization: Bearer ${ID_TOKEN}" "${SERVICE_URL}/debug/fish-completion-lab" | grep -q "Fish Completion Lab v0.1"
           {
             echo "### Fish Completion Lab Deployment"
             echo "- Service: `$SERVICE\`"
