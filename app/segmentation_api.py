@@ -1,48 +1,341 @@
-<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>鱼体补全实验室 v0.1</title>
-<style>
-*{box-sizing:border-box}body{margin:0;background:#f1f5f3;color:#17211f;font-family:Inter,system-ui,sans-serif}main{max-width:1500px;margin:auto;padding:20px}.card{background:#fff;border:1px solid #dce7e2;border-radius:16px;padding:16px;margin:14px 0;box-shadow:0 4px 18px #153b2d0b}h1,h2,h3{margin:0 0 8px}.muted,.note{color:#64736d;font-size:13px}.pill{display:inline-block;padding:5px 9px;border-radius:99px;background:#e4f3eb;color:#08734d;font-weight:700}button,input,select,textarea{font:inherit;border:1px solid #cbd9d3;border-radius:9px;padding:9px}button{background:#123b2e;color:white;border:0;font-weight:700;cursor:pointer}button.secondary{background:#e7efeb;color:#123b2e}button:disabled{opacity:.5;cursor:not-allowed}.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.four{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.preview{min-height:220px;display:grid;place-items:center;background:#f8fbfa;border:1px dashed #c9d8d1;border-radius:12px;overflow:hidden}.preview img{max-width:100%;max-height:520px;object-fit:contain}.metrics{line-height:1.8;font-size:13px}.editor-wrap{display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:14px}.canvas-box{position:relative;min-height:460px;background:#12241e;border-radius:12px;overflow:auto;display:grid;place-items:center}.canvas-box canvas{max-width:100%;max-height:680px;display:block;cursor:crosshair}.side{border:1px solid #dce7e2;border-radius:12px;padding:12px}.side label{display:block;margin:8px 0 4px;font-weight:700}.side select,.side input{width:100%}.report{white-space:pre-wrap;word-break:break-word;background:#10241d;color:#e8f4ef;border-radius:12px;padding:14px;font-size:12px;min-height:180px}.hero{height:380px;border-radius:12px;display:grid;place-items:center;overflow:hidden;position:relative}.hero img{max-width:90%;max-height:90%;object-fit:contain}.lake{background:linear-gradient(155deg,#bcd5d1,#eef3ef 55%,#a9c5be)}.white{background:#fff}.dark{background:#18231f}.mobile{max-width:390px;margin:auto;border:8px solid #111;border-radius:28px;padding:8px;background:#fff}.mobile .hero{height:700px}.warn{background:#fff7df;border-color:#efd28a;color:#775600}.review-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.review-grid label{display:block;font-weight:700;margin-bottom:5px}.review-grid select,.review-grid textarea{width:100%}.wide{grid-column:1/-1}@media(max-width:900px){main{padding:12px}.grid,.four,.editor-wrap,.review-grid{grid-template-columns:1fr}.canvas-box{min-height:330px}}
-</style></head>
-<body><header>{% include "_mobile_ux.html" %}</header><main>
-<h1>鱼体补全实验室 v0.1</h1><p class="muted">实验功能 · 手动遮罩 · 受控补全 · 已锁定可见像素</p>
-<div class="card"><input id="file" type="file" accept="image/jpeg,image/png,image/webp"><input id="label" placeholder="案例标签（可选）"><button onclick="prepare()">1. 上传 + 鱼体检测 + SAM 分割</button><span id="status" class="muted"></span></div>
-<div id="app" class="hidden">
-<div class="card"><h2>阶段 A · 定义真实标注</h2><div class="four"><div><b>1 上传</b><p id="inputMeta" class="note"></p></div><div><b>2 鱼体检测</b><p id="detectorMeta" class="note"></p></div><div><b>3 SAM 原始结果</b><p id="samMeta" class="note"></p></div><div><b>6 可用性</b><p id="eligibility" class="note"></p></div></div></div>
-<div class="grid"><div class="card"><h3>原图 / 鱼体检测 / SAM 原始结果</h3><div id="baseline" class="preview"></div></div><div class="card"><h3>SAM 透明结果</h3><div id="rawTransparent" class="preview"></div></div></div>
-<div class="card"><h2>4–5 · 手动遮罩编辑器</h2><p class="note">所有绘制坐标保存为原图尺寸 8-bit mask。Completion 必须属于 遮挡物；不会自动把整只手变成鱼。</p>
-<div class="editor-wrap"><div class="canvas-box"><canvas id="canvas"></canvas></div><div class="side"><label>图层 / 工具</label><select id="layer" onchange="setLayer(this.value)"><option value="visible_add">添加可见鱼体 · 绿色</option><option value="remove">移除非鱼体 · 红色</option><option value="occluder">标记遮挡物 · 橙色</option><option value="completion">绘制补全区域 · 蓝色</option></select><label>画笔大小</label><input id="brush" type="range" min="4" max="120" value="25"><label>叠加层透明度</label><input id="opacity" type="range" min="0" max="100" value="55"><div class="toolbar"><button class="secondary" onclick="undo()">撤销</button><button class="secondary" onclick="redo()">重做</button><button class="secondary" onclick="clearLayer()">清除</button><button class="secondary" onclick="zoom(1.2)">放大</button><button class="secondary" onclick="zoom(.8)">缩小</button></div><div class="toolbar"><button onclick="saveMasks()">保存遮罩 + 统计数据</button></div><p id="mask状态" class="note"></p></div></div></div>
-<details class="card"><summary><b>图层预览</b></summary><div class="grid"><div class="preview"><img id="addPreview"></div><div class="preview"><img id="removePreview"></div></div></details>
-<div class="card"><h2>6 · 统计数据 / 可用性</h2><div id="stats" class="metrics">尚未保存遮罩</div></div>
-<div class="card"><h2>阶段 B · 生成与对比</h2><div class="toolbar"><button id="runCompletion" onclick="runCompletion()" disabled>7. 执行补全</button><span id="completion状态" class="muted">请先提交合法的补全遮罩</span></div><div id="completionNotice" class="card warn">PowerPaintCompletionEngine：当前未配置真实 Worker。不会使用 Mock Completion、原图伪装或静态测试图。</div>
-<div class="four"><div><b>A · 智能裁切</b><div id="heroA" class="hero lake"></div></div><div><b>B · SAM 原始结果</b><div id="heroB" class="hero lake"></div></div><div><b>C · 精修可见区域</b><div id="heroC" class="hero lake"></div></div><div><b>D · AI 补全结果</b><div id="heroD" class="hero lake"><span class="muted">未生成</span></div></div></div></div>
-<div class="card"><h2>10 · 边缘检查</h2><div class="toolbar"><button class="secondary" onclick="edgeAsset('B')">B SAM Raw</button><button class="secondary" onclick="edgeAsset('C')">C Refined</button><button class="secondary" onclick="edgeAsset('D')">D Completed</button><button class="secondary" onclick="edgeBg('lake')">湖泊</button><button class="secondary" onclick="edgeBg('white')">白色</button><button class="secondary" onclick="edgeBg('dark')">深色</button></div><div id="edge" class="hero lake"></div></div>
-<div class="card"><h2>11 · 移动端预览 390 × 844</h2><div class="toolbar"><button class="secondary" onclick="mobileAsset('A')">A</button><button class="secondary" onclick="mobileAsset('B')">B</button><button class="secondary" onclick="mobileAsset('C')">C</button><button class="secondary" onclick="mobileAsset('D')">D</button></div><div class="mobile"><div id="mobileHero" class="hero lake"></div></div></div>
-<div class="card"><h2>12 · 人工审核</h2><div class="review-grid"><div><label>原始补全可行性</label><select id="feas"><option>NOT_RATED</option><option>YES</option><option>UNCERTAIN</option><option>NO</option></select></div><div><label>精修可见区域质量</label><select id="refinedQ"><option>NOT_RATED</option><option>GOOD</option><option>BORDERLINE</option><option>BAD</option></select></div><div><label>补全质量</label><select id="compQ"><option>NOT_RATED</option><option>COMPLETION_OK</option><option>BORDERLINE</option><option>COMPLETION_BAD</option></select></div><div><label>特征保持</label><select id="identity"><option>NOT_RATED</option><option>PRESERVED</option><option>UNCERTAIN</option><option>CHANGED</option></select></div><div><label>D 对比 C</label><select id="vsC"><option>NOT_RATED</option><option>MUCH_BETTER</option><option>BETTER</option><option>SAME</option><option>WORSE</option><option>MUCH_WORSE</option></select></div><div><label>D 对比智能裁切</label><select id="vsA"><option>NOT_RATED</option><option>MUCH_BETTER</option><option>BETTER</option><option>SAME</option><option>WORSE</option><option>MUCH_WORSE</option></select></div><div class="wide"><label>问题标签</label><select id="issues" multiple size="5"><option>SEAM_VISIBLE</option><option>COLOR_MISMATCH</option><option>LIGHTING_MISMATCH</option><option>TEXTURE_MISMATCH</option><option>DUPLICATE_SCALES</option><option>BLURRED_SCALES</option><option>EXTRA_FIN</option><option>MISSING_FIN</option><option>ANATOMY_DEFORMED</option><option>BODY_TOO_FAT</option><option>BODY_TOO_THIN</option><option>HUMAN_SKIN_REMAINS</option><option>HAND_LIKE_TEXTURE</option><option>GENERATED_REGION_TOO_SMOOTH</option><option>GENERATED_REGION_TOO_SHARP</option><option>AI_LOOKING</option><option>IDENTITY_CHANGED</option><option>SOURCE_TOO_AMBIGUOUS</option><option>COMPLETION_NOT_BETTER_THAN_SMART_CROP</option></select></div><div class="wide"><label>审核备注</label><textarea id="notes" maxlength="500" rows="4"></textarea></div></div><button onclick="saveReview()">保存审核</button><span id="review状态" class="muted"></span></div>
-<div class="card"><h2>13 · 测试报告</h2><button onclick="copyReport()">Copy 测试报告</button> <button class="secondary" onclick="copyRaw()">复制原始 JSON</button> <button class="secondary" onclick="downloadReport()">下载 JSON</button><pre id="report"></pre></div>
-<div class="card"><h2>14 · 下一个样本</h2><span id="case状态" class="pill">待处理</span></div>
-</div>
-<script>
-const $=id=>document.getElementById(id), S={masks:{visible_add:null,remove:null,occluder:null,completion:null},layer:"visible_add",zoom:1,history:[],future:[]};
-function b64data(v){return v.split(",")[1]||v} function dataUrl(blob,type){return "data:"+type+";base64,"+btoa(String.fromCharCode(...new Uint8Array(blob)))}
-async function readJsonResponse(response){const text=await response.text();if(!text)return {};try{return JSON.parse(text)}catch(_){return {error_code:"HTTP_NON_JSON",message:text||("HTTP "+response.status)}}}
-async function prepare(){const f=$("file").files[0];if(!f){$("status").textContent="请先选择图片";return} $("status").textContent="Detector + SAM 处理中…";const fd=new FormData();fd.append("file",f,f.name);fd.append("case_label",$("label").value);try{const r=await fetch("/api/debug/fish-completion-lab/prepare",{method:"POST",body:fd}),d=await readJsonResponse(r);if(!r.ok)throw Error(d.message||d.error_code||("HTTP "+r.status));S.data=d;S.testId=d.test_id;$("app").classList.remove("hidden");$("inputMeta").textContent=d.input.filename+" · "+d.input.width+"×"+d.input.height+" · "+d.test_id;$("detectorMeta").textContent=d.detector.model+" · "+d.detector.assessment+" · conf "+d.detector.primary_confidence;$("samMeta").textContent=d.segmentation.model+" · "+d.segmentation.quality;$("eligibility").textContent="请先绘制补全遮罩";setImage("baseline",d.original,"原图 + 检测框");setImage("rawTransparent",d.sam_transparent,"SAM 透明结果");initCanvas(d.original,d.sam_transparent);setHero("heroB",d.sam_transparent);setHero("heroA",d.original);setHero("heroC",d.sam_transparent);setHero("edge",d.sam_transparent);setHero("mobileHero",d.sam_transparent);$("status").textContent="基线已准备";makeReport()}catch(e){$("status").textContent=e.message}}
-function setImage(id,url,alt){$(id).innerHTML='<img src="'+url+'" alt="'+alt+'">'} function setHero(id,url){$(id).innerHTML=url?'<img src="'+url+'">':'<span class="muted">未生成</span>'}
-function loadImage(url){return new Promise((resolve,reject)=>{const im=new Image();im.onload=()=>resolve(im);im.onerror=()=>reject(new Error("Canvas image load failed"));im.src=url})}
-async function initCanvas(originalUrl,samUrl){try{const [original,sam]=await Promise.all([loadImage(originalUrl),loadImage(samUrl)]);const c=$("canvas");c.width=original.naturalWidth||original.width;c.height=original.naturalHeight||original.height;S.base=original;S.sam=sam;for(const k of Object.keys(S.masks))S.masks[k]=new Uint8Array(c.width*c.height);c.onpointerdown=paint;c.onpointermove=e=>{if(S.painting)paint(e)};c.onpointerup=()=>{S.painting=false};renderMasks();$("mask状态").textContent="Canvas ready · Original + SAM mask overlay"}catch(e){$("mask状态").textContent=e.message||"Canvas initialization failed";console.error(e)}}
-function setLayer(v){S.layer=v;renderMasks()} function pos(e){const c=$("canvas"),r=c.getBoundingClientRect();return{x:Math.max(0,Math.min(c.width-1,(e.clientX-r.left)*c.width/r.width)),y:Math.max(0,Math.min(c.height-1,(e.clientY-r.top)*c.height/r.height))}}
-function paint(e){const c=$("canvas"),p=pos(e);if(e.type==="pointerdown"){S.painting=true;S.history.push(snapshot());S.future=[]}const radius=+$("brush").value/2,mask=S.masks[S.layer];for(let y=Math.max(0,Math.floor(p.y-radius));y<Math.min(c.height,Math.ceil(p.y+radius));y++)for(let x=Math.max(0,Math.floor(p.x-radius));x<Math.min(c.width,Math.ceil(p.x+radius));x++)if((x-p.x)**2+(y-p.y)**2<=radius**2)mask[y*c.width+x]=255;renderMasks()}
-function snapshot(){return Object.fromEntries(Object.entries(S.masks).map(([k,v])=>[k,new Uint8Array(v)]) )} function restore(v){for(const k of Object.keys(S.masks))S.masks[k]=new Uint8Array(v[k]);renderMasks()}
-function undo(){const v=S.history.pop();if(v){S.future.push(snapshot());restore(v)}}function redo(){const v=S.future.pop();if(v){S.history.push(snapshot());restore(v)}}function clearLayer(){S.history.push(snapshot());S.masks[S.layer].fill(0);renderMasks()}
-function drawSamOverlay(x,c){if(!S.sam)return;const off=document.createElement("canvas");off.width=c.width;off.height=c.height;const ox=off.getContext("2d");ox.drawImage(S.sam,0,0,c.width,c.height);const src=ox.getImageData(0,0,c.width,c.height).data;const overlay=x.createImageData(c.width,c.height);for(let i=0;i<src.length;i+=4){const alpha=src[i+3];if(alpha){overlay.data[i]=245;overlay.data[i+1]=150;overlay.data[i+2]=30;overlay.data[i+3]=Math.round(alpha*.42)}}x.putImageData(overlay,0,0)}
-function renderMasks(){const c=$("canvas");if(!c.width||!S.base)return;const x=c.getContext("2d");x.globalAlpha=1;x.globalCompositeOperation="source-over";x.drawImage(S.base,0,0,c.width,c.height);drawSamOverlay(x,c);const colors={visible_add:[30,180,100],remove:[220,50,50],occluder:[245,150,30],completion:[40,100,240]};const img=x.createImageData(c.width,c.height);const a=+$("opacity").value/100;for(let i=0;i<img.data.length;i+=4){const idx=i/4;let col=null;for(const k of ["visible_add","remove","occluder","completion"]){if(S.masks[k]&&S.masks[k][idx]){col=colors[k];break}}if(col){img.data[i]=col[0];img.data[i+1]=col[1];img.data[i+2]=col[2];img.data[i+3]=255*a}}x.putImageData(img,0,0);$("addPreview").src=maskUrl(S.masks.visible_add);$("removePreview").src=maskUrl(S.masks.remove)}
-function maskUrl(mask){const c=document.createElement("canvas"),base=$("canvas");c.width=base.width;c.height=base.height;const x=c.getContext("2d"),d=x.createImageData(c.width,c.height);for(let i=0;i<mask.length;i++){d.data[i*4]=mask[i];d.data[i*4+1]=mask[i];d.data[i*4+2]=mask[i];d.data[i*4+3]=mask[i]}x.putImageData(d,0,0);return c.toDataURL("image/png")}
-function zoom(v){S.zoom*=v;$("canvas").style.width=(S.base.width*S.zoom)+"px"} 
-async function saveMasks(){if(!S.data)return;const masks={visible_add:maskUrl(S.masks.visible_add),remove:maskUrl(S.masks.remove),occluder:maskUrl(S.masks.occluder),completion_canonical:maskUrl(S.masks.completion)};const r=await fetch("/api/debug/fish-completion-lab/masks",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({test_id:S.testId,masks})}),d=await r.json();if(!r.ok){$("mask状态").textContent=JSON.stringify(d.detail);return}S.stats=d.statistics;$("stats").textContent=JSON.stringify(d.statistics,null,2);$("eligibility").textContent=d.statistics.eligible_for_v0_1?d.statistics.eligibility_reason:"BLOCKED · "+d.statistics.eligibility_reason;$("runCompletion").disabled=!d.statistics.eligible_for_v0_1;setHero("heroC",d.refined_visible);makeReport();$("mask状态").textContent="遮罩已保存 · 使用原图坐标系"} 
-async function runCompletion(){const r=await fetch("/api/debug/fish-completion-lab/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({test_id:S.testId})}),d=await r.json();$("completion状态").textContent=JSON.stringify(d.detail||d);makeReport()}
-function edgeAsset(a){const id={B:"heroB",C:"heroC",D:"heroD"}[a];$("edge").innerHTML=$(id).innerHTML}function edgeBg(v){$("edge").className="hero "+v}function mobileAsset(a){const id={A:"heroA",B:"heroB",C:"heroC",D:"heroD"}[a];$("mobileHero").innerHTML=$(id).innerHTML}
-function review(){return{source_completion_feasibility:$("feas").value,refined_visible_quality:$("refinedQ").value,completion_quality:$("compQ").value,identity_preservation:$("identity").value,d_vs_c:$("vsC").value,d_vs_smart_crop:$("vsA").value,issue_tags:[...$("issues").selectedOptions].map(x=>x.value),reviewer_notes:$("notes").value}}
-async function saveReview(){const r=await fetch("/api/debug/fish-completion-lab/review",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({test_id:S.testId,review:review()})}),d=await r.json();$("review状态").textContent=d.status||JSON.stringify(d)}
-function makeReport(){if(!S.data)return;const j=S.data;j.mask_refinement={...(j.mask_refinement||{}),statistics:S.stats||null};j.human_review=review();$("report").textContent=JSON.stringify(j,null,2);S.report=j}
-async function copyReport(){makeReport();await navigator.clipboard.writeText($("report").textContent)}async function copyRaw(){makeReport();await navigator.clipboard.writeText(JSON.stringify(S.report,null,2))}function downloadReport(){makeReport();const a=document.createElement("a");a.href="data:application/json;charset=utf-8,"+encodeURIComponent(JSON.stringify(S.report,null,2));a.download=(S.testId||"fish-completion")+".json";a.click()}
-</script></main></body></html>
+"""Debug-only fish segmentation and Fish Hero preview API."""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import io
+import json
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from PIL import Image, ImageDraw
+from pydantic import BaseModel, Field
+
+from app.detector_runtime import detect, normalize_android_source
+from app.recognition_pipeline import assess_detections
+from app.segmentation.mask_generator import SegmentationModelNotConfigured
+from app.segmentation.service import generate_fish_cutout
+
+MAX_DEBUG_IMAGE_BYTES = 25 * 1024 * 1024
+DEMO_VERSION = "FISH_HERO_PREVIEW_DEMO_v0.2-A"
+CHECKPOINT_LABEL = "sam_vit_b_01ec64"
+
+SUBJECT_PREVIEW_PADDING_RATIO = 0.06
+
+
+def _transparent_subject_preview(png_bytes: bytes) -> tuple[bytes, dict[str, Any]]:
+    """Crop only transparent canvas around the existing alpha subject."""
+    try:
+        image = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+    except Exception:
+        return png_bytes, {
+            "full_canvas_width": None,
+            "full_canvas_height": None,
+            "alpha_bbox_pixels": None,
+            "alpha_bbox_normalized": None,
+            "subject_crop_bbox_pixels": None,
+            "subject_crop_bbox_normalized": None,
+            "subject_preview_padding_ratio": SUBJECT_PREVIEW_PADDING_RATIO,
+            "subject_width": None,
+            "subject_height": None,
+            "subject_aspect_ratio": None,
+            "subject_orientation": "UNKNOWN",
+        }
+    alpha_bbox = image.getchannel("A").getbbox()
+    if not alpha_bbox:
+        return png_bytes, {
+            "full_canvas_width": image.width,
+            "full_canvas_height": image.height,
+            "alpha_bbox_pixels": None,
+            "alpha_bbox_normalized": None,
+            "subject_crop_bbox_pixels": [0, 0, image.width, image.height],
+            "subject_crop_bbox_normalized": [0.0, 0.0, 1.0, 1.0],
+            "subject_preview_padding_ratio": SUBJECT_PREVIEW_PADDING_RATIO,
+            "subject_width": image.width,
+            "subject_height": image.height,
+            "subject_aspect_ratio": round(image.width / max(1, image.height), 6),
+            "subject_orientation": "BALANCED",
+        }
+    left, top, right, bottom = alpha_bbox
+    subject_width, subject_height = right - left, bottom - top
+    pad_x = max(1, round(subject_width * SUBJECT_PREVIEW_PADDING_RATIO))
+    pad_y = max(1, round(subject_height * SUBJECT_PREVIEW_PADDING_RATIO))
+    crop_left, crop_top = max(0, left - pad_x), max(0, top - pad_y)
+    crop_right, crop_bottom = min(image.width, right + pad_x), min(image.height, bottom + pad_y)
+    cropped = image.crop((crop_left, crop_top, crop_right, crop_bottom))
+    output = io.BytesIO()
+    cropped.save(output, format="PNG", optimize=True)
+    aspect_ratio = subject_width / max(1, subject_height)
+    orientation = "VERTICAL" if aspect_ratio < 0.65 else ("HORIZONTAL" if aspect_ratio > 1.5 else "BALANCED")
+    return output.getvalue(), {
+        "full_canvas_width": image.width,
+        "full_canvas_height": image.height,
+        "alpha_bbox_pixels": [left, top, right, bottom],
+        "alpha_bbox_normalized": [left / image.width, top / image.height, right / image.width, bottom / image.height],
+        "subject_crop_bbox_pixels": [crop_left, crop_top, crop_right, crop_bottom],
+        "subject_crop_bbox_normalized": [crop_left / image.width, crop_top / image.height, crop_right / image.width, crop_bottom / image.height],
+        "subject_preview_padding_ratio": SUBJECT_PREVIEW_PADDING_RATIO,
+        "subject_width": subject_width,
+        "subject_height": subject_height,
+        "subject_aspect_ratio": round(aspect_ratio, 6),
+        "subject_orientation": orientation,
+    }
+router = APIRouter(tags=["fish-segmentation-demo"])
+templates = Jinja2Templates(directory="app/templates")
+
+
+class FishHeroReviewRequest(BaseModel):
+    test_id: str = Field(min_length=1, max_length=80)
+    image_id: str = Field(min_length=1, max_length=128)
+    timestamp: str = Field(min_length=1, max_length=80)
+    detector_summary: dict[str, Any] = Field(default_factory=dict)
+    segmentation_summary: dict[str, Any] = Field(default_factory=dict)
+    eligibility: dict[str, Any] = Field(default_factory=dict)
+    human: dict[str, Any] = Field(default_factory=dict)
+
+
+async def _read_image(file: UploadFile) -> bytes:
+    if file.content_type and file.content_type not in {"image/jpeg", "image/png", "image/webp"}:
+        raise HTTPException(status_code=400, detail="仅支持 JPG、PNG、WEBP 图片")
+    data = await file.read(MAX_DEBUG_IMAGE_BYTES + 1)
+    if not data:
+        raise HTTPException(status_code=400, detail="请选择图片")
+    if len(data) > MAX_DEBUG_IMAGE_BYTES:
+        raise HTTPException(status_code=400, detail="图片不能超过 25 MiB")
+    return data
+
+
+def _data_url(content: bytes, media_type: str) -> str:
+    return f"data:{media_type};base64," + base64.b64encode(content).decode("ascii")
+
+
+def _png_data_url(image: Image.Image) -> str:
+    output = io.BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    return _data_url(output.getvalue(), "image/png")
+
+
+def _mask_overlay(source: Image.Image, mask: Any, bbox: Any) -> str:
+    image = source.convert("RGBA")
+    overlay = Image.new("RGBA", image.size, (13, 148, 136, 0))
+    alpha = Image.fromarray((mask.astype("uint8") * 120), mode="L")
+    overlay.putalpha(alpha)
+    image.alpha_composite(overlay)
+    draw = ImageDraw.Draw(image)
+    b = bbox.normalized()
+    draw.rectangle(
+        (
+            round(b.x1 * image.width),
+            round(b.y1 * image.height),
+            round(b.x2 * image.width),
+            round(b.y2 * image.height),
+        ),
+        outline="#dc2626",
+        width=max(3, image.width // 500),
+    )
+    return _png_data_url(image)
+
+
+def _expanded_crop_box(bbox: Any, width: int, height: int, padding_ratio: float = 0.12) -> tuple[int, int, int, int]:
+    b = bbox.normalized()
+    box_width = max(1.0, (b.x2 - b.x1) * width)
+    box_height = max(1.0, (b.y2 - b.y1) * height)
+    left = max(0, int((b.x1 * width) - box_width * padding_ratio))
+    top = max(0, int((b.y1 * height) - box_height * padding_ratio))
+    right = min(width, int((b.x2 * width) + box_width * padding_ratio + 0.999))
+    bottom = min(height, int((b.y2 * height) + box_height * padding_ratio + 0.999))
+    return left, top, max(left + 1, right), max(top + 1, bottom)
+
+
+def _smart_crop(source: Image.Image, bbox: Any) -> tuple[bytes, tuple[float, float, float, float]]:
+    left, top, right, bottom = _expanded_crop_box(bbox, source.width, source.height)
+    crop = source.crop((left, top, right, bottom)).convert("RGB")
+    return _png_bytes(crop), (
+        left / source.width,
+        top / source.height,
+        right / source.width,
+        bottom / source.height,
+    )
+
+
+def _png_bytes(image: Image.Image) -> bytes:
+    output = io.BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
+def _runtime() -> dict[str, str]:
+    return {
+        "service": os.getenv("K_SERVICE", "yujian-fish-segmentation-demo"),
+        "revision": os.getenv("K_REVISION", "unknown"),
+        "commit": os.getenv("APP_GIT_COMMIT", "unknown"),
+        "demo_version": DEMO_VERSION,
+        "detector_model": "DET_FISH_v0.1",
+        "segmentation_model": "SAM_VIT_B",
+        "segmentation_checkpoint": CHECKPOINT_LABEL,
+        "hero_gate": "DISABLED_IN_V0.2-A",
+    }
+
+
+def _orientation(source: Image.Image) -> str:
+    return "landscape" if source.width >= source.height else "portrait"
+
+
+def _review_path() -> Path:
+    path = Path("var/fish_hero_demo/reviews.jsonl")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+@router.get("/debug/fish-segmentation", response_class=HTMLResponse)
+def fish_segmentation_page(request: Request):
+    return templates.TemplateResponse(request=request, name="fish_segmentation.html", context={})
+
+
+@router.post("/api/debug/fish-segmentation")
+async def fish_segmentation(file: UploadFile = File(..., alias="image")) -> dict[str, Any]:
+    data = await _read_image(file)
+    source = None
+    image_id = hashlib.sha256(data).hexdigest()[:16]
+    try:
+        with Image.open(io.BytesIO(data)) as uploaded:
+            source = normalize_android_source(uploaded)
+        detector_run = detect(source)
+        assessment = assess_detections(detector_run.detections)
+        assessment_name = assessment.status.value
+        primary = assessment.primary
+        eligible = assessment_name == "ready" and primary is not None
+        eligibility_reason = (
+            "ELIGIBLE_SINGLE_PRIMARY_FISH"
+            if eligible
+            else ("MULTIPLE_FISH" if assessment_name == "multiple_fish" else "NO_RELIABLE_PRIMARY_FISH")
+        )
+        response: dict[str, Any] = {
+            "report_version": "YUJIAN_FISH_HERO_TEST_REPORT_V0.2-A",
+            "runtime": _runtime(),
+            "input": {
+                "image_id": image_id,
+                "filename": file.filename or "uploaded-image",
+                "image_width": source.width,
+                "image_height": source.height,
+                "orientation": _orientation(source),
+                "upload_size_bytes": len(data),
+            },
+            "detector": {
+                "model": detector_run.model_version,
+                "detections_count": len(detector_run.detections),
+                "strong_detection_count": len(detector_run.detections),
+                "primary_detection_found": primary is not None,
+                "primary_confidence": round(float(primary.confidence), 6) if primary else None,
+                "bbox_normalized": ([primary.box.normalized().x1, primary.box.normalized().y1, primary.box.normalized().x2, primary.box.normalized().y2] if primary else None),
+                "primary_bbox_normalized": (
+                    [primary.box.normalized().x1, primary.box.normalized().y1, primary.box.normalized().x2, primary.box.normalized().y2]
+                    if primary else None
+                ),
+                "primary_bbox_pixels": (
+                    [round(primary.box.normalized().x1 * source.width), round(primary.box.normalized().y1 * source.height),
+                     round(primary.box.normalized().x2 * source.width), round(primary.box.normalized().y2 * source.height)]
+                    if primary else None
+                ),
+                "bbox_area_ratio": (
+                    (primary.box.normalized().x2 - primary.box.normalized().x1)
+                    * (primary.box.normalized().y2 - primary.box.normalized().y1)
+                    if primary else None
+                ),
+                "bbox_touches_image_edge": (
+                    primary.box.normalized().x1 <= 0.001 or primary.box.normalized().y1 <= 0.001
+                    or primary.box.normalized().x2 >= 0.999 or primary.box.normalized().y2 >= 0.999
+                    if primary else None
+                ),
+                "assessment": assessment_name,
+                "reason": assessment.reason,
+                "detector_processing_ms": detector_run.latency_ms,
+                "primary_selection": "confidence × sqrt(area)",
+            },
+            "eligibility": {
+                "single_fish_hero_evaluation": eligible,
+                "eligibility_reason": eligibility_reason,
+            },
+            "hero_preview": {
+                "original": "READY",
+                "smart_crop": "UNAVAILABLE" if not primary else "READY",
+                "transparent": "UNAVAILABLE",
+            },
+            "errors": {
+                "detector_error": None,
+                "segmentation_error": None,
+                "preview_error": None,
+                "review_save_error": None,
+            },
+        }
+        response["original"] = _data_url(_png_bytes(source), "image/png")
+        if primary is None:
+            response["smart_crop_reason"] = "NO_RELIABLE_PRIMARY_FISH"
+            response["transparent_fish"] = None
+            response["mask_overlay"] = None
+            response["original"] = _data_url(_png_bytes(source), "image/png")
+            return response
+
+        smart_crop, crop_box = _smart_crop(source, primary.box)
+        response["smart_crop"] = _data_url(smart_crop, "image/png")
+        response["smart_crop_meta"] = {
+            "source": "PRIMARY_DETECTION",
+            "crop_normalized": list(crop_box),
+            "crop_padding_ratio": 0.12,
+            "foreground_fit": "CONTAIN",
+            "background_mode": "ORIGINAL_BLUR",
+        }
+        result = generate_fish_cutout(source, primary.box)
+        response["segmentation"] = {
+            "executed": True,
+            "model": "SAM_VIT_B",
+            "prompt_type": "DETECTOR_PRIMARY_BBOX",
+            "prompt": "DET_FISH_v0.1 primary bbox",
+            "quality": result.quality.value,
+            "quality_reason": result.reason,
+            "mask_area_ratio": round(result.mask_area_ratio, 6),
+            "edge_ratio": round(result.edge_ratio, 6),
+            "connected_components": result.connected_components,
+            "mask_width": int(result.mask.shape[1]),
+            "mask_height": int(result.mask.shape[0]),
+            "processing_ms": result.processing_ms,
+        }
+        response["hero_preview"]["transparent"] = "READY"
+        transparent_full_url = _data_url(result.cutout_png, "image/png")
+        transparent_subject_png, subject_meta = _transparent_subject_preview(result.cutout_png)
+        response["transparent_fish"] = transparent_full_url
+        response["transparent_full_fish"] = transparent_full_url
+        response["transparent_subject_fish"] = _data_url(transparent_subject_png, "image/png")
+        response["mask_overlay"] = _mask_overlay(source, result.mask, primary.box)
+        response["transparent_hero_meta"] = {
+            "transparent_source": "SAM_MASK",
+            "hero_fit": "CONTAIN",
+            "hero_background": "MORNING_LAKE_V1",
+            "fish_rgb_modified": False,
+            "fish_generated": False,
+            **subject_meta,
+        }
+        return response
+    except HTTPException:
+        raise
+    except SegmentationModelNotConfigured as exc:
+        raise HTTPException(status_code=503, detail={"error_code": "SEGMENTATION_MODEL_UNAVAILABLE", "message": str(exc)}) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail={"error_code": "SEGMENTATION_FAILED", "message": str(exc)}) from exc
+    finally:
+        if source is not None:
+            source.close()
+
+
+@router.post("/api/debug/fish-hero-review")
+def save_fish_hero_review(payload: FishHeroReviewRequest) -> dict[str, Any]:
+    path = _review_path()
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload.model_dump(), ensure_ascii=False) + "\n")
+    return {"status": "saved", "test_id": payload.test_id}
