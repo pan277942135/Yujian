@@ -6,7 +6,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3.10 pyth
 RUN git clone https://github.com/open-mmlab/PowerPaint.git /opt/PowerPaint \
     && cd /opt/PowerPaint \
     && git checkout "${POWERPAINT_COMMIT}" \
-    && test "$(git rev-parse HEAD)" = "${POWERPAINT_COMMIT}"
+    && test "$(git rev-parse HEAD)" = "${POWERPAINT_COMMIT}" \
+    && git rev-parse HEAD > /opt/POWERPAINT_COMMIT
 COPY requirements.txt .
 RUN python3 -m pip install --upgrade pip \
     && python3 -m pip install --index-url https://download.pytorch.org/whl/cu124 torch==2.5.1 torchvision==0.20.1 \
