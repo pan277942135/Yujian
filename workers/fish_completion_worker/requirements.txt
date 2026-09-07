@@ -1,0 +1,13 @@
+fastapi>=0.116.0
+uvicorn[standard]>=0.35.0
+google-cloud-storage>=2.18.0
+Pillow>=11.0.0
+numpy>=1.26.0
+accelerate
+controlnet-aux==0.0.3
+diffusers==0.27.0
+mmengine
+opencv-python-headless
+safetensors
+transformers==4.28.0
+git+https://github.com/open-mmlab/PowerPaint.git
