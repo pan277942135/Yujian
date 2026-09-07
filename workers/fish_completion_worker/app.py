@@ -1,6 +1,6 @@
 """GPU-only PowerPaint completion worker; no mock or input pass-through."""
 from __future__ import annotations
-import io, os, time
+import importlib.util, io, os, time
 from pathlib import Path
 from typing import Any
 import numpy as np, torch
@@ -31,7 +31,12 @@ def _load_controller()->None:
     checkpoint_dir=os.getenv("POWERPAINT_CHECKPOINT_DIR","/models/ppt-v1").strip()
     if not Path(checkpoint_dir).is_dir(): _model_error=f"PowerPaint checkpoint directory does not exist: {checkpoint_dir}"; return
     try:
-        from app import PowerPaintController as OfficialPowerPaintController
+        spec = importlib.util.spec_from_file_location("powerpaint_official_app", "/opt/PowerPaint/app.py")
+        if spec is None or spec.loader is None:
+            raise ImportError("cannot load official PowerPaint app")
+        official_app = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(official_app)
+        OfficialPowerPaintController = official_app.PowerPaintController
         dtype=torch.float16 if os.getenv("POWERPAINT_DTYPE","float16")=="float16" else torch.float32
         _controller=OfficialPowerPaintController(dtype,checkpoint_dir,os.getenv("POWERPAINT_LOCAL_FILES_ONLY","true").lower()=="true","ppt-v1")
     except Exception as exc: _model_error=f"{exc.__class__.__name__}: {exc}"
