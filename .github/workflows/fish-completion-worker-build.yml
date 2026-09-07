@@ -10,12 +10,47 @@ on:
 
 permissions:
   contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: gemini-api-project-503706
+  REGION: asia-east1
+  WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+  DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+  IMAGE: asia-east1-docker.pkg.dev/gemini-api-project-503706/yujian/fish-completion-worker:${{ github.sha }}
 
 jobs:
-  docker-build:
+  docker-build-push:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - name: Build GPU worker image
-        run: docker build --file workers/fish_completion_worker/Dockerfile --tag yujian-fish-completion-worker:ci workers/fish_completion_worker
+
+      - name: Authenticate to Google Cloud with GitHub OIDC/WIF
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          version: ">= 416.0.0"
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - name: Build Worker image
+        run: |
+          set -euo pipefail
+          docker build \
+            --file workers/fish_completion_worker/Dockerfile \
+            --tag "${IMAGE}" \
+            workers/fish_completion_worker
+
+      - name: Push Worker image
+        run: |
+          set -euo pipefail
+          docker push "${IMAGE}"
