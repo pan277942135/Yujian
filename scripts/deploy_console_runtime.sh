@@ -69,7 +69,8 @@ print(next((x.get("value","") for x in env if x.get("name")=="USER_JWT_SECRET"),
 ')"
 fi
 
-DEPLOY_ENV_VARS="APP_GIT_COMMIT=${GIT_SHA},GCS_BUCKET=${GCS_BUCKET},SEGMENTATION_MODEL_TYPE=${SEGMENTATION_MODEL_TYPE},SEGMENTATION_CHECKPOINT_URI=${SEGMENTATION_CHECKPOINT_URI}"
+DEPLOY_ENV_VARS="APP_GIT_COMMIT=${GIT_SHA}"
+DEPLOY_ENV_VARS="${DEPLOY_ENV_VARS},GCS_BUCKET=${GCS_BUCKET},SEGMENTATION_MODEL_TYPE=${SEGMENTATION_MODEL_TYPE},SEGMENTATION_CHECKPOINT_URI=${SEGMENTATION_CHECKPOINT_URI}"
 if [[ "$FEEDBACK_ENV_PRESENT" == "0" ]]; then
   FEEDBACK_INGEST_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
   DEPLOY_ENV_VARS="${DEPLOY_ENV_VARS},FEEDBACK_INGEST_KEY=${FEEDBACK_INGEST_KEY}"
@@ -218,47 +219,3 @@ png += chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0))
 png += chunk(b"IDAT", zlib.compress(b"\x00\x2e\x8b\x83\xff"))
 png += chunk(b"IEND", b"")
 open(path, "wb").write(png)
-PY
-  SMOKE_EVENT_ID="uat_${GIT_SHA:0:12}_${REVISION//[^A-Za-z0-9_.-]/_}"
-  FEEDBACK_SMOKE="$(curl --retry 2 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 45 -fsS \
-    -H "X-YuJian-Ingest-Key: ${FEEDBACK_INGEST_KEY}" \
-    -F "source_event_id=${SMOKE_EVENT_ID}" \
-    -F "feedback_type=confirmed" \
-    -F "source=uat_deploy_smoke" \
-    -F "model_version=deploy-smoke" \
-    -F "predicted_species=草鱼" \
-    -F "confidence=0.99" \
-    -F "smoke=true" \
-    -F "file=@${SMOKE_IMAGE};type=image/png" \
-    "${SERVICE_URL}/api/feedback/ingest")"
-  rm -f "$SMOKE_IMAGE"
-  printf '%s' "$FEEDBACK_SMOKE" | python -c '
-import json,sys
-d=json.load(sys.stdin)
-assert d.get("status")=="ok", d
-assert d.get("smoke") is True, d
-assert d.get("gcs_write_delete") is True, d
-assert d.get("db_reachable") is True, d
-'
-fi
-
-printf 'SERVICE_URL=%s\n' "$SERVICE_URL"
-printf 'REVISION=%s\n' "$REVISION"
-printf 'APP_GIT_COMMIT=%s\n' "$GIT_SHA"
-printf 'BUILD_SA=%s\n' "$BUILD_SA"
-printf 'BUILD_SA_RESOURCE=%s\n' "$BUILD_SA_RESOURCE"
-printf 'HEALTH=%s\n' "$BASIC_HEALTH"
-printf 'DEPLOY_HEALTH=%s\n' "$DEPLOY_HEALTH"
-printf 'FEEDBACK_SMOKE=%s\n' "$FEEDBACK_SMOKE"
-printf 'USER_AUTH_JWT_READY=%s\n' "$USER_AUTH_READY"
-
-if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
-  {
-    echo "service_url=${SERVICE_URL}"
-    echo "revision=${REVISION}"
-    echo "git_commit=${GIT_SHA}"
-    echo "build_service_account=${BUILD_SA}"
-    echo "feedback_ingest_ready=${FEEDBACK_READY}"
-    echo "user_auth_jwt_ready=${USER_AUTH_READY}"
-  } >> "$GITHUB_OUTPUT"
-fi
