@@ -1,0 +1,21 @@
+name: Fish Completion Worker Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/fish-completion-lab-v0.1
+    paths:
+      - workers/fish_completion_worker/**
+
+permissions:
+  contents: read
+
+jobs:
+  docker-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build GPU worker image
+        run: docker build --file workers/fish_completion_worker/Dockerfile --tag yujian-fish-completion-worker:ci workers/fish_completion_worker
