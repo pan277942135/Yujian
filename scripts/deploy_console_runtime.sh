@@ -5,6 +5,9 @@ PROJECT_ID="${PROJECT_ID:-gemini-api-project-503706}"
 PROJECT_NUMBER="${PROJECT_NUMBER:-571785698442}"
 REGION="${REGION:-asia-east1}"
 SERVICE="${SERVICE:-yujian-model-factory-console}"
+GCS_BUCKET="${GCS_BUCKET:-yujian-model-factory-571785698442}"
+SEGMENTATION_MODEL_TYPE="${SEGMENTATION_MODEL_TYPE:-vit_b}"
+SEGMENTATION_CHECKPOINT_URI="${SEGMENTATION_CHECKPOINT_URI:-gs://${GCS_BUCKET}/models/segmentation/sam_vit_b_01ec64.pth}"
 BUILD_SA="${BUILD_SA:-${PROJECT_NUMBER}-compute@developer.gserviceaccount.com}"
 BUILD_SA_RESOURCE="${BUILD_SA_RESOURCE:-projects/${PROJECT_ID}/serviceAccounts/${BUILD_SA}}"
 DEPLOY_SA="${DEPLOY_SERVICE_ACCOUNT:-yujian-github-deployer@${PROJECT_ID}.iam.gserviceaccount.com}"
@@ -66,7 +69,7 @@ print(next((x.get("value","") for x in env if x.get("name")=="USER_JWT_SECRET"),
 ')"
 fi
 
-DEPLOY_ENV_VARS="APP_GIT_COMMIT=${GIT_SHA}"
+DEPLOY_ENV_VARS="APP_GIT_COMMIT=${GIT_SHA},GCS_BUCKET=${GCS_BUCKET},SEGMENTATION_MODEL_TYPE=${SEGMENTATION_MODEL_TYPE},SEGMENTATION_CHECKPOINT_URI=${SEGMENTATION_CHECKPOINT_URI}"
 if [[ "$FEEDBACK_ENV_PRESENT" == "0" ]]; then
   FEEDBACK_INGEST_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
   DEPLOY_ENV_VARS="${DEPLOY_ENV_VARS},FEEDBACK_INGEST_KEY=${FEEDBACK_INGEST_KEY}"
