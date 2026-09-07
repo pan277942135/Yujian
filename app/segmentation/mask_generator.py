@@ -1,82 +1,101 @@
-"""Quality checks for experimental segmentation masks."""
+"""SAM bbox-prompt mask generation for the experimental demo."""
 
 from __future__ import annotations
 
-from enum import Enum
+import logging
+import os
+import tempfile
+from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
+from PIL import Image
+
+from app.recognition_pipeline import BBox
 
 
-class SegmentationQuality(str, Enum):
-    GOOD = "GOOD"
-    WARNING = "WARNING"
-    INVALID = "INVALID"
+logger = logging.getLogger(__name__)
 
 
-def assess_mask(mask: np.ndarray, roi: tuple[int, int, int, int]) -> tuple[SegmentationQuality, dict]:
-    if mask.ndim != 2 or not mask.any():
-        return SegmentationQuality.INVALID, {"reason": "empty_mask"}
-
-    left, top, right, bottom = roi
-    roi_mask = mask[top:bottom, left:right]
-    roi_area = max(1, roi_mask.size)
-    subject_area = int(roi_mask.sum())
-    area_ratio = subject_area / roi_area
-    if subject_area == 0 or area_ratio < 0.03:
-        return SegmentationQuality.INVALID, {"reason": "subject_area_too_small", "mask_area_ratio": area_ratio}
-
-    border = np.zeros_like(roi_mask, dtype=bool)
-    border[:1, :] = True
-    border[-1:, :] = True
-    border[:, :1] = True
-    border[:, -1:] = True
-    edge_ratio = float((roi_mask & border).sum()) / max(1, subject_area)
-
-    small = _downsample(roi_mask, 128, 128)
-    components = _component_count(small)
-    if edge_ratio > 0.55:
-        quality = SegmentationQuality.WARNING
-        reason = "mask_touches_roi_edge"
-    elif components > 8:
-        quality = SegmentationQuality.WARNING
-        reason = "fragmented_mask"
-    elif area_ratio > 0.85:
-        quality = SegmentationQuality.WARNING
-        reason = "subject_area_too_large"
-    else:
-        quality = SegmentationQuality.GOOD
-        reason = "mask_passed_basic_checks"
-
-    return quality, {
-        "reason": reason,
-        "mask_area_ratio": area_ratio,
-        "edge_ratio": edge_ratio,
-        "connected_components": components,
-    }
+class SegmentationModelNotConfigured(RuntimeError):
+    pass
 
 
-def _downsample(mask: np.ndarray, width: int, height: int) -> np.ndarray:
-    from PIL import Image
+def _checkpoint_path() -> Path:
+    configured = os.getenv("SEGMENTATION_CHECKPOINT_PATH", "").strip()
+    if configured:
+        path = Path(configured)
+        if not path.exists():
+            raise SegmentationModelNotConfigured(f"checkpoint not found: {path}")
+        return path
 
-    image = Image.fromarray((mask.astype(np.uint8) * 255), mode="L")
-    return np.asarray(image.resize((width, height), Image.Resampling.NEAREST)) > 0
+    uri = os.getenv("SEGMENTATION_CHECKPOINT_URI", "").strip()
+    if uri.startswith("gs://"):
+        from google.cloud import storage
+
+        bucket_name, object_name = uri[5:].split("/", 1)
+        directory = Path(tempfile.gettempdir()) / "yujian-segmentation"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / Path(object_name).name
+        if not path.exists():
+            storage.Client().bucket(bucket_name).blob(object_name).download_to_filename(str(path), timeout=600)
+        return path
+
+    raise SegmentationModelNotConfigured(
+        "set SEGMENTATION_CHECKPOINT_PATH or SEGMENTATION_CHECKPOINT_URI for the SAM demo"
+    )
 
 
-def _component_count(mask: np.ndarray) -> int:
-    height, width = mask.shape
-    visited = np.zeros_like(mask, dtype=bool)
-    count = 0
-    for y in range(height):
-        for x in range(width):
-            if not mask[y, x] or visited[y, x]:
-                continue
-            count += 1
-            stack = [(y, x)]
-            visited[y, x] = True
-            while stack:
-                cy, cx = stack.pop()
-                for ny, nx in ((cy - 1, cx), (cy + 1, cx), (cy, cx - 1), (cy, cx + 1)):
-                    if 0 <= ny < height and 0 <= nx < width and mask[ny, nx] and not visited[ny, nx]:
-                        visited[ny, nx] = True
-                        stack.append((ny, nx))
-    return count
+@lru_cache(maxsize=1)
+def _load_predictor():
+    try:
+        from segment_anything import SamPredictor, sam_model_registry
+    except Exception as exc:
+        raise SegmentationModelNotConfigured("segment-anything is not installed") from exc
+
+    model_type = os.getenv("SEGMENTATION_MODEL_TYPE", "vit_b").strip()
+    if model_type not in sam_model_registry:
+        raise SegmentationModelNotConfigured(f"unsupported SAM model type: {model_type}")
+    model = sam_model_registry[model_type](checkpoint=str(_checkpoint_path()))
+    model.eval()
+    return SamPredictor(model)
+
+
+def initialize_segmentation_model() -> bool:
+    """Warm-load SAM when configured, without making startup dependent on it."""
+    try:
+        _load_predictor()
+        model_name = os.getenv("SEGMENTATION_MODEL_TYPE", "vit_b").strip().upper()
+        logger.info("Fish Segmentation Model Ready model=SAM_%s checkpoint=loaded", model_name)
+        return True
+    except SegmentationModelNotConfigured as exc:
+        logger.warning("Segmentation unavailable: %s", exc)
+        return False
+    except Exception:
+        logger.exception("Segmentation unavailable: SAM checkpoint load failed")
+        return False
+
+def generate_mask(image: Image.Image, bbox: BBox) -> np.ndarray:
+    predictor = _load_predictor()
+    rgb = np.asarray(image.convert("RGB"))
+    predictor.set_image(rgb)
+    left, top, right, bottom = _pixel_box(bbox, image.width, image.height)
+    masks, _, _ = predictor.predict(
+        box=np.asarray([left, top, right, bottom], dtype=np.float32),
+        multimask_output=False,
+    )
+    mask = np.asarray(masks[0], dtype=bool)
+    if mask.shape != (image.height, image.width):
+        raise RuntimeError(
+            f"SAM mask shape {mask.shape} does not match image {(image.height, image.width)}"
+        )
+    return mask
+
+
+def _pixel_box(box: BBox, width: int, height: int) -> tuple[int, int, int, int]:
+    normalized = box.normalized()
+    left = max(0, min(width - 1, int(np.floor(normalized.x1 * width))))
+    top = max(0, min(height - 1, int(np.floor(normalized.y1 * height))))
+    right = max(left + 1, min(width, int(np.ceil(normalized.x2 * width))))
+    bottom = max(top + 1, min(height, int(np.ceil(normalized.y2 * height))))
+    return left, top, right, bottom
