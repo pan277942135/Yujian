@@ -1,59 +1,82 @@
-"""Coordinator for the non-production fish segmentation demo."""
+"""Quality checks for experimental segmentation masks."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from time import perf_counter
+from enum import Enum
 
-from PIL import Image
-
-from app.recognition_pipeline import BBox
-from app.segmentation.cutout_builder import build_png_cutout
-from app.segmentation.mask_generator import generate_mask
-from app.segmentation.quality_gate import SegmentationQuality, assess_mask
+import numpy as np
 
 
-@dataclass(frozen=True)
-class FishSegmentationResult:
-    quality: SegmentationQuality
-    reason: str
-    width: int
-    height: int
-    mask_area_ratio: float
-    edge_ratio: float
-    connected_components: int
-    processing_ms: float
-    cutout_png: bytes
-    mask: object
+class SegmentationQuality(str, Enum):
+    GOOD = "GOOD"
+    WARNING = "WARNING"
+    INVALID = "INVALID"
 
 
-def generate_fish_cutout(image: Image.Image, bbox: BBox) -> FishSegmentationResult:
-    started = perf_counter()
-    source = image.convert("RGB")
-    mask = generate_mask(source, bbox)
-    roi = _pixel_box(bbox, source.width, source.height)
-    quality, metrics = assess_mask(mask, roi)
-    cutout = build_png_cutout(source, mask)
-    return FishSegmentationResult(
-        quality=quality,
-        reason=str(metrics.get("reason", "unknown")),
-        width=source.width,
-        height=source.height,
-        mask_area_ratio=float(metrics.get("mask_area_ratio", 0.0)),
-        edge_ratio=float(metrics.get("edge_ratio", 0.0)),
-        connected_components=int(metrics.get("connected_components", 0)),
-        processing_ms=round((perf_counter() - started) * 1000.0, 1),
-        cutout_png=cutout,
-        mask=mask,
-    )
+def assess_mask(mask: np.ndarray, roi: tuple[int, int, int, int]) -> tuple[SegmentationQuality, dict]:
+    if mask.ndim != 2 or not mask.any():
+        return SegmentationQuality.INVALID, {"reason": "empty_mask"}
+
+    left, top, right, bottom = roi
+    roi_mask = mask[top:bottom, left:right]
+    roi_area = max(1, roi_mask.size)
+    subject_area = int(roi_mask.sum())
+    area_ratio = subject_area / roi_area
+    if subject_area == 0 or area_ratio < 0.03:
+        return SegmentationQuality.INVALID, {"reason": "subject_area_too_small", "mask_area_ratio": area_ratio}
+
+    border = np.zeros_like(roi_mask, dtype=bool)
+    border[:1, :] = True
+    border[-1:, :] = True
+    border[:, :1] = True
+    border[:, -1:] = True
+    edge_ratio = float((roi_mask & border).sum()) / max(1, subject_area)
+
+    small = _downsample(roi_mask, 128, 128)
+    components = _component_count(small)
+    if edge_ratio > 0.55:
+        quality = SegmentationQuality.WARNING
+        reason = "mask_touches_roi_edge"
+    elif components > 8:
+        quality = SegmentationQuality.WARNING
+        reason = "fragmented_mask"
+    elif area_ratio > 0.85:
+        quality = SegmentationQuality.WARNING
+        reason = "subject_area_too_large"
+    else:
+        quality = SegmentationQuality.GOOD
+        reason = "mask_passed_basic_checks"
+
+    return quality, {
+        "reason": reason,
+        "mask_area_ratio": area_ratio,
+        "edge_ratio": edge_ratio,
+        "connected_components": components,
+    }
 
 
-def _pixel_box(bbox: BBox, width: int, height: int) -> tuple[int, int, int, int]:
-    b = bbox.normalized()
-    import math
+def _downsample(mask: np.ndarray, width: int, height: int) -> np.ndarray:
+    from PIL import Image
 
-    left = max(0, min(width - 1, math.floor(b.x1 * width)))
-    top = max(0, min(height - 1, math.floor(b.y1 * height)))
-    right = max(left + 1, min(width, math.ceil(b.x2 * width)))
-    bottom = max(top + 1, min(height, math.ceil(b.y2 * height)))
-    return left, top, right, bottom
+    image = Image.fromarray((mask.astype(np.uint8) * 255), mode="L")
+    return np.asarray(image.resize((width, height), Image.Resampling.NEAREST)) > 0
+
+
+def _component_count(mask: np.ndarray) -> int:
+    height, width = mask.shape
+    visited = np.zeros_like(mask, dtype=bool)
+    count = 0
+    for y in range(height):
+        for x in range(width):
+            if not mask[y, x] or visited[y, x]:
+                continue
+            count += 1
+            stack = [(y, x)]
+            visited[y, x] = True
+            while stack:
+                cy, cx = stack.pop()
+                for ny, nx in ((cy - 1, cx), (cy + 1, cx), (cy, cx - 1), (cy, cx + 1)):
+                    if 0 <= ny < height and 0 <= nx < width and mask[ny, nx] and not visited[ny, nx]:
+                        visited[ny, nx] = True
+                        stack.append((ny, nx))
+    return count
