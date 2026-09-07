@@ -1,3 +1,4 @@
+# PowerPaint compatibility: cached_download was removed after huggingface_hub 0.25.x.
 fastapi>=0.116.0
 uvicorn[standard]>=0.35.0
 google-cloud-storage>=2.18.0
