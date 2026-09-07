@@ -10,4 +10,3 @@ mmengine
 opencv-python-headless
 safetensors
 transformers==4.28.0
-git+https://github.com/open-mmlab/PowerPaint.git
