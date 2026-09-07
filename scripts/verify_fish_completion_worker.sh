@@ -45,6 +45,7 @@ if [[ -n "$TOKEN" ]]; then
 fi
 
 health_body="$(mktemp)"
+response_body=""
 trap 'rm -f "$health_body" "$response_body"' EXIT
 health_code="$(curl --silent --show-error --output "$health_body" --write-out '%{http_code}' "${auth_args[@]}" "$BASE_URL/health")"
 [[ "$health_code" == "200" ]] || { echo "HEALTH FAIL HTTP $health_code"; cat "$health_body"; exit 1; }
