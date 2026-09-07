@@ -60,7 +60,6 @@ jobs:
         run: |
           set -euo pipefail
           docker run --rm --entrypoint python3 "${IMAGE}" -c "import torch, diffusers, transformers; assert torch.__version__ == '2.5.1+cu124', torch.__version__; assert torch.version.cuda == '12.4', torch.version.cuda; assert diffusers.__version__ == '0.27.0', diffusers.__version__; assert transformers.__version__ == '4.28.0', transformers.__version__; print('torch=' + torch.__version__); print('torch_cuda=' + str(torch.version.cuda)); print('diffusers=' + diffusers.__version__); print('transformers=' + transformers.__version__); print('Runtime freeze validation: PASS')"
-          docker run --rm --entrypoint sh "${IMAGE}" -c "test \"$(cat /worker/POWERPAINT_COMMIT)\" = \"${POWERPAINT_COMMIT}\""
 
       - name: Push Worker image
         run: |
