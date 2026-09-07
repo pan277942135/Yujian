@@ -271,13 +271,14 @@ async def save_masks(payload: MaskPayload):
     refined = (raw_mask | masks["visible_add"]) & ~masks["remove"]
     refined_png = _png(Image.fromarray(np.where(refined, 255, 0).astype("uint8"), "L"))
     refined_fish = _png(Image.fromarray(np.dstack([np.asarray(original), np.where(refined, 255, 0).astype("uint8")]), "RGBA"))
+    asset_uris = {}
     for name, mask in (("05_visible_add_mask.png", masks["visible_add"]), ("06_remove_mask.png", masks["remove"]), ("07_refined_visible_mask.png", refined), ("09_occluder_mask.png", masks["occluder"]), ("10_completion_mask_canonical.png", masks["completion_canonical"])):
-        _persist(payload.test_id, name, _mask_bytes(mask), "image/png")
-    _persist(payload.test_id, "08_refined_visible_fish.png", refined_fish, "image/png")
+        asset_uris[name] = _persist(payload.test_id, name, _mask_bytes(mask), "image/png")
+    asset_uris["refined_visible"] = _persist(payload.test_id, "08_refined_visible_fish.png", refined_fish, "image/png")
     state["mask_refinement"].update(stats)
     state["occlusion"] = {"occluder_area_pixels": stats["occluder_area_pixels"], "occluder_region_count": stats["occluder_region_count"]}
     state["completion_mask"] = {k: stats[k] for k in ("completion_area_pixels", "completion_region_count", "estimated_final_fish_area_pixels", "generated_pixel_ratio", "completion_level", "eligible_for_v0_1", "eligibility_reason", "completion_mask_valid")}
-    state["assets"].update({"refined_visible": f"{PREFIX}/{payload.test_id}/08_refined_visible_fish.png"})
+    state["assets"].update({"visible_add": asset_uris["05_visible_add_mask.png"], "remove": asset_uris["06_remove_mask.png"], "refined_visible_mask": asset_uris["07_refined_visible_mask.png"], "occluder": asset_uris["09_occluder_mask.png"], "completion_mask": asset_uris["10_completion_mask_canonical.png"], "refined_visible": asset_uris["refined_visible"]})
     _save_state(payload.test_id, state)
     return {"test_id": payload.test_id, "statistics": stats, "refined_visible": _data_url(refined_fish, "image/png")}
 
