@@ -12,6 +12,7 @@ import io
 import json
 import os
 import secrets
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -26,6 +27,7 @@ from pydantic import BaseModel, Field
 from app.detector_runtime import detect, normalize_android_source
 from app.recognition_pipeline import assess_detections
 from app.segmentation.service import generate_fish_cutout
+from app.completion_worker_client import CompletionWorkerError, invoke_completion_worker
 
 router = APIRouter(tags=["fish-completion-lab"])
 templates = Jinja2Templates(directory="app/templates")
@@ -72,7 +74,7 @@ def _read_persist(uri: str) -> bytes:
         remainder = uri[len("gs://"):]
         bucket_name, object_name = remainder.split("/", 1)
         return storage.Client().bucket(bucket_name).blob(object_name).download_as_bytes()
-    with open(uri.removeprefix("local://"), "rb"):
+    with open(uri.removeprefix("local://"), "rb") as handle:
         return handle.read()
 
 
@@ -280,17 +282,103 @@ async def save_masks(payload: MaskPayload):
     return {"test_id": payload.test_id, "statistics": stats, "refined_visible": _data_url(refined_fish, "image/png")}
 
 
+
+def _lab_asset_uri(test_id: str, name: str) -> str:
+    bucket = _bucket()
+    object_name = f"{PREFIX}/{test_id}/{name}"
+    return f"gs://{bucket.name}/{object_name}" if bucket else f"local://var/fish_completion_lab/{test_id}/{name}"
+
+
+def _build_completion_roi(test_id: str, state: dict[str, Any]) -> tuple[str, str, Image.Image, np.ndarray, tuple[int, int, int, int]]:
+    original = Image.open(io.BytesIO(_read_persist(state["assets"]["original"]))).convert("RGB")
+    mask_uri = _lab_asset_uri(test_id, "10_completion_mask_canonical.png")
+    completion = np.asarray(Image.open(io.BytesIO(_read_persist(mask_uri))).convert("L")) > 127
+    ys, xs = np.where(completion)
+    if not len(xs):
+        raise HTTPException(422, {"error_code": "COMPLETION_MASK_EMPTY", "message": "Completion mask is empty"})
+    height, width = completion.shape
+    x1, x2 = int(xs.min()), int(xs.max()) + 1
+    y1, y2 = int(ys.min()), int(ys.max()) + 1
+    pad_x, pad_y = max(8, int((x2 - x1) * 0.20)), max(8, int((y2 - y1) * 0.20))
+    x1, y1, x2, y2 = max(0, x1 - pad_x), max(0, y1 - pad_y), min(width, x2 + pad_x), min(height, y2 + pad_y)
+    roi = original.crop((x1, y1, x2, y2))
+    roi_mask = Image.fromarray(np.where(completion[y1:y2, x1:x2], 255, 0).astype("uint8"), "L")
+    longest = max(roi.size)
+    if longest > 512:
+        scale = 512 / longest
+        size = (max(8, int(roi.width * scale) // 8 * 8), max(8, int(roi.height * scale) // 8 * 8))
+        roi, roi_mask = roi.resize(size, Image.Resampling.LANCZOS), roi_mask.resize(size, Image.Resampling.NEAREST)
+    roi_uri = _persist(test_id, "08_completion_roi.png", _png(roi), "image/png")
+    roi_mask_uri = _persist(test_id, "08_completion_roi_mask.png", _png(roi_mask), "image/png")
+    return roi_uri, roi_mask_uri, roi, np.asarray(roi_mask) > 127, (x1, y1, x2, y2)
+
+
+def _compose_completion(state: dict[str, Any], generated: Image.Image, box: tuple[int, int, int, int]) -> tuple[bytes, float]:
+    original = Image.open(io.BytesIO(_read_persist(state["assets"]["original"]))).convert("RGB")
+    canonical_uri = state["assets"].get("completion_mask") or _lab_asset_uri(state["runtime"]["test_id"], "10_completion_mask_canonical.png")
+    canonical = np.asarray(Image.open(io.BytesIO(_read_persist(canonical_uri))).convert("L")) > 127
+    refined_uri = state["assets"].get("refined_visible")
+    refined = np.asarray(Image.open(io.BytesIO(_read_persist(refined_uri))).convert("RGBA"))[:, :, 3] > 127 if refined_uri else np.zeros(canonical.shape, dtype=bool)
+    generated = generated.convert("RGB")
+    x1, y1, x2, y2 = box
+    if generated.size != (x2 - x1, y2 - y1):
+        generated = generated.resize((x2 - x1, y2 - y1), Image.Resampling.LANCZOS)
+    canvas = np.asarray(original).copy()
+    generated_pixels = np.asarray(generated)
+    target_mask = canonical[y1:y2, x1:x2]
+    canvas[y1:y2, x1:x2][target_mask] = generated_pixels[target_mask]
+    alpha = np.where(refined | canonical, 255, 0).astype("uint8")
+    rgba = np.dstack([canvas, alpha])
+    changed = np.any(canvas != np.asarray(original), axis=2)
+    observed = refined & ~canonical
+    ratio = float((changed & observed).sum() / max(1, observed.sum()))
+    return _png(Image.fromarray(rgba, "RGBA")), ratio
+
+
 @router.post("/api/debug/fish-completion-lab/run")
 def run_completion(payload: RunPayload):
+    started = time.perf_counter()
     state = _load_state(payload.test_id)
-    if not state.get("completion_mask", {}).get("eligible_for_v0_1"):
+    mask_state = state.get("completion_mask", {})
+    if not mask_state.get("eligible_for_v0_1"):
         raise HTTPException(422, {"error_code": "COMPLETION_NOT_ELIGIBLE", "message": "请先提交合法且不超过 20% 的 Completion Mask"})
-    if not os.getenv("FISH_COMPLETION_ENABLED", "").strip().lower() == "true":
-        state["completion"]["status"] = "COMPLETION_UNAVAILABLE"
-        state["errors"]["completion"] = {"error_code": "COMPLETION_WORKER_UNAVAILABLE", "message": "FISH_COMPLETION_ENABLED=true 且真实 PowerPaint Worker 未配置"}
+    if mask_state.get("completion_area_pixels", 0) == 0:
+        state["completion"].update({"status": "COMPLETION_NOT_REQUIRED", "generation_count": 0, "retry_count": 0})
+        state["composition"]["total_processing_ms"] = round((time.perf_counter() - started) * 1000, 2)
         _save_state(payload.test_id, state)
-        raise HTTPException(503, state["errors"]["completion"])
-    raise HTTPException(503, {"error_code": "COMPLETION_WORKER_NOT_IMPLEMENTED", "message": "真实 PowerPaint Worker 尚未配置；禁止 Mock Completion"})
+        return {"test_id": payload.test_id, "status": "COMPLETION_NOT_REQUIRED", "report": state}
+    if os.getenv("FISH_COMPLETION_ENABLED", "").strip().lower() != "true":
+        error = {"error_code": "COMPLETION_WORKER_UNAVAILABLE", "message": "FISH_COMPLETION_ENABLED=true 且真实 PowerPaint Worker 未配置"}
+        state["completion"]["status"] = "COMPLETION_UNAVAILABLE"
+        state["errors"]["completion"] = error
+        _save_state(payload.test_id, state)
+        raise HTTPException(503, error)
+    try:
+        roi_uri, roi_mask_uri, roi, roi_mask, box = _build_completion_roi(payload.test_id, state)
+        worker = invoke_completion_worker(image_uri=roi_uri, mask_uri=roi_mask_uri, prompt="FIXED_FISH_COMPLETION_V0.1")
+        generated_bytes = _read_persist(worker["result_uri"])
+        if hashlib.sha256(generated_bytes).digest() == hashlib.sha256(_png(roi)).digest():
+            raise CompletionWorkerError("WORKER_RETURNED_INPUT", "Worker output is byte-identical to the ROI input")
+        generated = Image.open(io.BytesIO(generated_bytes)).convert("RGB")
+        final_png, observed_change_ratio = _compose_completion(state, generated, box)
+        generated_uri = _persist(payload.test_id, "09_generated_roi.png", generated_bytes, "image/png")
+        final_uri = _persist(payload.test_id, "10_final_asset.png", final_png, "image/png")
+        total_ms = round((time.perf_counter() - started) * 1000, 2)
+        state["completion"].update({"status": "COMPLETION_EXECUTED", "model_version": worker["model_version"], "generation_count": 1, "retry_count": 0, "inference_time_ms": worker["inference_time_ms"], "gpu_info": worker.get("gpu_info")})
+        state["composition"].update({"observed_pixel_change_ratio": observed_change_ratio, "generated_pixels": mask_state["completion_area_pixels"], "total_processing_ms": total_ms})
+        state["assets"].update({"completion_roi": roi_uri, "completion_roi_mask": roi_mask_uri, "generated_roi": generated_uri, "final_asset": final_uri})
+        _save_json(payload.test_id, "12_test_report.json", state)
+        _save_state(payload.test_id, state)
+        return {"test_id": payload.test_id, "status": "COMPLETION_EXECUTED", "model_version": worker["model_version"], "processing_ms": total_ms, "generated_roi": _data_url(generated_bytes, "image/png"), "final_asset": _data_url(final_png, "image/png"), "report": state}
+    except CompletionWorkerError as exc:
+        error = {"error_code": exc.error_code, "message": str(exc), "status_code": exc.status_code}
+    except Exception as exc:
+        error = {"error_code": "COMPLETION_PIPELINE_FAILED", "message": f"{exc.__class__.__name__}: {exc}"}
+    state["completion"]["status"] = "COMPLETION_FAILED"
+    state["errors"]["completion"] = error
+    state["composition"]["total_processing_ms"] = round((time.perf_counter() - started) * 1000, 2)
+    _save_state(payload.test_id, state)
+    raise HTTPException(503, error)
 
 
 @router.post("/api/debug/fish-completion-lab/review")
