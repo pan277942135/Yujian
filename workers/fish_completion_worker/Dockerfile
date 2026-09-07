@@ -5,6 +5,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3.10 pyth
 RUN git clone --depth 1 https://github.com/open-mmlab/PowerPaint.git /opt/PowerPaint
 COPY requirements.txt .
 RUN python3 -m pip install --upgrade pip && python3 -m pip install --extra-index-url https://download.pytorch.org/whl/cu121 torch torchvision && python3 -m pip install -r requirements.txt
-COPY app.py .
-ENV PYTHONPATH=/worker:/opt/PowerPaint PORT=8080
-CMD ["sh","-c","uvicorn app:app --host 0.0.0.0 --port 8080"]
+COPY app.py worker_server.py
+ENV PYTHONPATH=/opt/PowerPaint:/worker PORT=8080
+CMD ["sh","-c","uvicorn worker_server:app --host 0.0.0.0 --port 8080"]
