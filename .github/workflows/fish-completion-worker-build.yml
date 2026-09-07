@@ -18,6 +18,7 @@ env:
   WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
   DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
   IMAGE: asia-east1-docker.pkg.dev/gemini-api-project-503706/yujian/fish-completion-worker:${{ github.sha }}
+  POWERPAINT_COMMIT: 5b4c3d52291709fcec2a1870d987da693fd3549c
 
 jobs:
   docker-build-push:
@@ -54,6 +55,12 @@ jobs:
         run: |
           set -euo pipefail
           docker run --rm --entrypoint python3 "${IMAGE}" -c "from huggingface_hub import cached_download; print('cached_download: PASS')"
+
+      - name: Verify frozen PowerPaint runtime
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint python3 "${IMAGE}" -c "import torch, diffusers, transformers; assert torch.__version__ == '2.5.1', torch.__version__; assert torch.version.cuda == '12.4', torch.version.cuda; assert diffusers.__version__ == '0.27.0', diffusers.__version__; assert transformers.__version__ == '4.28.0', transformers.__version__; print('torch=' + torch.__version__); print('torch_cuda=' + str(torch.version.cuda)); print('diffusers=' + diffusers.__version__); print('transformers=' + transformers.__version__); print('Runtime freeze validation: PASS')"
+          docker run --rm --entrypoint sh "${IMAGE}" -c "test \"$(git -C /opt/PowerPaint rev-parse HEAD)\" = \"${POWERPAINT_COMMIT}\""
 
       - name: Push Worker image
         run: |

@@ -1,15 +1,17 @@
-# PowerPaint compatibility: cached_download was removed after huggingface_hub 0.25.x.
-fastapi>=0.116.0
-uvicorn[standard]>=0.35.0
-google-cloud-storage>=2.18.0
-Pillow>=10.0.0,<11.0.0
-numpy>=1.26.0
-accelerate
+# Runtime-frozen direct dependencies for PowerPaint v1 / ppt-v1.
+fastapi==0.141.1
+uvicorn[standard]==0.50.1
+google-cloud-storage==3.13.1
+Pillow==10.4.0
+numpy==1.26.4
+accelerate==1.14.0
 controlnet-aux==0.0.3
 diffusers==0.27.0
-huggingface_hub<0.26
-mmengine
-opencv-python-headless
-safetensors
+huggingface_hub==0.25.2
+mmengine==0.10.7
+opencv-python-headless==4.11.0.86
+safetensors==0.8.0
 transformers==4.28.0
 gradio==3.41.0
+torch==2.5.1
+torchvision==0.20.1

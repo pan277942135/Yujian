@@ -40,8 +40,22 @@ def _load_controller()->None:
         dtype=torch.float16 if os.getenv("POWERPAINT_DTYPE","float16")=="float16" else torch.float32
         _controller=OfficialPowerPaintController(dtype,checkpoint_dir,os.getenv("POWERPAINT_LOCAL_FILES_ONLY","true").lower()=="true","ppt-v1")
     except Exception as exc: _model_error=f"{exc.__class__.__name__}: {exc}"
+def _runtime_self_check() -> None:
+    cuda_version = torch.version.cuda or "unavailable"
+    gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "unavailable"
+    print(
+        "PowerPaint Runtime: "
+        f"commit={os.getenv('POWERPAINT_COMMIT', 'unknown')} "
+        f"torch={torch.__version__} "
+        f"cuda={cuda_version} "
+        f"gpu={gpu_name}",
+        flush=True,
+    )
+
 @app.on_event("startup")
-def initialize_model()->None: _load_controller()
+def initialize_model()->None:
+    _runtime_self_check()
+    _load_controller()
 @app.get("/health")
 def health()->dict[str,Any]:
     _load_controller()
