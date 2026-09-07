@@ -50,6 +50,11 @@ jobs:
             --tag "${IMAGE}" \
             workers/fish_completion_worker
 
+      - name: Verify cached_download compatibility
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint python3 "${IMAGE}" -c "from huggingface_hub import cached_download; print('cached_download: PASS')"
+
       - name: Push Worker image
         run: |
           set -euo pipefail
