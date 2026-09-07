@@ -15,4 +15,4 @@ The checkpoint is not baked into the image. Mount or stage it on the GPU worker 
 GET /health returns 503 until CUDA and the checkpoint are loaded.
 POST /completion accepts GCS URIs for an RGB image and a grayscale mask and runs official PowerPaint v1 shape-guided inference once.
 
-Build verification is defined in .github/workflows/fish-completion-worker-build.yml.
+Build verification and Artifact Registry publishing are defined in .github/workflows/fish-completion-worker-build.yml.
