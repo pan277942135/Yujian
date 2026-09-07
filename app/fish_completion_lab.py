@@ -10,6 +10,7 @@ import base64
 import hashlib
 import io
 import json
+import logging
 import os
 import secrets
 import time
@@ -18,7 +19,7 @@ from typing import Any
 
 import numpy as np
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from google.cloud import storage
 from PIL import Image
@@ -34,6 +35,11 @@ templates = Jinja2Templates(directory="app/templates")
 LAB_VERSION = "YUJIAN_FISH_COMPLETION_LAB_V0.1"
 MAX_BYTES = 25 * 1024 * 1024
 PREFIX = "experiments/fish_completion_lab/v0.1"
+logger = logging.getLogger(__name__)
+
+
+def _json_error(status_code: int, error_code: str, message: str) -> JSONResponse:
+    return JSONResponse(status_code=status_code, content={"error_code": error_code, "message": message})
 
 
 class MaskPayload(BaseModel):
@@ -211,8 +217,9 @@ def fish_completion_lab_page(request: Request):
 async def prepare(file: UploadFile = File(...), case_label: str = ""):
     data = await file.read(MAX_BYTES + 1)
     if not data or len(data) > MAX_BYTES:
-        raise HTTPException(400, "图片为空或超过 25 MiB")
+        return _json_error(400, "INVALID_IMAGE_UPLOAD", "图片为空或超过 25 MiB")
     test_id = "FCL_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + secrets.token_hex(2)
+    source = None
     try:
         with Image.open(io.BytesIO(data)) as uploaded:
             source = normalize_android_source(uploaded)
@@ -254,8 +261,18 @@ async def prepare(file: UploadFile = File(...), case_label: str = ""):
         }
         _save_state(test_id, state)
         return {**state, "test_id": test_id, "original": _data_url(original, "image/png"), "sam_raw_mask": _data_url(_mask_bytes(raw_mask), "image/png"), "sam_transparent": _data_url(raw_transparent, "image/png")}
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
+        return JSONResponse(status_code=exc.status_code, content={
+            "error_code": detail.get("error_code", "FISH_COMPLETION_REQUEST_FAILED"),
+            "message": detail.get("message", str(detail.get("detail", "请求失败"))),
+        })
+    except Exception as exc:
+        logger.exception("Fish Completion Lab prepare failed; test_id=%s", test_id)
+        return _json_error(500, "FISH_COMPLETION_PREPARE_FAILED", f"{exc.__class__.__name__}: {exc}")
     finally:
-        source.close()
+        if source is not None:
+            source.close()
 
 
 @router.post("/api/debug/fish-completion-lab/masks")
