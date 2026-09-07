@@ -57,11 +57,11 @@ docker_args=(
   -e "POWERPAINT_CHECKPOINT_DIR=/models/ppt-v1"
   -e "COMPLETION_OUTPUT_BUCKET=$OUTPUT_BUCKET"
   -e "POWERPAINT_LOCAL_FILES_ONLY=true"
-  "$IMAGE"
 )
 if [[ -n "$TOKEN" ]]; then
-  docker_args=(-e "WORKER_AUTH_TOKEN=$TOKEN" "${docker_args[@]}")
+  docker_args+=( -e "WORKER_AUTH_TOKEN=$TOKEN" )
 fi
+docker_args+=( "$IMAGE" )
 
 docker "${docker_args[@]}"
 echo "Worker started: http://127.0.0.1:$PORT"
