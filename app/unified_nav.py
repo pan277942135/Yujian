@@ -23,6 +23,7 @@ _NAV_ITEMS = [
     ("/crop-qa", "Crop QA", "prefix"),
     ("/debug/detector-parity", "Detector Parity", "prefix"),
     ("/debug/fish-completion-lab", "鱼体补全实验室 · Fish Completion Lab", "prefix"),
+    ("/debug/fish-completion-lab-v02", "自动鱼体资产 · Fish Asset Pipeline V0.2", "prefix"),
 ]
 _NAV_HREFS = {href for href, _label, _mode in _NAV_ITEMS}
 
