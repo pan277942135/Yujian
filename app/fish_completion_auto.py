@@ -5,6 +5,7 @@ import io
 import logging
 import os
 import secrets
+from collections import deque
 from datetime import datetime, timezone
 from math import ceil, floor
 from typing import Any
@@ -59,27 +60,60 @@ def _component_count(mask: np.ndarray) -> int:
     return count
 
 
+def _enclosed_holes(mask: np.ndarray, bbox: tuple[int, int, int, int]) -> np.ndarray:
+    """Return only background holes enclosed by the visible mask.
+
+    This intentionally does not dilate the outside contour. An outside contour
+    is not evidence that the fish is incomplete and must never become a worker
+    completion region by itself.
+    """
+    h, w = mask.shape
+    x1, y1, x2, y2 = bbox
+    region = mask[y1:y2, x1:x2]
+    if not region.size:
+        return np.zeros_like(mask)
+    background = ~region
+    reachable = np.zeros_like(background, dtype=bool)
+    queue: deque[tuple[int, int]] = deque()
+    for x in range(region.shape[1]):
+        for y in (0, region.shape[0] - 1):
+            if background[y, x] and not reachable[y, x]:
+                reachable[y, x] = True
+                queue.append((y, x))
+    for y in range(region.shape[0]):
+        for x in (0, region.shape[1] - 1):
+            if background[y, x] and not reachable[y, x]:
+                reachable[y, x] = True
+                queue.append((y, x))
+    while queue:
+        cy, cx = queue.popleft()
+        for ny, nx in ((cy - 1, cx), (cy + 1, cx), (cy, cx - 1), (cy, cx + 1)):
+            if 0 <= ny < region.shape[0] and 0 <= nx < region.shape[1] and background[ny, nx] and not reachable[ny, nx]:
+                reachable[ny, nx] = True
+                queue.append((ny, nx))
+    result = np.zeros_like(mask)
+    result[y1:y2, x1:x2] = background & ~reachable
+    return result
+
+
 def analyze_completion(mask: np.ndarray, bbox: tuple[int, int, int, int]) -> tuple[dict[str, Any], np.ndarray]:
     h, w = mask.shape
     x1, y1, x2, y2 = max(0, bbox[0]), max(0, bbox[1]), min(w, bbox[2]), min(h, bbox[3])
-    box_mask = np.zeros_like(mask)
     if x2 <= x1 or y2 <= y1:
-        return {"completion_required": False, "severity": "NOT_ELIGIBLE", "completion_ratio": 1.0, "reason": ["invalid_bbox"], "region_count": 0}, box_mask
-    box_mask[y1:y2, x1:x2] = True
-    closed = Image.fromarray(np.where(mask & box_mask, 255, 0).astype("uint8"), "L").filter(ImageFilter.MaxFilter(7)).filter(ImageFilter.MinFilter(5))
-    candidate = (np.asarray(closed) > 127) & ~mask & box_mask
+        return {"completion_required": False, "severity": "NOT_ELIGIBLE", "completion_ratio": 1.0, "reason": ["invalid_bbox"], "region_count": 0, "detection_method": "enclosed_hole_fill"}, np.zeros_like(mask)
+    candidate = _enclosed_holes(mask, (x1, y1, x2, y2))
     missing = int(candidate.sum())
     ratio = missing / max(1, int(mask.sum()) + missing)
     regions = _component_count(candidate)
     severity, required, reasons = "COMPLETION_NOT_REQUIRED", False, []
     if missing:
-        reasons.append("contour_gap_detected")
+        reasons.append("enclosed_gap_detected")
         if ratio <= .05 and regions <= 2: severity, required = "LIGHT", True
         elif ratio <= .10 and regions <= 2: severity, required = "MEDIUM", True
         elif ratio <= .15 and regions <= 2: severity, required = "HEAVY", True
         elif ratio <= .20 and regions <= 2: severity, required = "EXTREME_EXPERIMENTAL", True
         else: severity, reasons = "NOT_ELIGIBLE", reasons + ["completion_safety_limit"]
-    return {"completion_required": required, "severity": severity, "completion_ratio": round(ratio, 6), "reason": reasons or ["visible_mask_sufficient"], "region_count": regions}, candidate
+    return {"completion_required": required, "severity": severity, "completion_ratio": round(ratio, 6), "reason": reasons or ["visible_mask_sufficient"], "region_count": regions, "detection_method": "enclosed_hole_fill"}, candidate
 
 
 def _build_completion_roi(original: Image.Image, completion_mask: np.ndarray, test_id: str) -> dict[str, Any]:
