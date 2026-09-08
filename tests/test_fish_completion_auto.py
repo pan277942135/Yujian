@@ -30,6 +30,28 @@ def test_auto_completion_stays_inside_primary_bbox():
     assert result["region_count"] <= 2 or result["severity"] == "NOT_ELIGIBLE"
 
 
+def test_complete_mask_does_not_create_outer_contour_completion():
+    mask = np.zeros((40, 60), dtype=bool)
+    mask[10:30, 15:45] = True
+    result, candidate = analyze_completion(mask, (10, 5, 50, 35))
+    assert not candidate.any()
+    assert result["completion_required"] is False
+    assert result["severity"] == "COMPLETION_NOT_REQUIRED"
+    assert result["reason"] == ["visible_mask_sufficient"]
+    assert result["detection_method"] == "enclosed_hole_fill"
+
+
+def test_enclosed_gap_is_completion_candidate_not_outer_border():
+    mask = np.zeros((40, 60), dtype=bool)
+    mask[10:30, 15:45] = True
+    mask[18:22, 25:35] = False
+    result, candidate = analyze_completion(mask, (10, 5, 50, 35))
+    assert candidate[19, 30]
+    assert not candidate[10:15, 15:45].any()
+    assert result["completion_required"] is True
+    assert "enclosed_gap_detected" in result["reason"]
+
+
 def test_auto_completion_invalid_box_is_not_eligible():
     result, candidate = analyze_completion(np.zeros((10, 10), dtype=bool), (4, 4, 4, 8))
     assert not result["completion_required"]
