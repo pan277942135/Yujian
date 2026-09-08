@@ -6,6 +6,7 @@ PROJECT_NUMBER="${PROJECT_NUMBER:-571785698442}"
 REGION="${REGION:-asia-east1}"
 SERVICE="${SERVICE:-yujian-model-factory-console}"
 GCS_BUCKET="${GCS_BUCKET:-yujian-model-factory-571785698442}"
+MEMORY="${MEMORY:-4Gi}"
 SEGMENTATION_MODEL_TYPE="${SEGMENTATION_MODEL_TYPE:-vit_b}"
 SEGMENTATION_CHECKPOINT_URI="${SEGMENTATION_CHECKPOINT_URI:-gs://${GCS_BUCKET}/models/segmentation/sam_vit_b_01ec64.pth}"
 BUILD_SA="${BUILD_SA:-${PROJECT_NUMBER}-compute@developer.gserviceaccount.com}"
@@ -101,6 +102,7 @@ gcloud run deploy "$SERVICE" \
   --region "$REGION" \
   --source . \
   --build-service-account "$BUILD_SA_RESOURCE" \
+  --memory "$MEMORY" \
   --update-env-vars="$DEPLOY_ENV_VARS" \
   --quiet
 DEPLOY_RC=$?
