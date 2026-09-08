@@ -16,7 +16,7 @@ from PIL import Image, ImageFilter
 
 from app.detector_runtime import detect, normalize_android_source
 from app.completion_worker_client import invoke_completion_worker
-from app.fish_completion_lab import MAX_BYTES, _data_url, _mask_bytes, _persist, _png, _runtime, _save_state
+from app.fish_completion_lab import MAX_BYTES, _data_url, _mask_bytes, _persist, _png, _read_persist, _runtime, _save_state
 from app.recognition_pipeline import assess_detections
 from app.segmentation.service import generate_fish_cutout
 
@@ -128,27 +128,40 @@ async def auto_run(file: UploadFile = File(...), case_label: str = ""):
         original_uri = _persist(test_id, "01_original_image.png", original_bytes, "image/png")
         completion_bytes = _mask_bytes(completion_mask)
         completion_uri = _persist(test_id, "03_auto_completion_mask.png", completion_bytes, "image/png")
-        assets = {
-            "original_image": _data_url(original_bytes, "image/png"),
-            "sam_transparent": _store_data(test_id, "02_sam_transparent.png", result.cutout_png),
-            "auto_completion_mask": _data_url(completion_bytes, "image/png"),
-            "edge_refined": _store_data(test_id, "04_edge_refined.png", refined_png),
-        }
+        asset_uris = {"original_image": original_uri, "auto_completion_mask": completion_uri}
+        asset_data = {"original_image": _data_url(original_bytes, "image/png"), "auto_completion_mask": _data_url(completion_bytes, "image/png")}
+        for key, name, content in (("sam_transparent", "02_sam_transparent.png", result.cutout_png), ("edge_refined", "04_edge_refined.png", refined_png)):
+            asset_uris[key] = _persist(test_id, name, content, "image/png")
+            asset_data[key] = _data_url(content, "image/png")
         for name, content in _output_assets(original, refined).items():
-            assets[name] = _store_data(test_id, name, content)
+            asset_uris[name] = _persist(test_id, name, content, "image/png")
+            asset_data[name] = _data_url(content, "image/png")
         worker_status = "SKIPPED" if not analysis["completion_required"] else ("WORKER_READY" if os.getenv("FISH_COMPLETION_WORKER_URL", "").strip() else "WORKER_UNAVAILABLE")
         worker_result = None
         worker_error = None
         if worker_status == "WORKER_READY":
             try:
                 worker_result = invoke_completion_worker(image_uri=original_uri, mask_uri=completion_uri, prompt="FIXED_FISH_COMPLETION_V0.2")
+                generated_bytes = _read_persist(worker_result["result_uri"])
+                generated = Image.open(io.BytesIO(generated_bytes)).convert("RGB")
+                if generated.size != original.size:
+                    generated = generated.resize(original.size, Image.Resampling.LANCZOS)
+                composited = np.asarray(original).copy()
+                generated_pixels = np.asarray(generated)
+                composited[completion_mask] = generated_pixels[completion_mask]
+                final_alpha = np.where(refined | completion_mask, 255, 0).astype("uint8")
+                final_bytes = _png(Image.fromarray(np.dstack([composited, final_alpha]), "RGBA"))
+                asset_uris["generated_roi"] = _persist(test_id, "05_generated_roi.png", generated_bytes, "image/png")
+                asset_uris["final_asset"] = _persist(test_id, "06_final_asset.png", final_bytes, "image/png")
+                asset_data["generated_roi"] = _data_url(generated_bytes, "image/png")
+                asset_data["final_asset"] = _data_url(final_bytes, "image/png")
             except Exception as exc:
                 worker_status = "WORKER_FAILED"
                 worker_error = {"error_code": getattr(exc, "error_code", "WORKER_FAILED"), "message": str(exc)}
-        state = {"report_version": V02_VERSION, "runtime": {**_runtime(test_id), "demo_version": V02_VERSION}, "input": {"filename": file.filename or "uploaded", "case_label": case_label[:200], "width": source.width, "height": source.height, "size_bytes": len(data)}, "detector": {"model": detector_run.model_version, "assessment": assessment.status.value, "confidence": round(float(primary.confidence), 6), "bbox": bbox}, "segmentation": {"model": "SAM_VIT_B", "quality": result.quality.value, "mask_area_ratio": round(result.mask_area_ratio, 6)}, "auto_completion": analysis, "completion_mask": {"area_pixels": int(completion_mask.sum()), "protected": True}, "worker": {"status": worker_status, "endpoint_configured": bool(os.getenv("FISH_COMPLETION_WORKER_URL", "").strip())}, "assets": assets}
-        state["worker"].update({"result": worker_result, "error": worker_error})
+        state = {"report_version": V02_VERSION, "runtime": {**_runtime(test_id), "demo_version": V02_VERSION}, "input": {"filename": file.filename or "uploaded", "case_label": case_label[:200], "width": source.width, "height": source.height, "size_bytes": len(data)}, "detector": {"model": detector_run.model_version, "assessment": assessment.status.value, "confidence": round(float(primary.confidence), 6), "bbox": bbox}, "segmentation": {"model": "SAM_VIT_B", "quality": result.quality.value, "mask_area_ratio": round(result.mask_area_ratio, 6)}, "auto_completion": analysis, "completion_mask": {"area_pixels": int(completion_mask.sum()), "protected": True}, "worker": {"status": worker_status, "endpoint_configured": bool(os.getenv("FISH_COMPLETION_WORKER_URL", "").strip()), "result": worker_result, "error": worker_error}, "assets": asset_uris}
         _save_state(test_id, state)
-        return {"status": "ok", "stage": "outline", "test_id": test_id, "data": state, "error": None}
+        response_state = {**state, "assets": asset_data}
+        return {"status": "ok", "stage": "outline", "test_id": test_id, "data": response_state, "error": None}
     except Exception as exc:
         logger.exception("Fish Completion Lab v0.2 failed; test_id=%s", test_id)
         return _error(500, "AUTO_PIPELINE_FAILED", f"{exc.__class__.__name__}: {exc}", "pipeline")
