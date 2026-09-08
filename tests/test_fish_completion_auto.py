@@ -1,6 +1,22 @@
 import numpy as np
 
-from app.fish_completion_auto import analyze_completion
+from app.fish_completion_auto import _bbox_to_pixels, analyze_completion
+
+
+class Box:
+    def __init__(self, x1, y1, x2, y2):
+        self.values = (x1, y1, x2, y2)
+
+    def normalized(self):
+        return type("Normalized", (), dict(zip(("x1", "y1", "x2", "y2"), self.values)))()
+
+
+def test_normalized_bbox_to_pixels():
+    assert _bbox_to_pixels(Box(.1, .2, .8, .9), 1000, 500) == (100, 100, 800, 450)
+
+
+def test_zero_normalized_bbox_remains_invalid():
+    assert _bbox_to_pixels(Box(0, 0, 0, 0), 1000, 500) == (0, 0, 0, 0)
 
 
 def test_auto_completion_stays_inside_primary_bbox():
