@@ -26,6 +26,10 @@ router = APIRouter(tags=["fish-completion-lab-v02"])
 templates = Jinja2Templates(directory="app/templates")
 V02_VERSION = "YUJIAN_FISH_COMPLETION_LAB_V0.2"
 logger = logging.getLogger(__name__)
+MIN_COMPONENT_ABS_PIXELS = 16
+MIN_COMPONENT_RELATIVE_AREA = 0.0005
+MAX_EFFECTIVE_REGIONS = 2
+BOUNDARY_RING_DISTANCE_PX = 3
 
 
 def _error(status: int, code: str, message: str, stage: str, detail: Any = None):
@@ -58,6 +62,61 @@ def _component_count(mask: np.ndarray) -> int:
                     seen[ny, nx] = True
                     stack.append((ny, nx))
     return count
+
+
+def _component_masks(mask: np.ndarray) -> list[np.ndarray]:
+    """Return connected components without changing the source mask."""
+    seen = np.zeros(mask.shape, dtype=bool)
+    components: list[np.ndarray] = []
+    for y, x in zip(*np.where(mask)):
+        if seen[y, x]:
+            continue
+        current = np.zeros(mask.shape, dtype=bool)
+        stack = [(int(y), int(x))]
+        seen[y, x] = True
+        current[y, x] = True
+        while stack:
+            cy, cx = stack.pop()
+            for ny, nx in ((cy - 1, cx), (cy + 1, cx), (cy, cx - 1), (cy, cx + 1)):
+                if 0 <= ny < mask.shape[0] and 0 <= nx < mask.shape[1] and mask[ny, nx] and not seen[ny, nx]:
+                    seen[ny, nx] = True
+                    current[ny, nx] = True
+                    stack.append((ny, nx))
+        components.append(current)
+    return components
+
+
+def _remove_mask_noise(mask: np.ndarray, bbox: tuple[int, int, int, int]) -> np.ndarray:
+    """Keep only the largest meaningful SAM component for analysis."""
+    x1, y1, x2, y2 = bbox
+    clipped = np.zeros_like(mask)
+    clipped[y1:y2, x1:x2] = mask[y1:y2, x1:x2]
+    components = _component_masks(clipped)
+    if not components:
+        return clipped
+    largest = max(components, key=lambda component: int(component.sum()))
+    threshold = max(MIN_COMPONENT_ABS_PIXELS, int(largest.sum() * MIN_COMPONENT_RELATIVE_AREA))
+    meaningful = np.zeros_like(mask)
+    for component in components:
+        if int(component.sum()) >= threshold and int(component.sum()) >= int(largest.sum() * 0.01):
+            meaningful |= component
+    return meaningful if meaningful.any() else largest
+
+
+def _boundary_ring_metrics(mask: np.ndarray, candidate: np.ndarray) -> tuple[float, float]:
+    """Measure whether a candidate is an outer boundary ring."""
+    if not candidate.any() or not mask.any():
+        return 0.0, 0.0
+    boundary = mask & ~(
+        np.asarray(Image.fromarray((mask * 255).astype("uint8"), "L").filter(ImageFilter.MinFilter(2))) > 127
+    )
+    near_boundary = np.asarray(
+        Image.fromarray((boundary * 255).astype("uint8"), "L").filter(ImageFilter.MaxFilter(2 * BOUNDARY_RING_DISTANCE_PX + 1))
+    ) > 127
+    overlap_ratio = float((candidate & near_boundary).sum() / max(1, int(candidate.sum())))
+    boundary_pixels = int(boundary.sum())
+    coverage = float((candidate & near_boundary).sum() / max(1, boundary_pixels))
+    return round(overlap_ratio, 6), round(min(1.0, coverage), 6)
 
 
 def _enclosed_holes(mask: np.ndarray, bbox: tuple[int, int, int, int]) -> np.ndarray:
@@ -96,24 +155,53 @@ def _enclosed_holes(mask: np.ndarray, bbox: tuple[int, int, int, int]) -> np.nda
     return result
 
 
-def analyze_completion(mask: np.ndarray, bbox: tuple[int, int, int, int]) -> tuple[dict[str, Any], np.ndarray]:
+def analyze_completion_details(mask: np.ndarray, bbox: tuple[int, int, int, int]) -> tuple[dict[str, Any], np.ndarray, np.ndarray, np.ndarray]:
     h, w = mask.shape
     x1, y1, x2, y2 = max(0, bbox[0]), max(0, bbox[1]), min(w, bbox[2]), min(h, bbox[3])
     if x2 <= x1 or y2 <= y1:
-        return {"completion_required": False, "severity": "NOT_ELIGIBLE", "completion_ratio": 1.0, "reason": ["invalid_bbox"], "region_count": 0, "detection_method": "enclosed_hole_fill"}, np.zeros_like(mask)
-    candidate = _enclosed_holes(mask, (x1, y1, x2, y2))
+        empty = np.zeros_like(mask)
+        return {"completion_required": False, "severity": "NOT_ELIGIBLE", "completion_ratio": 1.0, "completion_percent": 100.0, "reason": ["invalid_bbox"], "region_count": 0, "detection_method": "enclosed_hole_fill"}, empty, empty, empty
+    analysis_visible = _remove_mask_noise(mask, (x1, y1, x2, y2))
+    raw_candidate = _enclosed_holes(analysis_visible, (x1, y1, x2, y2))
+    raw_components = _component_masks(raw_candidate)
+    fish_area = max(1, int(analysis_visible.sum()))
+    component_threshold = max(MIN_COMPONENT_ABS_PIXELS, int(fish_area * MIN_COMPONENT_RELATIVE_AREA))
+    filtered_candidate = np.zeros_like(mask)
+    for component in raw_components:
+        if int(component.sum()) >= component_threshold:
+            filtered_candidate |= component
+    raw_regions = len(raw_components)
+    # Keep the unfiltered structural candidate for diagnostics and ROI review;
+    # only the accepted mask may reach the worker.
+    candidate = raw_candidate
+    regions = _component_count(filtered_candidate)
     missing = int(candidate.sum())
-    ratio = missing / max(1, int(mask.sum()) + missing)
-    regions = _component_count(candidate)
-    severity, required, reasons = "COMPLETION_NOT_REQUIRED", False, []
-    if missing:
-        reasons.append("enclosed_gap_detected")
-        if ratio <= .05 and regions <= 2: severity, required = "LIGHT", True
-        elif ratio <= .10 and regions <= 2: severity, required = "MEDIUM", True
-        elif ratio <= .15 and regions <= 2: severity, required = "HEAVY", True
-        elif ratio <= .20 and regions <= 2: severity, required = "EXTREME_EXPERIMENTAL", True
-        else: severity, reasons = "NOT_ELIGIBLE", reasons + ["completion_safety_limit"]
-    return {"completion_required": required, "severity": severity, "completion_ratio": round(ratio, 6), "reason": reasons or ["visible_mask_sufficient"], "region_count": regions, "detection_method": "enclosed_hole_fill"}, candidate
+    ratio = missing / max(1, fish_area + missing)
+    boundary_overlap_ratio, perimeter_coverage = _boundary_ring_metrics(analysis_visible, candidate)
+    reasons: list[str] = []
+    severity, required = "COMPLETION_NOT_REQUIRED", False
+    if raw_regions > MAX_EFFECTIVE_REGIONS and regions == 0:
+        severity, reasons = "NOT_ELIGIBLE", ["candidate_too_fragmented"]
+    elif regions > MAX_EFFECTIVE_REGIONS:
+        severity, reasons = "NOT_ELIGIBLE", ["too_many_candidate_regions"]
+    elif boundary_overlap_ratio >= 0.9 and perimeter_coverage >= 0.35:
+        severity, reasons = "NOT_ELIGIBLE", ["boundary_ring_candidate"]
+    elif missing:
+        reasons = ["internal_gap_detected"]
+        if ratio <= .05: severity, required = "LIGHT", True
+        elif ratio <= .10: severity, required = "MEDIUM", True
+        elif ratio <= .15: severity, required = "HEAVY", True
+        elif ratio <= .20: severity, required = "EXTREME_EXPERIMENTAL", True
+        else: severity, required, reasons = "LARGE_EXPERIMENTAL", True, ["internal_gap_detected", "large_completion_area"]
+    analysis = {"completion_required": required, "severity": severity, "completion_ratio": round(ratio, 6), "completion_percent": round(ratio * 100, 4), "reason": reasons or ["visible_mask_sufficient"], "region_count": regions, "candidate_area_pixels": missing, "raw_region_count": raw_regions, "boundary_overlap_ratio": boundary_overlap_ratio, "perimeter_coverage": perimeter_coverage, "detection_method": "enclosed_hole_fill"}
+    accepted = filtered_candidate if required else np.zeros_like(mask)
+    structural_envelope = analysis_visible | candidate
+    return analysis, candidate, accepted, structural_envelope
+
+
+def analyze_completion(mask: np.ndarray, bbox: tuple[int, int, int, int]) -> tuple[dict[str, Any], np.ndarray]:
+    analysis, candidate, _accepted, _envelope = analyze_completion_details(mask, bbox)
+    return analysis, candidate
 
 
 def _build_completion_roi(original: Image.Image, completion_mask: np.ndarray, test_id: str) -> dict[str, Any]:
@@ -175,6 +263,15 @@ def _outline_assets(rgba_bytes: bytes, alpha: np.ndarray) -> dict[str, bytes]:
     return {"fish_clean.png": clean, "fish_gold_outline.png": outlined((245, 180, 40)), "fish_black_outline.png": outlined((20, 24, 22))}
 
 
+def _mask_overlay_bytes(original: Image.Image, mask: np.ndarray, color: tuple[int, int, int]) -> bytes:
+    """Composite a diagnostic mask over the original without destroying the base image."""
+    base = original.convert("RGBA")
+    overlay = np.zeros((mask.shape[0], mask.shape[1], 4), dtype=np.uint8)
+    overlay[mask, :3] = color
+    overlay[mask, 3] = 145
+    return _png(Image.alpha_composite(base, Image.fromarray(overlay, "RGBA")))
+
+
 @router.get("/debug/fish-completion-lab-v02", response_class=HTMLResponse)
 def fish_completion_lab_v02_page(request: Request):
     return templates.TemplateResponse(request=request, name="fish_completion_auto.html", context={})
@@ -202,7 +299,8 @@ async def auto_run(file: UploadFile = File(...), case_label: str = ""):
             return _error(422, "INVALID_PRIMARY_BBOX", "主鱼体检测框无效", "detector", {"bbox_normalized": [bbox_normalized.x1, bbox_normalized.y1, bbox_normalized.x2, bbox_normalized.y2], "bbox_pixel": list(bbox_pixel)})
         result = generate_fish_cutout(source, primary.box)
         raw_mask = result.mask.astype(bool)
-        analysis, completion_mask = analyze_completion(raw_mask, bbox_pixel)
+        analysis, completion_candidate, completion_mask, structural_envelope = analyze_completion_details(raw_mask, bbox_pixel)
+        analysis_visible_mask = _remove_mask_noise(raw_mask, bbox_pixel)
         worker = {"status": "NOT_REQUIRED", "skip_reason": "completion_not_required", "endpoint_configured": bool(os.getenv("FISH_COMPLETION_WORKER_URL", "").strip())}
         generated_bytes = None
         compose = {"generated_pixels": 0, "visible_changed_pixels": 0, "visible_pixel_change_ratio": 0.0}
@@ -234,8 +332,17 @@ async def auto_run(file: UploadFile = File(...), case_label: str = ""):
             except Exception as exc:
                 worker = {**worker, "status": "WORKER_FAILED", "error": {"error_code": "COMPLETION_WORKER_FAILED", "message": f"{exc.__class__.__name__}: {exc}"}}
         edge_bytes, final_mask = _edge_refine(original, final_bytes, raw_mask | completion_mask)
-        asset_data = {"original_image": _data_url(_png(original), "image/png"), "sam_transparent": _data_url(result.cutout_png, "image/png"), "auto_completion_mask": _data_url(_mask_bytes(completion_mask), "image/png"), "edge_refined": _data_url(edge_bytes, "image/png")}
-        asset_uris = {"original_image": original_uri, "completion_mask": completion_uri, "sam_transparent": _persist(test_id, "02_sam_transparent.png", result.cutout_png, "image/png"), "edge_refined": _persist(test_id, "07_edge_refined.png", edge_bytes, "image/png")}
+        debug_bytes = {
+            "analysis_visible_mask": _mask_bytes(analysis_visible_mask),
+            "structural_envelope": _mask_bytes(structural_envelope),
+            "completion_candidate": _mask_bytes(completion_candidate),
+            "auto_completion_mask": _mask_bytes(completion_mask),
+            "completion_candidate_overlay": _mask_overlay_bytes(original, completion_candidate, (255, 128, 0)),
+            "accepted_completion_overlay": _mask_overlay_bytes(original, completion_mask, (40, 150, 255)),
+        }
+        debug_uris = {key: _persist(test_id, f"03_{key}.png", content, "image/png") for key, content in debug_bytes.items()}
+        asset_data = {"original_image": _data_url(_png(original), "image/png"), "sam_transparent": _data_url(result.cutout_png, "image/png"), "edge_refined": _data_url(edge_bytes, "image/png"), **{key: _data_url(content, "image/png") for key, content in debug_bytes.items()}}
+        asset_uris = {"original_image": original_uri, "completion_mask": completion_uri, "sam_transparent": _persist(test_id, "02_sam_transparent.png", result.cutout_png, "image/png"), "edge_refined": _persist(test_id, "07_edge_refined.png", edge_bytes, "image/png"), **debug_uris}
         asset_uris["final_asset"] = _persist(test_id, "08_final_asset.png", final_bytes, "image/png")
         asset_data["final_asset"] = _data_url(final_bytes, "image/png")
         if roi:
@@ -246,7 +353,7 @@ async def auto_run(file: UploadFile = File(...), case_label: str = ""):
         for name, content in _outline_assets(edge_bytes, final_mask).items():
             asset_uris[name] = _persist(test_id, name, content, "image/png")
             asset_data[name] = _data_url(content, "image/png")
-        state = {"report_version": V02_VERSION, "runtime": {**_runtime(test_id), "demo_version": V02_VERSION}, "input": {"filename": file.filename or "uploaded", "case_label": case_label[:200], "width": source.width, "height": source.height, "size_bytes": len(data)}, "detector": {"model": detector_run.model_version, "assessment": assessment.status.value, "confidence": round(float(primary.confidence), 6), "bbox_normalized": [bbox_normalized.x1, bbox_normalized.y1, bbox_normalized.x2, bbox_normalized.y2], "bbox_pixel": list(bbox_pixel)}, "segmentation": {"model": "SAM_VIT_B", "quality": result.quality.value, "mask_area_pixels": int(raw_mask.sum()), "mask_area_ratio": round(result.mask_area_ratio, 6)}, "auto_completion": analysis, "completion_mask": {"area_pixels": int(completion_mask.sum()), "protected": True}, "worker": worker, "composition": compose, "assets": asset_uris}
+        state = {"report_version": V02_VERSION, "runtime": {**_runtime(test_id), "demo_version": V02_VERSION}, "input": {"filename": file.filename or "uploaded", "case_label": case_label[:200], "width": source.width, "height": source.height, "size_bytes": len(data)}, "detector": {"model": detector_run.model_version, "assessment": assessment.status.value, "confidence": round(float(primary.confidence), 6), "bbox_normalized": [bbox_normalized.x1, bbox_normalized.y1, bbox_normalized.x2, bbox_normalized.y2], "bbox_pixel": list(bbox_pixel)}, "segmentation": {"model": "SAM_VIT_B", "quality": result.quality.value, "mask_area_pixels": int(raw_mask.sum()), "mask_area_ratio": round(result.mask_area_ratio, 6)}, "auto_completion": analysis, "completion_mask": {"area_pixels": int(completion_mask.sum()), "candidate_area_pixels": int(completion_candidate.sum()), "protected": True}, "worker": worker, "composition": compose, "trace": {"analysis_visible_pixels": int(analysis_visible_mask.sum()), "candidate_area_pixels": int(completion_candidate.sum()), "accepted_area_pixels": int(completion_mask.sum()), "completion_ratio": analysis["completion_ratio"], "completion_percent": analysis["completion_percent"], "boundary_overlap_ratio": analysis["boundary_overlap_ratio"], "perimeter_coverage": analysis["perimeter_coverage"]}, "assets": asset_uris}
         _save_state(test_id, state)
         return {"status": "ok", "stage": "outline", "test_id": test_id, "data": {**state, "assets": asset_data}, "error": None}
     except Exception as exc:
