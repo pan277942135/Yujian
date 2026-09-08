@@ -202,13 +202,13 @@ async def auto_run(file: UploadFile = File(...), case_label: str = ""):
         edge_bytes, final_mask = _edge_refine(original, final_bytes, raw_mask | completion_mask)
         asset_data = {"original_image": _data_url(_png(original), "image/png"), "sam_transparent": _data_url(result.cutout_png, "image/png"), "auto_completion_mask": _data_url(_mask_bytes(completion_mask), "image/png"), "edge_refined": _data_url(edge_bytes, "image/png")}
         asset_uris = {"original_image": original_uri, "completion_mask": completion_uri, "sam_transparent": _persist(test_id, "02_sam_transparent.png", result.cutout_png, "image/png"), "edge_refined": _persist(test_id, "07_edge_refined.png", edge_bytes, "image/png")}
+        asset_uris["final_asset"] = _persist(test_id, "08_final_asset.png", final_bytes, "image/png")
+        asset_data["final_asset"] = _data_url(final_bytes, "image/png")
         if roi:
             asset_uris.update({"completion_roi": roi["image_uri"], "completion_roi_mask": roi["mask_uri"]})
         if generated_bytes:
             asset_uris["generated_roi"] = _persist(test_id, "06_generated_roi.png", generated_bytes, "image/png")
             asset_data["generated_roi"] = _data_url(generated_bytes, "image/png")
-            asset_uris["final_asset"] = _persist(test_id, "08_final_asset.png", final_bytes, "image/png")
-            asset_data["final_asset"] = _data_url(final_bytes, "image/png")
         for name, content in _outline_assets(edge_bytes, final_mask).items():
             asset_uris[name] = _persist(test_id, name, content, "image/png")
             asset_data[name] = _data_url(content, "image/png")
