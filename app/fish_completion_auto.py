@@ -108,7 +108,7 @@ def _boundary_ring_metrics(mask: np.ndarray, candidate: np.ndarray) -> tuple[flo
     if not candidate.any() or not mask.any():
         return 0.0, 0.0
     boundary = mask & ~(
-        np.asarray(Image.fromarray((mask * 255).astype("uint8"), "L").filter(ImageFilter.MinFilter(2))) > 127
+        np.asarray(Image.fromarray((mask * 255).astype("uint8"), "L").filter(ImageFilter.MinFilter(3))) > 127
     )
     near_boundary = np.asarray(
         Image.fromarray((boundary * 255).astype("uint8"), "L").filter(ImageFilter.MaxFilter(2 * BOUNDARY_RING_DISTANCE_PX + 1))
