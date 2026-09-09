@@ -265,6 +265,7 @@ def _apply_masks(test_id: str, state: dict[str, Any], masks: dict[str, np.ndarra
     state["completion_mask"] = {key: stats[key] for key in ("completion_area_pixels", "completion_region_count", "estimated_final_fish_area_pixels", "generated_pixel_ratio", "completion_level", "eligible_for_v0_1", "eligibility_reason", "completion_mask_valid")}
     state["visible_fish_mask"] = asset_uris["07_refined_visible_mask.png"]
     state["assets"].update({"visible_add": asset_uris["05_visible_add_mask.png"], "remove": asset_uris["06_remove_mask.png"], "refined_visible_mask": asset_uris["07_refined_visible_mask.png"], "occluder": asset_uris["09_occluder_mask.png"], "occluder_mask": asset_uris["09_occluder_mask.png"], "completion_mask": asset_uris["10_completion_mask.png"], "completion_mask_canonical": asset_uris["10_completion_mask.png"], "refined_visible": asset_uris["refined_visible"]})
+    state.setdefault("completion_decision", {"mode": AUTO_COMPLETION if source == "AUTO" else MANUAL_DEBUG, "source": source, "status": "MASK_READY", "completion_required": bool(stats.get("completion_area_pixels"))})
     state["completion_decision"]["source"] = source
     state["completion_decision"]["mask_generated"] = bool(masks.get("completion_canonical", zeros).any())
     state["progress"] = _progress(state)
