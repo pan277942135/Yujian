@@ -359,7 +359,7 @@ def decide_completion(
     completion_ratio = completion_area / max(1, final_area)
     completion_regions = len(_components(candidate))
     axis_support = min(1.0, axis_length / max(1.0, max(height, width)))
-    bridge_support = 1.0 if gaps else 0.35
+    bridge_support = 1.0 if gaps else (0.55 if local_defects else 0.35)
     width_support = 0.85 if all_gaps else 0.35
     confidence = _decision_confidence(axis_support, bridge_support, width_support, segmentation_quality, bool(all_gaps))
 
