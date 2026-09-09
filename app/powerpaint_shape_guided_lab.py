@@ -384,8 +384,9 @@ async def run(request: Request, db=Depends(get_db)):
         if not validation["valid"]:
             return _error(422, test_id, "completion_mask", "INVALID_COMPLETION_MASK", json.dumps(validation))
         original_bytes = _png(crop)
+        original_uri = _persist(test_id, "original.png", original_bytes, "image/png")
         detector_uri = _persist(test_id, "detector_crop.png", original_bytes, "image/png")
-        sam_visible_bytes = _png(Image.fromarray(np.where(visible, np.asarray(crop), 0).astype("uint8"), "RGB"))
+        sam_visible_bytes = _png(Image.fromarray(np.where(visible[..., None], np.asarray(crop), 0).astype("uint8"), "RGB"))
         sam_visible_uri = _persist(test_id, "sam_visible.png", sam_visible_bytes, "image/png")
         sam_mask_uri = _persist(test_id, "sam_mask.png", _mask_png(visible), "image/png")
         completion_mask_uri = _persist(test_id, "completion_mask.png", _mask_png(completion), "image/png")
@@ -398,7 +399,7 @@ async def run(request: Request, db=Depends(get_db)):
             "task_mode": TASK_MODE,
             "prompt_id": PROMPT_ID,
             "completion_mask": validation,
-            "assets": {"original": detector_uri, "detector_crop": detector_uri, "sam_visible": sam_visible_uri, "sam_mask": sam_mask_uri, "completion_mask": completion_mask_uri},
+            "assets": {"original": original_uri, "detector_crop": detector_uri, "sam_visible": sam_visible_uri, "sam_mask": sam_mask_uri, "completion_mask": completion_mask_uri},
             "preview_original": _data_url(original_bytes, "image/png"),
             "preview_sam": _data_url(sam_visible_bytes, "image/png"),
             "preview_completion_mask": _data_url(_mask_png(completion), "image/png"),
