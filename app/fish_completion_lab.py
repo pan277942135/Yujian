@@ -28,13 +28,17 @@ from pydantic import BaseModel, Field
 from app.detector_runtime import detect, normalize_android_source
 from app.recognition_pipeline import assess_detections
 from app.segmentation.service import generate_fish_cutout
-from app.completion_worker_client import CompletionWorkerError, invoke_completion_worker
+from app.completion_worker_client import (
+    CompletionWorkerError,
+    check_completion_worker,
+    invoke_completion_worker,
+)
 
 router = APIRouter(tags=["fish-completion-lab"])
 templates = Jinja2Templates(directory="app/templates")
-LAB_VERSION = "YUJIAN_FISH_COMPLETION_LAB_V0.1"
+LAB_VERSION = "YUJIAN_FISH_COMPLETION_LAB_V0.2"
 MAX_BYTES = 25 * 1024 * 1024
-PREFIX = "experiments/fish_completion_lab/v0.1"
+PREFIX = "experiments/fish_completion_lab/v0.2"
 logger = logging.getLogger(__name__)
 
 
@@ -49,6 +53,7 @@ class MaskPayload(BaseModel):
 
 class RunPayload(BaseModel):
     test_id: str = Field(min_length=1, max_length=80)
+    completion_mode: str = Field(default="manual", max_length=20)
 
 
 class ReviewPayload(BaseModel):
@@ -251,6 +256,7 @@ async def prepare(file: UploadFile = File(...), case_label: str = ""):
             "detector": detector,
             "segmentation": {"model": "SAM_VIT_B", "quality": result.quality.value, "mask_area_ratio": round(result.mask_area_ratio, 6), "edge_ratio": round(result.edge_ratio, 6), "connected_components": result.connected_components},
             "mask_refinement": {"formula": "(raw_sam OR visible_add) AND NOT remove"},
+            "completion_mode": "manual",
             "completion": {"engine": "PowerPaintCompletionEngine", "model_type": os.getenv("FISH_COMPLETION_MODEL_TYPE", "powerpaint"), "model_version": os.getenv("FISH_COMPLETION_MODEL_VERSION") or None, "model_uri": os.getenv("FISH_COMPLETION_MODEL_URI") or None, "species_condition": "OFF", "fixed_prompt_id": "FIXED_FISH_COMPLETION_V0.1", "generation_count": 0, "retry_count": 0, "status": "NOT_RUN"},
             "composition": {"observed_pixel_change_ratio": None, "final_visible_pixels": None, "generated_pixels": None, "formula": "Refined Visible + Generated Completion"},
             "preview": {"asset": "A_SMART_CROP_B_SAM_RAW_C_REFINED_VISIBLE_D_AI_COMPLETED", "display_transform": "SHARED"},
@@ -279,7 +285,14 @@ async def prepare(file: UploadFile = File(...), case_label: str = ""):
 async def save_masks(payload: MaskPayload):
     state = _load_state(payload.test_id)
     width, height = state["input"]["width"], state["input"]["height"]
-    masks = {name: _decode_mask(payload.masks.get(name, ""), width, height) if payload.masks.get(name) else np.zeros((height, width), dtype=bool) for name in ("visible_add", "remove", "occluder", "completion_canonical")}
+    completion_value = payload.masks.get("completion_mask") or payload.masks.get("completion_canonical")
+    occluder_value = payload.masks.get("occluder_mask") or payload.masks.get("occluder")
+    masks = {
+        "visible_add": _decode_mask(payload.masks.get("visible_add", ""), width, height) if payload.masks.get("visible_add") else np.zeros((height, width), dtype=bool),
+        "remove": _decode_mask(payload.masks.get("remove", ""), width, height) if payload.masks.get("remove") else np.zeros((height, width), dtype=bool),
+        "occluder": _decode_mask(occluder_value, width, height) if occluder_value else np.zeros((height, width), dtype=bool),
+        "completion_canonical": _decode_mask(completion_value, width, height) if completion_value else np.zeros((height, width), dtype=bool),
+    }
     raw_mask = np.asarray(Image.open(io.BytesIO(_read_persist(state["assets"]["sam_raw_mask"]))).convert("L")) > 127
     stats = _stats(raw_mask, masks["visible_add"], masks["remove"], masks["occluder"], masks["completion_canonical"])
     if not stats["completion_mask_valid"]:
@@ -289,13 +302,14 @@ async def save_masks(payload: MaskPayload):
     refined_png = _png(Image.fromarray(np.where(refined, 255, 0).astype("uint8"), "L"))
     refined_fish = _png(Image.fromarray(np.dstack([np.asarray(original), np.where(refined, 255, 0).astype("uint8")]), "RGBA"))
     asset_uris = {}
-    for name, mask in (("05_visible_add_mask.png", masks["visible_add"]), ("06_remove_mask.png", masks["remove"]), ("07_refined_visible_mask.png", refined), ("09_occluder_mask.png", masks["occluder"]), ("10_completion_mask_canonical.png", masks["completion_canonical"])):
+    for name, mask in (("05_visible_add_mask.png", masks["visible_add"]), ("06_remove_mask.png", masks["remove"]), ("07_refined_visible_mask.png", refined), ("09_occluder_mask.png", masks["occluder"]), ("10_completion_mask.png", masks["completion_canonical"])):
         asset_uris[name] = _persist(payload.test_id, name, _mask_bytes(mask), "image/png")
     asset_uris["refined_visible"] = _persist(payload.test_id, "08_refined_visible_fish.png", refined_fish, "image/png")
     state["mask_refinement"].update(stats)
     state["occlusion"] = {"occluder_area_pixels": stats["occluder_area_pixels"], "occluder_region_count": stats["occluder_region_count"]}
     state["completion_mask"] = {k: stats[k] for k in ("completion_area_pixels", "completion_region_count", "estimated_final_fish_area_pixels", "generated_pixel_ratio", "completion_level", "eligible_for_v0_1", "eligibility_reason", "completion_mask_valid")}
-    state["assets"].update({"visible_add": asset_uris["05_visible_add_mask.png"], "remove": asset_uris["06_remove_mask.png"], "refined_visible_mask": asset_uris["07_refined_visible_mask.png"], "occluder": asset_uris["09_occluder_mask.png"], "completion_mask": asset_uris["10_completion_mask_canonical.png"], "refined_visible": asset_uris["refined_visible"]})
+    state["visible_fish_mask"] = asset_uris["07_refined_visible_mask.png"]
+    state["assets"].update({"visible_add": asset_uris["05_visible_add_mask.png"], "remove": asset_uris["06_remove_mask.png"], "refined_visible_mask": asset_uris["07_refined_visible_mask.png"], "occluder": asset_uris["09_occluder_mask.png"], "occluder_mask": asset_uris["09_occluder_mask.png"], "completion_mask": asset_uris["10_completion_mask.png"], "completion_mask_canonical": asset_uris["10_completion_mask.png"], "refined_visible": asset_uris["refined_visible"]})
     _save_state(payload.test_id, state)
     return {"test_id": payload.test_id, "statistics": stats, "refined_visible": _data_url(refined_fish, "image/png")}
 
@@ -309,7 +323,7 @@ def _lab_asset_uri(test_id: str, name: str) -> str:
 
 def _build_completion_roi(test_id: str, state: dict[str, Any]) -> tuple[str, str, Image.Image, np.ndarray, tuple[int, int, int, int]]:
     original = Image.open(io.BytesIO(_read_persist(state["assets"]["original"]))).convert("RGB")
-    mask_uri = _lab_asset_uri(test_id, "10_completion_mask_canonical.png")
+    mask_uri = state["assets"].get("completion_mask") or _lab_asset_uri(test_id, "10_completion_mask.png")
     completion = np.asarray(Image.open(io.BytesIO(_read_persist(mask_uri))).convert("L")) > 127
     ys, xs = np.where(completion)
     if not len(xs):
@@ -317,7 +331,8 @@ def _build_completion_roi(test_id: str, state: dict[str, Any]) -> tuple[str, str
     height, width = completion.shape
     x1, x2 = int(xs.min()), int(xs.max()) + 1
     y1, y2 = int(ys.min()), int(ys.max()) + 1
-    pad_x, pad_y = max(8, int((x2 - x1) * 0.20)), max(8, int((y2 - y1) * 0.20))
+    padding_ratio = min(1.0, max(0.5, float(os.getenv("FISH_COMPLETION_ROI_PADDING_RATIO", "0.75"))))
+    pad_x, pad_y = max(8, int((x2 - x1) * padding_ratio)), max(8, int((y2 - y1) * padding_ratio))
     x1, y1, x2, y2 = max(0, x1 - pad_x), max(0, y1 - pad_y), min(width, x2 + pad_x), min(height, y2 + pad_y)
     roi = original.crop((x1, y1, x2, y2))
     roi_mask = Image.fromarray(np.where(completion[y1:y2, x1:x2], 255, 0).astype("uint8"), "L")
@@ -333,7 +348,7 @@ def _build_completion_roi(test_id: str, state: dict[str, Any]) -> tuple[str, str
 
 def _compose_completion(state: dict[str, Any], generated: Image.Image, box: tuple[int, int, int, int]) -> tuple[bytes, float]:
     original = Image.open(io.BytesIO(_read_persist(state["assets"]["original"]))).convert("RGB")
-    canonical_uri = state["assets"].get("completion_mask") or _lab_asset_uri(state["runtime"]["test_id"], "10_completion_mask_canonical.png")
+    canonical_uri = state["assets"].get("completion_mask") or _lab_asset_uri(state["runtime"]["test_id"], "10_completion_mask.png")
     canonical = np.asarray(Image.open(io.BytesIO(_read_persist(canonical_uri))).convert("L")) > 127
     refined_uri = state["assets"].get("refined_visible")
     refined = np.asarray(Image.open(io.BytesIO(_read_persist(refined_uri))).convert("RGBA"))[:, :, 3] > 127 if refined_uri else np.zeros(canonical.shape, dtype=bool)
@@ -365,7 +380,7 @@ def run_completion(payload: RunPayload):
         state["composition"]["total_processing_ms"] = round((time.perf_counter() - started) * 1000, 2)
         _save_state(payload.test_id, state)
         return {"test_id": payload.test_id, "status": "COMPLETION_NOT_REQUIRED", "report": state}
-    if os.getenv("FISH_COMPLETION_ENABLED", "").strip().lower() != "true":
+    if os.getenv("FISH_COMPLETION_ENABLED", "").strip().lower() == "false" or not os.getenv("FISH_COMPLETION_WORKER_URL", "").strip():
         error = {"error_code": "COMPLETION_WORKER_UNAVAILABLE", "message": "FISH_COMPLETION_ENABLED=true 且真实 PowerPaint Worker 未配置"}
         state["completion"]["status"] = "COMPLETION_UNAVAILABLE"
         state["errors"]["completion"] = error
@@ -373,8 +388,22 @@ def run_completion(payload: RunPayload):
         raise HTTPException(503, error)
     try:
         roi_uri, roi_mask_uri, roi, roi_mask, box = _build_completion_roi(payload.test_id, state)
-        worker = invoke_completion_worker(image_uri=roi_uri, mask_uri=roi_mask_uri, prompt="FIXED_FISH_COMPLETION_V0.1")
-        generated_bytes = _read_persist(worker["result_uri"])
+        worker = invoke_completion_worker(
+            image_uri=roi_uri,
+            mask_uri=roi_mask_uri,
+            prompt=(
+                "Complete the missing part of the fish body. Preserve original species, "
+                "body shape, scales, fins and natural texture. Do not modify visible fish pixels."
+            ),
+            task="fish_completion",
+        )
+        generated_ref = worker.get("result_uri")
+        if generated_ref and generated_ref.startswith("data:"):
+            generated_bytes = base64.b64decode(generated_ref.split(",", 1)[1])
+        elif worker.get("generated_roi", "").startswith("data:"):
+            generated_bytes = base64.b64decode(worker["generated_roi"].split(",", 1)[1])
+        else:
+            generated_bytes = _read_persist(generated_ref)
         if hashlib.sha256(generated_bytes).digest() == hashlib.sha256(_png(roi)).digest():
             raise CompletionWorkerError("WORKER_RETURNED_INPUT", "Worker output is byte-identical to the ROI input")
         generated = Image.open(io.BytesIO(generated_bytes)).convert("RGB")
@@ -382,12 +411,12 @@ def run_completion(payload: RunPayload):
         generated_uri = _persist(payload.test_id, "09_generated_roi.png", generated_bytes, "image/png")
         final_uri = _persist(payload.test_id, "10_final_asset.png", final_png, "image/png")
         total_ms = round((time.perf_counter() - started) * 1000, 2)
-        state["completion"].update({"status": "COMPLETION_EXECUTED", "model_version": worker["model_version"], "generation_count": 1, "retry_count": 0, "inference_time_ms": worker["inference_time_ms"], "gpu_info": worker.get("gpu_info")})
-        state["composition"].update({"observed_pixel_change_ratio": observed_change_ratio, "generated_pixels": mask_state["completion_area_pixels"], "total_processing_ms": total_ms})
+        state["completion"].update({"status": "WORKER_EXECUTED", "worker_status": "WORKER_EXECUTED", "model_version": worker["model_version"], "generation_count": 1, "retry_count": 0, "inference_time_ms": worker["inference_time_ms"], "gpu_info": worker.get("gpu_info")})
+        state["composition"].update({"observed_pixel_change_ratio": observed_change_ratio, "visible_pixel_change_ratio": observed_change_ratio, "visible_changed_pixels": 0 if observed_change_ratio == 0 else None, "generated_pixels": mask_state["completion_area_pixels"], "total_processing_ms": total_ms})
         state["assets"].update({"completion_roi": roi_uri, "completion_roi_mask": roi_mask_uri, "generated_roi": generated_uri, "final_asset": final_uri})
         _save_json(payload.test_id, "12_test_report.json", state)
         _save_state(payload.test_id, state)
-        return {"test_id": payload.test_id, "status": "COMPLETION_EXECUTED", "model_version": worker["model_version"], "processing_ms": total_ms, "generated_roi": _data_url(generated_bytes, "image/png"), "final_asset": _data_url(final_png, "image/png"), "report": state}
+        return {"test_id": payload.test_id, "status": "WORKER_EXECUTED", "worker_status": "WORKER_EXECUTED", "model_version": worker["model_version"], "processing_ms": total_ms, "generated_roi": _data_url(generated_bytes, "image/png"), "final_asset": _data_url(final_png, "image/png"), "report": state}
     except CompletionWorkerError as exc:
         error = {"error_code": exc.error_code, "message": str(exc), "status_code": exc.status_code}
     except Exception as exc:
@@ -397,6 +426,22 @@ def run_completion(payload: RunPayload):
     state["composition"]["total_processing_ms"] = round((time.perf_counter() - started) * 1000, 2)
     _save_state(payload.test_id, state)
     raise HTTPException(503, error)
+
+
+@router.get("/api/debug/fish-completion-lab/worker-status")
+def worker_status():
+    try:
+        return check_completion_worker()
+    except CompletionWorkerError as exc:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "endpoint_configured": True,
+                "status": "WORKER_UNAVAILABLE",
+                "error_code": exc.error_code,
+                "message": str(exc),
+            },
+        )
 
 
 @router.post("/api/debug/fish-completion-lab/review")
