@@ -27,6 +27,7 @@ env:
   DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
   DETECTOR_BUNDLE_URL: https://github.com/pan277942135/Yujian/releases/download/detector-model-v0.1/det_fish_v0_1_android_bundle.zip
   DETECTOR_BUNDLE_SHA256: 246ddacaf89ca7ecc9c64a47d3e12c5ee9088d92c763a38626778505ae8c15ee
+  FISH_COMPLETION_WORKER_URL: http://34.60.190.161:8080
 
 jobs:
   preflight:
@@ -111,6 +112,7 @@ jobs:
         id: deploy
         env:
           GIT_SHA: ${{ needs.preflight.outputs.deploy_sha }}
+          FISH_COMPLETION_WORKER_URL: ${{ env.FISH_COMPLETION_WORKER_URL }}
         run: bash scripts/deploy_console_runtime.sh
 
       - name: Checkout Android app main
