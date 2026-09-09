@@ -17,7 +17,7 @@ STRUCTURAL_THRESHOLDS: dict[str, float] = {
     "min_component_pixels": 16,
     "min_support_bins": 2,
     "max_internal_gap_fraction": 0.45,
-    "local_width_drop_ratio": 0.55,
+    "local_width_drop_ratio": 0.70,
     "min_decision_confidence": 0.70,
     "min_large_experimental_confidence": 0.65,
     "max_pathological_completion_regions": 64,
