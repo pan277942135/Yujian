@@ -123,6 +123,6 @@ def decide_completion(
     if candidate.any() and candidate_ratio <= 0.20:
         severity = "MEDIUM" if candidate_ratio <= 0.10 else "HEAVY"
         case_class = "OCCLUSION" if is_occlusion else ("COMPLEX_BACKGROUND" if complex_background else "LIGHT_MISSING")
-        return CompletionDecision(AUTO_COMPLETION, "MASK_READY", True, severity, round(candidate_ratio, 6), is_occlusion, candidate, candidate.copy() if is_occlusion else np.zeros_like(mask), case_class, "AUTO_MASK_FROM_HIGH_CONFIDENCE_DEBUG_SIGNAL")
+        return CompletionDecision(AUTO_COMPLETION, "MASK_READY", True, severity, round(candidate_ratio, 6), is_occlusion, candidate, candidate.copy(), case_class, "AUTO_MASK_FROM_HIGH_CONFIDENCE_DEBUG_SIGNAL")
 
     return CompletionDecision(AUTO_COMPLETION, "REVIEW_REQUIRED", False, "REVIEW", 0.0, False, np.zeros_like(mask), np.zeros_like(mask), "COMPLEX_BACKGROUND" if complex_background else "AMBIGUOUS", "NO_HIGH_CONFIDENCE_COMPLETION_SIGNAL")
