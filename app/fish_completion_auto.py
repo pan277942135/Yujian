@@ -11,14 +11,19 @@ from math import ceil, floor
 from typing import Any
 
 import numpy as np
-from fastapi import APIRouter, File, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from PIL import Image, ImageFilter
+from sqlalchemy import select
+
+from app.db import get_db
+from app.dataset_models import DatasetItem
+from app.models import DatasetVersion
 
 from app.completion_worker_client import CompletionWorkerError, check_completion_worker, invoke_completion_worker
 from app.detector_runtime import detect, normalize_android_source
-from app.fish_completion_lab import MAX_BYTES, _data_url, _mask_bytes, _persist, _png, _read_persist, _runtime, _save_state
+from app.fish_completion_lab import MAX_BYTES, _data_url, _mask_bytes, _persist, _png, _read_dataset_image, _read_persist, _runtime, _save_state
 from app.recognition_pipeline import assess_detections
 from app.segmentation.service import generate_fish_cutout
 
@@ -31,6 +36,29 @@ MIN_COMPONENT_RELATIVE_AREA = 0.0005
 MAX_EFFECTIVE_REGIONS = 2
 BOUNDARY_RING_DISTANCE_PX = 3
 
+
+
+
+def _auto_progress(state: dict[str, Any]) -> list[dict[str, Any]]:
+    timings = state.get("timings", {})
+    detector = state.get("detector", {})
+    segmentation = state.get("segmentation", {})
+    analysis = state.get("auto_completion", {})
+    mask = state.get("completion_mask", {})
+    worker = state.get("worker", {})
+    composition = state.get("composition", {})
+    assets = state.get("assets", {})
+    return [
+        {"stage": "input", "label": "图片输入", "status": "READY", "elapsed_ms": timings.get("input_decode_ms"), "result": state.get("input", {}).get("filename")},
+        {"stage": "detector", "label": "Detector / BBox", "status": "READY" if detector else "PENDING", "elapsed_ms": timings.get("detector_ms"), "result": {"bbox_pixel": detector.get("bbox_pixel"), "confidence": detector.get("confidence")}},
+        {"stage": "sam", "label": "SAM 分割", "status": "READY" if segmentation else "PENDING", "elapsed_ms": timings.get("sam_ms"), "result": segmentation.get("quality")},
+        {"stage": "analysis", "label": "完整度判断", "status": "READY" if analysis else "PENDING", "elapsed_ms": timings.get("analysis_ms"), "result": {"required": analysis.get("completion_required"), "ratio": analysis.get("completion_ratio")}},
+        {"stage": "mask", "label": "Auto Completion Mask", "status": "AUTO_GENERATED" if mask.get("area_pixels", 0) else ("NOT_REQUIRED" if analysis.get("completion_required") is False else "PENDING"), "elapsed_ms": timings.get("mask_ms"), "result": mask.get("area_pixels", 0)},
+        {"stage": "roi", "label": "ROI 提取", "status": "READY" if worker.get("roi") else "SKIPPED", "elapsed_ms": timings.get("roi_ms"), "result": worker.get("roi")},
+        {"stage": "powerpaint", "label": "PowerPaint Worker（补全执行服务）", "status": worker.get("status", "PENDING"), "elapsed_ms": timings.get("worker_ms"), "result": {"configured": worker.get("endpoint_configured"), "health": worker.get("health_status"), "inference_time_ms": worker.get("inference_time_ms")}},
+        {"stage": "compose", "label": "Protected Compose（受保护合成）", "status": "READY" if composition.get("visible_pixel_change_ratio") is not None else "PENDING", "elapsed_ms": timings.get("compose_ms"), "result": {"generated_pixels": composition.get("generated_pixels"), "visible_changed_pixels": composition.get("visible_changed_pixels"), "visible_pixel_change_ratio": composition.get("visible_pixel_change_ratio")}},
+        {"stage": "final", "label": "Edge / Outline / Final Asset", "status": "READY" if assets.get("fish_clean.png") and assets.get("fish_gold_outline.png") and assets.get("fish_black_outline.png") else "PENDING", "elapsed_ms": timings.get("final_ms"), "result": {"edge_refined": bool(assets.get("edge_refined")), "final_asset": bool(assets.get("final_asset"))}},
+    ]
 
 def _error(status: int, code: str, message: str, stage: str, detail: Any = None):
     return JSONResponse(status_code=status, content={"status": "error", "stage": stage, "error": {"error_code": code, "message": message, "detail": detail or {}}})
@@ -210,7 +238,8 @@ def _build_completion_roi(original: Image.Image, completion_mask: np.ndarray, te
         raise ValueError("COMPLETION_MASK_EMPTY")
     h, w = completion_mask.shape
     x1, y1, x2, y2 = int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
-    pad_x, pad_y = max(8, int((x2 - x1) * .20)), max(8, int((y2 - y1) * .20))
+    padding_ratio = min(1.0, max(0.5, float(os.getenv("FISH_COMPLETION_ROI_PADDING_RATIO", "0.75"))))
+    pad_x, pad_y = max(8, int((x2 - x1) * padding_ratio)), max(8, int((y2 - y1) * padding_ratio))
     x1, y1, x2, y2 = max(0, x1 - pad_x), max(0, y1 - pad_y), min(w, x2 + pad_x), min(h, y2 + pad_y)
     roi = original.crop((x1, y1, x2, y2))
     roi_mask = Image.fromarray(np.where(completion_mask[y1:y2, x1:x2], 255, 0).astype("uint8"), "L")
@@ -278,13 +307,33 @@ def fish_completion_lab_v02_page(request: Request):
 
 
 @router.post("/api/debug/fish-completion-lab-v02/auto-run")
-async def auto_run(file: UploadFile = File(...), case_label: str = ""):
-    data = await file.read(MAX_BYTES + 1)
-    if not data or len(data) > MAX_BYTES:
-        return _error(400, "INVALID_IMAGE_UPLOAD", "图片为空或超过 25 MiB", "upload")
-    test_id = "FCL2_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + secrets.token_hex(2)
+async def auto_run(file: UploadFile | None = File(default=None), case_label: str = Form(default=""), source_type: str = Form(default="local_upload"), dataset_version: str = Form(default=""), dataset_item_id: str = Form(default=""), db=Depends(get_db)):
+    total_started = datetime.now(timezone.utc)
+    test_id = "FCL2_" + total_started.strftime("%Y%m%d_%H%M%S") + "_" + secrets.token_hex(2)
     source = None
     try:
+        if source_type == "dataset_freeze" or dataset_item_id:
+            if not dataset_version or not dataset_item_id:
+                return _error(400, "DATASET_SELECTION_REQUIRED", "请先选择 Dataset Freeze（冻结数据集）图片", "input")
+            dataset = db.get(DatasetVersion, dataset_version)
+            if not dataset or dataset.status != "FROZEN":
+                return _error(409, "DATASET_VERSION_NOT_FROZEN", "只能使用已冻结 Dataset Freeze（冻结数据集）版本", "input")
+            try:
+                item_id = int(dataset_item_id)
+            except (TypeError, ValueError):
+                return _error(400, "DATASET_ITEM_ID_INVALID", "数据集图片 ID 无效", "input")
+            dataset_item = db.scalar(select(DatasetItem).where(DatasetItem.dataset_version == dataset_version, DatasetItem.id == item_id))
+            if not dataset_item:
+                return _error(404, "DATASET_ITEM_NOT_FOUND", "数据集图片不存在", "input")
+            data = _read_dataset_image(dataset_item)
+            input_filename = dataset_item.image_id or f"dataset-{dataset_item.id}"
+        else:
+            if file is None:
+                return _error(400, "IMAGE_UPLOAD_REQUIRED", "请先选择本地图片", "input")
+            data = await file.read(MAX_BYTES + 1)
+            input_filename = file.filename or "uploaded"
+        if not data or len(data) > MAX_BYTES:
+            return _error(400, "INVALID_IMAGE_UPLOAD", "图片为空或超过 25 MiB", "input")
         with Image.open(io.BytesIO(data)) as uploaded:
             source = normalize_android_source(uploaded)
         original = source.convert("RGB")
