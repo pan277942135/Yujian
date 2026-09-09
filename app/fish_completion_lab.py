@@ -213,6 +213,7 @@ def _save_state(test_id: str, state: dict[str, Any]) -> None:
     _save_json(test_id, "16_test_report.json", state)
 
 
+@router.get("/debug/fish-completion-lab-v02", response_class=HTMLResponse)
 @router.get("/debug/fish-completion-lab", response_class=HTMLResponse)
 def fish_completion_lab_page(request: Request):
     return templates.TemplateResponse(request=request, name="fish_completion_lab.html", context={})
@@ -327,7 +328,7 @@ def _build_completion_roi(test_id: str, state: dict[str, Any]) -> tuple[str, str
     completion = np.asarray(Image.open(io.BytesIO(_read_persist(mask_uri))).convert("L")) > 127
     ys, xs = np.where(completion)
     if not len(xs):
-        raise HTTPException(422, {"error_code": "COMPLETION_MASK_EMPTY", "message": "Completion mask is empty"})
+        raise HTTPException(422, {"error_code": "MANUAL_COMPLETION_MASK_EMPTY", "message": "Manual completion mask is empty"})
     height, width = completion.shape
     x1, x2 = int(xs.min()), int(xs.max()) + 1
     y1, y2 = int(ys.min()), int(ys.max()) + 1
@@ -371,7 +372,10 @@ def _compose_completion(state: dict[str, Any], generated: Image.Image, box: tupl
 @router.post("/api/debug/fish-completion-lab/run")
 def run_completion(payload: RunPayload):
     started = time.perf_counter()
+    if payload.completion_mode != "manual":
+        raise HTTPException(400, {"error_code": "COMPLETION_MODE_UNSUPPORTED", "message": "V0.2 只支持 completion_mode=manual"})
     state = _load_state(payload.test_id)
+    state["completion_mode"] = "manual"
     mask_state = state.get("completion_mask", {})
     if not mask_state.get("eligible_for_v0_1"):
         raise HTTPException(422, {"error_code": "COMPLETION_NOT_ELIGIBLE", "message": "请先提交合法且不超过 20% 的 Completion Mask"})
