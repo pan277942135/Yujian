@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from google.cloud import storage
@@ -184,7 +184,11 @@ def _progress(report: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 @router.post("/api/debug/powerpaint-direct-lab/run")
-def run_direct_lab(dataset_version: str, dataset_item_id: int, db=Depends(get_db)):
+def run_direct_lab(
+    dataset_version: str = Form(...),
+    dataset_item_id: int = Form(...),
+    db=Depends(get_db),
+):
     started = time.perf_counter()
     test_id = "PPD_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + secrets.token_hex(2)
     item = db.scalar(
