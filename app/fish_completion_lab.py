@@ -202,12 +202,14 @@ def _stats(
     pathological = regions > int(STRUCTURAL_THRESHOLDS["max_pathological_completion_regions"])
     mask_valid = not bool(illegal.any()) and not pathological
     if execution_allowed_override is None:
-        execution_allowed = bool(
-            mode == AUTO_COMPLETION
-            and mask_valid
-            and completion_area > 0
-            and float(decision_confidence) >= float(STRUCTURAL_THRESHOLDS["min_large_experimental_confidence"])
-        )
+        if mode == AUTO_COMPLETION:
+            execution_allowed = bool(
+                mask_valid
+                and completion_area > 0
+                and float(decision_confidence) >= float(STRUCTURAL_THRESHOLDS["min_large_experimental_confidence"])
+            )
+        else:
+            execution_allowed = bool(mask_valid and completion_area > 0)
     else:
         execution_allowed = bool(execution_allowed_override and mask_valid)
     if completion_area == 0:
