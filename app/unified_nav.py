@@ -25,6 +25,7 @@ _NAV_ITEMS = [
     ("/debug/fish-completion-lab", "鱼体补全实验室 · Fish Completion Lab", "prefix"),
     ("/debug/fish-completion-lab-v02", "自动鱼体资产 · Fish Asset Pipeline V0.2", "prefix"),
     ("/debug/powerpaint-direct-lab", "PowerPaint Direct Lab", "prefix"),
+    ("/debug/powerpaint-shape-guided-lab", "PowerPaint Shape Guided Lab", "prefix"),
 ]
 _NAV_HREFS = {href for href, _label, _mode in _NAV_ITEMS}
 
