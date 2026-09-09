@@ -41,9 +41,20 @@ VERSION = "POWERPAINT_SHAPE_GUIDED_V0.3"
 PROMPT_ID = "FIXED_FISH_SHAPE_GUIDED_V0.3"
 TASK_MODE = "SHAPE_GUIDED"
 FITTING_DEGREES = (0.6, 0.8, 0.95)
-PREFIX = "powerpaint_shape_guided_lab/v0.3"
+PREFIX = "experiments/powerpaint_shape_guided_lab/v0.3"
 MAX_BYTES = 25 * 1024 * 1024
 logger = logging.getLogger(__name__)
+EXPERIMENT_STAGES = (
+    "INIT",
+    "INPUT_READY",
+    "DETECTOR_READY",
+    "SAM_READY",
+    "MASK_READY",
+    "WORKER_READY",
+    "POWERPAINT_RUNNING",
+    "SUCCESS",
+    "FAILED",
+)
 PROMPT = """Complete only the missing biological parts of this fish.
 
 Use the existing visible fish as the identity reference.
@@ -79,6 +90,57 @@ def _persist(test_id: str, name: str, data: bytes, content_type: str) -> str:
         return f"local://{path}"
     bucket.blob(object_name).upload_from_string(data, content_type=content_type)
     return f"gs://{bucket.name}/{object_name}"
+
+
+def _persist_json(test_id: str, name: str, value: Any) -> str:
+    return _persist(test_id, name, json.dumps(value, ensure_ascii=False, indent=2, default=str).encode("utf-8"), "application/json")
+
+
+def _placeholder_png() -> bytes:
+    return _png(Image.new("RGB", (1, 1), (0, 0, 0)))
+
+
+class ExperimentFailure(RuntimeError):
+    def __init__(self, http_status: int, stage: str, error_code: str, message: str, classification: str = "FAILED_VALIDATION"):
+        super().__init__(message)
+        self.http_status = http_status
+        self.stage = stage
+        self.error_code = error_code
+        self.classification = classification
+
+
+def _set_stage(report: dict[str, Any], stage: str) -> None:
+    if stage not in EXPERIMENT_STAGES:
+        raise ValueError(f"unknown experiment stage: {stage}")
+    report["experiment_stage"] = stage
+    if stage == "FAILED":
+        report["status"] = "FAILED"
+    elif stage == "SUCCESS":
+        report["status"] = "SUCCESS"
+
+
+def _safe_persist(test_id: str, name: str, data: bytes, content_type: str, report: dict[str, Any]) -> str | None:
+    try:
+        uri = _persist(test_id, name, data, content_type)
+        report.setdefault("assets", {})[name.rsplit(".", 1)[0]] = uri
+        return uri
+    except Exception as exc:
+        report.setdefault("persistence_errors", []).append({"asset": name, "error": f"{exc.__class__.__name__}: {exc}"})
+        logger.exception("Shape Guided artifact persistence failed test_id=%s asset=%s", test_id, name)
+        return None
+
+
+def _safe_persist_json(test_id: str, name: str, value: Any, report: dict[str, Any] | None = None) -> str | None:
+    try:
+        uri = _persist_json(test_id, name, value)
+        if report is not None:
+            report.setdefault("assets", {})[name.rsplit(".", 1)[0]] = uri
+        return uri
+    except Exception as exc:
+        if report is not None:
+            report.setdefault("persistence_errors", []).append({"asset": name, "error": f"{exc.__class__.__name__}: {exc}"})
+        logger.exception("Shape Guided JSON artifact persistence failed test_id=%s asset=%s", test_id, name)
+        return None
 
 
 def _read_dataset_image(item: DatasetItem) -> bytes:
@@ -202,12 +264,11 @@ def build_completion_mask(visible_mask: np.ndarray, *, max_ratio: float = 0.20) 
     visible = np.asarray(visible_mask, dtype=bool)
     if visible.ndim != 2:
         raise ValueError("visible mask must be 2D")
-    # Hole filling estimates an envelope only where visible fish surrounds a gap.
+    # Hole filling estimates an envelope only where visible fish surrounds a
+    # gap. A dilation/ring is deliberately not a completion mask: a complete
+    # fish must produce an empty mask and therefore skip PowerPaint.
     envelope = _binary_fill_holes(visible)
-    # A narrow local contour band makes complete-fish cases testable without
-    # opening the whole crop to the Worker. It is not a large edit region.
-    band = _binary_dilation(visible, iterations=2)
-    candidate = (envelope | band) & ~visible
+    candidate = envelope & ~visible
     denominator = int((envelope | visible).sum())
     if denominator and candidate.sum() / denominator > max_ratio:
         # Keep the closest boundary pixels only, deterministically.
@@ -316,6 +377,7 @@ def _invoke_shape_guided(*, image_uri: str, mask_uri: str, fitting_degree: float
         raise RuntimeError(f"SHAPE_GUIDED_WORKER_INVALID_JSON_HTTP_{status_code}") from exc
     if not isinstance(result, dict):
         raise RuntimeError("SHAPE_GUIDED_WORKER_INVALID_RESPONSE")
+    result["http_status"] = status_code
     result["result_uri"] = result.get("result_uri") or result.get("generated_roi_uri") or result.get("output_uri")
     result["generated_roi"] = result.get("generated_roi")
     if not result.get("result_uri") and not _decode_data_url(result.get("generated_roi")):
@@ -372,142 +434,234 @@ async def run(request: Request, db=Depends(get_db)):
     started = time.perf_counter()
     test_id = _new_test_id()
     source = None
+    raw = None
+    original_bytes = None
+    detector_bytes = None
+    sam_visible_bytes = None
+    sam_mask_bytes = None
+    completion_mask_bytes = None
+    request_log: list[dict[str, Any]] = []
+    response_log: list[dict[str, Any]] = []
+    error_info: dict[str, Any] | None = None
+    response_status = 200
+    report: dict[str, Any] = {
+        "experiment": VERSION,
+        "runtime": _runtime(test_id),
+        "test_id": test_id,
+        "status": "RUNNING",
+        "experiment_stage": "INIT",
+        "result_classification": None,
+        "completion_required": None,
+        "assets": {},
+        "results": [],
+        "progress": [
+            {"stage": "input", "label": "Input", "status": "PENDING"},
+            {"stage": "detector", "label": "Detector", "status": "PENDING"},
+            {"stage": "sam", "label": "SAM", "status": "PENDING"},
+            {"stage": "completion_mask", "label": "Completion Mask", "status": "PENDING"},
+            {"stage": "shape_guided", "label": "PowerPaint Shape Guided", "status": "PENDING"},
+        ],
+        "timings": {"total_ms": None},
+    }
+
+    def mark_progress(stage: str, status: str, result: Any = None) -> None:
+        for entry in report["progress"]:
+            if entry["stage"] == stage:
+                entry["status"] = status
+                if result is not None:
+                    entry["result"] = result
+
     try:
         data = await _payload(request)
         dataset_version = str(data.get("dataset_version") or "").strip()
-        item_id = int(data.get("dataset_item_id"))
+        try:
+            item_id = int(data.get("dataset_item_id"))
+        except (TypeError, ValueError) as exc:
+            raise ExperimentFailure(400, "INIT", "INVALID_DATASET_ITEM", "dataset_item_id is required") from exc
+        report["input"] = {"dataset_version": dataset_version, "dataset_item_id": item_id, "source_type": "dataset_freeze"}
         requested = data.get("fitting_degrees") or data.get("fitting_degree") or [str(x) for x in FITTING_DEGREES]
         try:
             degrees = normalize_fitting_degrees(requested)
         except ValueError as exc:
-            return _error(400, test_id, "input", "INVALID_FITTING_DEGREE", str(exc))
+            raise ExperimentFailure(400, "INIT", "INVALID_FITTING_DEGREE", str(exc)) from exc
+        report["input"]["fitting_degrees"] = degrees
         item = db.scalar(select(DatasetItem).where(DatasetItem.dataset_version == dataset_version, DatasetItem.id == item_id))
         dataset = db.get(DatasetVersion, dataset_version)
         if not dataset or dataset.status != "FROZEN":
-            return _error(409, test_id, "input", "DATASET_VERSION_NOT_FROZEN", dataset_version)
+            raise ExperimentFailure(409, "INIT", "DATASET_VERSION_NOT_FROZEN", dataset_version)
         if not item:
-            return _error(404, test_id, "input", "DATASET_ITEM_NOT_FOUND", str(item_id))
+            raise ExperimentFailure(404, "INIT", "DATASET_ITEM_NOT_FOUND", str(item_id))
         raw = _read_dataset_image(item)
         with Image.open(io.BytesIO(raw)) as uploaded:
             source = normalize_android_source(uploaded)
+        report["input"].update({"image_id": item.image_id, "image_hash": hashlib.sha256(raw).hexdigest()[:16], "width": source.width, "height": source.height})
+        mark_progress("input", "READY")
+        _set_stage(report, "INPUT_READY")
         detector_run = detect(source)
         assessment = assess_detections(detector_run.detections)
+        report["detector"] = {"model": detector_run.model_version, "assessment": assessment.status.value, "detections": len(detector_run.detections)}
+        _persist_json(test_id, "detector_report.json", report["detector"])
         if assessment.primary is None:
-            return _error(422, test_id, "detector", "NO_RELIABLE_PRIMARY_FISH", assessment.status.value)
+            raise ExperimentFailure(422, "DETECTOR_READY", "NO_RELIABLE_PRIMARY_FISH", assessment.status.value, "FAILED_VALIDATION")
         primary = assessment.primary
         x1, y1, x2, y2 = _crop_box(primary.box, source.width, source.height)
         crop = source.crop((x1, y1, x2, y2)).convert("RGB")
+        original_bytes = _png(crop)
+        detector_bytes = original_bytes
+        report["detector"].update({"confidence": float(primary.confidence), "bbox_pixels": [x1, y1, x2, y2]})
+        report["assets"]["original"] = _persist(test_id, "original.png", original_bytes, "image/png")
+        report["assets"]["detector_crop"] = _persist(test_id, "detector_crop.png", detector_bytes, "image/png")
+        mark_progress("detector", "READY", assessment.status.value)
+        _set_stage(report, "DETECTOR_READY")
         segmentation = generate_fish_cutout(source, primary.box)
         visible_full = np.asarray(segmentation.mask, dtype=bool)
         visible = visible_full[y1:y2, x1:x2]
+        report["sam"] = {"model": "SAM_VIT_B", "quality": segmentation.quality.value, "mask_area_pixels": int(visible.sum())}
+        sam_visible_bytes = _png(Image.fromarray(np.where(visible[..., None], np.asarray(crop), 0).astype("uint8"), "RGB"))
+        sam_mask_bytes = _mask_png(visible)
+        report["assets"]["sam_visible"] = _persist(test_id, "sam_visible.png", sam_visible_bytes, "image/png")
+        report["assets"]["sam_mask"] = _persist(test_id, "sam_mask.png", sam_mask_bytes, "image/png")
+        _persist_json(test_id, "sam_report.json", report["sam"])
+        mark_progress("sam", "READY", segmentation.quality.value)
+        _set_stage(report, "SAM_READY")
         completion = build_completion_mask(visible)
         validation = validate_completion_mask(completion, visible)
         if not validation["valid"]:
-            return _error(422, test_id, "completion_mask", "INVALID_COMPLETION_MASK", json.dumps(validation))
-        original_bytes = _png(crop)
-        original_uri = _persist(test_id, "original.png", original_bytes, "image/png")
-        detector_uri = _persist(test_id, "detector_crop.png", original_bytes, "image/png")
-        sam_visible_bytes = _png(Image.fromarray(np.where(visible[..., None], np.asarray(crop), 0).astype("uint8"), "RGB"))
-        sam_visible_uri = _persist(test_id, "sam_visible.png", sam_visible_bytes, "image/png")
-        sam_mask_uri = _persist(test_id, "sam_mask.png", _mask_png(visible), "image/png")
-        completion_mask_uri = _persist(test_id, "completion_mask.png", _mask_png(completion), "image/png")
-        report: dict[str, Any] = {
-            "experiment": VERSION,
-            "runtime": _runtime(test_id),
-            "input": {"dataset_version": dataset_version, "dataset_item_id": item.id, "image_id": item.image_id, "width": crop.width, "height": crop.height, "source_type": "dataset_freeze", "image_hash": hashlib.sha256(raw).hexdigest()[:16]},
-            "detector": {"model": detector_run.model_version, "confidence": float(primary.confidence), "bbox_pixels": [x1, y1, x2, y2], "assessment": assessment.status.value},
-            "sam": {"model": "SAM_VIT_B", "quality": segmentation.quality.value, "mask_area_pixels": int(visible.sum())},
-            "task_mode": TASK_MODE,
-            "prompt_id": PROMPT_ID,
-            "completion_mask": validation,
-            "assets": {"original": original_uri, "detector_crop": detector_uri, "sam_visible": sam_visible_uri, "sam_mask": sam_mask_uri, "completion_mask": completion_mask_uri},
-            "preview_original": _data_url(original_bytes, "image/png"),
-            "preview_sam": _data_url(sam_visible_bytes, "image/png"),
-            "preview_completion_mask": _data_url(_mask_png(completion), "image/png"),
-            "results": [],
-            "progress": [
-                {"stage": "input", "label": "Input", "status": "READY"},
-                {"stage": "detector", "label": "Detector", "status": "READY", "result": assessment.status.value},
-                {"stage": "sam", "label": "SAM", "status": "READY", "result": segmentation.quality.value},
-                {"stage": "completion_mask", "label": "Completion Mask", "status": "READY", "result": validation},
-                {"stage": "shape_guided", "label": "PowerPaint Shape Guided", "status": "RUNNING"},
-            ],
-            "timings": {"total_ms": None},
-        }
-        health_error = None
-        try:
-            report["worker"] = {"health": _check_worker_health()}
-        except Exception as exc:
-            health_error = str(exc)
-            report["worker"] = {"health": {"status": "unreachable", "error": health_error}}
-        for degree in degrees:
-            result_started = time.perf_counter()
-            item_result: dict[str, Any] = {"task_mode": TASK_MODE, "fitting_degree": degree, "status": "PENDING", "visible_pixel_change_ratio": None, "generated_area_pixels": int(completion.sum()), "result_uri": None}
-            try:
-                if health_error:
-                    raise RuntimeError(health_error)
-                worker = _invoke_shape_guided(image_uri=detector_uri, mask_uri=completion_mask_uri, fitting_degree=degree)
-                generated = _decode_data_url(worker.get("result_uri")) or _decode_data_url(worker.get("generated_roi"))
-                if generated is None and worker.get("result_uri"):
-                    generated = _read_uri(worker["result_uri"])
-                if not generated:
-                    raise RuntimeError("SHAPE_GUIDED_WORKER_EMPTY_OUTPUT")
-                output_uri = _persist(test_id, f"powerpaint_output_{degree:g}.png", generated, "image/png")
-                with Image.open(io.BytesIO(generated)) as generated_image:
-                    final_bytes, visible_change = _compose(crop, generated_image, completion)
-                final_uri = _persist(test_id, f"final_result_{degree:g}.png", final_bytes, "image/png")
-                item_result.update({"status": "SUCCESS", "result_uri": worker.get("result_uri"), "output_asset": output_uri, "final_asset": final_uri, "worker_ms": round((time.perf_counter() - result_started) * 1000, 2), "inference_time_ms": worker.get("inference_time_ms"), "visible_pixel_change_ratio": visible_change, "fish_identity_check": "PENDING", "background_change": "PENDING", "result_preview": _data_url(final_bytes, "image/png")})
-                report["assets"][f"powerpaint_output_{degree:g}"] = output_uri
-                report["assets"][f"final_result_{degree:g}"] = final_uri
-                item_result["shape_guided_report"] = shape_guided_report_entry(
-                    fitting_degree=degree,
-                    visible_pixel_change_ratio=visible_change,
-                    completion_area_ratio=validation["completion_area_ratio"],
-                    generated_area_pixels=validation["completion_area_pixels"],
-                    status="SUCCESS",
-                )
-                report["result_preview"] = _data_url(final_bytes, "image/png")
-            except Exception as exc:
-                item_result.update({"status": "SHAPE_GUIDED_FAILED", "error_code": "SHAPE_GUIDED_FAILED", "error": str(exc), "worker_ms": round((time.perf_counter() - result_started) * 1000, 2)})
-            report["results"].append(item_result)
-        successful = [x for x in report["results"] if x["status"] == "SUCCESS"]
-        if successful:
-            best = successful[-1]
-            output_alias = _persist(test_id, "powerpaint_output.png", _read_uri(best["output_asset"]), "image/png")
-            final_alias = _persist(test_id, "final_result.png", _read_uri(best["final_asset"]), "image/png")
-            report["assets"]["powerpaint_output"] = output_alias
-            report["assets"]["final_result"] = final_alias
-            report["status"] = "SUCCESS"
-            report["shape_guided_report"] = shape_guided_report_entry(
-                fitting_degree=best["fitting_degree"],
-                visible_pixel_change_ratio=best["visible_pixel_change_ratio"],
-                completion_area_ratio=validation["completion_area_ratio"],
-                generated_area_pixels=validation["completion_area_pixels"],
-                status="SUCCESS",
-            )
+            raise ExperimentFailure(422, "MASK_READY", "INVALID_COMPLETION_MASK", json.dumps(validation), "FAILED_MASK")
+        completion_mask_bytes = _mask_png(completion)
+        report["completion_mask"] = validation
+        report["assets"]["completion_mask"] = _persist(test_id, "completion_mask.png", completion_mask_bytes, "image/png")
+        _persist_json(test_id, "completion_report.json", validation)
+        report["preview_original"] = _data_url(original_bytes, "image/png")
+        report["preview_sam"] = _data_url(sam_visible_bytes, "image/png")
+        report["preview_completion_mask"] = _data_url(completion_mask_bytes, "image/png")
+        mark_progress("completion_mask", "READY", validation)
+        _set_stage(report, "MASK_READY")
+        report["task_mode"] = TASK_MODE
+        report["prompt_id"] = PROMPT_ID
+        report["completion_required"] = bool(validation["completion_area_pixels"] > 0 and validation["completion_area_ratio"] >= 0.001)
+        if not report["completion_required"]:
+            for degree in degrees:
+                report["results"].append({"task_mode": TASK_MODE, "fitting_degree": degree, "status": "NOT_REQUIRED", "result": "NOT_REQUIRED", "worker_called": False, "result_uri": None, "generated_area_pixels": 0, "visible_pixel_change_ratio": 0.0})
+            report["result"] = "NOT_REQUIRED"
+            report["result_classification"] = "SUCCESS_NOT_REQUIRED"
+            report["completion_case"] = "COMPLETE_FISH"
+            report["assets"]["powerpaint_output"] = _persist(test_id, "powerpaint_output.png", original_bytes, "image/png")
+            report["assets"]["final_result"] = _persist(test_id, "final_result.png", original_bytes, "image/png")
+            report["result_preview"] = _data_url(original_bytes, "image/png")
+            mark_progress("shape_guided", "SUCCESS", "NOT_REQUIRED")
+            _set_stage(report, "SUCCESS")
         else:
-            report["status"] = "SHAPE_GUIDED_FAILED"
-            report["shape_guided_report"] = shape_guided_report_entry(
-                fitting_degree=degrees[-1],
-                visible_pixel_change_ratio=None,
-                completion_area_ratio=validation["completion_area_ratio"],
-                generated_area_pixels=validation["completion_area_pixels"],
-                status="SHAPE_GUIDED_FAILED",
-            )
-        report["progress"][-1].update({"status": "SUCCESS" if successful else "SHAPE_GUIDED_FAILED", "result": {"successful_degrees": [x["fitting_degree"] for x in successful]}})
-        report["timings"]["total_ms"] = round((time.perf_counter() - started) * 1000, 2)
-        report_bytes = json.dumps(report, ensure_ascii=False, indent=2).encode()
-        report_uri = _persist(test_id, "shape_guided_report.json", report_bytes, "application/json")
-        _persist(test_id, "report.json", report_bytes, "application/json")
-        report["assets"]["report"] = report_uri
-        return {"status": "ok" if successful else "error", "stage": "shape_guided_complete" if successful else "shape_guided", "test_id": test_id, "report": report}
+            try:
+                report["worker"] = {"health": _check_worker_health()}
+                mark_progress("shape_guided", "RUNNING", "worker health ready")
+                _set_stage(report, "WORKER_READY")
+            except Exception as exc:
+                report["worker"] = {"health": {"status": "unreachable", "error": str(exc)}}
+                for degree in degrees:
+                    request_log.append({"task_mode": TASK_MODE, "fitting_degree": degree, "prompt_version": PROMPT_ID, "image_uri": report["assets"]["detector_crop"], "mask_uri": report["assets"]["completion_mask"], "mask_ratio": validation["completion_area_ratio"], "worker_called": False})
+                    response_log.append({"fitting_degree": degree, "worker_called": False, "http_status": None, "result_uri": None, "latency_ms": 0, "error": str(exc)})
+                raise ExperimentFailure(503, "WORKER_READY", "SHAPE_GUIDED_WORKER_FAILED", str(exc), "FAILED_WORKER") from exc
+            _set_stage(report, "POWERPAINT_RUNNING")
+            for degree in degrees:
+                result_started = time.perf_counter()
+                request_entry = {"task_mode": TASK_MODE, "fitting_degree": degree, "prompt_version": PROMPT_ID, "image_uri": report["assets"]["detector_crop"], "mask_uri": report["assets"]["completion_mask"], "mask_ratio": validation["completion_area_ratio"], "worker_called": True}
+                request_log.append(request_entry)
+                item_result: dict[str, Any] = {"task_mode": TASK_MODE, "fitting_degree": degree, "status": "PENDING", "worker_called": True, "visible_pixel_change_ratio": None, "generated_area_pixels": int(completion.sum()), "result_uri": None}
+                try:
+                    worker = _invoke_shape_guided(image_uri=report["assets"]["detector_crop"], mask_uri=report["assets"]["completion_mask"], fitting_degree=degree)
+                    generated = _decode_data_url(worker.get("result_uri")) or _decode_data_url(worker.get("generated_roi"))
+                    if generated is None and worker.get("result_uri"):
+                        generated = _read_uri(worker["result_uri"])
+                    if not generated:
+                        raise RuntimeError("SHAPE_GUIDED_WORKER_EMPTY_OUTPUT")
+                    output_uri = _persist(test_id, f"powerpaint_output_{degree:g}.png", generated, "image/png")
+                    with Image.open(io.BytesIO(generated)) as generated_image:
+                        final_bytes, visible_change = _compose(crop, generated_image, completion)
+                    final_uri = _persist(test_id, f"final_result_{degree:g}.png", final_bytes, "image/png")
+                    latency_ms = round((time.perf_counter() - result_started) * 1000, 2)
+                    item_result.update({"status": "SUCCESS", "result_uri": worker.get("result_uri"), "output_asset": output_uri, "final_asset": final_uri, "worker_ms": latency_ms, "inference_time_ms": worker.get("inference_time_ms"), "visible_pixel_change_ratio": visible_change, "fish_identity_check": "PENDING", "background_change": "PENDING", "result_preview": _data_url(final_bytes, "image/png")})
+                    response_log.append({"fitting_degree": degree, "worker_called": True, "http_status": worker.get("http_status"), "result_uri": worker.get("result_uri"), "latency_ms": latency_ms, "error": None})
+                    report["assets"][f"powerpaint_output_{degree:g}"] = output_uri
+                    report["assets"][f"final_result_{degree:g}"] = final_uri
+                    report["result_preview"] = _data_url(final_bytes, "image/png")
+                except Exception as exc:
+                    latency_ms = round((time.perf_counter() - result_started) * 1000, 2)
+                    item_result.update({"status": "FAILED_POWERPAINT", "error_code": "SHAPE_GUIDED_POWERPAINT_FAILED", "error": str(exc), "worker_ms": latency_ms})
+                    response_log.append({"fitting_degree": degree, "worker_called": True, "http_status": None, "result_uri": None, "latency_ms": latency_ms, "error": str(exc)})
+                report["results"].append(item_result)
+            successful = [x for x in report["results"] if x["status"] == "SUCCESS"]
+            if successful:
+                best = successful[-1]
+                report["assets"]["powerpaint_output"] = _persist(test_id, "powerpaint_output.png", _read_uri(best["output_asset"]), "image/png")
+                report["assets"]["final_result"] = _persist(test_id, "final_result.png", _read_uri(best["final_asset"]), "image/png")
+                report["result_classification"] = "SUCCESS_COMPLETED"
+                mark_progress("shape_guided", "SUCCESS", {"successful_degrees": [x["fitting_degree"] for x in successful]})
+                _set_stage(report, "SUCCESS")
+            else:
+                raise ExperimentFailure(502, "POWERPAINT_RUNNING", "SHAPE_GUIDED_POWERPAINT_FAILED", "all fitting degrees failed", "FAILED_POWERPAINT")
+        report["shape_guided_report"] = shape_guided_report_entry(fitting_degree=degrees[-1], visible_pixel_change_ratio=(0.0 if not report["completion_required"] else next((x.get("visible_pixel_change_ratio") for x in report["results"] if x.get("status") == "SUCCESS"), None)), completion_area_ratio=validation["completion_area_ratio"], generated_area_pixels=validation["completion_area_pixels"], status=report["result_classification"] or "SUCCESS")
+    except ExperimentFailure as exc:
+        response_status = exc.http_status
+        error_info = {"error_code": exc.error_code, "message": str(exc), "stage": exc.stage, "classification": exc.classification}
+        report["result_classification"] = exc.classification
+        report["error"] = error_info
+        report["completion_required"] = report.get("completion_required")
+        mark_progress("shape_guided" if exc.stage in {"WORKER_READY", "POWERPAINT_RUNNING"} else "completion_mask", "FAILED", str(exc))
+        _set_stage(report, "FAILED")
     except (TypeError, ValueError) as exc:
-        return _error(400, test_id, "input", "INVALID_REQUEST", str(exc))
+        response_status = 400
+        error_info = {"error_code": "INVALID_REQUEST", "message": str(exc), "stage": "INIT", "classification": "FAILED_VALIDATION"}
+        report["result_classification"] = "FAILED_VALIDATION"
+        report["error"] = error_info
+        _set_stage(report, "FAILED")
     except HTTPException as exc:
-        return _error(exc.status_code, test_id, "input", str(exc.detail), str(exc.detail))
+        response_status = exc.status_code
+        error_info = {"error_code": str(exc.detail), "message": str(exc.detail), "stage": report.get("experiment_stage", "INIT"), "classification": "FAILED_VALIDATION"}
+        report["result_classification"] = "FAILED_VALIDATION"
+        report["error"] = error_info
+        _set_stage(report, "FAILED")
     except Exception as exc:
         logger.exception("Shape Guided Lab failed test_id=%s", test_id)
-        return _error(500, test_id, "shape_guided", "SHAPE_GUIDED_FAILED", f"{exc.__class__.__name__}: {exc}")
+        response_status = 500
+        error_info = {"error_code": "SHAPE_GUIDED_FAILED", "message": f"{exc.__class__.__name__}: {exc}", "stage": report.get("experiment_stage", "INIT"), "classification": "FAILED_VALIDATION"}
+        report["result_classification"] = "FAILED_VALIDATION"
+        report["error"] = error_info
+        _set_stage(report, "FAILED")
     finally:
         if source is not None:
             source.close()
+        if original_bytes is None:
+            original_bytes = _placeholder_png()
+        if detector_bytes is None:
+            detector_bytes = original_bytes
+        if sam_visible_bytes is None:
+            sam_visible_bytes = original_bytes
+        if sam_mask_bytes is None:
+            sam_mask_bytes = _mask_png(np.zeros((1, 1), dtype=bool))
+        if completion_mask_bytes is None:
+            completion_mask_bytes = _mask_png(np.zeros((1, 1), dtype=bool))
+        _safe_persist(test_id, "original.png", original_bytes, "image/png", report)
+        _safe_persist(test_id, "detector_crop.png", detector_bytes, "image/png", report)
+        _safe_persist(test_id, "sam_visible.png", sam_visible_bytes, "image/png", report)
+        _safe_persist(test_id, "sam_mask.png", sam_mask_bytes, "image/png", report)
+        _safe_persist(test_id, "completion_mask.png", completion_mask_bytes, "image/png", report)
+        report["assets"]["detector_report"] = _safe_persist_json(test_id, "detector_report.json", report.get("detector", {"status": "NOT_REACHED"}))
+        report["assets"]["sam_report"] = _safe_persist_json(test_id, "sam_report.json", report.get("sam", {"status": "NOT_REACHED"}))
+        report["assets"]["completion_report"] = _safe_persist_json(test_id, "completion_report.json", report.get("completion_mask", {"status": "NOT_REACHED"}))
+        report["assets"]["shape_guided_request"] = _safe_persist_json(test_id, "shape_guided_request.json", {"requests": request_log})
+        report["assets"]["shape_guided_response"] = _safe_persist_json(test_id, "shape_guided_response.json", {"responses": response_log})
+        if "powerpaint_output" not in report["assets"]:
+            report["assets"]["powerpaint_output"] = _safe_persist(test_id, "powerpaint_output.png", original_bytes, "image/png", report)
+        if "final_result" not in report["assets"]:
+            report["assets"]["final_result"] = _safe_persist(test_id, "final_result.png", original_bytes, "image/png", report)
+        report["timings"]["total_ms"] = round((time.perf_counter() - started) * 1000, 2)
+        report["artifacts_ready"] = not bool(report.get("persistence_errors"))
+        report["error"] = error_info
+        report["status"] = "SUCCESS" if report.get("experiment_stage") == "SUCCESS" else "FAILED"
+        report["assets"]["shape_guided_report"] = _safe_persist_json(test_id, "shape_guided_report.json", report)
+        report["assets"]["error"] = _safe_persist_json(test_id, "error.json", error_info or {"error": None, "status": report["status"]})
+        report["assets"]["report"] = _safe_persist_json(test_id, "report.json", report)
+    if error_info:
+        return JSONResponse(status_code=response_status, content={"status": "error", "stage": report["experiment_stage"], "test_id": test_id, "error": error_info, "report": report})
+    return {"status": "ok", "stage": "shape_guided_complete", "test_id": test_id, "report": report}
