@@ -401,7 +401,9 @@ async def auto_run(file: UploadFile | None = File(default=None), case_label: str
                 compose_ms = round((datetime.now(timezone.utc) - compose_started).total_seconds() * 1000, 2)
                 worker = {"status": "WORKER_EXECUTED", "endpoint_configured": True, "health_status": health.get("health_status"), "skip_reason": None, "inference_time_ms": worker_result.get("inference_time_ms"), "model_version": worker_result.get("model_version"), "roi": {k: roi[k] for k in ("box", "original_size", "worker_size")}, "result": {"model_version": worker_result.get("model_version"), "inference_time_ms": worker_result.get("inference_time_ms")}}
             except CompletionWorkerError as exc:
-                worker = {**worker, "status": "WORKER_TIMEOUT" if "TIMEOUT" in exc.error_code else "WORKER_FAILED", "error": {"error_code": exc.error_code, "message": str(exc)}}
+                unavailable_codes = {"COMPLETION_WORKER_NOT_CONFIGURED", "COMPLETION_WORKER_HEALTH_NOT_READY", "COMPLETION_WORKER_HEALTH_ERROR", "COMPLETION_WORKER_HEALTH_UNREACHABLE"}
+                worker_status = "WORKER_UNAVAILABLE" if exc.error_code in unavailable_codes else ("WORKER_TIMEOUT" if "TIMEOUT" in exc.error_code else "WORKER_ERROR")
+                worker = {**worker, "status": worker_status, "error": {"error_code": exc.error_code, "message": str(exc)}}
             except Exception as exc:
                 worker = {**worker, "status": "WORKER_FAILED", "error": {"error_code": "COMPLETION_WORKER_FAILED", "message": f"{exc.__class__.__name__}: {exc}"}}
         edge_bytes, final_mask = _edge_refine(original, final_bytes, raw_mask | completion_mask)
