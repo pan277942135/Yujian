@@ -84,3 +84,71 @@ def test_auto_completion_invalid_box_is_not_eligible():
     assert not result["completion_required"]
     assert result["severity"] == "NOT_ELIGIBLE"
     assert not candidate.any()
+
+
+from PIL import Image
+
+from app.completion_worker_client import check_completion_worker
+from app.fish_completion_auto import _auto_progress, _protected_compose
+
+
+def test_protected_compose_does_not_change_visible_pixels():
+    original = Image.new("RGB", (4, 4), (10, 10, 10))
+    visible = np.ones((4, 4), dtype=bool)
+    completion = np.zeros((4, 4), dtype=bool)
+    completion[1:3, 1:3] = True
+    visible[1:3, 1:3] = False
+    generated = Image.new("RGB", (2, 2), (200, 20, 20))
+
+    _, compose, _ = _protected_compose(
+        original,
+        visible,
+        completion,
+        generated,
+        {"box": [1, 1, 3, 3], "original_size": [2, 2]},
+    )
+
+    assert compose["generated_pixels"] == 4
+    assert compose["visible_changed_pixels"] == 0
+    assert compose["visible_pixel_change_ratio"] == 0
+
+
+def test_auto_progress_exposes_worker_and_timing_fields():
+    progress = _auto_progress(
+        {
+            "timings": {"worker_ms": 123.4},
+            "detector": {"bbox_pixel": [1, 2, 3, 4], "confidence": 0.9},
+            "segmentation": {"quality": "GOOD"},
+            "auto_completion": {"completion_required": True, "completion_ratio": 0.04},
+            "completion_mask": {"area_pixels": 20},
+            "worker": {
+                "status": "WORKER_EXECUTED",
+                "endpoint_configured": True,
+                "health_status": 200,
+                "inference_time_ms": 111,
+            },
+            "composition": {
+                "generated_pixels": 20,
+                "visible_changed_pixels": 0,
+                "visible_pixel_change_ratio": 0,
+            },
+            "assets": {
+                "fish_clean.png": "gs://clean",
+                "fish_gold_outline.png": "gs://gold",
+                "fish_black_outline.png": "gs://black",
+                "final_asset": "gs://final",
+            },
+        }
+    )
+
+    worker_card = next(item for item in progress if item["stage"] == "powerpaint")
+    assert worker_card["status"] == "WORKER_EXECUTED"
+    assert worker_card["elapsed_ms"] == 123.4
+    assert worker_card["result"]["inference_time_ms"] == 111
+
+
+def test_worker_status_is_explicit_when_endpoint_missing(monkeypatch):
+    monkeypatch.delenv("FISH_COMPLETION_WORKER_URL", raising=False)
+    result = check_completion_worker()
+    assert result["endpoint_configured"] is False
+    assert result["status"] == "WORKER_UNAVAILABLE"
