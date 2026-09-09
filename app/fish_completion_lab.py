@@ -381,7 +381,7 @@ def run_completion(payload: RunPayload):
         _save_state(payload.test_id, state)
         return {"test_id": payload.test_id, "status": "COMPLETION_NOT_REQUIRED", "report": state}
     if os.getenv("FISH_COMPLETION_ENABLED", "").strip().lower() == "false" or not os.getenv("FISH_COMPLETION_WORKER_URL", "").strip():
-        error = {"error_code": "COMPLETION_WORKER_UNAVAILABLE", "message": "FISH_COMPLETION_ENABLED=true 且真实 PowerPaint Worker 未配置"}
+        error = {"error_code": "COMPLETION_WORKER_UNAVAILABLE", "message": "真实 PowerPaint Worker 未配置；请设置 FISH_COMPLETION_WORKER_URL"}
         state["completion"]["status"] = "COMPLETION_UNAVAILABLE"
         state["errors"]["completion"] = error
         _save_state(payload.test_id, state)
@@ -400,7 +400,7 @@ def run_completion(payload: RunPayload):
         generated_ref = worker.get("result_uri")
         if generated_ref and generated_ref.startswith("data:"):
             generated_bytes = base64.b64decode(generated_ref.split(",", 1)[1])
-        elif worker.get("generated_roi", "").startswith("data:"):
+        elif (worker.get("generated_roi") or "").startswith("data:"):
             generated_bytes = base64.b64decode(worker["generated_roi"].split(",", 1)[1])
         else:
             generated_bytes = _read_persist(generated_ref)
