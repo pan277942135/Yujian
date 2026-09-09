@@ -26,6 +26,7 @@ from app.detector_parity_api import router as detector_parity_router, templates 
 from app.segmentation_api import router as segmentation_router, templates as segmentation_templates
 from app.fish_completion_lab import router as fish_completion_router, templates as fish_completion_templates
 from app.fish_completion_auto import router as fish_completion_auto_router, templates as fish_completion_auto_templates
+from app.powerpaint_direct_lab import router as powerpaint_direct_router, templates as powerpaint_direct_templates
 from app.segmentation.mask_generator import initialize_segmentation_model
 from app.fish_knowledge.api import router as fish_knowledge_router
 from app.fish_knowledge.admin import (
@@ -54,6 +55,7 @@ for template_engine in (
     segmentation_templates,
     fish_completion_templates,
     fish_completion_auto_templates,
+    powerpaint_direct_templates,
 ):
     install_unified_nav(template_engine)
 
@@ -127,6 +129,7 @@ app.include_router(detector_parity_router)
 app.include_router(segmentation_router)
 app.include_router(fish_completion_router)
 app.include_router(fish_completion_auto_router)
+app.include_router(powerpaint_direct_router)
 app.include_router(fish_knowledge_router)
 app.include_router(fish_knowledge_admin_router)
 app.include_router(fish_knowledge_admin_compat_router)
