@@ -2,9 +2,11 @@ import inspect
 
 import numpy as np
 import pytest
+from PIL import Image
 
 from app.completion_decision import AUTO_COMPLETION, decide_completion
-from app.fish_completion_lab import _stats
+from app import fish_completion_lab as lab
+from app.fish_completion_lab import RunPayload, _stats
 
 
 def _fish(width=240, height=120):
@@ -130,3 +132,52 @@ def test_stats_zero_ratio_is_not_required():
     stats = _stats(raw, np.zeros_like(raw), np.zeros_like(raw), np.zeros_like(raw), np.zeros_like(raw), mode=AUTO_COMPLETION)
     assert stats["completion_level"] == "NONE"
     assert stats["execution_reason"] == "NOT_REQUIRED"
+
+
+def test_runtime_forces_roi_worker_and_compose_for_not_required(monkeypatch):
+    state = {
+        "input": {"width": 16, "height": 16},
+        "detector": {},
+        "segmentation": {},
+        "completion_decision": {"status": "NOT_REQUIRED", "completion_required": False, "execution_allowed": False},
+        "completion_mask": {"completion_area_pixels": 0},
+        "completion": {},
+        "composition": {},
+        "timings": {},
+        "assets": {},
+        "errors": {},
+    }
+    events = []
+    roi = Image.new("RGB", (16, 16), (10, 10, 10))
+    generated = Image.new("RGB", (16, 16), (200, 20, 20))
+
+    monkeypatch.setenv("FISH_COMPLETION_WORKER_URL", "http://worker")
+    monkeypatch.setattr(lab, "_load_state", lambda _test_id: state)
+    monkeypatch.setattr(lab, "_save_state", lambda _test_id, _state: None)
+    monkeypatch.setattr(lab, "_save_json", lambda _test_id, _name, _value: None)
+    monkeypatch.setattr(lab, "_persist", lambda _test_id, name, _content, _content_type="application/octet-stream": f"local://{name}")
+    monkeypatch.setattr(lab, "_worker_execution_mask", lambda *_args: (np.ones((16, 16), dtype=bool), "NO_OP_PROBE"))
+
+    def fake_roi(*_args):
+        events.append("roi")
+        return "local://roi", "local://roi-mask", roi, np.ones((16, 16), dtype=bool), (0, 0, 16, 16)
+
+    def fake_worker(**_kwargs):
+        events.append("worker")
+        return {"generated_roi": lab._data_url(lab._png(generated), "image/png"), "model_version": "test", "inference_time_ms": 5, "gpu_info": {}}
+
+    def fake_compose(*_args):
+        events.append("compose")
+        return b"final", 0.0
+
+    monkeypatch.setattr(lab, "_build_completion_roi", fake_roi)
+    monkeypatch.setattr(lab, "invoke_completion_worker", fake_worker)
+    monkeypatch.setattr(lab, "_compose_completion", fake_compose)
+
+    result = lab.run_completion(RunPayload(test_id="runtime-test", completion_mode=AUTO_COMPLETION))
+
+    assert result["status"] == "WORKER_EXECUTED"
+    assert events == ["roi", "worker", "compose"]
+    assert state["completion"]["status"] == "WORKER_EXECUTED"
+    assert state["composition"]["visible_pixel_change_ratio"] == 0.0
+    assert state["roi"]["execution_mask_source"] == "NO_OP_PROBE"

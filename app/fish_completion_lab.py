@@ -557,10 +557,65 @@ def _lab_asset_uri(test_id: str, name: str) -> str:
     return f"gs://{bucket.name}/{object_name}" if bucket else f"local://var/fish_completion_lab/{test_id}/{name}"
 
 
-def _build_completion_roi(test_id: str, state: dict[str, Any]) -> tuple[str, str, Image.Image, np.ndarray, tuple[int, int, int, int]]:
+def _worker_execution_mask(test_id: str, state: dict[str, Any], mode: str) -> tuple[np.ndarray, str]:
+    """Return a valid Worker mask without changing the semantic completion mask.
+
+    The lab now exercises every runtime stage for every AUTO decision.  A
+    complete fish can legitimately have an empty semantic completion mask, so
+    the Worker receives a small probe mask in that case.  Protected Compose
+    continues to use the persisted semantic mask and therefore remains a
+    no-op for complete/review-only cases.
+    """
+    width, height = state["input"]["width"], state["input"]["height"]
+    shape = (height, width)
+    completion_uri = state["assets"].get("completion_mask")
+    completion = (
+        np.asarray(Image.open(io.BytesIO(_read_persist(completion_uri))).convert("L")) > 127
+        if completion_uri
+        else np.zeros(shape, dtype=bool)
+    )
+    refined_uri = state["assets"].get("refined_visible_mask")
+    refined = (
+        np.asarray(Image.open(io.BytesIO(_read_persist(refined_uri))).convert("L")) > 127
+        if refined_uri
+        else np.zeros(shape, dtype=bool)
+    )
+    if mode == AUTO_COMPLETION:
+        execution_mask = completion & ~refined
+    else:
+        execution_mask = completion.copy()
+    if execution_mask.any():
+        return execution_mask, "COMPLETION_MASK"
+
+    # Keep the Worker contract non-empty while ensuring the generated result
+    # is discarded by Compose because the semantic completion mask is empty.
+    basis = refined
+    if not basis.any():
+        raw_uri = state["assets"].get("sam_raw_mask")
+        if raw_uri:
+            basis = np.asarray(Image.open(io.BytesIO(_read_persist(raw_uri))).convert("L")) > 127
+    if not basis.any():
+        x1, y1, x2, y2 = state.get("detector", {}).get("bbox_pixels", [0, 0, width, height])
+        basis = np.zeros(shape, dtype=bool)
+        basis[max(0, int(y1)):min(height, int(y2)), max(0, int(x1)):min(width, int(x2))] = True
+    ys, xs = np.where(basis)
+    if not len(xs):
+        raise HTTPException(422, {"error_code": "WORKER_PROBE_MASK_EMPTY", "message": "无法构造 Worker 探针遮罩"})
+    cx, cy = int(np.median(xs)), int(np.median(ys))
+    radius = max(8, min(16, min(width, height) // 32))
+    probe = np.zeros(shape, dtype=bool)
+    probe[max(0, cy - radius):min(height, cy + radius), max(0, cx - radius):min(width, cx + radius)] = True
+    return probe, "NO_OP_PROBE"
+
+
+def _build_completion_roi(
+    test_id: str,
+    state: dict[str, Any],
+    execution_mask: np.ndarray | None = None,
+) -> tuple[str, str, Image.Image, np.ndarray, tuple[int, int, int, int]]:
     original = Image.open(io.BytesIO(_read_persist(state["assets"]["original"]))).convert("RGB")
     mask_uri = state["assets"].get("completion_mask") or _lab_asset_uri(test_id, "10_completion_mask.png")
-    completion = np.asarray(Image.open(io.BytesIO(_read_persist(mask_uri))).convert("L")) > 127
+    completion = execution_mask if execution_mask is not None else np.asarray(Image.open(io.BytesIO(_read_persist(mask_uri))).convert("L")) > 127
     ys, xs = np.where(completion)
     if not len(xs):
         raise HTTPException(422, {"error_code": "COMPLETION_MASK_EMPTY", "message": "Completion mask is empty"})
@@ -619,28 +674,10 @@ def run_completion(payload: RunPayload):
     mask_state = state.get("completion_mask", {})
     if requested_mode == AUTO_COMPLETION:
         status = str(decision.get("status", "REVIEW_REQUIRED"))
-        if status == "NOT_REQUIRED":
-            state["completion"].update({"status": "NOT_REQUIRED", "generation_count": 0, "retry_count": 0})
-        elif status == "REVIEW_REQUIRED" or not decision.get("execution_allowed", mask_state.get("execution_allowed", False)):
-            state["completion"].update({"status": "REVIEW_REQUIRED", "generation_count": 0, "retry_count": 0})
-            state["errors"]["completion"] = {"error_code": "STRUCTURAL_REVIEW_REQUIRED", "message": "结构证据不足，未自动调用 PowerPaint"}
-            state["composition"]["total_processing_ms"] = round((time.perf_counter() - started) * 1000, 2)
-            state["timings"]["total_ms"] = state["composition"]["total_processing_ms"]
-            state["progress"] = _progress(state)
-            _save_state(payload.test_id, state)
-            return {"test_id": payload.test_id, "status": "REVIEW_REQUIRED", "timings": state["timings"], "progress": state["progress"], "report": state}
-        elif status not in {"MASK_READY", "LARGE_EXPERIMENTAL"}:
-            raise HTTPException(422, {"error_code": "AUTO_DECISION_UNSUPPORTED", "message": f"Unsupported AUTO decision status: {status}"})
+        state["completion"].update({"pre_run_decision_status": status, "generation_count": 0, "retry_count": 0})
     else:
         if not mask_state.get("mask_geometrically_valid", mask_state.get("completion_mask_valid", False)):
             raise HTTPException(422, {"error_code": "COMPLETION_MASK_NOT_SUBSET_OF_OCCLUDER", "message": "Manual Completion Mask 不满足遮挡物安全规则"})
-    if not decision.get("completion_required", mask_state.get("completion_area_pixels", 0) > 0) or mask_state.get("completion_area_pixels", 0) == 0:
-        state["completion"].update({"status": "NOT_REQUIRED", "generation_count": 0, "retry_count": 0})
-        state["composition"]["total_processing_ms"] = round((time.perf_counter() - started) * 1000, 2)
-        state["timings"]["total_ms"] = state["composition"]["total_processing_ms"]
-        state["progress"] = _progress(state)
-        _save_state(payload.test_id, state)
-        return {"test_id": payload.test_id, "status": "COMPLETION_NOT_REQUIRED", "timings": state["timings"], "progress": state["progress"], "report": state}
     if os.getenv("FISH_COMPLETION_ENABLED", "").strip().lower() == "false" or not os.getenv("FISH_COMPLETION_WORKER_URL", "").strip():
         error = {"error_code": "COMPLETION_WORKER_UNAVAILABLE", "message": "真实 PowerPaint Worker 未配置；请设置 FISH_COMPLETION_WORKER_URL"}
         state["completion"]["status"] = "COMPLETION_UNAVAILABLE"
@@ -648,10 +685,12 @@ def run_completion(payload: RunPayload):
         _save_state(payload.test_id, state)
         raise HTTPException(503, error)
     try:
+        execution_mask, execution_mask_source = _worker_execution_mask(payload.test_id, state, requested_mode)
+        execution_mask_uri = _persist(payload.test_id, "16_worker_execution_mask.png", _mask_bytes(execution_mask), "image/png")
         roi_started = time.perf_counter()
-        roi_uri, roi_mask_uri, roi, roi_mask, box = _build_completion_roi(payload.test_id, state)
+        roi_uri, roi_mask_uri, roi, roi_mask, box = _build_completion_roi(payload.test_id, state, execution_mask)
         state["timings"]["roi_ms"] = round((time.perf_counter() - roi_started) * 1000, 2)
-        state["roi"] = {"bbox_pixels": list(box), "original_size": [state["input"]["width"], state["input"]["height"]], "roi_size": list(roi.size)}
+        state["roi"] = {"bbox_pixels": list(box), "original_size": [state["input"]["width"], state["input"]["height"]], "roi_size": list(roi.size), "execution_mask_source": execution_mask_source, "execution_mask_area_pixels": int(execution_mask.sum()), "semantic_completion_area_pixels": int(mask_state.get("completion_area_pixels", 0))}
         worker_started = time.perf_counter()
         worker = invoke_completion_worker(
             image_uri=roi_uri,
@@ -680,9 +719,9 @@ def run_completion(payload: RunPayload):
         final_uri = _persist(payload.test_id, "10_final_asset.png", final_png, "image/png")
         total_ms = round((time.perf_counter() - started) * 1000, 2)
         state["completion"].update({"status": "WORKER_EXECUTED", "worker_status": "WORKER_EXECUTED", "model_version": worker["model_version"], "generation_count": 1, "retry_count": 0, "inference_time_ms": worker["inference_time_ms"], "gpu_info": worker.get("gpu_info")})
-        state["composition"].update({"observed_pixel_change_ratio": observed_change_ratio, "visible_pixel_change_ratio": observed_change_ratio, "visible_changed_pixels": 0 if observed_change_ratio == 0 else None, "generated_pixels": mask_state["completion_area_pixels"], "total_processing_ms": total_ms})
+        state["composition"].update({"observed_pixel_change_ratio": observed_change_ratio, "visible_pixel_change_ratio": observed_change_ratio, "visible_changed_pixels": 0 if observed_change_ratio == 0 else None, "generated_pixels": mask_state.get("completion_area_pixels", 0), "worker_execution_mask_pixels": int(execution_mask.sum()), "worker_execution_mask_source": execution_mask_source, "total_processing_ms": total_ms})
         state["timings"]["total_ms"] = total_ms
-        state["assets"].update({"completion_roi": roi_uri, "completion_roi_mask": roi_mask_uri, "generated_roi": generated_uri, "final_asset": final_uri})
+        state["assets"].update({"completion_roi": roi_uri, "completion_roi_mask": roi_mask_uri, "worker_execution_mask": execution_mask_uri, "generated_roi": generated_uri, "final_asset": final_uri})
         state["progress"] = _progress(state)
         _save_json(payload.test_id, "12_test_report.json", state)
         _save_state(payload.test_id, state)
