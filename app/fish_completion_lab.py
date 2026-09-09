@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from google.cloud import storage
@@ -266,7 +266,7 @@ def completion_dataset_images(dataset_version: str, split: str | None = None, sp
 
 
 @router.post("/api/debug/fish-completion-lab/prepare")
-async def prepare(file: UploadFile = File(...), case_label: str = "", source_type: str = "local_upload", dataset_version: str = "", dataset_item_id: str = ""):
+async def prepare(file: UploadFile = File(...), case_label: str = Form(default=""), source_type: str = Form(default="local_upload"), dataset_version: str = Form(default=""), dataset_item_id: str = Form(default="")):
     prepare_started = time.perf_counter()
     data = await file.read(MAX_BYTES + 1)
     if not data or len(data) > MAX_BYTES:
@@ -347,6 +347,7 @@ async def prepare(file: UploadFile = File(...), case_label: str = "", source_typ
 async def save_masks(payload: MaskPayload):
     mask_started = time.perf_counter()
     state = _load_state(payload.test_id)
+    state.setdefault("timings", {})
     width, height = state["input"]["width"], state["input"]["height"]
     completion_value = payload.masks.get("completion_mask") or payload.masks.get("completion_canonical")
     occluder_value = payload.masks.get("occluder_mask") or payload.masks.get("occluder")
@@ -439,6 +440,7 @@ def run_completion(payload: RunPayload):
     if payload.completion_mode != "manual":
         raise HTTPException(400, {"error_code": "COMPLETION_MODE_UNSUPPORTED", "message": "V0.2 只支持 completion_mode=manual"})
     state = _load_state(payload.test_id)
+    state.setdefault("timings", {})
     state["completion_mode"] = "manual"
     mask_state = state.get("completion_mask", {})
     if not mask_state.get("eligible_for_v0_1"):
