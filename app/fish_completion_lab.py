@@ -542,6 +542,7 @@ def run_completion(payload: RunPayload):
     raise HTTPException(503, error)
 
 
+@router.get("/api/debug/fish-completion-lab-v02/worker-status")
 @router.get("/api/debug/fish-completion-lab/worker-status")
 def worker_status():
     try:
