@@ -427,7 +427,7 @@ async def run(request: Request, db=Depends(get_db)):
                 with Image.open(io.BytesIO(generated)) as generated_image:
                     final_bytes, visible_change = _compose(crop, generated_image, completion)
                 final_uri = _persist(test_id, f"final_result_{degree:g}.png", final_bytes, "image/png")
-                item_result.update({"status": "SUCCESS", "result_uri": worker.get("result_uri"), "output_asset": output_uri, "final_asset": final_uri, "worker_ms": round((time.perf_counter() - result_started) * 1000, 2), "inference_time_ms": worker.get("inference_time_ms"), "visible_pixel_change_ratio": visible_change, "fish_identity_check": "PENDING", "background_change": "PENDING"})
+                item_result.update({"status": "SUCCESS", "result_uri": worker.get("result_uri"), "output_asset": output_uri, "final_asset": final_uri, "worker_ms": round((time.perf_counter() - result_started) * 1000, 2), "inference_time_ms": worker.get("inference_time_ms"), "visible_pixel_change_ratio": visible_change, "fish_identity_check": "PENDING", "background_change": "PENDING", "result_preview": _data_url(final_bytes, "image/png")})
                 report["assets"][f"powerpaint_output_{degree:g}"] = output_uri
                 report["assets"][f"final_result_{degree:g}"] = final_uri
                 item_result["shape_guided_report"] = shape_guided_report_entry(
