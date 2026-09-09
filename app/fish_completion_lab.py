@@ -265,15 +265,46 @@ def completion_dataset_images(dataset_version: str, split: str | None = None, sp
     return [{"dataset_version": row.dataset_version, "dataset_item_id": row.id, "batch_id": row.batch_id, "image_id": row.image_id, "species": row.species_name, "species_key": row.species_key, "split": row.split, "gcs_uri": row.gcs_uri, "preview_url": f"/media/{row.batch_id}/{row.image_id}"} for row in rows]
 
 
+def _read_dataset_image(item: DatasetItem) -> bytes:
+    uri = (item.gcs_uri or "").strip()
+    if not uri.startswith("gs://") or "/" not in uri[5:]:
+        raise HTTPException(status_code=422, detail="DATASET_IMAGE_URI_INVALID")
+    bucket_name, object_name = uri[5:].split("/", 1)
+    try:
+        return storage.Client().bucket(bucket_name).blob(object_name).download_as_bytes(timeout=120)
+    except Exception as exc:
+        logger.exception("Dataset image read failed; dataset_item_id=%s", item.id)
+        raise HTTPException(status_code=502, detail="DATASET_IMAGE_READ_FAILED") from exc
+
+
 @router.post("/api/debug/fish-completion-lab/prepare")
-async def prepare(file: UploadFile = File(...), case_label: str = Form(default=""), source_type: str = Form(default="local_upload"), dataset_version: str = Form(default=""), dataset_item_id: str = Form(default="")):
+async def prepare(file: UploadFile | None = File(default=None), case_label: str = Form(default=""), source_type: str = Form(default="local_upload"), dataset_version: str = Form(default=""), dataset_item_id: str = Form(default=""), db=Depends(get_db)):
     prepare_started = time.perf_counter()
-    data = await file.read(MAX_BYTES + 1)
-    if not data or len(data) > MAX_BYTES:
-        return _json_error(400, "INVALID_IMAGE_UPLOAD", "图片为空或超过 25 MiB")
     test_id = "FCL_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + secrets.token_hex(2)
     source = None
     try:
+        if source_type == "dataset_freeze" or dataset_item_id:
+            if not dataset_version or not dataset_item_id:
+                raise HTTPException(status_code=400, detail="DATASET_SELECTION_REQUIRED")
+            dataset = db.get(DatasetVersion, dataset_version)
+            if not dataset or dataset.status != "FROZEN":
+                raise HTTPException(status_code=409, detail="DATASET_VERSION_NOT_FROZEN")
+            try:
+                item_id = int(dataset_item_id)
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail="DATASET_ITEM_ID_INVALID") from exc
+            dataset_item = db.scalar(select(DatasetItem).where(DatasetItem.dataset_version == dataset_version, DatasetItem.id == item_id))
+            if not dataset_item:
+                raise HTTPException(status_code=404, detail="DATASET_ITEM_NOT_FOUND")
+            data = _read_dataset_image(dataset_item)
+            input_filename = dataset_item.image_id or f"dataset-{dataset_item.id}"
+        else:
+            if file is None:
+                raise HTTPException(status_code=400, detail="IMAGE_UPLOAD_REQUIRED")
+            data = await file.read(MAX_BYTES + 1)
+            input_filename = file.filename or "uploaded"
+        if not data or len(data) > MAX_BYTES:
+            return _json_error(400, "INVALID_IMAGE_UPLOAD", "图片为空或超过 25 MiB")
         decode_started = time.perf_counter()
         with Image.open(io.BytesIO(data)) as uploaded:
             source = normalize_android_source(uploaded)
@@ -312,7 +343,7 @@ async def prepare(file: UploadFile = File(...), case_label: str = Form(default="
         state = {
             "report_version": LAB_VERSION,
             "runtime": _runtime(test_id),
-            "input": {"image_id": hashlib.sha256(data).hexdigest()[:16], "filename": file.filename or "uploaded", "case_label": case_label[:200], "source_type": source_type[:32], "dataset_version": dataset_version[:128] or None, "dataset_item_id": dataset_item_id[:80] or None, "width": source.width, "height": source.height, "orientation": "landscape" if source.width >= source.height else "portrait", "size_bytes": len(data)},
+            "input": {"image_id": hashlib.sha256(data).hexdigest()[:16], "filename": input_filename, "case_label": case_label[:200], "source_type": source_type[:32], "dataset_version": dataset_version[:128] or None, "dataset_item_id": dataset_item_id[:80] or None, "width": source.width, "height": source.height, "orientation": "landscape" if source.width >= source.height else "portrait", "size_bytes": len(data)},
             "detector": detector,
             "segmentation": {"model": "SAM_VIT_B", "quality": result.quality.value, "mask_area_ratio": round(result.mask_area_ratio, 6), "edge_ratio": round(result.edge_ratio, 6), "connected_components": result.connected_components},
             "mask_refinement": {"formula": "(raw_sam OR visible_add) AND NOT remove"},
