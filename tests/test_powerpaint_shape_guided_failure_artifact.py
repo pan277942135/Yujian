@@ -1,5 +1,6 @@
 import asyncio
 import io
+import json
 from types import SimpleNamespace
 
 import numpy as np
@@ -56,13 +57,19 @@ def _patch_runtime(monkeypatch, mask, worker_health=None, worker_result=None):
     return _Request(), _DB(item, dataset)
 
 
+def _response_status_and_body(response):
+    if isinstance(response, dict):
+        return 200, json.dumps(response)
+    return response.status_code, response.body.decode()
+
+
 def test_worker_timeout_persists_all_failure_artifacts(monkeypatch):
     visible = np.ones((24, 32), dtype=bool)
     visible[10:14, 14:18] = False
     request, db = _patch_runtime(monkeypatch, visible, worker_health=lambda: (_ for _ in ()).throw(TimeoutError("timeout")))
     response = asyncio.run(lab.run(request, db))
-    assert response.status_code == 503
-    body = response.body.decode()
+    status, body = _response_status_and_body(response)
+    assert status == 503
     for name in ("original", "detector_crop", "sam_visible", "sam_mask", "completion_mask", "detector_report", "sam_report", "completion_report", "shape_guided_request", "shape_guided_response", "report", "error"):
         assert name in body
     assert "FAILED_WORKER" in body
@@ -79,8 +86,8 @@ def test_complete_fish_is_not_required_and_does_not_call_worker(monkeypatch):
 
     request, db = _patch_runtime(monkeypatch, visible, worker_health=fail_worker)
     response = asyncio.run(lab.run(request, db))
-    assert response.status_code == 200
-    body = response.body.decode()
+    status, body = _response_status_and_body(response)
+    assert status == 200
     assert "SUCCESS_NOT_REQUIRED" in body
     assert "COMPLETE_FISH" in body
     assert called["count"] == 0
@@ -96,8 +103,8 @@ def test_powerpaint_exception_is_classified_and_report_is_persisted(monkeypatch)
         worker_result=lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("inference failed")),
     )
     response = asyncio.run(lab.run(request, db))
-    assert response.status_code == 502
-    body = response.body.decode()
+    status, body = _response_status_and_body(response)
+    assert status == 502
     assert "FAILED_POWERPAINT" in body
     assert "shape_guided_response" in body
     assert "report" in body
@@ -115,9 +122,8 @@ def test_successful_generation_persists_report_and_final(monkeypatch):
         worker_result=lambda **_kwargs: {"http_status": 200, "result_uri": result_uri, "inference_time_ms": 12},
     )
     response = asyncio.run(lab.run(request, db))
-    assert response.status_code == 200
-    body = response.body.decode()
+    status, body = _response_status_and_body(response)
+    assert status == 200
     assert "SUCCESS_COMPLETED" in body
     assert "shape_guided_report" in body
     assert "final_result" in body
-
