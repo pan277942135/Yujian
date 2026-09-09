@@ -1,6 +1,7 @@
 """Isolated Fish Completion Lab v0.2 automatic pipeline."""
 from __future__ import annotations
 
+import base64
 import io
 import logging
 import os
@@ -334,11 +335,15 @@ async def auto_run(file: UploadFile | None = File(default=None), case_label: str
             input_filename = file.filename or "uploaded"
         if not data or len(data) > MAX_BYTES:
             return _error(400, "INVALID_IMAGE_UPLOAD", "图片为空或超过 25 MiB", "input")
+        decode_started = datetime.now(timezone.utc)
         with Image.open(io.BytesIO(data)) as uploaded:
             source = normalize_android_source(uploaded)
+        input_decode_ms = round((datetime.now(timezone.utc) - decode_started).total_seconds() * 1000, 2)
         original = source.convert("RGB")
+        detector_started = datetime.now(timezone.utc)
         detector_run = detect(source)
         assessment = assess_detections(detector_run.detections)
+        detector_ms = round((datetime.now(timezone.utc) - detector_started).total_seconds() * 1000, 2)
         primary = assessment.primary
         if primary is None:
             return _error(422, "NO_RELIABLE_PRIMARY_FISH", "未找到可靠主鱼体", "detector")
@@ -346,15 +351,20 @@ async def auto_run(file: UploadFile | None = File(default=None), case_label: str
         bbox_pixel = _bbox_to_pixels(primary.box, source.width, source.height)
         if bbox_pixel[2] <= bbox_pixel[0] or bbox_pixel[3] <= bbox_pixel[1]:
             return _error(422, "INVALID_PRIMARY_BBOX", "主鱼体检测框无效", "detector", {"bbox_normalized": [bbox_normalized.x1, bbox_normalized.y1, bbox_normalized.x2, bbox_normalized.y2], "bbox_pixel": list(bbox_pixel)})
+        sam_started = datetime.now(timezone.utc)
         result = generate_fish_cutout(source, primary.box)
+        sam_ms = round((datetime.now(timezone.utc) - sam_started).total_seconds() * 1000, 2)
         raw_mask = result.mask.astype(bool)
+        analysis_started = datetime.now(timezone.utc)
         analysis, completion_candidate, completion_mask, structural_envelope = analyze_completion_details(raw_mask, bbox_pixel)
+        analysis_ms = round((datetime.now(timezone.utc) - analysis_started).total_seconds() * 1000, 2)
         analysis_visible_mask = _remove_mask_noise(raw_mask, bbox_pixel)
         worker = {"status": "NOT_REQUIRED", "skip_reason": "completion_not_required", "endpoint_configured": bool(os.getenv("FISH_COMPLETION_WORKER_URL", "").strip())}
         generated_bytes = None
         compose = {"generated_pixels": 0, "visible_changed_pixels": 0, "visible_pixel_change_ratio": 0.0}
         final_bytes = _png(Image.fromarray(np.dstack([np.asarray(original), np.where(raw_mask, 255, 0).astype("uint8")]), "RGBA"))
         roi = None
+        mask_ms = round((datetime.now(timezone.utc) - analysis_started).total_seconds() * 1000, 2)
         original_uri = _persist(test_id, "01_original_image.png", _png(original), "image/png")
         completion_uri = _persist(test_id, "03_auto_completion_mask.png", _mask_bytes(completion_mask), "image/png")
         if analysis["severity"] == "NOT_ELIGIBLE":
@@ -362,7 +372,9 @@ async def auto_run(file: UploadFile | None = File(default=None), case_label: str
         elif analysis["completion_required"]:
             worker = {"status": "WORKER_UNAVAILABLE", "skip_reason": "worker_endpoint_not_configured", "endpoint_configured": bool(os.getenv("FISH_COMPLETION_WORKER_URL", "").strip())}
             try:
+                roi_started = datetime.now(timezone.utc)
                 roi = _build_completion_roi(original, completion_mask, test_id)
+                roi_ms = round((datetime.now(timezone.utc) - roi_started).total_seconds() * 1000, 2)
                 worker["roi"] = {k: roi[k] for k in ("box", "original_size", "worker_size")}
                 if not worker["endpoint_configured"]:
                     raise CompletionWorkerError("COMPLETION_WORKER_NOT_CONFIGURED", "FISH_COMPLETION_WORKER_URL is not configured")
@@ -371,10 +383,22 @@ async def auto_run(file: UploadFile | None = File(default=None), case_label: str
                 if health.get("status") != "READY":
                     raise CompletionWorkerError("COMPLETION_WORKER_HEALTH_NOT_READY", "Worker health check did not return READY")
                 worker["status"] = "WORKER_RUNNING"
-                worker_result = invoke_completion_worker(image_uri=roi["image_uri"], mask_uri=roi["mask_uri"], prompt="FIXED_FISH_COMPLETION_V0.2")
-                generated_bytes = _read_persist(worker_result["result_uri"])
+                worker_started = datetime.now(timezone.utc)
+                worker_result = invoke_completion_worker(image_uri=roi["image_uri"], mask_uri=roi["mask_uri"], prompt=("Complete the missing part of the fish body. Preserve original fish species, anatomy, scales, fins and natural texture. Do not modify visible fish pixels."))
+                worker_ms = round((datetime.now(timezone.utc) - worker_started).total_seconds() * 1000, 2)
+                worker["inference_time_ms"] = worker_result.get("inference_time_ms")
+                worker["model_version"] = worker_result.get("model_version")
+                generated_ref = worker_result.get("result_uri")
+                if generated_ref and generated_ref.startswith("data:"):
+                    generated_bytes = base64.b64decode(generated_ref.split(",", 1)[1])
+                elif (worker_result.get("generated_roi") or "").startswith("data:"):
+                    generated_bytes = base64.b64decode(worker_result["generated_roi"].split(",", 1)[1])
+                else:
+                    generated_bytes = _read_persist(generated_ref)
                 generated_image = Image.open(io.BytesIO(generated_bytes)).convert("RGB")
+                compose_started = datetime.now(timezone.utc)
                 final_bytes, compose, final_mask = _protected_compose(original, raw_mask, completion_mask, generated_image, roi)
+                compose_ms = round((datetime.now(timezone.utc) - compose_started).total_seconds() * 1000, 2)
                 worker = {"status": "WORKER_EXECUTED", "endpoint_configured": True, "skip_reason": None, "roi": {k: roi[k] for k in ("box", "original_size", "worker_size")}, "result": {"model_version": worker_result.get("model_version"), "inference_time_ms": worker_result.get("inference_time_ms")}}
             except CompletionWorkerError as exc:
                 worker = {**worker, "status": "WORKER_TIMEOUT" if "TIMEOUT" in exc.error_code else "WORKER_FAILED", "error": {"error_code": exc.error_code, "message": str(exc)}}
