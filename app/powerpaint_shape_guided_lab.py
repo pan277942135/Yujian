@@ -271,6 +271,26 @@ def _worker_base_url() -> str:
     return os.getenv("FISH_COMPLETION_WORKER_URL", "").strip().rstrip("/")
 
 
+def _check_worker_health() -> dict[str, Any]:
+    base_url = _worker_base_url()
+    if not base_url:
+        raise RuntimeError("SHAPE_GUIDED_WORKER_NOT_CONFIGURED")
+    req = urllib.request.Request(f"{base_url}/health", method="GET", headers={"Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            status_code = response.status
+            body = response.read()
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise RuntimeError(f"SHAPE_GUIDED_WORKER_HEALTH_UNREACHABLE: {exc}") from exc
+    if status_code != 200:
+        raise RuntimeError(f"SHAPE_GUIDED_WORKER_HEALTH_HTTP_{status_code}")
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("SHAPE_GUIDED_WORKER_HEALTH_INVALID_JSON") from exc
+    return {"status_code": status_code, **payload} if isinstance(payload, dict) else {"status_code": status_code}
+
+
 def _invoke_shape_guided(*, image_uri: str, mask_uri: str, fitting_degree: float) -> dict[str, Any]:
     base_url = _worker_base_url()
     if not base_url:
@@ -282,7 +302,8 @@ def _invoke_shape_guided(*, image_uri: str, mask_uri: str, fitting_degree: float
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(f"{base_url}/completion", data=payload, method="POST", headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=float(os.getenv("FISH_COMPLETION_WORKER_TIMEOUT_SECONDS", "900"))) as response:
+        configured_timeout = float(os.getenv("FISH_COMPLETION_WORKER_TIMEOUT_SECONDS", "120"))
+        with urllib.request.urlopen(req, timeout=min(max(configured_timeout, 1.0), 120.0)) as response:
             status_code = response.status
             body = response.read()
     except urllib.error.HTTPError as exc:
@@ -413,10 +434,18 @@ async def run(request: Request, db=Depends(get_db)):
             ],
             "timings": {"total_ms": None},
         }
+        health_error = None
+        try:
+            report["worker"] = {"health": _check_worker_health()}
+        except Exception as exc:
+            health_error = str(exc)
+            report["worker"] = {"health": {"status": "unreachable", "error": health_error}}
         for degree in degrees:
             result_started = time.perf_counter()
             item_result: dict[str, Any] = {"task_mode": TASK_MODE, "fitting_degree": degree, "status": "PENDING", "visible_pixel_change_ratio": None, "generated_area_pixels": int(completion.sum()), "result_uri": None}
             try:
+                if health_error:
+                    raise RuntimeError(health_error)
                 worker = _invoke_shape_guided(image_uri=detector_uri, mask_uri=completion_mask_uri, fitting_degree=degree)
                 generated = _decode_data_url(worker.get("result_uri")) or _decode_data_url(worker.get("generated_roi"))
                 if generated is None and worker.get("result_uri"):
