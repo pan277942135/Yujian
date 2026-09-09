@@ -121,6 +121,7 @@ def test_successful_generation_persists_report_and_final(monkeypatch):
         worker_health=lambda: {"status_code": 200, "status": "ok"},
         worker_result=lambda **_kwargs: {"http_status": 200, "result_uri": result_uri, "inference_time_ms": 12},
     )
+    monkeypatch.setattr(lab, "_read_uri", lambda _uri: result_bytes)
     response = asyncio.run(lab.run(request, db))
     status, body = _response_status_and_body(response)
     assert status == 200
