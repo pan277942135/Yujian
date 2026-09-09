@@ -82,6 +82,12 @@ def _data_url(data: bytes, media_type: str) -> str:
     return f"data:{media_type};base64,{base64.b64encode(data).decode()}"
 
 
+def _decode_data_url(value: str | None) -> bytes | None:
+    if not isinstance(value, str) or not value.startswith("data:") or "," not in value:
+        return None
+    return base64.b64decode(value.split(",", 1)[1])
+
+
 def _read_uri(uri: str) -> bytes:
     if uri.startswith("gs://"):
         bucket_name, object_name = uri[5:].split("/", 1)
@@ -270,10 +276,10 @@ def run_direct_lab(dataset_version: str, dataset_item_id: int, db=Depends(get_db
             result_uri = worker_result.get("result_uri")
             generated_uri = None
             generated_preview = worker_result.get("generated_roi")
-            if generated_preview and isinstance(generated_preview, str) and generated_preview.startswith("data:"):
-                encoded = generated_preview.split(",", 1)[1]
-                generated_bytes = base64.b64decode(encoded)
+            generated_bytes = _decode_data_url(result_uri) or _decode_data_url(generated_preview)
+            if generated_bytes is not None:
                 generated_uri = _persist(test_id, "powerpaint_result.png", generated_bytes, "image/png")
+                generated_preview = _data_url(generated_bytes, "image/png")
             elif result_uri:
                 generated_bytes = _read_uri(result_uri)
                 generated_uri = _persist(test_id, "powerpaint_result.png", generated_bytes, "image/png")
