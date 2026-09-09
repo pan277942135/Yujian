@@ -37,13 +37,13 @@ from app.completion_worker_client import (
     check_completion_worker,
     invoke_completion_worker,
 )
-from app.completion_decision import AUTO_COMPLETION, MANUAL_DEBUG, decide_completion
+from app.completion_decision import AUTO_COMPLETION, MANUAL_DEBUG, STRUCTURAL_THRESHOLDS, CompletionDecision, decide_completion
 
 router = APIRouter(tags=["fish-completion-lab"])
 templates = Jinja2Templates(directory="app/templates")
-LAB_VERSION = "YUJIAN_FISH_COMPLETION_LAB_V0.3"
+LAB_VERSION = "YUJIAN_FISH_COMPLETION_LAB_V0.3.1"
 MAX_BYTES = 25 * 1024 * 1024
-PREFIX = "experiments/fish_completion_lab/v0.3"
+PREFIX = "experiments/fish_completion_lab/v0.3.1"
 logger = logging.getLogger(__name__)
 
 
@@ -62,7 +62,7 @@ def _progress(state: dict[str, Any]) -> list[dict[str, Any]]:
         {"stage": "input", "label": "图片输入", "status": "READY", "elapsed_ms": timings.get("input_decode_ms"), "result": state.get("input", {}).get("filename")},
         {"stage": "detector", "label": "Detector / BBox", "status": "READY" if detector else "PENDING", "elapsed_ms": timings.get("detector_ms"), "result": {"bbox_pixels": detector.get("bbox_pixels"), "bbox_normalized": detector.get("primary_bbox_normalized"), "confidence": detector.get("primary_confidence"), "area_ratio": detector.get("bbox_area_ratio")}},
         {"stage": "sam", "label": "SAM 分割", "status": "READY" if state.get("segmentation") else "PENDING", "elapsed_ms": timings.get("sam_ms"), "result": state.get("segmentation", {}).get("quality")},
-        {"stage": "mask", "label": "Mask 标注", "status": "READY" if state.get("completion_mask") else "PENDING", "elapsed_ms": timings.get("mask_edit_ms"), "result": state.get("completion_mask", {}).get("completion_area_pixels")},
+        {"stage": "mask", "label": "Structural Decision / Completion Mask", "status": state.get("completion_decision", {}).get("status", "PENDING"), "elapsed_ms": timings.get("mask_generation_ms") or timings.get("mask_edit_ms"), "result": {"case_class": state.get("completion_decision", {}).get("case_class"), "completion_percent": state.get("completion_decision", {}).get("completion_percent")}},
         {"stage": "roi", "label": "ROI 提取", "status": "READY" if assets.get("completion_roi") else "PENDING", "elapsed_ms": timings.get("roi_ms"), "result": state.get("roi")},
         {"stage": "powerpaint", "label": "PowerPaint", "status": completion.get("worker_status") or completion.get("status", "PENDING"), "elapsed_ms": timings.get("worker_ms"), "result": completion.get("model_version")},
         {"stage": "compose", "label": "Protected Compose", "status": "READY" if assets.get("final_asset") else "PENDING", "elapsed_ms": timings.get("compose_ms"), "result": {"visible_pixel_change_ratio": composition.get("visible_pixel_change_ratio"), "generated_pixels": composition.get("generated_pixels")}},
@@ -162,44 +162,86 @@ def _components(mask: np.ndarray) -> list[int]:
     return sorted(sizes, reverse=True)
 
 
-def _stats(raw: np.ndarray, add: np.ndarray, remove: np.ndarray, occluder: np.ndarray, completion: np.ndarray) -> dict[str, Any]:
+def _stats(
+    raw: np.ndarray,
+    add: np.ndarray,
+    remove: np.ndarray,
+    occluder: np.ndarray,
+    completion: np.ndarray,
+    *,
+    mode: str = AUTO_COMPLETION,
+    decision_confidence: float = 1.0,
+    execution_allowed_override: bool | None = None,
+) -> dict[str, Any]:
     refined = (raw | add) & ~remove
-    illegal = completion & ~occluder
+    completion = np.asarray(completion, dtype=bool)
+    refined = np.asarray(refined, dtype=bool)
+    if mode == AUTO_COMPLETION:
+        illegal = completion & refined
+        safety_rule = "completion_mask ∩ refined_visible_mask == 0"
+    else:
+        illegal = completion & ~np.asarray(occluder, dtype=bool)
+        safety_rule = "manual completion_mask ⊆ occluder_mask"
     refined_area = int(refined.sum())
     completion_area = int(completion.sum())
     denominator = refined_area + completion_area
     ratio = completion_area / denominator if denominator else 0.0
     if ratio == 0:
-        level, eligible_reason = "LIGHT", "COMPLETION_NOT_REQUIRED"
+        level = "NONE"
     elif ratio <= .05:
-        level, eligible_reason = "LIGHT", "WITHIN_LIGHT_LIMIT"
+        level = "LIGHT"
     elif ratio <= .10:
-        level, eligible_reason = "MEDIUM", "WITHIN_MEDIUM_LIMIT"
-    elif ratio <= .15:
-        level, eligible_reason = "HEAVY", "WITHIN_HEAVY_LIMIT"
+        level = "MEDIUM"
     elif ratio <= .20:
-        level, eligible_reason = "EXTREME_EXPERIMENTAL", "WITHIN_EXPERIMENTAL_LIMIT"
+        level = "HEAVY"
+    elif ratio <= .35:
+        level = "LARGE_EXPERIMENTAL"
     else:
-        level, eligible_reason = "NOT_ELIGIBLE", "GENERATED_RATIO_OVER_20_PERCENT"
+        level = "VERY_LARGE_EXPERIMENTAL"
     regions = len(_components(completion))
-    if regions > 2:
-        eligible_reason = "COMPLETION_COMPLEX"
+    pathological = regions > int(STRUCTURAL_THRESHOLDS["max_pathological_completion_regions"])
+    mask_valid = not bool(illegal.any()) and not pathological
+    if execution_allowed_override is None:
+        execution_allowed = bool(
+            mode == AUTO_COMPLETION
+            and mask_valid
+            and completion_area > 0
+            and float(decision_confidence) >= float(STRUCTURAL_THRESHOLDS["min_large_experimental_confidence"])
+        )
+    else:
+        execution_allowed = bool(execution_allowed_override and mask_valid)
+    if completion_area == 0:
+        execution_reason = "NOT_REQUIRED"
+    elif not mask_valid:
+        execution_reason = "MASK_GEOMETRY_INVALID" if not pathological else "PATHOLOGICAL_MASK"
+    elif not execution_allowed:
+        execution_reason = "STRUCTURAL_CONFIDENCE_BELOW_EXECUTION_THRESHOLD"
+    else:
+        execution_reason = "STRUCTURAL_EVIDENCE_SUFFICIENT" if mode == AUTO_COMPLETION else "MANUAL_MASK_VALID"
     return {
         "raw_sam_area_pixels": int(raw.sum()),
         "visible_added_pixels": int(add.sum()),
         "removed_nonfish_pixels": int(remove.sum()),
         "refined_visible_area_pixels": refined_area,
         "occluder_area_pixels": int(occluder.sum()),
-        "occluder_region_count": len(_components(occluder)),
+        "occluder_region_count": len(_components(np.asarray(occluder, dtype=bool))),
         "completion_area_pixels": completion_area,
         "completion_region_count": regions,
         "estimated_final_fish_area_pixels": refined_area + completion_area,
         "generated_pixel_ratio": round(ratio, 6),
+        "completion_ratio": round(ratio, 6),
+        "completion_percent": round(ratio * 100.0, 2),
         "completion_level": level,
-        "completion_mask_valid": not bool(illegal.any()),
+        "completion_mask_valid": mask_valid,
+        "mask_geometrically_valid": mask_valid,
+        "visible_overlap_pixels": int((completion & refined).sum()),
         "illegal_completion_pixels": int(illegal.sum()),
-        "eligibility_reason": eligible_reason,
-        "eligible_for_v0_1": bool(not illegal.any() and ratio <= .20 and regions <= 2),
+        "eligibility_reason": execution_reason,
+        "execution_allowed": execution_allowed,
+        "execution_reason": execution_reason,
+        "safety_rule": safety_rule,
+        "pathological_completion_mask": pathological,
+        "mode": mode,
     }
 
 
@@ -235,39 +277,96 @@ def _load_state(test_id: str) -> dict[str, Any]:
 def _save_state(test_id: str, state: dict[str, Any]) -> None:
     _save_json(test_id, "16_test_report.json", state)
 
-def _apply_masks(test_id: str, state: dict[str, Any], masks: dict[str, np.ndarray], *, source: str) -> tuple[dict[str, Any], bytes]:
-    """Persist masks and update state for automatic or manual execution."""
+def _axis_overlay(original: Image.Image, decision: CompletionDecision) -> bytes:
+    canvas = original.convert("RGBA")
+    from PIL import ImageDraw
+    draw = ImageDraw.Draw(canvas)
+    start, end = decision.axis_endpoints_xy
+    width = max(2, min(canvas.size) // 180)
+    draw.line((start[0], start[1], end[0], end[1]), fill=(0, 220, 255, 255), width=width)
+    draw.ellipse((start[0] - width, start[1] - width, start[0] + width, start[1] + width), fill=(0, 220, 255, 255))
+    draw.ellipse((end[0] - width, end[1] - width, end[0] + width, end[1] + width), fill=(255, 180, 0, 255))
+    return _png(canvas)
+
+
+def _apply_masks(
+    test_id: str,
+    state: dict[str, Any],
+    masks: dict[str, np.ndarray],
+    *,
+    source: str,
+    decision: CompletionDecision | None = None,
+) -> tuple[dict[str, Any], bytes]:
+    """Persist AUTO or MANUAL masks with separate safety semantics."""
     mask_started = time.perf_counter()
     width, height = state["input"]["width"], state["input"]["height"]
     raw_mask = np.asarray(Image.open(io.BytesIO(_read_persist(state["assets"]["sam_raw_mask"]))).convert("L")) > 127
     if raw_mask.shape != (height, width):
         raise HTTPException(500, "SAM mask dimensions do not match input")
     zeros = np.zeros((height, width), dtype=bool)
-    stats = _stats(raw_mask, masks.get("visible_add", zeros), masks.get("remove", zeros), masks.get("occluder", zeros), masks.get("completion_canonical", zeros))
+    completion = np.asarray(masks.get("completion_canonical", zeros), dtype=bool)
+    occluder = np.asarray(masks.get("occluder", zeros), dtype=bool)
+    mode = AUTO_COMPLETION if source == "AUTO" else MANUAL_DEBUG
+    stats = _stats(
+        raw_mask,
+        masks.get("visible_add", zeros),
+        masks.get("remove", zeros),
+        occluder,
+        completion,
+        mode=mode,
+        decision_confidence=float(decision.decision_confidence if decision else state.get("completion_decision", {}).get("decision_confidence", 1.0)),
+        execution_allowed_override=(
+            decision.execution_allowed if decision is not None else None
+        ),
+    )
     if not stats["completion_mask_valid"]:
-        raise HTTPException(422, {"error_code": "COMPLETION_MASK_NOT_SUBSET_OF_OCCLUDER", "illegal_pixels": stats["illegal_completion_pixels"]})
+        error_code = "AUTO_COMPLETION_MASK_OVERLAPS_VISIBLE_FISH" if mode == AUTO_COMPLETION else "COMPLETION_MASK_NOT_SUBSET_OF_OCCLUDER"
+        raise HTTPException(422, {"error_code": error_code, "illegal_pixels": stats["illegal_completion_pixels"]})
     original = Image.open(io.BytesIO(_read_persist(state["assets"]["original"]))).convert("RGB")
     refined = (raw_mask | masks.get("visible_add", zeros)) & ~masks.get("remove", zeros)
     refined_fish = _png(Image.fromarray(np.dstack([np.asarray(original), np.where(refined, 255, 0).astype("uint8")]), "RGBA"))
-    asset_uris = {}
+    asset_uris: dict[str, str] = {}
     for name, mask in (
         ("05_visible_add_mask.png", masks.get("visible_add", zeros)),
         ("06_remove_mask.png", masks.get("remove", zeros)),
         ("07_refined_visible_mask.png", refined),
-        ("09_occluder_mask.png", masks.get("occluder", zeros)),
-        ("10_completion_mask.png", masks.get("completion_canonical", zeros)),
+        ("09_occluder_mask.png", occluder),
+        ("10_completion_mask.png", completion),
     ):
         asset_uris[name] = _persist(test_id, name, _mask_bytes(mask), "image/png")
     asset_uris["refined_visible"] = _persist(test_id, "08_refined_visible_fish.png", refined_fish, "image/png")
+    if decision is not None and source == "AUTO":
+        structural_assets = {
+            "11_structural_axis_overlay.png": _axis_overlay(original, decision),
+            "12_estimated_full_fish_mask.png": _mask_bytes(decision.estimated_full_fish_mask),
+            "13_auto_completion_candidate.png": _mask_bytes(decision.completion_mask),
+            "14_auto_completion_mask.png": _mask_bytes(completion),
+        }
+        if decision.occluder_mask.any():
+            structural_assets["15_auto_occluder_mask.png"] = _mask_bytes(decision.occluder_mask)
+        for name, content in structural_assets.items():
+            asset_uris[name] = _persist(test_id, name, content, "image/png")
     state.setdefault("timings", {})["mask_generation_ms" if source == "AUTO" else "mask_edit_ms"] = round((time.perf_counter() - mask_started) * 1000, 2)
     state["mask_refinement"].update(stats)
     state["occlusion"] = {"occluder_area_pixels": stats["occluder_area_pixels"], "occluder_region_count": stats["occluder_region_count"]}
-    state["completion_mask"] = {key: stats[key] for key in ("completion_area_pixels", "completion_region_count", "estimated_final_fish_area_pixels", "generated_pixel_ratio", "completion_level", "eligible_for_v0_1", "eligibility_reason", "completion_mask_valid")}
+    state["completion_mask"] = {key: stats[key] for key in (
+        "completion_area_pixels", "completion_region_count", "estimated_final_fish_area_pixels", "generated_pixel_ratio",
+        "completion_ratio", "completion_percent", "completion_level", "completion_mask_valid", "mask_geometrically_valid",
+        "visible_overlap_pixels", "execution_allowed", "execution_reason",
+    )}
     state["visible_fish_mask"] = asset_uris["07_refined_visible_mask.png"]
-    state["assets"].update({"visible_add": asset_uris["05_visible_add_mask.png"], "remove": asset_uris["06_remove_mask.png"], "refined_visible_mask": asset_uris["07_refined_visible_mask.png"], "occluder": asset_uris["09_occluder_mask.png"], "occluder_mask": asset_uris["09_occluder_mask.png"], "completion_mask": asset_uris["10_completion_mask.png"], "completion_mask_canonical": asset_uris["10_completion_mask.png"], "refined_visible": asset_uris["refined_visible"]})
-    state.setdefault("completion_decision", {"mode": AUTO_COMPLETION if source == "AUTO" else MANUAL_DEBUG, "source": source, "status": "MASK_READY", "completion_required": bool(stats.get("completion_area_pixels"))})
-    state["completion_decision"]["source"] = source
-    state["completion_decision"]["mask_generated"] = bool(masks.get("completion_canonical", zeros).any())
+    state["assets"].update({
+        "visible_add": asset_uris["05_visible_add_mask.png"], "remove": asset_uris["06_remove_mask.png"],
+        "refined_visible_mask": asset_uris["07_refined_visible_mask.png"], "occluder": asset_uris["09_occluder_mask.png"],
+        "occluder_mask": asset_uris["09_occluder_mask.png"], "completion_mask": asset_uris["10_completion_mask.png"],
+        "completion_mask_canonical": asset_uris["10_completion_mask.png"], "refined_visible": asset_uris["refined_visible"],
+        **{key.removesuffix(".png"): value for key, value in asset_uris.items() if key.startswith(("11_", "12_", "13_", "14_", "15_"))},
+    })
+    if decision is not None:
+        state["completion_decision"] = {**decision.as_dict(), "execution_allowed": stats["execution_allowed"], "execution_reason": stats["execution_reason"]}
+    else:
+        state.setdefault("completion_decision", {"mode": mode, "source": source, "status": "MASK_READY", "completion_required": bool(stats.get("completion_area_pixels"))})
+        state["completion_decision"].update({"mode": mode, "source": source, "execution_allowed": stats["execution_allowed"], "execution_reason": stats["execution_reason"], "mask_generated": bool(completion.any())})
     state["progress"] = _progress(state)
     return stats, refined_fish
 
@@ -378,15 +477,24 @@ async def prepare(file: UploadFile | None = File(default=None), case_label: str 
         raw_mask_uri = _persist(test_id, "03_sam_raw_mask.png", _mask_bytes(raw_mask), "image/png")
         raw_transparent = result.cutout_png
         raw_transparent_uri = _persist(test_id, "04_sam_transparent_raw.png", raw_transparent, "image/png")
-        decision = decide_completion(raw_mask, tuple(bbox_pixels), (source.height, source.width), case_label=case_label, segmentation_quality=result.quality.value)
+        decision = decide_completion(
+            raw_mask,
+            tuple(bbox_pixels),
+            (source.height, source.width),
+            detector_assessment=assessment.status.value,
+            segmentation_quality=result.quality.value,
+            original_image=source,
+        )
         state = {
             "report_version": LAB_VERSION,
             "runtime": _runtime(test_id),
-            "input": {"image_id": hashlib.sha256(data).hexdigest()[:16], "filename": input_filename, "case_label": case_label[:200], "source_type": source_type[:32], "dataset_version": dataset_version[:128] or None, "dataset_item_id": dataset_item_id[:80] or None, "width": source.width, "height": source.height, "orientation": "landscape" if source.width >= source.height else "portrait", "size_bytes": len(data)},
+            "input": {"image_id": hashlib.sha256(data).hexdigest()[:16], "filename": input_filename, "expected_case_label": case_label[:200], "source_type": source_type[:32], "dataset_version": dataset_version[:128] or None, "dataset_item_id": dataset_item_id[:80] or None, "width": source.width, "height": source.height, "orientation": "landscape" if source.width >= source.height else "portrait", "size_bytes": len(data)},
             "detector": detector,
             "segmentation": {"model": "SAM_VIT_B", "quality": result.quality.value, "mask_area_ratio": round(result.mask_area_ratio, 6), "edge_ratio": round(result.edge_ratio, 6), "connected_components": result.connected_components},
             "mask_refinement": {"formula": "(raw_sam OR visible_add) AND NOT remove"},
             "completion_mode": AUTO_COMPLETION,
+            "expected_case_label": case_label[:200],
+            "debug": {"ground_truth_label": case_label[:200]},
             "completion_decision": decision.as_dict(),
             "completion": {"engine": "PowerPaintCompletionEngine", "model_type": os.getenv("FISH_COMPLETION_MODEL_TYPE", "powerpaint"), "model_version": os.getenv("FISH_COMPLETION_MODEL_VERSION") or None, "model_uri": os.getenv("FISH_COMPLETION_MODEL_URI") or None, "species_condition": "OFF", "fixed_prompt_id": "FIXED_FISH_COMPLETION_V0.1", "generation_count": 0, "retry_count": 0, "status": "NOT_REQUIRED" if not decision.completion_required else "MASK_READY"},
             "composition": {"observed_pixel_change_ratio": None, "final_visible_pixels": None, "generated_pixels": None, "formula": "Refined Visible + Generated Completion"},
@@ -398,12 +506,12 @@ async def prepare(file: UploadFile | None = File(default=None), case_label: str 
             "timings": {"input_decode_ms": input_decode_ms, "detector_ms": detector_ms, "sam_ms": sam_ms, "mask_edit_ms": None, "mask_generation_ms": None, "roi_ms": None, "worker_ms": None, "compose_ms": None, "prepare_total_ms": None},
         }
         auto_masks = {"visible_add": np.zeros_like(raw_mask, dtype=bool), "remove": np.zeros_like(raw_mask, dtype=bool), "occluder": decision.occluder_mask, "completion_canonical": decision.completion_mask}
-        statistics, refined_fish = _apply_masks(test_id, state, auto_masks, source="AUTO")
-        state["completion"]["status"] = "NOT_REQUIRED" if not decision.completion_required else "MASK_READY"
+        statistics, refined_fish = _apply_masks(test_id, state, auto_masks, source="AUTO", decision=decision)
+        state["completion"]["status"] = decision.status
         state["timings"]["prepare_total_ms"] = round((time.perf_counter() - prepare_started) * 1000, 2)
         state["progress"] = _progress(state)
         _save_state(test_id, state)
-        return {**state, "test_id": test_id, "statistics": statistics, "progress": state["progress"], "original": _data_url(original, "image/png"), "sam_raw_mask": _data_url(_mask_bytes(raw_mask), "image/png"), "sam_transparent": _data_url(raw_transparent, "image/png"), "refined_visible": _data_url(refined_fish, "image/png")}
+        return {**state, "test_id": test_id, "statistics": statistics, "progress": state["progress"], "original": _data_url(original, "image/png"), "sam_raw_mask": _data_url(_mask_bytes(raw_mask), "image/png"), "sam_transparent": _data_url(raw_transparent, "image/png"), "refined_visible": _data_url(refined_fish, "image/png"), "structural_envelope": _data_url(_mask_bytes(decision.estimated_full_fish_mask), "image/png"), "auto_completion_mask": _data_url(_mask_bytes(decision.completion_mask), "image/png")}
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
         return JSONResponse(status_code=exc.status_code, content={
@@ -506,11 +614,24 @@ def run_completion(payload: RunPayload):
     state.setdefault("timings", {})
     state["completion_mode"] = requested_mode
     decision = state.get("completion_decision", {})
-    if requested_mode == AUTO_COMPLETION and decision.get("status") == "NOT_ELIGIBLE":
-        raise HTTPException(422, {"error_code": "COMPLETION_NOT_ELIGIBLE", "message": "可见鱼体不足 50%，禁止自动补全"})
     mask_state = state.get("completion_mask", {})
-    if not mask_state.get("eligible_for_v0_1"):
-        raise HTTPException(422, {"error_code": "COMPLETION_NOT_ELIGIBLE", "message": "Completion Mask 不满足当前安全阈值"})
+    if requested_mode == AUTO_COMPLETION:
+        status = str(decision.get("status", "REVIEW_REQUIRED"))
+        if status == "NOT_REQUIRED":
+            state["completion"].update({"status": "NOT_REQUIRED", "generation_count": 0, "retry_count": 0})
+        elif status == "REVIEW_REQUIRED" or not decision.get("execution_allowed", mask_state.get("execution_allowed", False)):
+            state["completion"].update({"status": "REVIEW_REQUIRED", "generation_count": 0, "retry_count": 0})
+            state["errors"]["completion"] = {"error_code": "STRUCTURAL_REVIEW_REQUIRED", "message": "结构证据不足，未自动调用 PowerPaint"}
+            state["composition"]["total_processing_ms"] = round((time.perf_counter() - started) * 1000, 2)
+            state["timings"]["total_ms"] = state["composition"]["total_processing_ms"]
+            state["progress"] = _progress(state)
+            _save_state(payload.test_id, state)
+            return {"test_id": payload.test_id, "status": "REVIEW_REQUIRED", "timings": state["timings"], "progress": state["progress"], "report": state}
+        elif status not in {"MASK_READY", "LARGE_EXPERIMENTAL"}:
+            raise HTTPException(422, {"error_code": "AUTO_DECISION_UNSUPPORTED", "message": f"Unsupported AUTO decision status: {status}"})
+    else:
+        if not mask_state.get("mask_geometrically_valid", mask_state.get("completion_mask_valid", False)):
+            raise HTTPException(422, {"error_code": "COMPLETION_MASK_NOT_SUBSET_OF_OCCLUDER", "message": "Manual Completion Mask 不满足遮挡物安全规则"})
     if not decision.get("completion_required", mask_state.get("completion_area_pixels", 0) > 0) or mask_state.get("completion_area_pixels", 0) == 0:
         state["completion"].update({"status": "NOT_REQUIRED", "generation_count": 0, "retry_count": 0})
         state["composition"]["total_processing_ms"] = round((time.perf_counter() - started) * 1000, 2)
