@@ -446,8 +446,10 @@ def run_completion(payload: RunPayload):
     if mask_state.get("completion_area_pixels", 0) == 0:
         state["completion"].update({"status": "COMPLETION_NOT_REQUIRED", "generation_count": 0, "retry_count": 0})
         state["composition"]["total_processing_ms"] = round((time.perf_counter() - started) * 1000, 2)
+        state["timings"]["total_ms"] = state["composition"]["total_processing_ms"]
+        state["progress"] = _progress(state)
         _save_state(payload.test_id, state)
-        return {"test_id": payload.test_id, "status": "COMPLETION_NOT_REQUIRED", "report": state}
+        return {"test_id": payload.test_id, "status": "COMPLETION_NOT_REQUIRED", "timings": state["timings"], "progress": state["progress"], "report": state}
     if os.getenv("FISH_COMPLETION_ENABLED", "").strip().lower() == "false" or not os.getenv("FISH_COMPLETION_WORKER_URL", "").strip():
         error = {"error_code": "COMPLETION_WORKER_UNAVAILABLE", "message": "真实 PowerPaint Worker 未配置；请设置 FISH_COMPLETION_WORKER_URL"}
         state["completion"]["status"] = "COMPLETION_UNAVAILABLE"
@@ -455,7 +457,11 @@ def run_completion(payload: RunPayload):
         _save_state(payload.test_id, state)
         raise HTTPException(503, error)
     try:
+        roi_started = time.perf_counter()
         roi_uri, roi_mask_uri, roi, roi_mask, box = _build_completion_roi(payload.test_id, state)
+        state["timings"]["roi_ms"] = round((time.perf_counter() - roi_started) * 1000, 2)
+        state["roi"] = {"bbox_pixels": list(box), "original_size": [state["input"]["width"], state["input"]["height"]], "roi_size": list(roi.size)}
+        worker_started = time.perf_counter()
         worker = invoke_completion_worker(
             image_uri=roi_uri,
             mask_uri=roi_mask_uri,
@@ -465,6 +471,7 @@ def run_completion(payload: RunPayload):
             ),
             task="fish_completion",
         )
+        state["timings"]["worker_ms"] = round((time.perf_counter() - worker_started) * 1000, 2)
         generated_ref = worker.get("result_uri")
         if generated_ref and generated_ref.startswith("data:"):
             generated_bytes = base64.b64decode(generated_ref.split(",", 1)[1])
@@ -475,16 +482,20 @@ def run_completion(payload: RunPayload):
         if hashlib.sha256(generated_bytes).digest() == hashlib.sha256(_png(roi)).digest():
             raise CompletionWorkerError("WORKER_RETURNED_INPUT", "Worker output is byte-identical to the ROI input")
         generated = Image.open(io.BytesIO(generated_bytes)).convert("RGB")
+        compose_started = time.perf_counter()
         final_png, observed_change_ratio = _compose_completion(state, generated, box)
+        state["timings"]["compose_ms"] = round((time.perf_counter() - compose_started) * 1000, 2)
         generated_uri = _persist(payload.test_id, "09_generated_roi.png", generated_bytes, "image/png")
         final_uri = _persist(payload.test_id, "10_final_asset.png", final_png, "image/png")
         total_ms = round((time.perf_counter() - started) * 1000, 2)
         state["completion"].update({"status": "WORKER_EXECUTED", "worker_status": "WORKER_EXECUTED", "model_version": worker["model_version"], "generation_count": 1, "retry_count": 0, "inference_time_ms": worker["inference_time_ms"], "gpu_info": worker.get("gpu_info")})
         state["composition"].update({"observed_pixel_change_ratio": observed_change_ratio, "visible_pixel_change_ratio": observed_change_ratio, "visible_changed_pixels": 0 if observed_change_ratio == 0 else None, "generated_pixels": mask_state["completion_area_pixels"], "total_processing_ms": total_ms})
+        state["timings"]["total_ms"] = total_ms
         state["assets"].update({"completion_roi": roi_uri, "completion_roi_mask": roi_mask_uri, "generated_roi": generated_uri, "final_asset": final_uri})
+        state["progress"] = _progress(state)
         _save_json(payload.test_id, "12_test_report.json", state)
         _save_state(payload.test_id, state)
-        return {"test_id": payload.test_id, "status": "WORKER_EXECUTED", "worker_status": "WORKER_EXECUTED", "model_version": worker["model_version"], "processing_ms": total_ms, "generated_roi": _data_url(generated_bytes, "image/png"), "final_asset": _data_url(final_png, "image/png"), "report": state}
+        return {"test_id": payload.test_id, "status": "WORKER_EXECUTED", "worker_status": "WORKER_EXECUTED", "model_version": worker["model_version"], "processing_ms": total_ms, "timings": state["timings"], "progress": state["progress"], "generated_roi": _data_url(generated_bytes, "image/png"), "final_asset": _data_url(final_png, "image/png"), "report": state}
     except CompletionWorkerError as exc:
         error = {"error_code": exc.error_code, "message": str(exc), "status_code": exc.status_code}
     except Exception as exc:
@@ -492,6 +503,8 @@ def run_completion(payload: RunPayload):
     state["completion"]["status"] = "COMPLETION_FAILED"
     state["errors"]["completion"] = error
     state["composition"]["total_processing_ms"] = round((time.perf_counter() - started) * 1000, 2)
+    state["timings"]["total_ms"] = state["composition"]["total_processing_ms"]
+    state["progress"] = _progress(state)
     _save_state(payload.test_id, state)
     raise HTTPException(503, error)
 
