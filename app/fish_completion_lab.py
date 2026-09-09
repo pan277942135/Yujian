@@ -18,15 +18,19 @@ from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from google.cloud import storage
 from PIL import Image
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
+from app.db import get_db
+from app.dataset_models import DatasetItem
 from app.detector_runtime import detect, normalize_android_source
 from app.recognition_pipeline import assess_detections
+from app.models import DatasetVersion
 from app.segmentation.service import generate_fish_cutout
 from app.completion_worker_client import (
     CompletionWorkerError,
@@ -44,6 +48,24 @@ logger = logging.getLogger(__name__)
 
 def _json_error(status_code: int, error_code: str, message: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"error_code": error_code, "message": message})
+
+
+
+def _progress(state: dict[str, Any]) -> list[dict[str, Any]]:
+    timings = state.get("timings", {})
+    detector = state.get("detector", {})
+    completion = state.get("completion", {})
+    assets = state.get("assets", {})
+    composition = state.get("composition", {})
+    return [
+        {"stage": "input", "label": "图片输入", "status": "READY", "elapsed_ms": timings.get("input_decode_ms"), "result": state.get("input", {}).get("filename")},
+        {"stage": "detector", "label": "Detector / BBox", "status": "READY" if detector else "PENDING", "elapsed_ms": timings.get("detector_ms"), "result": {"bbox_pixels": detector.get("bbox_pixels"), "bbox_normalized": detector.get("primary_bbox_normalized"), "confidence": detector.get("primary_confidence"), "area_ratio": detector.get("bbox_area_ratio")}},
+        {"stage": "sam", "label": "SAM 分割", "status": "READY" if state.get("segmentation") else "PENDING", "elapsed_ms": timings.get("sam_ms"), "result": state.get("segmentation", {}).get("quality")},
+        {"stage": "mask", "label": "Mask 标注", "status": "READY" if state.get("completion_mask") else "PENDING", "elapsed_ms": timings.get("mask_edit_ms"), "result": state.get("completion_mask", {}).get("completion_area_pixels")},
+        {"stage": "roi", "label": "ROI 提取", "status": "READY" if assets.get("completion_roi") else "PENDING", "elapsed_ms": timings.get("roi_ms"), "result": state.get("roi")},
+        {"stage": "powerpaint", "label": "PowerPaint", "status": completion.get("worker_status") or completion.get("status", "PENDING"), "elapsed_ms": timings.get("worker_ms"), "result": completion.get("model_version")},
+        {"stage": "compose", "label": "Protected Compose", "status": "READY" if assets.get("final_asset") else "PENDING", "elapsed_ms": timings.get("compose_ms"), "result": {"visible_pixel_change_ratio": composition.get("visible_pixel_change_ratio"), "generated_pixels": composition.get("generated_pixels")}},
+    ]
 
 
 class MaskPayload(BaseModel):
@@ -219,28 +241,65 @@ def fish_completion_lab_page(request: Request):
     return templates.TemplateResponse(request=request, name="fish_completion_lab.html", context={})
 
 
+@router.get("/api/debug/fish-completion-lab-v02/datasets")
+@router.get("/api/debug/fish-completion-lab/datasets")
+def completion_datasets(db=Depends(get_db)):
+    rows = db.scalars(select(DatasetVersion).where(DatasetVersion.status == "FROZEN").order_by(DatasetVersion.created_at.desc())).all()
+    return [{"dataset_version": row.dataset_version, "status": row.status, "pipeline_type": getattr(row, "pipeline_type", "WHOLE_IMAGE_V1"), "image_count": row.train_count + row.val_count + row.test_count, "train_count": row.train_count, "val_count": row.val_count, "test_count": row.test_count, "species_count": row.species_count} for row in rows]
+
+
+@router.get("/api/debug/fish-completion-lab-v02/datasets/{dataset_version}/images")
+@router.get("/api/debug/fish-completion-lab/datasets/{dataset_version}/images")
+def completion_dataset_images(dataset_version: str, split: str | None = None, species: str | None = None, limit: int = Query(default=60, ge=1, le=200), offset: int = Query(default=0, ge=0), db=Depends(get_db)):
+    dataset = db.get(DatasetVersion, dataset_version)
+    if not dataset:
+        raise HTTPException(status_code=404, detail="数据集版本不存在")
+    if dataset.status != "FROZEN":
+        raise HTTPException(status_code=409, detail="只能从已冻结 Dataset Freeze 版本选择图片")
+    stmt = select(DatasetItem).where(DatasetItem.dataset_version == dataset_version)
+    if split:
+        stmt = stmt.where(DatasetItem.split == split)
+    if species:
+        stmt = stmt.where(DatasetItem.species_name == species)
+    rows = db.scalars(stmt.order_by(DatasetItem.id).offset(offset).limit(limit)).all()
+    return [{"dataset_version": row.dataset_version, "dataset_item_id": row.id, "batch_id": row.batch_id, "image_id": row.image_id, "species": row.species_name, "species_key": row.species_key, "split": row.split, "gcs_uri": row.gcs_uri, "preview_url": f"/media/{row.batch_id}/{row.image_id}"} for row in rows]
+
+
 @router.post("/api/debug/fish-completion-lab/prepare")
-async def prepare(file: UploadFile = File(...), case_label: str = ""):
+async def prepare(file: UploadFile = File(...), case_label: str = "", source_type: str = "local_upload", dataset_version: str = "", dataset_item_id: str = ""):
+    prepare_started = time.perf_counter()
     data = await file.read(MAX_BYTES + 1)
     if not data or len(data) > MAX_BYTES:
         return _json_error(400, "INVALID_IMAGE_UPLOAD", "图片为空或超过 25 MiB")
     test_id = "FCL_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + secrets.token_hex(2)
     source = None
     try:
+        decode_started = time.perf_counter()
         with Image.open(io.BytesIO(data)) as uploaded:
             source = normalize_android_source(uploaded)
+        input_decode_ms = round((time.perf_counter() - decode_started) * 1000, 2)
         original = _png(source.convert("RGB"))
+        detector_started = time.perf_counter()
         detector_run = detect(source)
         assessment = assess_detections(detector_run.detections)
+        detector_ms = round((time.perf_counter() - detector_started) * 1000, 2)
         primary = assessment.primary
         if primary is None:
             raise HTTPException(422, "NO_RELIABLE_PRIMARY_FISH")
+        sam_started = time.perf_counter()
         result = generate_fish_cutout(source, primary.box)
+        sam_ms = round((time.perf_counter() - sam_started) * 1000, 2)
         raw_mask = result.mask.astype(bool)
+        normalized = primary.box.normalized()
+        bbox_normalized = [normalized.x1, normalized.y1, normalized.x2, normalized.y2]
+        bbox_pixels = [round(normalized.x1 * source.width), round(normalized.y1 * source.height), round(normalized.x2 * source.width), round(normalized.y2 * source.height)]
+        bbox_area_ratio = round(max(0, bbox_pixels[2] - bbox_pixels[0]) * max(0, bbox_pixels[3] - bbox_pixels[1]) / max(1, source.width * source.height), 6)
         detector = {
             "model": detector_run.model_version,
             "detections_count": len(detector_run.detections),
-            "primary_bbox_normalized": [primary.box.normalized().x1, primary.box.normalized().y1, primary.box.normalized().x2, primary.box.normalized().y2],
+            "primary_bbox_normalized": bbox_normalized,
+            "bbox_pixels": bbox_pixels,
+            "bbox_area_ratio": bbox_area_ratio,
             "primary_confidence": round(float(primary.confidence), 6),
             "assessment": assessment.status.value,
             "primary_selection": "confidence × sqrt(area)",
@@ -253,7 +312,7 @@ async def prepare(file: UploadFile = File(...), case_label: str = ""):
         state = {
             "report_version": LAB_VERSION,
             "runtime": _runtime(test_id),
-            "input": {"image_id": hashlib.sha256(data).hexdigest()[:16], "filename": file.filename or "uploaded", "case_label": case_label[:200], "width": source.width, "height": source.height, "orientation": "landscape" if source.width >= source.height else "portrait", "size_bytes": len(data)},
+            "input": {"image_id": hashlib.sha256(data).hexdigest()[:16], "filename": file.filename or "uploaded", "case_label": case_label[:200], "source_type": source_type[:32], "dataset_version": dataset_version[:128] or None, "dataset_item_id": dataset_item_id[:80] or None, "width": source.width, "height": source.height, "orientation": "landscape" if source.width >= source.height else "portrait", "size_bytes": len(data)},
             "detector": detector,
             "segmentation": {"model": "SAM_VIT_B", "quality": result.quality.value, "mask_area_ratio": round(result.mask_area_ratio, 6), "edge_ratio": round(result.edge_ratio, 6), "connected_components": result.connected_components},
             "mask_refinement": {"formula": "(raw_sam OR visible_add) AND NOT remove"},
@@ -265,9 +324,11 @@ async def prepare(file: UploadFile = File(...), case_label: str = ""):
             "cost": {"gpu_active_seconds": None, "estimated_compute_cost_usd": None, "cost_reason": "PRICING_NOT_CONFIGURED"},
             "errors": {},
             "assets": {"original": test_id_uri, "detector_metadata": detector_uri, "sam_raw_mask": raw_mask_uri, "sam_transparent": raw_transparent_uri},
+            "timings": {"input_decode_ms": input_decode_ms, "detector_ms": detector_ms, "sam_ms": sam_ms, "mask_edit_ms": None, "roi_ms": None, "worker_ms": None, "compose_ms": None, "prepare_total_ms": round((time.perf_counter() - prepare_started) * 1000, 2)},
         }
+        state["progress"] = _progress(state)
         _save_state(test_id, state)
-        return {**state, "test_id": test_id, "original": _data_url(original, "image/png"), "sam_raw_mask": _data_url(_mask_bytes(raw_mask), "image/png"), "sam_transparent": _data_url(raw_transparent, "image/png")}
+        return {**state, "test_id": test_id, "progress": state["progress"], "original": _data_url(original, "image/png"), "sam_raw_mask": _data_url(_mask_bytes(raw_mask), "image/png"), "sam_transparent": _data_url(raw_transparent, "image/png")}
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
         return JSONResponse(status_code=exc.status_code, content={
@@ -284,6 +345,7 @@ async def prepare(file: UploadFile = File(...), case_label: str = ""):
 
 @router.post("/api/debug/fish-completion-lab/masks")
 async def save_masks(payload: MaskPayload):
+    mask_started = time.perf_counter()
     state = _load_state(payload.test_id)
     width, height = state["input"]["width"], state["input"]["height"]
     completion_value = payload.masks.get("completion_mask") or payload.masks.get("completion_canonical")
@@ -306,13 +368,15 @@ async def save_masks(payload: MaskPayload):
     for name, mask in (("05_visible_add_mask.png", masks["visible_add"]), ("06_remove_mask.png", masks["remove"]), ("07_refined_visible_mask.png", refined), ("09_occluder_mask.png", masks["occluder"]), ("10_completion_mask.png", masks["completion_canonical"])):
         asset_uris[name] = _persist(payload.test_id, name, _mask_bytes(mask), "image/png")
     asset_uris["refined_visible"] = _persist(payload.test_id, "08_refined_visible_fish.png", refined_fish, "image/png")
+    state["timings"]["mask_edit_ms"] = round((time.perf_counter() - mask_started) * 1000, 2)
     state["mask_refinement"].update(stats)
     state["occlusion"] = {"occluder_area_pixels": stats["occluder_area_pixels"], "occluder_region_count": stats["occluder_region_count"]}
     state["completion_mask"] = {k: stats[k] for k in ("completion_area_pixels", "completion_region_count", "estimated_final_fish_area_pixels", "generated_pixel_ratio", "completion_level", "eligible_for_v0_1", "eligibility_reason", "completion_mask_valid")}
     state["visible_fish_mask"] = asset_uris["07_refined_visible_mask.png"]
     state["assets"].update({"visible_add": asset_uris["05_visible_add_mask.png"], "remove": asset_uris["06_remove_mask.png"], "refined_visible_mask": asset_uris["07_refined_visible_mask.png"], "occluder": asset_uris["09_occluder_mask.png"], "occluder_mask": asset_uris["09_occluder_mask.png"], "completion_mask": asset_uris["10_completion_mask.png"], "completion_mask_canonical": asset_uris["10_completion_mask.png"], "refined_visible": asset_uris["refined_visible"]})
+    state["progress"] = _progress(state)
     _save_state(payload.test_id, state)
-    return {"test_id": payload.test_id, "statistics": stats, "refined_visible": _data_url(refined_fish, "image/png")}
+    return {"test_id": payload.test_id, "statistics": stats, "timings": state["timings"], "progress": state["progress"], "refined_visible": _data_url(refined_fish, "image/png")}
 
 
 
