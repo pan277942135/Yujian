@@ -457,7 +457,31 @@ async def run_direct_lab(request: Request):
         state = _read_json(_state_uri(test_id))
         report = dict(state.get("report") or {})
         report["runtime"] = _runtime(test_id)
-        health = check_completion_worker()
+        try:
+            health = check_completion_worker()
+        except CompletionWorkerError as exc:
+            worker_ms = round((time.perf_counter() - started) * 1000, 2)
+            report["worker"] = {
+                "health": {
+                    "endpoint_configured": bool(os.getenv("FISH_COMPLETION_WORKER_URL", "").strip()),
+                    "status": "UNREACHABLE",
+                    "error_code": exc.error_code,
+                    "message": str(exc),
+                    "http_status": exc.status_code,
+                },
+                "status": "WORKER_FAILED",
+                "error_code": exc.error_code,
+                "error": str(exc),
+                "status_code": exc.status_code,
+                "worker_ms": worker_ms,
+            }
+            report["timings"]["worker_ms"] = worker_ms
+            report["timings"]["total_ms"] = worker_ms
+            report["progress"] = _progress(report)
+            report_uri = _persist(test_id, "report.json", json.dumps(report, ensure_ascii=False, indent=2).encode(), "application/json")
+            report["assets"]["report"] = report_uri
+            logger.exception("direct_lab_worker_health_failed test_id=%s error_code=%s", test_id, exc.error_code)
+            return _error_response(503, stage="powerpaint", test_id=test_id, error_code=exc.error_code, message=str(exc), report=report, http_status=exc.status_code)
         report["worker"]["health"] = health
         if health.get("status") != "READY":
             return _error_response(503, stage="powerpaint", test_id=test_id, error_code="COMPLETION_WORKER_NOT_READY", message=json.dumps(health, ensure_ascii=False), report=report)
