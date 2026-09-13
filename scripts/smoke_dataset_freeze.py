@@ -23,7 +23,7 @@ from app.db import Base, SessionLocal, init_db  # noqa: E402
 from app.dedupe import ImageFingerprint  # noqa: E402
 from app.flywheel import ensure_species_catalog  # noqa: E402
 from app.freeze_policy import SPLIT_STRATEGY, select_freeze_candidates  # noqa: E402
-from app.models import Batch, ImageAsset, SpeciesCatalog  # noqa: E402
+from app.models import Batch, BatchCropReview, ImageAsset, SpeciesCatalog  # noqa: E402
 from app.presence import FishPresenceResult  # noqa: E402
 from app.species_policy import ensure_target_species, training_thresholds  # noqa: E402
 
