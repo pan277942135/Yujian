@@ -1,0 +1,90 @@
+name: P1.1 Static IP Verification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PROJECT_ID: gemini-api-project-503706
+      VM: fish-completion-worker
+      ZONE: us-central1-a
+      REGION: us-central1
+      STATIC_IP_NAME: yujian-fish-completion-worker-ip
+      EXPECTED_EXTERNAL_IP: 136.111.134.128
+      WORKER_PORT: "8080"
+    steps:
+      - name: Authenticate to Google Cloud with GitHub OIDC/WIF
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+          service_account: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          version: ">= 416.0.0"
+
+      - name: Verify static IP, VM, and Worker health
+        shell: bash
+        run: |
+          set -u
+
+          echo "=== STATIC ADDRESS ==="
+          ADDRESS_OUTPUT="$(gcloud compute addresses describe "$STATIC_IP_NAME" \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --format="yaml(name,address,status,users,networkTier)" 2>&1)"
+          ADDRESS_RC=$?
+          printf '%s\n' "$ADDRESS_OUTPUT"
+          echo "ADDRESS_RC=$ADDRESS_RC"
+
+          STATIC_IP_ADDRESS="$(printf '%s\n' "$ADDRESS_OUTPUT" | awk '/^address:/{print $2; exit}')"
+          STATIC_IP_STATUS="$(printf '%s\n' "$ADDRESS_OUTPUT" | awk '/^status:/{print $2; exit}')"
+          STATIC_IP_USERS="$(printf '%s\n' "$ADDRESS_OUTPUT" | sed -n '/^users:/,$p' | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g')"
+
+          echo "=== VM ==="
+          VM_OUTPUT="$(gcloud compute instances describe "$VM" \
+            --project="$PROJECT_ID" \
+            --zone="$ZONE" \
+            --format="yaml(status,networkInterfaces.networkIP,networkInterfaces.accessConfigs.natIP)" 2>&1)"
+          VM_RC=$?
+          printf '%s\n' "$VM_OUTPUT"
+          echo "VM_RC=$VM_RC"
+
+          VM_STATUS="$(printf '%s\n' "$VM_OUTPUT" | awk '/^status:/{print $2; exit}')"
+          VM_EXTERNAL_IP="$(printf '%s\n' "$VM_OUTPUT" | awk '/  natIP:/{print $2; exit}')"
+
+          echo "=== WORKER HEALTH ==="
+          set +e
+          curl -fsS \
+            --connect-timeout 5 \
+            --max-time 10 \
+            -w '\nHTTP_STATUS=%{http_code}\nCONNECT=%{time_connect}\nTOTAL=%{time_total}\n' \
+            "http://${EXPECTED_EXTERNAL_IP}:${WORKER_PORT}/health"
+          CURL_RC=$?
+          set -e
+          echo "CURL_RC=$CURL_RC"
+
+          echo "STATIC_IP_NAME=$STATIC_IP_NAME"
+          echo "STATIC_IP_ADDRESS=$STATIC_IP_ADDRESS"
+          echo "STATIC_IP_STATUS=$STATIC_IP_STATUS"
+          echo "STATIC_IP_USERS=$STATIC_IP_USERS"
+          echo "VM_STATUS=$VM_STATUS"
+          echo "VM_EXTERNAL_IP=$VM_EXTERNAL_IP"
+          echo "WORKER_HEALTH_CURL_RC=$CURL_RC"
+
+          if [[ "$ADDRESS_RC" -ne 0 || "$VM_RC" -ne 0 || "$STATIC_IP_ADDRESS" != "$EXPECTED_EXTERNAL_IP" || "$STATIC_IP_STATUS" != "IN_USE" || "$VM_STATUS" != "RUNNING" || "$VM_EXTERNAL_IP" != "$EXPECTED_EXTERNAL_IP" || "$CURL_RC" -ne 0 ]]; then
+            echo "P1_1_STATUS=FAIL"
+            exit 1
+          fi
+
+          echo "P1_1_STATUS=PASS"
