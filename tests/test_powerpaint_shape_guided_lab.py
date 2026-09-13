@@ -11,7 +11,8 @@ def test_shape_guided_route_and_contract():
     assert "/api/debug/powerpaint-shape-guided-lab/run" in paths
     assert lab.TASK_MODE == "SHAPE_GUIDED"
     assert lab.FITTING_DEGREES == (0.6, 0.8, 0.95)
-    assert lab.PROMPT_ID == "FIXED_FISH_SHAPE_GUIDED_V0.3"
+    assert lab.PROMPT_ID == "FIXED_FISH_SHAPE_GUIDED_V0.3.1"
+    assert lab.PROMPT == "a realistic fish body matching the visible fish"
 
 
 def test_completion_mask_is_disjoint_and_capped():
