@@ -1,0 +1,176 @@
+name: P0 PowerPaint Network V2
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: yujian-p0-powerpaint-network-v2
+  cancel-in-progress: false
+
+env:
+  VM_NAME: fish-completion-worker
+  ZONE: us-central1-a
+  EXTERNAL_IP: 34.69.75.199
+  PROJECT_CANDIDATES: gemini-api-project-503706 gen-lang-client-0224022273
+  UAT_PROJECT: gemini-api-project-503706
+  UAT_REGION: asia-east1
+  UAT_SERVICE: yujian-model-factory-console
+
+jobs:
+  p0:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud with GitHub OIDC/WIF
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: ${{ env.UAT_PROJECT }}
+          workload_identity_provider: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+          service_account: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: ${{ env.UAT_PROJECT }}
+          version: '>= 416.0.0'
+
+      - name: Inspect GPU project, network, firewall and Worker runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo "=== AUTH ==="
+          gcloud auth list --filter=status:ACTIVE --format='table(account,status)'
+          echo "=== CANDIDATES ==="
+          printf '%s\n' "${PROJECT_CANDIDATES}"
+
+          FOUND_PROJECT=""
+          FOUND_YAML=""
+          for ATTEMPT in 1 2; do
+            echo "=== VM_DISCOVERY_ATTEMPT=${ATTEMPT} ==="
+            for PROJECT_ID in ${PROJECT_CANDIDATES}; do
+              echo "--- PROJECT=${PROJECT_ID} ---"
+              set +e
+              OUT="$(gcloud compute instances describe "${VM_NAME}" \
+                --project="${PROJECT_ID}" \
+                --zone="${ZONE}" \
+                --format='yaml(name,status,machineType,networkInterfaces,tags.items,serviceAccounts,metadata.items)' 2>&1)"
+              RC=$?
+              set -e
+              printf '%s\n' "${OUT}"
+              echo "DESCRIBE_RC=${RC}"
+              if [[ "${RC}" -eq 0 ]] && grep -q '^name:' <<<"${OUT}"; then
+                FOUND_PROJECT="${PROJECT_ID}"
+                FOUND_YAML="${OUT}"
+                break 2
+              fi
+            done
+            if [[ "${ATTEMPT}" -eq 1 ]]; then
+              echo "IAM propagation retry: waiting 60 seconds"
+              sleep 60
+            fi
+          done
+
+          if [[ -z "${FOUND_PROJECT}" ]]; then
+            echo "IAM_PROPAGATION_OR_BINDING_FAILURE"
+            echo "Principal=yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com"
+            echo "Missing permission=compute.instances.get"
+            exit 20
+          fi
+
+          echo "GPU_PROJECT_ID=${FOUND_PROJECT}"
+          echo "VM_NAME=${VM_NAME}"
+          echo "ZONE=${ZONE}"
+          printf '%s\n' "${FOUND_YAML}"
+
+          INTERNAL_IP="$(gcloud compute instances describe "${VM_NAME}" --project="${FOUND_PROJECT}" --zone="${ZONE}" --format='value(networkInterfaces[0].networkIP)')"
+          EXTERNAL_IP_ACTUAL="$(gcloud compute instances describe "${VM_NAME}" --project="${FOUND_PROJECT}" --zone="${ZONE}" --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"
+          NETWORK="$(gcloud compute instances describe "${VM_NAME}" --project="${FOUND_PROJECT}" --zone="${ZONE}" --format='value(networkInterfaces[0].network.basename())')"
+          SUBNET="$(gcloud compute instances describe "${VM_NAME}" --project="${FOUND_PROJECT}" --zone="${ZONE}" --format='value(networkInterfaces[0].subnetwork.basename())')"
+          TAGS="$(gcloud compute instances describe "${VM_NAME}" --project="${FOUND_PROJECT}" --zone="${ZONE}" --format='value(tags.items)' | tr '\n' ',' | sed 's/,$//')"
+
+          echo "VM_STATUS=$(gcloud compute instances describe "${VM_NAME}" --project="${FOUND_PROJECT}" --zone="${ZONE}" --format='value(status)')"
+          echo "INTERNAL_IP=${INTERNAL_IP}"
+          echo "EXTERNAL_IP=${EXTERNAL_IP_ACTUAL}"
+          echo "NETWORK=${NETWORK}"
+          echo "SUBNET=${SUBNET}"
+          echo "TAGS=${TAGS}"
+
+          echo "=== SUBNET ==="
+          gcloud compute networks subnets describe "${SUBNET}" \
+            --project="${FOUND_PROJECT}" \
+            --region=us-central1 \
+            --format='yaml(name,region,network,ipCidrRange,privateIpGoogleAccess,stackType)' || true
+
+          echo "=== FIREWALL_RULES ==="
+          gcloud compute firewall-rules list \
+            --project="${FOUND_PROJECT}" \
+            --filter="network:${NETWORK}" \
+            --format='table(name,direction,priority,disabled,sourceRanges.list():label=SOURCE,sourceTags.list():label=SOURCE_TAGS,allowed[].map().firewall_rule().list():label=ALLOW,denied[].map().firewall_rule().list():label=DENY,targetTags.list():label=TARGET_TAGS)' || true
+
+          echo "=== EFFECTIVE_FIREWALLS ==="
+          gcloud compute instances network-interfaces get-effective-firewalls "${VM_NAME}" \
+            --project="${FOUND_PROJECT}" \
+            --zone="${ZONE}" \
+            --network-interface=nic0 || true
+
+          echo "=== VM_SSH_WORKER_CHECK ==="
+          set +e
+          gcloud compute ssh "${VM_NAME}" \
+            --project="${FOUND_PROJECT}" \
+            --zone="${ZONE}" \
+            --quiet \
+            --command='
+              set +x
+              echo "=== GPU ==="
+              nvidia-smi || true
+              echo "=== HOST ==="
+              hostname
+              echo "=== LISTEN ==="
+              sudo ss -lntp | grep ":8000" || true
+              echo "=== PROCESS ==="
+              ps -ef | grep -Ei "uvicorn|gunicorn|powerpaint|worker_app|python|8000" | grep -v grep || true
+              echo "=== LOCAL HEALTH ==="
+              curl -v --connect-timeout 3 --max-time 8 http://127.0.0.1:8000/health || true
+              echo
+              echo "=== INTERNAL IP ==="
+              hostname -I
+              IP=$(hostname -I | awk "{print \$1}")
+              echo "=== INTERNAL HEALTH ==="
+              curl -v --connect-timeout 3 --max-time 8 "http://${IP}:8000/health" || true
+              echo
+              echo "=== SYSTEMD ==="
+              systemctl --failed --no-pager || true
+              echo "=== LOG TAIL ==="
+              for f in /tmp/powerpaint-worker.log /tmp/worker.log /opt/powerpaint/PowerPaint/worker.log; do
+                if [ -f "${f}" ]; then
+                  echo "--- ${f}"
+                  tail -120 "${f}"
+                fi
+              done
+            ' > /tmp/worker-ssh-check.log 2>&1
+          SSH_RC=$?
+          set -e
+          cat /tmp/worker-ssh-check.log
+          echo "SSH_RC=${SSH_RC}"
+
+          echo "=== PUBLIC_HEALTH_FROM_RUNNER ==="
+          set +e
+          curl -v --connect-timeout 5 --max-time 8 \
+            -w '\nHTTP_STATUS=%{http_code}\nCONNECT=%{time_connect}\nTOTAL=%{time_total}\n' \
+            "http://${EXTERNAL_IP_ACTUAL}:8000/health"
+          PUBLIC_RC=$?
+          set -e
+          echo "PUBLIC_CURL_RC=${PUBLIC_RC}"
+
+          if [[ "${SSH_RC}" -ne 0 ]]; then
+            echo "SSH_FAILURE"
+            exit "${SSH_RC}"
+          fi
+          echo "P0_PHASE1_COMPLETE"
