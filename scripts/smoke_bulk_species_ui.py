@@ -16,6 +16,11 @@ required = [
     '审核状态未改变',
     "const initial=x.review_status==='rejected'?'rejected':'approved';",
     "items.forEach((x,i)=>{x._state=x.review_status==='rejected'?'rejected':'approved'});",
+    '手动框选',
+    '清空框',
+    'function bboxPoint(i,event)',
+    'function clearBbox(i)',
+    'pointerdown',
 ]
 for token in required:
     assert token in text, f"missing quick-review bulk species control: {token}"
@@ -28,4 +33,8 @@ assert "._state=" not in body, "batch species action must not mutate review stat
 assert "review_status" not in body
 assert "catalog.filter" not in text.split("function renderBulkSpeciesOptions()", 1)[0].split("async function init()", 1)[1], "batch species action must remain species-only"
 
-print("Quick-review batch truth-species UI smoke test: OK")
+review_text = Path("app/templates/review.html").read_text(encoding="utf-8")
+for token in ("手动框选", "清空框", "function reviewBboxPoint(event)", "function clearCurrentBbox()"):
+    assert token in review_text, f"missing single-review bbox control: {token}"
+
+print("Quick-review batch truth-species + bbox UI smoke test: OK")
