@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.data_policy import UNCONFIRMED_TRUTH, human_approval_overrides, normalized_truth
 from app.dedupe import ImageFingerprint
-from app.models import ImageAsset, SpeciesCatalog
+from app.models import BatchCropReview, ImageAsset, SpeciesCatalog
 from app.presence import FishPresenceResult, effective_status
 from app.species_policy import ensure_target_species, training_eligibility, training_thresholds
 
@@ -361,6 +361,10 @@ def select_freeze_candidates(
         row.image_asset_id: row
         for row in db.scalars(select(FishPresenceResult).where(FishPresenceResult.image_asset_id.in_(image_ids))).all()
     }
+    bbox_reviews = {
+        row.image_asset_id: row
+        for row in db.scalars(select(BatchCropReview).where(BatchCropReview.image_asset_id.in_(image_ids))).all()
+    }
 
     selected = []
     seen: set[str] = set()
@@ -370,6 +374,11 @@ def select_freeze_candidates(
     for image in images:
         fp = fingerprints.get(image.id)
         presence = presences.get(image.id)
+        bbox_review = bbox_reviews.get(image.id)
+
+        if bbox_review is None or bbox_review.status not in {"ACCEPTED", "TRAINING_READY"} or not bbox_review.accepted_bbox_json:
+            excluded_quality["accepted_bbox_not_confirmed"] += 1
+            continue
 
         if fp is None:
             excluded_quality["dedupe_not_scanned"] += 1
@@ -436,6 +445,16 @@ def select_freeze_candidates(
 
     return {
         "approved_master_pool_count": len(images),
+        "accepted_bbox_pool_count": sum(
+            1
+            for row in bbox_reviews.values()
+            if row.status in {"ACCEPTED", "TRAINING_READY"} and row.accepted_bbox_json
+        ),
+        "accepted_bbox_missing_count": max(
+            len(images)
+            - sum(1 for row in bbox_reviews.values() if row.status in {"ACCEPTED", "TRAINING_READY"} and row.accepted_bbox_json),
+            0,
+        ),
         "selected": selected,
         "catalog_rows": catalog_rows,
         "excluded_quality": excluded_quality,
