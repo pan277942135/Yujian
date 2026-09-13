@@ -19,7 +19,7 @@ from app.db import SessionLocal, init_db
 from app.dedupe import ImageFingerprint
 from app.flywheel import ensure_species_catalog, flywheel_summary
 from app.main import ReviewUpdate, apply_review_filters, update_review
-from app.models import Batch, ImageAsset, SpeciesCatalog
+from app.models import Batch, BatchCropReview, ImageAsset, SpeciesCatalog
 from app.presence import FishPresenceResult
 
 
@@ -62,6 +62,18 @@ def add_qa(db, image, *, presence="single_fish", duplicate_kind=None):
         duplicate_kind=duplicate_kind,
     )
     db.add(fp)
+    if image.review_status == "approved":
+        db.add(
+            BatchCropReview(
+                batch_id=image.batch_id,
+                image_asset_id=image.id,
+                image_id=image.image_id,
+                accepted_bbox_json="[0.1,0.1,0.8,0.8]",
+                status="ACCEPTED",
+                species_name=image.truth_species,
+                reviewer="smoke",
+            )
+        )
     db.flush()
     return p, fp
 
@@ -107,7 +119,7 @@ def main():
             assert exc.status_code == 400
             db.rollback()
 
-        update_review("BATCH_P0", "I4", ReviewUpdate(review_status="approved", truth_species="黄骨鱼", reviewer="smoke"), db)
+        update_review("BATCH_P0", "I4", ReviewUpdate(review_status="approved", truth_species="黄骨鱼", accepted_bbox=[0.1, 0.1, 0.8, 0.8], reviewer="smoke"), db)
         db.refresh(pending)
         assert pending.truth_species == "黄骨鱼" and pending.review_status == "approved"
 
