@@ -427,6 +427,7 @@ def review_queue(
         result.append(
             image_dict(
                 row,
+                db=db,
                 classifier_prediction=event.predicted_species if event else None,
                 classifier_confidence=event.confidence if event else None,
             )
@@ -475,7 +476,11 @@ def update_review(batch_id: str, image_id: str, payload: ReviewUpdate, db: Sessi
     if proposed_status == "approved" and not proposed_truth:
         raise HTTPException(status_code=400, detail="通过前必须确认真实鱼种；采集标注不能自动作为 Ground Truth")
 
-    before = image_dict(image)
+    bbox_payload = _bbox(payload.accepted_bbox)
+    existing_bbox = _review_bbox_dict(db, image).get("accepted_bbox")
+    if proposed_status == "approved" and bbox_payload is None and existing_bbox is None:
+        raise HTTPException(status_code=400, detail={"error": "ACCEPTED_BBOX_REQUIRED", "reason": "通过前必须确认 accepted_bbox"})
+    before = image_dict(image, db=db)
     image.review_status = proposed_status
     image.truth_species = proposed_truth or None
     if payload.truth_status is not None:
@@ -489,7 +494,9 @@ def update_review(batch_id: str, image_id: str, payload: ReviewUpdate, db: Sessi
     image.reviewed_by = payload.reviewer
     image.reviewed_at = datetime.now(timezone.utc)
     mark_feedback_reviewed(db, image)
-    after = image_dict(image)
+    if proposed_status == "approved":
+        _upsert_review_bbox(db, image, bbox_payload or existing_bbox, payload.reviewer, payload.notes)
+    after = image_dict(image, db=db)
     db.add(
         ReviewEvent(
             image_asset_id=image.id,
