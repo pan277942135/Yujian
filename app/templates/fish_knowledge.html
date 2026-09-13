@@ -26,12 +26,12 @@
   </style>
 </head>
 <body>
-<header class="app-nav"><a href="/">总览</a><a href="/species">鱼种管理</a><a href="/fish-knowledge">鱼鉴内容</a><a href="/feedback">用户反馈</a><a href="/datasets">数据集</a></header>
+<header class="app-nav"><a href="/">总览</a><a href="/species">鱼种管理</a><a href="/fish-knowledge">鱼鉴内容</a><a href="/fish-knowledge/assets/import">批量资产导入</a><a href="/feedback">用户反馈</a><a href="/datasets">数据集</a></header>
 {% include "_mobile_ux.html" %}
 <main>
   <div class="top">
     <div><h1>Fish Knowledge CMS v1.2</h1><div class="muted">鱼鉴内容工作台：一个鱼种 = 列表 Cover + 五张鱼鉴卡 + 结构化知识 + Gallery + 视频。只有 ACTIVE 内容会进入 App 公共详情接口。</div></div>
-    <div class="actions"><button onclick="loadSpecies()">刷新目录</button><button class="primary" onclick="toggleCreateSpecies(true)">+ 新建鱼种</button></div>
+    <div class="actions"><button onclick="loadSpecies()">刷新目录</button><a class="link" href="/fish-knowledge/assets/import">批量资产导入</a><button class="primary" onclick="toggleCreateSpecies(true)">+ 新建鱼种</button></div>
   </div>
   <div id="banner" class="banner"></div>
   <section class="section overview">
