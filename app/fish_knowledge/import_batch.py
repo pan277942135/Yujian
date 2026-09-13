@@ -481,6 +481,80 @@ def _next_version_row(db: Session, species_id: str, asset_type: str) -> int:
     ).order_by(FishKnowledgeAssetVersion.version.desc())) or 0) + 1
 
 
+def _bind_imported_version(db: Session, version: FishKnowledgeAssetVersion) -> str:
+    """Bind an imported DRAFT image to the editable Fish Knowledge slot.
+
+    Existing ACTIVE content is never replaced.  For cards we can keep the
+    ACTIVE row and create a new DRAFT row; the cover schema has one row per
+    species, so an existing ACTIVE cover remains the live slot until the
+    operator explicitly activates the imported version.
+    """
+
+    species = db.get(FishSpecies, version.species_id)
+    if species is None:
+        raise RuntimeError(f"species {version.species_id} not found while binding imported asset")
+
+    if version.asset_type == "COVER":
+        current = db.scalar(select(FishSpeciesCover).where(FishSpeciesCover.species_id == species.id))
+        if current is None:
+            db.add(
+                FishSpeciesCover(
+                    species_id=species.id,
+                    image_url=version.image_url,
+                    style="ANIME_CARD",
+                    title=f"{species.name_cn}图鉴卡",
+                    status="DRAFT",
+                )
+            )
+            return "BOUND"
+        if current.status == "ACTIVE" and (current.image_url or "").strip():
+            return "ACTIVE_PRESERVED"
+        current.image_url = version.image_url
+        current.status = "DRAFT"
+        if not (current.title or "").strip():
+            current.title = f"{species.name_cn}图鉴卡"
+        return "BOUND"
+
+    rows = db.scalars(
+        select(FishCard)
+        .where(FishCard.species_id == species.id)
+        .order_by(FishCard.sort_order, FishCard.id)
+    ).all()
+    card_type = normalize_card_type(version.asset_type)
+    candidate = next(
+        (
+            row for row in rows
+            if normalize_card_type(row.card_type) == card_type
+            and row.status == "DRAFT"
+            and not (row.image_url or "").strip()
+        ),
+        None,
+    )
+    active = next(
+        (
+            row for row in rows
+            if normalize_card_type(row.card_type) == card_type
+            and row.status == "ACTIVE"
+        ),
+        None,
+    )
+    if candidate is None:
+        candidate = FishCard(
+            species_id=species.id,
+            card_type=card_type,
+            title=(active.title if active else f"{species.name_cn}{card_type}卡"),
+            image_url=version.image_url,
+            description=(active.description if active else ""),
+            sort_order=CARD_TYPE_ORDER.index(card_type),
+            status="DRAFT",
+        )
+        db.add(candidate)
+    else:
+        candidate.image_url = version.image_url
+        candidate.status = "DRAFT"
+    return "BOUND"
+
+
 def _import_item(db: Session, client: Any, bucket: Any, batch: FishAssetImportBatch, item: FishAssetImportItem) -> str:
     if item.validation_status == "IMPORTED":
         return "SKIP_IMPORTED"
@@ -536,9 +610,12 @@ def _import_item(db: Session, client: Any, bucket: Any, batch: FishAssetImportBa
             db.flush()
             item.version_id = version_row.id
         else:
+            version_row = existing_version
             item.version_id = existing_version.id
+
+        binding = _bind_imported_version(db, version_row)
         item.validation_status = "IMPORTED"
-        return "IMPORTED"
+        return "IMPORTED_ACTIVE_PRESERVED" if binding == "ACTIVE_PRESERVED" else "IMPORTED"
     except Exception as exc:
         item.validation_status = "FAILED"
         item.validation_errors = _json([_validation("IMPORT_FAILED", f"{item.source_object}: {exc}")])
@@ -548,12 +625,25 @@ def _import_item(db: Session, client: Any, bucket: Any, batch: FishAssetImportBa
 def _run_import(db: Session, batch: FishAssetImportBatch, *, retry_failed: bool = False) -> dict[str, int]:
     client, bucket, _ = _storage(batch)
     items = db.scalars(select(FishAssetImportItem).where(FishAssetImportItem.batch_id == batch.batch_id).order_by(FishAssetImportItem.id)).all()
-    totals = {"imported": 0, "skipped_duplicate": 0, "skipped_imported": 0, "failed": 0}
+    totals = {
+        "imported": 0,
+        "skipped_duplicate": 0,
+        "skipped_imported": 0,
+        "active_preserved": 0,
+        "failed": 0,
+    }
     for item in items:
         if retry_failed and item.validation_status != "FAILED":
             continue
         result = _import_item(db, client, bucket, batch, item)
-        totals[{"SKIP_DUPLICATE": "skipped_duplicate", "SKIP_IMPORTED": "skipped_imported", "IMPORTED": "imported", "FAILED": "failed", "SKIP_INVALID": "failed"}.get(result, "failed")] += 1
+        totals[{
+            "SKIP_DUPLICATE": "skipped_duplicate",
+            "SKIP_IMPORTED": "skipped_imported",
+            "IMPORTED": "imported",
+            "IMPORTED_ACTIVE_PRESERVED": "active_preserved",
+            "FAILED": "failed",
+            "SKIP_INVALID": "failed",
+        }.get(result, "failed")] += 1
         db.commit()
     batch.result_json = _json(totals)
     batch.failed_files = totals["failed"]
@@ -669,6 +759,65 @@ def retry_batch(batch_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     payload = _batch_dict(batch, include_items=True)
     payload["result"] = result
     return payload
+
+
+@router.post("/{batch_id}/sync-content")
+def sync_content(batch_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Bind already imported DRAFT versions to the Fish Knowledge CMS slots."""
+
+    batch = _batch_or_404(db, batch_id)
+    if batch.status not in {"COMPLETED", "FAILED"}:
+        raise HTTPException(status_code=409, detail={"code": "SYNC_NOT_ALLOWED", "message": "只有已执行批次可以同步到鱼鉴内容"})
+    items = db.scalars(
+        select(FishAssetImportItem)
+        .where(
+            FishAssetImportItem.batch_id == batch.batch_id,
+            FishAssetImportItem.validation_status == "IMPORTED",
+            FishAssetImportItem.version_id.is_not(None),
+        )
+        .order_by(FishAssetImportItem.id)
+    ).all()
+    totals = {"bound": 0, "active_preserved": 0, "missing_version": 0}
+    for item in items:
+        version = db.get(FishKnowledgeAssetVersion, item.version_id)
+        if version is None:
+            totals["missing_version"] += 1
+            continue
+        binding = _bind_imported_version(db, version)
+        totals["active_preserved" if binding == "ACTIVE_PRESERVED" else "bound"] += 1
+    previous = _read_json(batch.result_json, {})
+    previous["content_sync"] = totals
+    batch.result_json = _json(previous)
+    db.commit()
+    payload = _batch_dict(batch, include_items=True)
+    payload["result"] = totals
+    return payload
+
+
+@router.get("/{batch_id}/versions/{version_id}/preview")
+def preview_version(batch_id: str, version_id: int, db: Session = Depends(get_db)) -> Response:
+    """Serve a DRAFT version to the authenticated Admin CMS only."""
+
+    batch = _batch_or_404(db, batch_id)
+    version = db.scalar(
+        select(FishKnowledgeAssetVersion).where(
+            FishKnowledgeAssetVersion.id == version_id,
+            FishKnowledgeAssetVersion.batch_id == batch.batch_id,
+        )
+    )
+    if version is None:
+        raise HTTPException(status_code=404, detail={"code": "VERSION_NOT_FOUND", "message": "素材版本不存在"})
+    try:
+        client, bucket, _ = _storage(batch)
+        blob = bucket.blob(version.object_name)
+        data = blob.download_as_bytes(timeout=120)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail={"code": "GCS_READ_FAILED", "message": str(exc)}) from exc
+    return Response(
+        content=data,
+        media_type="image/webp",
+        headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"},
+    )
 
 
 @router.post("/{batch_id}/versions/{version_id}/activate")
