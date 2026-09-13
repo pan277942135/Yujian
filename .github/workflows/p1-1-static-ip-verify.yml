@@ -62,7 +62,7 @@ jobs:
 
           VM_STATUS="$(printf '%s\n' "$VM_OUTPUT" | awk '/^status:/{print $2; exit}')"
           VM_INTERNAL_IP="$(printf '%s\n' "$VM_OUTPUT" | awk '/networkIP:/{print $2; exit}')"
-          VM_EXTERNAL_IP="$(printf '%s\n' "$VM_OUTPUT" | awk '/natIP:/{print $2; exit}')"
+          VM_EXTERNAL_IP="$(printf '%s\n' "$VM_OUTPUT" | awk '/natIP:/{print $3; exit}')"
 
           echo "=== WORKER HEALTH ==="
           set +e
