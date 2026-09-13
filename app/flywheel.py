@@ -15,7 +15,7 @@ from app.dedupe import ImageFingerprint
 from app.data_policy import UNCONFIRMED_TRUTH, truth_distribution
 from app.factory import get_bucket_name
 from app.freeze_policy import select_freeze_candidates
-from app.models import DatasetVersion, FeedbackEvent, ImageAsset, SpeciesCatalog
+from app.models import BatchCropReview, DatasetVersion, FeedbackEvent, ImageAsset, SpeciesCatalog
 from app.presence import FishPresenceResult, effective_status
 
 INITIAL_SPECIES = [
@@ -225,6 +225,16 @@ def flywheel_summary(db: Session) -> dict:
     cutoff = latest.source_cutoff_at if latest else None
 
     approved_total = db.scalar(select(func.count()).select_from(ImageAsset).where(ImageAsset.review_status == "approved")) or 0
+    accepted_bbox_pool = db.scalar(
+        select(func.count())
+        .select_from(BatchCropReview)
+        .join(ImageAsset, BatchCropReview.image_asset_id == ImageAsset.id)
+        .where(
+            ImageAsset.review_status == "approved",
+            BatchCropReview.status.in_({"ACCEPTED", "TRAINING_READY"}),
+            BatchCropReview.accepted_bbox_json.is_not(None),
+        )
+    ) or 0
     new_approved_stmt = select(func.count()).select_from(ImageAsset).where(ImageAsset.review_status == "approved")
     if cutoff:
         new_approved_stmt = new_approved_stmt.where(ImageAsset.updated_at > cutoff)
@@ -240,6 +250,8 @@ def flywheel_summary(db: Session) -> dict:
         approved_species.append({"species": UNCONFIRMED_TRUTH, "count": unconfirmed_truth})
     return {
         "approved_master_pool": approved_total,
+        "accepted_bbox_pool": int(accepted_bbox_pool),
+        "accepted_bbox_missing": max(int(approved_total) - int(accepted_bbox_pool), 0),
         "approved_truth_unconfirmed": unconfirmed_truth,
         "new_approved_since_latest_dataset": new_approved,
         "active_species": active_species,
