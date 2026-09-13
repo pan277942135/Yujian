@@ -215,7 +215,7 @@ async function prepare(){
 async function renderP25(report){
   const results=report.results||[];
   const item08=results.find(x=>Number(x.fitting_degree)===0.8)||results[results.length-1]||{};
-  setImg('original',report.preview_original);setImg('rawSamOutput',report.preview_raw_sam);setImg('refinedOutput',report.preview_refined_visible||report.preview_sam);setImg('completionOutput',report.preview_completion_mask);setImg('completionOverlay',report.preview_completion_overlay);
+  setImg('original',report.preview_original);setImg('refinedOutput',report.preview_refined_visible||report.preview_sam);setImg('completionOutput',report.preview_completion_mask);setImg('completionOverlay',report.preview_completion_overlay);
   setImg('generatedOutput',item08.raw_output_preview||item08.result_preview);setImg('hardComposeOutput',item08.hard_compose_preview||item08.result_preview);setImg('feather3Output',item08.feather_3px_preview);setImg('feather5Output',item08.feather_5px_preview);
   const m=report.mask_boundary||report.p25?.mask_boundary||{};const b=m.completion_bbox||{};
   $('boundaryStats').innerHTML='<b>completion_area_pixels='+(m.completion_area_pixels??'-')+'</b><b>completion_bbox='+(b.x??'-')+','+(b.y??'-')+' '+(b.width??'-')+'×'+(b.height??'-')+'</b><b>completion_width='+(m.completion_width??'-')+'</b><b>completion_height='+(m.completion_height??'-')+'</b><b>distance_to_visible_fish='+(m.distance_to_visible_fish??'-')+' px</b><span class="muted">fill=yellow · completion contour=red · refined visible contour=green</span>';
