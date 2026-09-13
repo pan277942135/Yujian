@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from collections import deque
 import io
 import json
 import logging
@@ -62,6 +63,16 @@ EXPERIMENT_STAGES = (
 PROMPT = "a realistic fish body matching the visible fish"
 P2_DEFAULT_FITTING_DEGREE = 0.8
 MASK_MODES = ("AUTO_V1", "MANUAL_V2")
+QUALITY_FIELDS = ("BODY_CONTINUITY", "SCALE_TEXTURE", "COLOR_MATCH", "EDGE_SEAM", "ANATOMY", "BACKGROUND_PRESERVATION")
+QUALITY_VALUES = ("PASS", "WARNING", "FAIL", "UNRATED")
+
+
+def _quality_scores(data: dict[str, Any]) -> dict[str, str]:
+    scores: dict[str, str] = {}
+    for field in QUALITY_FIELDS:
+        value = str(data.get(field.lower()) or data.get(field) or "UNRATED").strip().upper()
+        scores[field] = value if value in QUALITY_VALUES else "UNRATED"
+    return scores
 
 
 def _bucket():
@@ -197,7 +208,6 @@ def validate_manual_completion_mask(mask: np.ndarray, visible: np.ndarray) -> di
         "ratio_warning_threshold": 0.35,
         "ratio_fail_threshold": 0.60,
     }
-
 
 def _prepare_input(db, dataset_version: str, item_id: int) -> dict[str, Any]:
     item = db.scalar(select(DatasetItem).where(DatasetItem.dataset_version == dataset_version, DatasetItem.id == item_id))
@@ -397,7 +407,6 @@ def validate_completion_mask(mask: np.ndarray, visible: np.ndarray, *, max_ratio
     ratio = area / max(int((completion | visible).sum()), 1)
     return {"valid": overlap == 0 and ratio <= max_ratio, "completion_area_pixels": area, "completion_area_ratio": round(ratio, 6), "visible_overlap_pixels": overlap}
 
-
 def _worker_base_url() -> str:
     return os.getenv("FISH_COMPLETION_WORKER_URL", "").strip().rstrip("/")
 
@@ -459,6 +468,110 @@ def _invoke_shape_guided(*, image_uri: str, mask_uri: str, fitting_degree: float
     return result
 
 
+
+def _mask_bbox(mask: np.ndarray) -> dict[str, int] | None:
+    ys, xs = np.where(np.asarray(mask, dtype=bool))
+    if len(xs) == 0:
+        return None
+    x1, x2 = int(xs.min()), int(xs.max())
+    y1, y2 = int(ys.min()), int(ys.max())
+    return {"x": x1, "y": y1, "width": x2 - x1 + 1, "height": y2 - y1 + 1, "x2": x2, "y2": y2}
+
+
+def _mask_contour(mask: np.ndarray) -> np.ndarray:
+    source = np.asarray(mask, dtype=bool)
+    if not source.any():
+        return np.zeros_like(source)
+    padded = np.pad(source, 1, mode="constant", constant_values=False)
+    eroded = (
+        padded[1:-1, 1:-1]
+        & padded[:-2, 1:-1]
+        & padded[2:, 1:-1]
+        & padded[1:-1, :-2]
+        & padded[1:-1, 2:]
+    )
+    return source & ~eroded
+
+
+def _distance_map(target: np.ndarray) -> np.ndarray:
+    source = np.asarray(target, dtype=bool)
+    distance = np.full(source.shape, -1, dtype=np.int32)
+    ys, xs = np.where(source)
+    queue: deque[tuple[int, int]] = deque(zip(ys.tolist(), xs.tolist()))
+    if not queue:
+        return distance
+    distance[ys, xs] = 0
+    height, width = source.shape
+    while queue:
+        y, x = queue.popleft()
+        next_distance = int(distance[y, x]) + 1
+        for ny, nx in ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)):
+            if 0 <= ny < height and 0 <= nx < width and distance[ny, nx] < 0:
+                distance[ny, nx] = next_distance
+                queue.append((ny, nx))
+    return distance
+
+
+def _completion_boundary_metrics(completion: np.ndarray, visible: np.ndarray) -> dict[str, Any]:
+    completion = np.asarray(completion, dtype=bool)
+    visible = np.asarray(visible, dtype=bool)
+    bbox = _mask_bbox(completion)
+    distances = _distance_map(visible)
+    values = distances[completion]
+    finite = values[values >= 0]
+    min_distance = int(finite.min()) if finite.size else None
+    return {
+        "completion_area_pixels": int(completion.sum()),
+        "completion_bbox": bbox,
+        "completion_width": int(bbox["width"]) if bbox else 0,
+        "completion_height": int(bbox["height"]) if bbox else 0,
+        "distance_to_visible_fish": min_distance,
+        "distance_to_visible_fish_stats": {
+            "min_px": min_distance,
+            "mean_px": round(float(finite.mean()), 3) if finite.size else None,
+            "max_px": int(finite.max()) if finite.size else None,
+        },
+        "completion_contour_pixels": int(_mask_contour(completion).sum()),
+        "refined_visible_contour_pixels": int(_mask_contour(visible).sum()),
+    }
+
+
+def _mask_boundary_preview(original: Image.Image, completion: np.ndarray, visible: np.ndarray) -> bytes:
+    base = np.asarray(original.convert("RGB"), dtype=np.float32)
+    completion = np.asarray(completion, dtype=bool)
+    visible = np.asarray(visible, dtype=bool)
+    rendered = base.copy()
+    if completion.any():
+        rendered[completion] = rendered[completion] * 0.58 + np.asarray([255, 196, 0], dtype=np.float32) * 0.42
+    visible_contour = _mask_contour(visible)
+    completion_contour = _mask_contour(completion)
+    if visible_contour.any():
+        rendered[visible_contour] = np.asarray([24, 190, 110], dtype=np.float32)
+    if completion_contour.any():
+        rendered[completion_contour] = np.asarray([235, 55, 55], dtype=np.float32)
+    return _png(Image.fromarray(np.clip(rendered, 0, 255).astype("uint8"), "RGB"))
+
+
+def _feather_alpha(mask: np.ndarray, radius: int) -> np.ndarray:
+    source = np.asarray(mask, dtype=bool)
+    if not source.any():
+        return np.zeros(source.shape, dtype=np.float32)
+    if source.all():
+        return np.ones(source.shape, dtype=np.float32)
+    distance = _distance_map(~source)
+    alpha = np.clip(distance.astype(np.float32) / max(int(radius), 1), 0.0, 1.0)
+    alpha[~source] = 0.0
+    return alpha
+
+
+def _compose_feather(original: Image.Image, generated: Image.Image, completion_mask: np.ndarray, radius: int) -> bytes:
+    base = np.asarray(original.convert("RGB"), dtype=np.float32)
+    out = np.asarray(generated.convert("RGB").resize(original.size), dtype=np.float32)
+    alpha = _feather_alpha(completion_mask, radius)[..., None]
+    blended = base * (1.0 - alpha) + out * alpha
+    return _png(Image.fromarray(np.clip(np.rint(blended), 0, 255).astype("uint8"), "RGB"))
+
+
 def _compose(original: Image.Image, generated: Image.Image, completion_mask: np.ndarray) -> tuple[bytes, float]:
     base = np.asarray(original.convert("RGB"), dtype=np.uint8)
     out = np.asarray(generated.convert("RGB").resize(original.size), dtype=np.uint8)
@@ -476,6 +589,28 @@ def _error(status: int, test_id: str, stage: str, code: str, message: str, repor
     if report is not None:
         body["report"] = report
     return JSONResponse(status_code=status, content=body)
+
+
+def _load_base_case_assets(base_test_id: str, dataset_version: str, item_id: int) -> dict[str, bytes]:
+    bucket = _bucket()
+    if bucket is None:
+        raise ValueError("P2.5 base assets require GCS_BUCKET")
+    report_uri = f"gs://{bucket.name}/{PREFIX}/{base_test_id}/report.json"
+    try:
+        report = json.loads(_read_uri(report_uri).decode("utf-8"))
+    except Exception as exc:
+        raise ValueError(f"P2.5 base test report unavailable: {base_test_id}") from exc
+    base_input = report.get("input") or {}
+    if str(base_input.get("dataset_version")) != str(dataset_version) or int(base_input.get("dataset_item_id")) != int(item_id):
+        raise ValueError("P2.5 base test input does not match selected dataset item")
+    assets = report.get("assets") or {}
+    result: dict[str, bytes] = {}
+    for key in ("visible_add_mask", "visible_remove_mask", "manual_completion_mask"):
+        uri = assets.get(key)
+        if not uri:
+            raise ValueError(f"P2.5 base test asset missing: {key}")
+        result[key] = _read_uri(uri)
+    return result
 
 
 async def _payload(request: Request) -> dict[str, Any]:
@@ -514,6 +649,8 @@ async def prepare(request: Request, db=Depends(get_db)):
             item_id = int(data.get("dataset_item_id"))
         except (TypeError, ValueError) as exc:
             raise ExperimentFailure(400, "INIT", "INVALID_DATASET_ITEM", "dataset_item_id is required") from exc
+        base_test_id = str(data.get("base_test_id") or "").strip()
+        base_assets = _load_base_case_assets(base_test_id, dataset_version, item_id) if base_test_id else {}
         prepared = _prepare_input(db, dataset_version, item_id)
         source = prepared["source"]
         crop = prepared["crop"]
@@ -536,6 +673,7 @@ async def prepare(request: Request, db=Depends(get_db)):
                 "image_id": prepared["item"].image_id,
                 "species": prepared["item"].species_name,
                 "source_type": "dataset_freeze",
+                "base_test_id": base_test_id or None,
             },
             "raw_sam_pixels": int(visible.sum()),
             "progress": [
@@ -566,7 +704,11 @@ async def prepare(request: Request, db=Depends(get_db)):
             "raw_sam_mask": _data_url(raw_sam_mask_bytes, "image/png"),
             "visible_add_mask": _data_url(_mask_png(np.zeros_like(visible)), "image/png"),
             "visible_remove_mask": _data_url(_mask_png(np.zeros_like(visible)), "image/png"),
-            "manual_completion_mask": _data_url(_mask_png(np.zeros_like(visible)), "image/png"),
+            "manual_completion_mask": _data_url(base_assets.get("manual_completion_mask") or _mask_png(np.zeros_like(visible)), "image/png"),
+            "base_test_id": base_test_id or None,
+            "base_visible_add_mask": _data_url(base_assets["visible_add_mask"], "image/png") if base_assets else None,
+            "base_visible_remove_mask": _data_url(base_assets["visible_remove_mask"], "image/png") if base_assets else None,
+            "base_manual_completion_mask": _data_url(base_assets["manual_completion_mask"], "image/png") if base_assets else None,
         }
     except ExperimentFailure as exc:
         return _error(exc.http_status, test_id, exc.stage, exc.error_code, str(exc))
@@ -598,6 +740,7 @@ async def run(request: Request, db=Depends(get_db)):
     refined_visible_fish_bytes = None
     manual_completion_mask_bytes = None
     completion_mask_bytes = None
+    completion_overlay_bytes = None
     request_log: list[dict[str, Any]] = []
     response_log: list[dict[str, Any]] = []
     error_info: dict[str, Any] | None = None
@@ -610,6 +753,9 @@ async def run(request: Request, db=Depends(get_db)):
         "experiment_stage": "INIT",
         "result_classification": None,
         "completion_required": None,
+        "comparison_mode": False,
+        "base_test_id": None,
+        "quality_scores": {},
         "mask_mode": None,
         "assets": {},
         "results": [],
@@ -641,14 +787,22 @@ async def run(request: Request, db=Depends(get_db)):
         mask_mode = str(data.get("mask_mode") or "AUTO_V1").strip().upper()
         if mask_mode not in MASK_MODES:
             raise ExperimentFailure(400, "INIT", "INVALID_MASK_MODE", "mask_mode must be AUTO_V1 or MANUAL_V2")
-        requested = data.get("fitting_degree") if mask_mode == "MANUAL_V2" else (data.get("fitting_degrees") or data.get("fitting_degree") or [str(x) for x in FITTING_DEGREES])
+        comparison_mode = str(data.get("p25_compare") or data.get("comparison_mode") or "").strip().lower() in {"1", "true", "yes", "on"}
+        base_test_id = str(data.get("base_test_id") or "").strip()
+        quality_scores = _quality_scores(data)
+        requested = data.get("fitting_degrees") if mask_mode == "MANUAL_V2" and comparison_mode else (data.get("fitting_degree") if mask_mode == "MANUAL_V2" else (data.get("fitting_degrees") or data.get("fitting_degree") or [str(x) for x in FITTING_DEGREES]))
         try:
             degrees = normalize_fitting_degrees(requested)
         except ValueError as exc:
             raise ExperimentFailure(400, "INIT", "INVALID_FITTING_DEGREE", str(exc)) from exc
-        if mask_mode == "MANUAL_V2" and degrees != [P2_DEFAULT_FITTING_DEGREE]:
+        if mask_mode == "MANUAL_V2" and not comparison_mode and degrees != [P2_DEFAULT_FITTING_DEGREE]:
             raise ExperimentFailure(400, "INIT", "P2_FIXED_FITTING_DEGREE", "MANUAL_V2 requires fitting_degree=0.8")
+        if comparison_mode and mask_mode != "MANUAL_V2":
+            raise ExperimentFailure(400, "INIT", "P25_REQUIRES_MANUAL_V2", "P2.5 comparison requires MANUAL_V2")
         report["mask_mode"] = mask_mode
+        report["comparison_mode"] = comparison_mode
+        report["base_test_id"] = base_test_id or None
+        report["quality_scores"] = quality_scores
         report["prompt_id"] = PROMPT_ID
         report["input"] = {
             "dataset_version": dataset_version,
@@ -656,7 +810,10 @@ async def run(request: Request, db=Depends(get_db)):
             "source_type": "dataset_freeze",
             "mask_mode": mask_mode,
             "prompt_id": PROMPT_ID,
-            "fitting_degree": degrees[0] if mask_mode == "MANUAL_V2" else None,
+            "fitting_degree": degrees[0] if mask_mode == "MANUAL_V2" and not comparison_mode else None,
+            "fitting_degrees": degrees,
+            "comparison_mode": comparison_mode,
+            "base_test_id": base_test_id or None,
         }
         prepared = _prepare_input(db, dataset_version, item_id)
         source = prepared["source"]
@@ -743,7 +900,8 @@ async def run(request: Request, db=Depends(get_db)):
             report["preview_completion_mask"] = _data_url(completion_mask_bytes, "image/png")
             mark_progress("completion_mask", "READY", validation)
             _set_stage(report, "COMPLETION_MASK_READY")
-            degrees = [P2_DEFAULT_FITTING_DEGREE]
+            if not comparison_mode:
+                degrees = [P2_DEFAULT_FITTING_DEGREE]
         else:
             completion = build_completion_mask(visible)
             validation = validate_completion_mask(completion, visible)
@@ -764,6 +922,12 @@ async def run(request: Request, db=Depends(get_db)):
             mark_progress("refined_visible", "READY", {"pixels": int(visible.sum()), "added": 0, "removed": 0})
             mark_progress("completion_mask", "READY", validation)
             _set_stage(report, "MASK_READY")
+        boundary_metrics = _completion_boundary_metrics(completion, visible)
+        completion_overlay_bytes = _mask_boundary_preview(crop, completion, visible)
+        report["mask_boundary"] = boundary_metrics
+        report["assets"]["completion_mask_overlay"] = _persist(test_id, "completion_mask_overlay.png", completion_overlay_bytes, "image/png")
+        report["assets"]["completion_mask_boundary"] = _persist(test_id, "completion_mask_boundary.png", completion_overlay_bytes, "image/png")
+        report["preview_completion_overlay"] = _data_url(completion_overlay_bytes, "image/png")
         report["preview_original"] = _data_url(original_bytes, "image/png")
         report["completion_required"] = bool(validation["completion_area_pixels"] > 0 and validation["completion_area_ratio"] >= 0.001)
         if mask_mode == "MANUAL_V2" and not report["completion_required"]:
@@ -806,17 +970,34 @@ async def run(request: Request, db=Depends(get_db)):
                     if not generated:
                         raise RuntimeError("SHAPE_GUIDED_WORKER_EMPTY_OUTPUT")
                     output_uri = _persist(test_id, f"powerpaint_output_{degree:g}.png", generated, "image/png")
+                    suffix = f"{degree:g}"
                     with Image.open(io.BytesIO(generated)) as generated_image:
-                        final_bytes, visible_change = _compose(crop, generated_image, completion)
-                    final_uri = _persist(test_id, f"final_result_{degree:g}.png", final_bytes, "image/png")
+                        hard_bytes, visible_change = _compose(crop, generated_image, completion)
+                        feather3_bytes = _compose_feather(crop, generated_image, completion, 3)
+                        feather5_bytes = _compose_feather(crop, generated_image, completion, 5)
+                    hard_name = "final_hard_compose.png" if degree == P2_DEFAULT_FITTING_DEGREE else f"final_hard_compose_{suffix}.png"
+                    feather3_name = "final_feather_3px.png" if degree == P2_DEFAULT_FITTING_DEGREE else f"final_feather_3px_{suffix}.png"
+                    feather5_name = "final_feather_5px.png" if degree == P2_DEFAULT_FITTING_DEGREE else f"final_feather_5px_{suffix}.png"
+                    hard_uri = _persist(test_id, hard_name, hard_bytes, "image/png")
+                    feather3_uri = _persist(test_id, feather3_name, feather3_bytes, "image/png")
+                    feather5_uri = _persist(test_id, feather5_name, feather5_bytes, "image/png")
                     latency_ms = round((time.perf_counter() - result_started) * 1000, 2)
-                    item_result.update({"status": "SUCCESS", "result_uri": worker.get("result_uri"), "output_asset": output_uri, "final_asset": final_uri, "worker_ms": latency_ms, "inference_time_ms": worker.get("inference_time_ms"), "model_version": worker.get("model_version"), "raw_output_preview": _data_url(generated, "image/png"), "visible_pixel_change_ratio": visible_change, "fish_identity_check": "PENDING", "background_change": "PENDING", "result_preview": _data_url(final_bytes, "image/png")})
-                    response_log.append({"fitting_degree": degree, "worker_called": True, "http_status": worker.get("http_status"), "result_uri": worker.get("result_uri"), "inference_time_ms": worker.get("inference_time_ms"), "model_version": worker.get("model_version"), "latency_ms": latency_ms, "error": None})
-                    report["assets"][f"powerpaint_output_{degree:g}"] = output_uri
-                    report["assets"][f"final_result_{degree:g}"] = final_uri
-                    report["result_preview"] = _data_url(final_bytes, "image/png")
+                    item_result.update({"status": "SUCCESS", "result_uri": worker.get("result_uri"), "output_asset": output_uri, "final_asset": hard_uri, "hard_compose_asset": hard_uri, "feather_3px_asset": feather3_uri, "feather_5px_asset": feather5_uri, "worker_ms": latency_ms, "inference_time_ms": worker.get("inference_time_ms"), "model_version": worker.get("model_version"), "raw_output_preview": _data_url(generated, "image/png"), "visible_pixel_change_ratio": visible_change, "fish_identity_check": "PENDING", "background_change": "PENDING", "result_preview": _data_url(hard_bytes, "image/png"), "hard_compose_preview": _data_url(hard_bytes, "image/png"), "feather_3px_preview": _data_url(feather3_bytes, "image/png"), "feather_5px_preview": _data_url(feather5_bytes, "image/png")})
+                    response_log.append({"fitting_degree": degree, "worker_called": True, "http_status": worker.get("http_status"), "result_uri": worker.get("result_uri"), "inference_time_ms": worker.get("inference_time_ms"), "model_version": worker.get("model_version"), "latency_ms": latency_ms, "hard_compose_asset": hard_uri, "feather_3px_asset": feather3_uri, "feather_5px_asset": feather5_uri, "error": None})
+                    report["assets"][f"powerpaint_output_{suffix}"] = output_uri
+                    report["assets"][f"final_hard_compose_{suffix}"] = hard_uri
+                    report["assets"][f"final_feather_3px_{suffix}"] = feather3_uri
+                    report["assets"][f"final_feather_5px_{suffix}"] = feather5_uri
+                    if degree == P2_DEFAULT_FITTING_DEGREE:
+                        report["assets"]["final_hard_compose"] = hard_uri
+                        report["assets"]["final_feather_3px"] = feather3_uri
+                        report["assets"]["final_feather_5px"] = feather5_uri
+                    report["result_preview"] = _data_url(hard_bytes, "image/png")
+                    report["preview_hard_compose"] = _data_url(hard_bytes, "image/png")
+                    report["preview_feather_3px"] = _data_url(feather3_bytes, "image/png")
+                    report["preview_feather_5px"] = _data_url(feather5_bytes, "image/png")
                     mark_progress("powerpaint", "SUCCESS", {"fitting_degree": degree, "inference_time_ms": worker.get("inference_time_ms"), "model_version": worker.get("model_version")})
-                    mark_progress("final_compose", "READY", {"fitting_degree": degree, "final_asset": final_uri})
+                    mark_progress("final_compose", "READY", {"fitting_degree": degree, "hard_compose_asset": hard_uri, "feather_3px_asset": feather3_uri})
                 except Exception as exc:
                     latency_ms = round((time.perf_counter() - result_started) * 1000, 2)
                     item_result.update({"status": "FAILED_POWERPAINT", "error_code": "SHAPE_GUIDED_POWERPAINT_FAILED", "error": str(exc), "worker_ms": latency_ms})
@@ -826,10 +1007,16 @@ async def run(request: Request, db=Depends(get_db)):
             if successful:
                 best = successful[-1]
                 report["assets"]["powerpaint_output"] = _persist(test_id, "powerpaint_output.png", _read_uri(best["output_asset"]), "image/png")
-                report["assets"]["final_result"] = _persist(test_id, "final_result.png", _read_uri(best["final_asset"]), "image/png")
+                report["assets"]["final_result"] = _persist(test_id, "final_result.png", _read_uri(best["hard_compose_asset"]), "image/png")
+                report["assets"]["final_hard_compose"] = best.get("hard_compose_asset")
+                report["assets"]["final_feather_3px"] = best.get("feather_3px_asset")
+                report["assets"]["final_feather_5px"] = best.get("feather_5px_asset")
                 report["result_uri"] = best.get("result_uri")
                 report["model_version"] = best.get("model_version")
                 report["inference_time_ms"] = best.get("inference_time_ms")
+                report["preview_hard_compose"] = best.get("hard_compose_preview")
+                report["preview_feather_3px"] = best.get("feather_3px_preview")
+                report["preview_feather_5px"] = best.get("feather_5px_preview")
                 report["result_classification"] = "SUCCESS_COMPLETED"
                 _set_stage(report, "FINAL_COMPOSE_READY")
                 mark_progress("powerpaint", "SUCCESS", {"successful_degrees": [x["fitting_degree"] for x in successful]})
@@ -849,6 +1036,16 @@ async def run(request: Request, db=Depends(get_db)):
             "visible_overlap_pixels": validation["visible_overlap_pixels"],
             "fitting_degree": degrees[0] if mask_mode == "MANUAL_V2" else degrees[-1],
             "result_uri": report.get("result_uri"),
+        }
+        report["p25"] = {
+            "base_test_id": base_test_id or None,
+            "comparison_mode": comparison_mode,
+            "mask_boundary": report.get("mask_boundary"),
+            "quality_scores": quality_scores,
+            "hard_compose_asset": report["assets"].get("final_hard_compose"),
+            "feather_3px_asset": report["assets"].get("final_feather_3px"),
+            "feather_5px_asset": report["assets"].get("final_feather_5px"),
+            "degrees": degrees,
         }
     except ExperimentFailure as exc:
         response_status = exc.http_status
@@ -900,7 +1097,9 @@ async def run(request: Request, db=Depends(get_db)):
             manual_completion_mask_bytes = _mask_png(np.zeros((1, 1), dtype=bool))
         if completion_mask_bytes is None:
             completion_mask_bytes = manual_completion_mask_bytes
-        _safe_persist(test_id, "original.png", original_bytes, "image/png", report)
+        if completion_overlay_bytes is None:
+            completion_overlay_bytes = _placeholder_png()
+        _safe_persist(test_id, "original.png, original_bytes, "image/png", report)
         _safe_persist(test_id, "detector_crop.png", detector_bytes, "image/png", report)
         _safe_persist(test_id, "raw_sam_mask.png", raw_sam_mask_bytes, "image/png", report)
         _safe_persist(test_id, "raw_sam_visible.png", raw_sam_visible_bytes, "image/png", report)
@@ -912,6 +1111,8 @@ async def run(request: Request, db=Depends(get_db)):
         _safe_persist(test_id, "sam_mask.png", refined_visible_mask_bytes, "image/png", report)
         _safe_persist(test_id, "manual_completion_mask.png", manual_completion_mask_bytes, "image/png", report)
         _safe_persist(test_id, "completion_mask.png", completion_mask_bytes, "image/png", report)
+        _safe_persist(test_id, "completion_mask_overlay.png", completion_overlay_bytes, "image/png", report)
+        _safe_persist(test_id, "completion_mask_boundary.png", completion_overlay_bytes, "image/png", report)
         report["assets"]["detector_report"] = _safe_persist_json(test_id, "detector_report.json", report.get("detector", {"status": "NOT_REACHED"}))
         report["assets"]["sam_report"] = _safe_persist_json(test_id, "sam_report.json", report.get("sam", {"status": "NOT_REACHED"}))
         report["assets"]["completion_report"] = _safe_persist_json(test_id, "completion_report.json", report.get("completion_mask", {"status": "NOT_REACHED"}))
