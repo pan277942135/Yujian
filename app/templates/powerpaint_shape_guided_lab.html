@@ -91,14 +91,29 @@
     <div class="stats" id="completionStats"></div>
   </section>
 
-  <section class="card"><h2>输入与输出</h2>
+  <section class="card"><h2>P2.5 独立预览</h2>
     <div class="preview-grid">
       <figure><img id="original" alt="Original Crop"><figcaption>A · Original Crop</figcaption></figure>
-      <figure><img id="rawSamOutput" alt="Raw SAM"><figcaption>B1 · Raw SAM</figcaption></figure>
-      <figure><img id="refinedOutput" alt="Refined Visible Fish"><figcaption>B2 · Refined Visible Fish</figcaption></figure>
-      <figure><img id="completionOutput" alt="Manual Completion Mask"><figcaption>C · Manual Completion Mask</figcaption></figure>
-      <figure><img id="generatedOutput" alt="Raw PowerPaint Output"><figcaption>D · Raw PowerPaint Output</figcaption></figure>
-      <figure><img id="finalOutput" alt="Final Compose"><figcaption>E · Final Compose</figcaption></figure>
+      <figure><img id="refinedOutput" alt="Refined Visible Fish"><figcaption>B · Refined Visible Fish</figcaption></figure>
+      <figure><img id="completionOutput" alt="Completion Mask"><figcaption>C1 · Completion Mask</figcaption></figure>
+      <figure><img id="completionOverlay" alt="Completion Mask Overlay"><figcaption>C2 · Mask Overlay on Original</figcaption></figure>
+      <figure><img id="generatedOutput" alt="Raw PowerPaint Output"><figcaption>D · Raw PowerPaint Output (0.8)</figcaption></figure>
+      <figure><img id="hardComposeOutput" alt="Hard Compose"><figcaption>E1 · Hard Compose (0.8)</figcaption></figure>
+      <figure><img id="feather3Output" alt="Feather Compose 3px"><figcaption>E2 · Feather Compose 3px (0.8)</figcaption></figure>
+      <figure><img id="feather5Output" alt="Feather Compose 5px"><figcaption>E3 · Feather Compose 5px (0.8)</figcaption></figure>
+    </div>
+    <div class="stats" id="boundaryStats"></div>
+    <div id="degreeResults" class="degree-grid"></div>
+  </section>
+  <section class="card"><h2>人工评分</h2>
+    <p class="muted">评分只记录人工判断，不改变模型输出。</p>
+    <div class="score-grid">
+      <label>BODY_CONTINUITY<select id="scoreBodyContinuity"><option>UNRATED</option><option>PASS</option><option>WARNING</option><option>FAIL</option></select></label>
+      <label>SCALE_TEXTURE<select id="scoreScaleTexture"><option>UNRATED</option><option>PASS</option><option>WARNING</option><option>FAIL</option></select></label>
+      <label>COLOR_MATCH<select id="scoreColorMatch"><option>UNRATED</option><option>PASS</option><option>WARNING</option><option>FAIL</option></select></label>
+      <label>EDGE_SEAM<select id="scoreEdgeSeam"><option>UNRATED</option><option>PASS</option><option>WARNING</option><option>FAIL</option></select></label>
+      <label>ANATOMY<select id="scoreAnatomy"><option>UNRATED</option><option>PASS</option><option>WARNING</option><option>FAIL</option></select></label>
+      <label>BACKGROUND_PRESERVATION<select id="scoreBackgroundPreservation"><option>UNRATED</option><option>PASS</option><option>WARNING</option><option>FAIL</option></select></label>
     </div>
   </section>
 
