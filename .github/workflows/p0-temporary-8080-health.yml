@@ -1,0 +1,38 @@
+name: P0 Temporary 8080 Health Probe
+
+on:
+  push:
+    branches:
+      - p0-8080-probe-20260913
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Authenticate to Google Cloud with GitHub OIDC/WIF
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: gemini-api-project-503706
+          workload_identity_provider: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+          service_account: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: gemini-api-project-503706
+          version: '>= 416.0.0'
+
+      - name: Probe 8080 health
+        shell: bash
+        run: |
+          set +e
+          curl -v --connect-timeout 5 --max-time 10             -w '\nHTTP_STATUS=%{http_code}\nCONNECT=%{time_connect}\nTOTAL=%{time_total}\n'             http://136.111.134.128:8080/health
+          CURL_RC=$?
+          echo "CURL_RC=${CURL_RC}"
+          exit 0
