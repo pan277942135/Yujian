@@ -2,11 +2,13 @@ import json
 import mimetypes
 import os
 from datetime import datetime, timezone
+from io import BytesIO
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from google.cloud import storage
+from PIL import Image
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -15,8 +17,10 @@ from starlette.requests import Request
 from app.batch_console import audit_with_species_catalog, list_incoming_batches
 from app.batch_upload_api import ensure_incoming_manifest
 from app.db import SessionLocal, get_db, init_db
+from app.detector_runtime import detect, normalize_android_source
 from app.factory import DOWNLOAD_RETRY, get_bucket_name, promote_incoming_batch, sync_batch_registry
 from app.feedback_pipeline import materialize_feedback_batch
+from app.frozen_crop_bridge import _read_uri
 from app.flywheel import (
     create_species_candidate,
     ensure_species_catalog,
@@ -37,6 +41,7 @@ from app.data_policy import (
     valid_truth_for_image,
 )
 from app.models import Batch, BatchCropReview, DatasetVersion, FeedbackEvent, ImageAsset, ReviewEvent
+from app.recognition_pipeline import assess_detections
 from app.secure import install_access_guard
 from app.presence import FishPresenceResult
 from app.crop_review import _candidate_boxes
@@ -159,6 +164,24 @@ def _review_bbox_dict(db: Session, image: ImageAsset) -> dict:
         "bbox_status": "ACCEPTED" if confirmed else ("CANDIDATE" if candidate else "MISSING"),
         "bbox_review_status": row.status if row else "REVIEW_REQUIRED",
     }
+
+
+def _detect_candidate_bbox(image: ImageAsset) -> tuple[list[float] | None, str, str, float | None]:
+    """Run the same detector/selection contract used by Detector Golden Parity."""
+    raw, _ = _read_uri(image.gcs_uri)
+    with Image.open(BytesIO(raw)) as opened:
+        detector_image = normalize_android_source(opened)
+    try:
+        detector_run = detect(detector_image)
+    finally:
+        detector_image.close()
+    assessment = assess_detections(detector_run.detections)
+    primary = assessment.primary
+    candidate = None
+    if primary is not None:
+        box = primary.box.normalized()
+        candidate = [round(value, 6) for value in (box.x1, box.y1, box.width, box.height)]
+    return candidate, detector_run.model_version, assessment.status.value, detector_run.latency_ms
 
 
 def _upsert_review_bbox(db: Session, image: ImageAsset, box: list[float], reviewer: str, notes: str | None):
@@ -454,6 +477,41 @@ def review_stats(
     ).group_by(ImageAsset.review_status)
     all_status = db.execute(status_stmt).all()
     return {"filtered": count, "status": {key: value for key, value in all_status}}
+
+
+@app.post("/api/review/{batch_id}/{image_id}/reidentify-bbox")
+def reidentify_review_bbox(batch_id: str, image_id: str, db: Session = Depends(get_db)):
+    image = db.scalar(select(ImageAsset).where(ImageAsset.batch_id == batch_id, ImageAsset.image_id == image_id))
+    if not image:
+        raise HTTPException(status_code=404, detail="image not found")
+    try:
+        candidate, detector_version, assessment, latency_ms = _detect_candidate_bbox(image)
+        row = db.scalar(select(BatchCropReview).where(BatchCropReview.image_asset_id == image.id))
+        if row is None:
+            row = BatchCropReview(batch_id=image.batch_id, image_asset_id=image.id, image_id=image.image_id)
+            db.add(row)
+            db.flush()
+        row.candidate_bbox_json = json.dumps(candidate, separators=(",", ":")) if candidate else None
+        row.detector_version = detector_version
+        if row.status not in {"ACCEPTED", "TRAINING_READY"}:
+            row.status = "REVIEW_REQUIRED"
+        row.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(row)
+        result = image_dict(image, db=db)
+        result.update(
+            {
+                "detector_version": detector_version,
+                "detector_assessment": assessment,
+                "detector_latency_ms": latency_ms,
+            }
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"重新识别失败：{exc}") from exc
 
 
 @app.patch("/api/review/{batch_id}/{image_id}")
