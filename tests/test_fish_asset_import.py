@@ -94,11 +94,12 @@ def test_valid_image_scan_marks_square_file(tmp_path, monkeypatch):
         "app.fish_knowledge.import_batch._source_parts",
         lambda _: ("bucket", "fish-assets/imports/FK_001/", "FK_001"),
     )
+    batch = type("Batch", (), {"source_gcs_uri": "gs://bucket/fish-assets/imports/FK_001/", "batch_id": "FK_001"})()
     item = _scan_item(
         db,
         None,
         Bucket(),
-        type("Batch", (), {"source_gcs_uri": "gs://bucket/fish-assets/imports/FK_001/"})(),
+        batch,
         Blob.name,
     )
     assert item.species_id == "sharpbelly"
