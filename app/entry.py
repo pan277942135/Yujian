@@ -21,6 +21,7 @@ from app.crop_qa import router as crop_qa_router, templates as crop_qa_templates
 from app.crop_dataset_api import router as crop_dataset_router
 from app.crop_review import router as crop_review_router, templates as crop_review_templates
 from app.dataset_crop_review import router as dataset_crop_review_router
+from app.accepted_bbox_review import router as accepted_bbox_router, templates as accepted_bbox_templates
 from app.crop_audit_api import router as crop_audit_router
 from app.detector_parity_api import router as detector_parity_router, templates as detector_parity_templates
 from app.segmentation_api import router as segmentation_router, templates as segmentation_templates
@@ -53,6 +54,7 @@ for template_engine in (
     intelligence_templates,
     crop_qa_templates,
     crop_review_templates,
+    accepted_bbox_templates,
     detector_parity_templates,
     segmentation_templates,
     fish_completion_templates,
@@ -127,6 +129,7 @@ app.include_router(crop_qa_router)
 app.include_router(crop_dataset_router)
 app.include_router(crop_review_router)
 app.include_router(dataset_crop_review_router)
+app.include_router(accepted_bbox_router)
 app.include_router(crop_audit_router)
 app.include_router(detector_parity_router)
 app.include_router(segmentation_router)
