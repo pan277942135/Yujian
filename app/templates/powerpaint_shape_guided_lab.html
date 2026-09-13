@@ -3,60 +3,203 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PowerPaint Shape Guided Lab V0.3.1</title>
+  <title>PowerPaint Shape Guided Lab P2</title>
   <style>
     body{margin:0;background:#f6f8fb;color:#172033;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-    main{max-width:1280px;margin:0 auto;padding:28px 20px 60px}h1{margin:12px 0 6px;font-size:30px}.muted{color:#667085}.card{background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:16px;margin:14px 0;box-shadow:0 2px 10px #1720330b}
-    .toolbar{display:flex;gap:10px;align-items:end;flex-wrap:wrap}.toolbar label{display:grid;gap:5px;font-size:13px;font-weight:700}.toolbar select,.toolbar button{min-height:42px;border:1px solid #cbd5e1;border-radius:9px;padding:0 12px;background:#fff;font:inherit}.toolbar button{background:#172033;color:#fff;border:0;cursor:pointer}.toolbar button:disabled{opacity:.5;cursor:not-allowed}.degrees{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.degrees label{font-weight:600}
-    .status{white-space:pre-wrap;margin-top:12px}.items{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;max-height:310px;overflow:auto}.item{border:1px solid #dbe3ee;border-radius:10px;background:#fff;padding:8px;text-align:left;cursor:pointer}.item.selected{border:2px solid #2563eb;background:#eff6ff}.item img{width:100%;height:120px;object-fit:cover;border-radius:7px;display:block}.item b,.item small{display:block;margin-top:5px}.item small{color:#667085}
-    .progress{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}.stage{border:1px solid #dbe3ee;border-radius:10px;padding:12px;min-height:78px}.stage.ready{border-color:#86efac;background:#f0fdf4}.stage.running{border-color:#93c5fd;background:#eff6ff}.stage.failed{border-color:#fca5a5;background:#fef2f2}.stage b,.stage span{display:block}.stage span{margin-top:6px;color:#667085;font-size:13px;overflow-wrap:anywhere}
-    .results{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:14px}.results figure{margin:0}.results img{width:100%;height:270px;object-fit:contain;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px}.results figcaption{font-weight:700;margin-top:8px}.json{max-height:560px;overflow:auto;background:#0f172a;color:#dbeafe;padding:14px;border-radius:10px;white-space:pre-wrap;word-break:break-word}.prompt{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;background:#f8fafc;border-radius:9px;padding:12px;font-size:12px;line-height:1.5}
-    @media(max-width:1200px){.results{grid-template-columns:repeat(4,minmax(0,1fr))}}@media(max-width:1000px){.progress{grid-template-columns:repeat(2,minmax(0,1fr))}.results{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:600px){main{padding:18px 12px}.progress,.results{grid-template-columns:1fr}.results img{height:240px}}
+    main{max-width:1400px;margin:0 auto;padding:28px 20px 60px}h1{margin:12px 0 6px;font-size:30px}.muted{color:#667085}
+    .card{background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:16px;margin:14px 0;box-shadow:0 2px 10px #1720330b}
+    .toolbar{display:flex;gap:10px;align-items:end;flex-wrap:wrap}.toolbar label{display:grid;gap:5px;font-size:13px;font-weight:700}
+    .toolbar select,.toolbar button,.toolrow button{min-height:40px;border:1px solid #cbd5e1;border-radius:9px;padding:0 12px;background:#fff;font:inherit}
+    button{cursor:pointer}.toolbar button.primary,.toolrow button.primary{background:#172033;color:#fff;border:0}.toolbar button:disabled,.toolrow button:disabled{opacity:.5;cursor:not-allowed}
+    .status{white-space:pre-wrap;margin-top:12px}.items{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;max-height:310px;overflow:auto}
+    .item{border:1px solid #dbe3ee;border-radius:10px;background:#fff;padding:8px;text-align:left;cursor:pointer}.item.selected{border:2px solid #2563eb;background:#eff6ff}
+    .item img{width:100%;height:120px;object-fit:cover;border-radius:7px;display:block}.item b,.item small{display:block;margin-top:5px}.item small{color:#667085}
+    .progress{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}.stage{border:1px solid #dbe3ee;border-radius:10px;padding:12px;min-height:72px}
+    .stage.ready{border-color:#86efac;background:#f0fdf4}.stage.running{border-color:#93c5fd;background:#eff6ff}.stage.failed{border-color:#fca5a5;background:#fef2f2}
+    .stage b,.stage span{display:block}.stage span{margin-top:6px;color:#667085;font-size:13px;overflow-wrap:anywhere}
+    .columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.columns.three{grid-template-columns:repeat(3,minmax(0,1fr))}
+    .preview-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.preview-grid figure,.columns figure{margin:0}
+    .preview-grid img,.columns figure img{width:100%;height:220px;object-fit:contain;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px}
+    figcaption{font-weight:700;margin-top:8px}.toolrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}.toolrow label{font-size:13px;font-weight:700}
+    .toolrow input[type=range]{width:170px}.toolrow .active{background:#2563eb;color:#fff;border-color:#2563eb}
+    .editor-wrap{position:relative;width:100%;max-width:620px;min-height:260px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden}
+    .editor-wrap img{display:block;width:100%;height:auto;max-height:520px;object-fit:contain}.editor-wrap canvas{position:absolute;left:0;top:0;width:100%;height:100%;touch-action:none;cursor:crosshair}
+    .compare{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.compare img{width:100%;height:180px;object-fit:contain;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px}
+    .stats{display:flex;gap:18px;flex-wrap:wrap;font-size:13px}.stats b{color:#0f766e}.warning{color:#b45309}.error{color:#b91c1c}
+    .json{max-height:620px;overflow:auto;background:#0f172a;color:#dbeafe;padding:14px;border-radius:10px;white-space:pre-wrap;word-break:break-word}
+    .prompt{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f8fafc;border-radius:9px;padding:12px;font-size:13px}
+    @media(max-width:1100px){.progress{grid-template-columns:repeat(3,minmax(0,1fr))}.preview-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.columns.three{grid-template-columns:1fr}}
+    @media(max-width:700px){main{padding:18px 12px}.progress,.preview-grid,.columns{grid-template-columns:1fr}.preview-grid img,.columns figure img{height:240px}}
   </style>
 </head>
 <body>
 <header>{% include "_mobile_ux.html" %}</header>
 <main>
-  <h1>PowerPaint Shape Guided Lab V0.3.1</h1>
-  <p class="muted">独立形状引导实验：Original Crop → Detector → SAM Visible Fish → Fish Completion Mask → Shape-guided Object Inpainting。</p>
+  <h1>PowerPaint Shape Guided Lab P2</h1>
+  <p class="muted">固定样本支持：B1 Raw SAM → B2 Refined Visible Fish → C Manual Completion Mask V2 → PowerPaint 0.8 → Final Compose。</p>
+
   <section class="card">
     <div class="toolbar">
       <label>Dataset Freeze <select id="datasetVersion"></select></label>
       <label>Split <select id="split"><option value="">全部</option><option value="test">test</option><option value="train">train</option><option value="val">val</option></select></label>
-      <button id="run" disabled>运行 Shape Guided</button>
+      <label>Mask Mode <select id="maskMode"><option value="MANUAL_V2" selected>MANUAL_V2</option><option value="AUTO_V1">AUTO_V1</option></select></label>
+      <button id="prepare" class="primary" disabled>准备 B1 Raw SAM</button>
+      <button id="run" class="primary" disabled>运行 PowerPaint 0.8</button>
     </div>
-    <div class="degrees"><b>Task Mode:</b> <code>SHAPE_GUIDED</code><b>Fitting Degree:</b><label><input type="checkbox" value="0.6" checked> 0.6</label><label><input type="checkbox" value="0.8" checked> 0.8</label><label><input type="checkbox" value="0.95" checked> 0.95</label></div>
-    <div class="status muted">Prompt Version: <b>FIXED_FISH_SHAPE_GUIDED_V0.3</b></div>
+    <div class="status">Task Mode: <code>SHAPE_GUIDED</code> · Fitting Degree: <b>0.8</b> · Prompt ID: <code>FIXED_FISH_SHAPE_GUIDED_V0.3.1</code></div>
     <div id="selected" class="muted status">请选择图片</div><div id="status" class="status muted"></div>
   </section>
+
   <section class="card"><h2>Dataset Freeze 图片</h2><div id="items" class="items"><span class="muted">正在读取…</span></div></section>
-  <section class="card"><h2>Pipeline Trace</h2><div id="progress" class="progress"></div></section>
-  <section class="card"><h2>输入与输出</h2><div class="results"><figure><div id="original"><span class="muted">未运行</span></div><figcaption>A · Original Crop</figcaption></figure><figure><div id="sam"><span class="muted">未运行</span></div><figcaption>B · SAM Visible Fish</figcaption></figure><figure><div id="mask"><span class="muted">未运行</span></div><figcaption>C · Completion Mask</figcaption></figure><figure><div id="generated06"><span class="muted">未运行</span></div><figcaption>D1 · Shape 0.6</figcaption></figure><figure><div id="generated08"><span class="muted">未运行</span></div><figcaption>D2 · Shape 0.8</figcaption></figure><figure><div id="generated095"><span class="muted">未运行</span></div><figcaption>D3 · Shape 0.95</figcaption></figure><figure><div id="final"><span class="muted">未运行</span></div><figcaption>E · Final Compose</figcaption></figure></div></section>
-  <section class="card"><h2>固定 Prompt</h2><div class="prompt">Complete only the missing biological parts of this fish.
 
-Use the existing visible fish as the identity reference.
+  <section class="card"><h2>Pipeline State</h2><div id="progress" class="progress"></div></section>
 
-Preserve species, head shape, body proportion, scale pattern, fin structure, tail anatomy, and original color.
+  <section class="card">
+    <h2>B1 · Raw SAM（只读）</h2>
+    <div class="columns">
+      <figure><img id="rawSamPreview" alt="Raw SAM visible fish"><figcaption>Raw SAM Visible Fish</figcaption></figure>
+      <figure><img id="rawSamMaskPreview" alt="Raw SAM mask"><figcaption>Raw SAM Mask</figcaption></figure>
+    </div>
+    <div class="stats" id="rawStats"></div>
+  </section>
 
-Only generate inside the provided completion mask. Do not modify visible fish pixels. Do not change background. Do not create another fish.</div></section>
+  <section class="card">
+    <h2>B2 · Refined Visible Fish</h2>
+    <p class="muted">把 SAM 漏掉的真实可见鱼体用 Add 补回；用 Remove 删除手、背景或其他误包含区域。Raw SAM 本身不可修改。</p>
+    <div class="toolrow">
+      <button id="visibleAdd" class="active">+ Visible Fish</button><button id="visibleRemove">- Not Fish</button>
+      <label>Brush Size <input id="visibleBrush" type="range" min="2" max="80" value="24"><span id="visibleBrushValue">24 px</span></label>
+      <button id="visibleUndo">Undo</button><button id="visibleClear">Clear Manual Edits</button><button id="visibleReset">Reset to Raw SAM</button>
+    </div>
+    <div class="editor-wrap" id="visibleEditorWrap"><img id="visibleEditorImage" alt="Raw visible reference"><canvas id="visibleCanvas"></canvas></div>
+    <div class="stats" id="visibleStats"></div>
+    <div class="compare"><figure><img id="refinedVisiblePreview" alt="Refined Visible Fish"><figcaption>Refined mask preview</figcaption></figure><figure><img id="refinedVisibleMaskPreview" alt="Refined Visible Fish mask"><figcaption>Refined mask</figcaption></figure></div>
+  </section>
+
+  <section class="card">
+    <h2>C · Completion Mask V2</h2>
+    <p class="muted">默认 MANUAL_V2。只画“被手/物体遮住但本应属于鱼体”的区域；进入 Refined Visible Fish 的像素会自动裁掉。</p>
+    <div class="compare"><figure><img id="completionOriginal" alt="Original Crop"><figcaption>Original Crop</figcaption></figure><figure><img id="completionVisible" alt="Refined Visible Fish"><figcaption>Refined Visible Fish reference</figcaption></figure></div>
+    <div class="toolrow">
+      <button id="completionAdd" class="active">+ Completion Area</button><button id="completionErase">- Erase</button>
+      <label>Brush Size <input id="completionBrush" type="range" min="2" max="100" value="32"><span id="completionBrushValue">32 px</span></label>
+      <button id="completionUndo">Undo</button><button id="completionClear">Clear</button>
+    </div>
+    <div class="editor-wrap" id="completionEditorWrap"><img id="completionEditorImage" alt="Original Crop"><canvas id="completionCanvas"></canvas></div>
+    <div class="stats" id="completionStats"></div>
+  </section>
+
+  <section class="card"><h2>输入与输出</h2>
+    <div class="preview-grid">
+      <figure><img id="original" alt="Original Crop"><figcaption>A · Original Crop</figcaption></figure>
+      <figure><img id="rawSamOutput" alt="Raw SAM"><figcaption>B1 · Raw SAM</figcaption></figure>
+      <figure><img id="refinedOutput" alt="Refined Visible Fish"><figcaption>B2 · Refined Visible Fish</figcaption></figure>
+      <figure><img id="completionOutput" alt="Manual Completion Mask"><figcaption>C · Manual Completion Mask</figcaption></figure>
+      <figure><img id="generatedOutput" alt="Raw PowerPaint Output"><figcaption>D · Raw PowerPaint Output</figcaption></figure>
+      <figure><img id="finalOutput" alt="Final Compose"><figcaption>E · Final Compose</figcaption></figure>
+    </div>
+  </section>
+
+  <section class="card"><h2>固定 Prompt</h2><div class="prompt">a realistic fish body matching the visible fish</div></section>
   <section class="card"><h2>Report JSON</h2><pre id="report" class="json">未运行</pre></section>
 </main>
 <script>
-const $=id=>document.getElementById(id);let items=[];let selected=null;let currentTestId='';
+const $=id=>document.getElementById(id);
+const state={items:[],selected:null,prep:null,w:0,h:0,raw:null,add:null,remove:null,refined:null,completion:null,visibleMode:'add',completionMode:'add',visibleHistory:[],completionHistory:[],currentTestId:''};
+
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function renderItems(){ $('items').innerHTML=items.length?items.map((x,i)=>`<button class="item ${selected&&selected.dataset_item_id===x.dataset_item_id?'selected':''}" onclick="choose(${i})"><img src="${esc(x.preview_url)}" alt="${esc(x.image_id)}"><b>${esc(x.image_id)}</b><small>${esc(x.species||'-')} · ${esc(x.split||'-')} · item ${esc(x.dataset_item_id)}</small></button>`).join(''):'<span class="muted">没有图片</span>' }
-function choose(i){selected=items[i]||null;renderItems();$('run').disabled=!selected;$('selected').textContent=selected?`已选择 ${selected.image_id} · item ${selected.dataset_item_id} · ${selected.species||'-'}`:'请选择图片'}
-function renderProgress(stages){$('progress').innerHTML=(stages||[]).map(x=>{const s=String(x.status||'PENDING').toUpperCase();const cls=s.includes('FAIL')?'failed':s==='READY'||s==='SUCCESS'?'ready':s==='RUNNING'?'running':'';return `<div class="stage ${cls}"><b>${esc(x.label||x.stage)}</b><span>${esc(s)}</span><span>${x.elapsed_ms==null?'—':Number(x.elapsed_ms).toFixed(2)+' ms'}</span><span>${esc(typeof x.result==='object'?JSON.stringify(x.result):x.result||'')}</span></div>`}).join('')}
-function show(id,url){$(id).innerHTML=url?`<img src="${esc(url)}" alt="${esc(id)}">`:'<span class="muted">未生成</span>'}
-function showResults(report){const results=report.results||[];const byDegree=degree=>results.find(x=>Number(x.fitting_degree)===degree)?.result_preview;show('generated06',byDegree(.6));show('generated08',byDegree(.8));show('generated095',byDegree(.95));show('final',report.result_preview||byDegree(.95)||byDegree(.8)||byDegree(.6))}
-function resetProgress(){renderProgress([{stage:'input',label:'Input',status:'PENDING'},{stage:'detector',label:'Detector',status:'PENDING'},{stage:'sam',label:'SAM',status:'PENDING'},{stage:'completion_mask',label:'Completion Mask',status:'PENDING'},{stage:'shape_guided',label:'PowerPaint Shape Guided',status:'PENDING'}])}
-function errorText(code,testId,endpoint,started,err){return `${code}\ntest_id: ${testId||'-'}\nrequest: ${endpoint}\nelapsed: ${((performance.now()-started)/1000).toFixed(2)}s\nbrowser_error: ${err}`}
-function showRunStatus(report,result){const err=report.error||result?.error||{};const artifact=report.artifacts_ready===false?'NOT_READY':'READY';return `${report.result_classification||result?.status||'UNKNOWN'}\nTest ID: ${result?.test_id||report.test_id||'-'}\nStage: ${report.experiment_stage||result?.stage||'-'}\nError: ${err.error_code||'-'}${err.message?` — ${err.message}`:''}\nArtifacts: ${artifact}\nReport: ${report.assets?.report||'-'}`}
-async function fetchJson(url,options,kind,testId){const started=performance.now();try{const r=await fetch(url,{credentials:'include',...options});let d;try{d=await r.json()}catch(e){const x=new Error(`RESPONSE_JSON_ERROR HTTP ${r.status}`);x.payload={};throw x}if(!r.ok){const detail=d.error||d.detail||d.message||d;const e=new Error(`${kind}_HTTP_ERROR HTTP ${r.status}: ${typeof detail==='string'?detail:JSON.stringify(detail)}`);e.payload=d;throw e}return d}catch(e){if(String(e).includes('HTTP')||e.payload)throw e;throw new Error(errorText(`${kind}_NETWORK_ERROR`,testId,url,started,e))}}
-async function load(){try{const versions=await fetchJson('/api/debug/powerpaint-shape-guided-lab/datasets',{},'DATASET','');$('datasetVersion').innerHTML=versions.map(x=>`<option value="${esc(x.dataset_version)}">${esc(x.dataset_version)} · ${esc(x.image_count)} 张</option>`).join('');await loadItems()}catch(e){$('status').textContent=String(e)}}
-async function loadItems(){const v=$('datasetVersion').value;if(!v)return;try{const p=new URLSearchParams({limit:'60'});if($('split').value)p.set('split',$('split').value);items=await fetchJson('/api/debug/powerpaint-shape-guided-lab/datasets/'+encodeURIComponent(v)+'/images?'+p,{},'DATASET','');selected=null;$('run').disabled=true;renderItems();$('selected').textContent='请选择图片'}catch(e){$('status').textContent=String(e)}}
-async function run(){if(!selected)return;const degrees=[...document.querySelectorAll('.degrees input:checked')].map(x=>x.value);if(!degrees.length){$('status').textContent='至少选择一个 fitting degree';return}$('run').disabled=true;currentTestId='';resetProgress();$('report').textContent='Shape Guided 运行中…';$('status').textContent='SHAPE_GUIDED_RUNNING\nInput → Detector → SAM → Completion Mask → PowerPaint';const form=new URLSearchParams({dataset_version:selected.dataset_version,dataset_item_id:String(selected.dataset_item_id),fitting_degrees:degrees.join(',')});try{const result=await fetchJson('/api/debug/powerpaint-shape-guided-lab/run',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form},'SHAPE_GUIDED','');currentTestId=result.test_id;const report=result.report||{};renderProgress(report.progress||[]);$('report').textContent=JSON.stringify(report,null,2);show('original',report.preview_original||report.result_preview);show('sam',report.preview_sam);show('mask',report.preview_completion_mask);showResults(report);$('status').textContent=showRunStatus(report,result)}catch(e){const payload=e.payload||{};const report=payload.report||{};$('status').textContent=report?showRunStatus(report,payload):String(e);if(payload.report){currentTestId=payload.test_id||report.test_id||'';renderProgress(report.progress||[]);$('report').textContent=JSON.stringify(report,null,2);show('original',report.preview_original||report.result_preview);show('sam',report.preview_sam);show('mask',report.preview_completion_mask);showResults(report)}}finally{$('run').disabled=false}}
-document.querySelectorAll('.degrees input').forEach(x=>x.addEventListener('change',()=>{}));$('datasetVersion').addEventListener('change',loadItems);$('split').addEventListener('change',loadItems);$('run').addEventListener('click',run);resetProgress();load();
+function count(m){return m?m.reduce((a,x)=>a+(x?1:0),0):0}
+function blank(){return new Uint8Array(state.w*state.h)}
+function clone(m){return new Uint8Array(m)}
+function setImg(id,url){$(id).src=url||''}
+function maskDataUrl(mask){
+  const c=document.createElement('canvas');c.width=state.w;c.height=state.h;const ctx=c.getContext('2d');
+  const d=ctx.createImageData(state.w,state.h);
+  for(let i=0;i<mask.length;i++){const v=mask[i]?255:0;d.data[i*4]=v;d.data[i*4+1]=v;d.data[i*4+2]=v;d.data[i*4+3]=255}
+  ctx.putImageData(d,0,0);return c.toDataURL('image/png')
+}
+async function readMask(url){
+  const img=new Image();img.src=url;await img.decode();const c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;
+  const ctx=c.getContext('2d');ctx.drawImage(img,0,0);const d=ctx.getImageData(0,0,c.width,c.height).data;const m=new Uint8Array(d.length/4);
+  for(let i=0;i<m.length;i++)m[i]=d[i*4+3]>0&&d[i*4]>0?1:0;return {mask:m,w:c.width,h:c.height}
+}
+function renderOverlay(canvasId,base,accent){
+  const c=$(canvasId),ctx=c.getContext('2d');c.width=state.w;c.height=state.h;
+  const d=ctx.createImageData(state.w,state.h);
+  for(let i=0;i<base.length;i++){
+    let r=0,g=0,b=0,a=0;
+    if(base[i]){g=210;b=90;a=92}
+    if(accent&&accent[i]){if(accent[i]===1){b=255;r=30;a=150}else{r=235;g=65;b=65;a=160}}
+    d.data[i*4]=r;d.data[i*4+1]=g;d.data[i*4+2]=b;d.data[i*4+3]=a;
+  }
+  ctx.putImageData(d,0,0)
+}
+function recomputeVisible(){
+  state.refined=new Uint8Array(state.raw);
+  for(let i=0;i<state.refined.length;i++)state.refined[i]=state.add[i]||0; 
+  for(let i=0;i<state.refined.length;i++)if(state.remove[i])state.refined[i]=0;
+  renderOverlay('visibleCanvas',state.refined,state.add.map((v,i)=>state.remove[i]?2:v?1:0));
+  setImg('refinedVisiblePreview',maskDataUrl(state.refined));
+  setImg('refinedVisibleMaskPreview',maskDataUrl(state.refined));
+  setImg('completionVisible',maskDataUrl(state.refined));
+  updateStats()
+}
+function clipCompletion(){for(let i=0;i<state.completion.length;i++)if(state.refined[i])state.completion[i]=0}
+function recomputeCompletion(){clipCompletion();renderOverlay('completionCanvas',state.completion,null);setImg('completionOutput',maskDataUrl(state.completion));updateStats()}
+function updateStats(){
+  const raw=count(state.raw), refined=count(state.refined), add=count(state.add), remove=count(state.remove), area=count(state.completion), overlap=state.completion&&state.refined?state.completion.reduce((a,x,i)=>a+(x&&state.refined[i]?1:0),0):0;
+  const ratio=area/Math.max(refined+area,1);
+  $('rawStats').innerHTML='<b>raw_sam_pixels='+raw+'</b>';
+  $('visibleStats').innerHTML='<b>refined_visible_pixels='+refined+'</b><b>visible_add_pixels='+add+'</b><b>visible_remove_pixels='+remove+'</b>';
+  $('completionStats').innerHTML='<b>completion_area_pixels='+area+'</b><b>completion_area_ratio='+ratio.toFixed(6)+'</b><b>visible_overlap_pixels='+overlap+'</b>'+(ratio>.35?'<span class="warning">WARNING: ratio &gt; 0.35</span>':'');
+  const valid=state.prep&&( $('maskMode').value==='AUTO_V1' || (area>0&&overlap===0&&ratio<=.60) );
+  $('run').disabled=!valid;
+}
+function point(e,canvas){const r=canvas.getBoundingClientRect();return {x:(e.clientX-r.left)*state.w/r.width,y:(e.clientY-r.top)*state.h/r.height}}
+function paint(mask,canvas,e,brush,value){
+  const p=point(e,canvas),rad=brush/2, x0=Math.max(0,Math.floor(p.x-rad)),x1=Math.min(state.w-1,Math.ceil(p.x+rad)),y0=Math.max(0,Math.floor(p.y-rad)),y1=Math.min(state.h-1,Math.ceil(p.y+rad));
+  for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++)if((x-p.x)*(x-p.x)+(y-p.y)*(y-p.y)<=rad*rad)mask[y*state.w+x]=value?1:0;
+}
+function wireCanvas(canvasId,which){
+  const canvas=$(canvasId), key=which==='visible'?'visibleHistory':'completionHistory';let drawing=false;
+  canvas.addEventListener('pointerdown',e=>{e.preventDefault();drawing=true;state[key].push(which==='visible'?{a:clone(state.add),r:clone(state.remove)}:clone(state.completion));canvas.setPointerCapture(e.pointerId);const m=which==='visible'?(state.visibleMode==='add'?state.add:state.remove):state.completion;paint(m,canvas,e,Number($(which==='visible'?'visibleBrush':'completionBrush').value),which==='visible'?true:state.completionMode==='add');which==='visible'?recomputeVisible():recomputeCompletion()});
+  canvas.addEventListener('pointermove',e=>{if(!drawing)return;const m=which==='visible'?(state.visibleMode==='add'?state.add:state.remove):state.completion;paint(m,canvas,e,Number($(which==='visible'?'visibleBrush':'completionBrush').value),which==='visible'?true:state.completionMode==='add');which==='visible'?recomputeVisible():recomputeCompletion()});
+  canvas.addEventListener('pointerup',()=>drawing=false);canvas.addEventListener('pointercancel',()=>drawing=false)
+}
+function undoVisible(){const x=state.visibleHistory.pop();if(!x)return;state.add=x.a;state.remove=x.r;recomputeVisible()}
+function undoCompletion(){const x=state.completionHistory.pop();if(!x)return;state.completion=x;recomputeCompletion()}
+function renderProgress(stages){$('progress').innerHTML=(stages||[]).map(x=>{const s=String(x.status||'PENDING').toUpperCase();const cls=s.includes('FAIL')?'failed':s==='READY'||s==='SUCCESS'?'ready':s==='RUNNING'?'running':'';return '<div class="stage '+cls+'"><b>'+esc(x.label||x.stage)+'</b><span>'+esc(s)+'</span><span>'+esc(typeof x.result==='object'?JSON.stringify(x.result):x.result||'')+'</span></div>'}).join('')}
+function showRunStatus(report,result){const err=report.error||result?.error||{};return (report.result_classification||result?.status||'UNKNOWN')+'\\nTest ID: '+(result?.test_id||report.test_id||'-')+'\\nStage: '+(report.experiment_stage||result?.stage||'-')+'\\nError: '+(err.error_code||'-')+(err.message?' — '+err.message:'')+'\\nReport: '+(report.assets?.report||'-')}
+async function fetchJson(url,options={},kind='REQUEST'){const r=await fetch(url,{credentials:'include',...options});let d={};try{d=await r.json()}catch(e){throw new Error(kind+'_RESPONSE_JSON_ERROR HTTP '+r.status)}if(!r.ok){const e=new Error(kind+'_HTTP_ERROR HTTP '+r.status+': '+JSON.stringify(d.error||d.detail||d));e.payload=d;throw e}return d}
+function renderItems(){$('items').innerHTML=state.items.length?state.items.map((x,i)=>'<button class="item '+(state.selected&&String(state.selected.dataset_item_id)===String(x.dataset_item_id)?'selected':'')+'" onclick="choose('+i+')"><img src="'+esc(x.preview_url)+'" alt="'+esc(x.image_id)+'"><b>'+esc(x.image_id)+'</b><small>'+esc(x.species||'-')+' · '+esc(x.split||'-')+' · item '+esc(x.dataset_item_id)+'</small></button>').join(''):'<span class="muted">没有图片</span>'}
+function choose(i){state.selected=state.items[i]||null;renderItems();$('prepare').disabled=!state.selected;$('run').disabled=true;$('selected').textContent=state.selected?'已选择 '+state.selected.image_id+' · item '+state.selected.dataset_item_id+' · '+(state.selected.species||'-'):'请选择图片'}
+async function loadItems(){const v=$('datasetVersion').value;if(!v)return;try{const p=new URLSearchParams({limit:'200'});if($('split').value)p.set('split',$('split').value);state.items=await fetchJson('/api/debug/powerpaint-shape-guided-lab/datasets/'+encodeURIComponent(v)+'/images?'+p,{},'DATASET');state.selected=null;state.prep=null;renderItems();const target=state.items.find(x=>String(x.dataset_item_id)==='5100');if(v==='DS_M1_v0.7'&&target)choose(state.items.indexOf(target))}catch(e){$('status').textContent=String(e)}}
+async function load(){try{const versions=await fetchJson('/api/debug/powerpaint-shape-guided-lab/datasets',{},'DATASET');$('datasetVersion').innerHTML=versions.map(x=>'<option value="'+esc(x.dataset_version)+'">'+esc(x.dataset_version)+' · '+esc(x.image_count)+' 张</option>').join('');const preferred=versions.find(x=>x.dataset_version==='DS_M1_v0.7');if(preferred)$('datasetVersion').value=preferred.dataset_version;await loadItems()}catch(e){$('status').textContent=String(e)}}
+async function prepare(){
+  if(!state.selected)return;$('prepare').disabled=true;$('run').disabled=true;$('status').textContent='PREPARE_RUNNING\\nInput → Detector → Raw SAM';try{
+    const form=new URLSearchParams({dataset_version:state.selected.dataset_version,dataset_item_id:String(state.selected.dataset_item_id)});
+    const d=await fetchJson('/api/debug/powerpaint-shape-guided-lab/prepare',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form},'PREPARE');
+    const rm=await readMask(d.raw_sam_mask);state.w=rm.w;state.h=rm.h;state.raw=rm.mask;state.add=blank();state.remove=blank();state.refined=new Uint8Array(state.raw);state.completion=blank();state.visibleHistory=[];state.completionHistory=[];state.prep=d;
+    setImg('rawSamPreview',d.preview_raw_sam);setImg('rawSamMaskPreview',d.raw_sam_mask);setImg('original',d.preview_original);setImg('visibleEditorImage',d.preview_raw_sam);setImg('completionOriginal',d.preview_original);setImg('completionEditorImage',d.preview_original);setImg('completionVisible',maskDataUrl(state.refined));
+    $('visibleCanvas').width=state.w;$('visibleCanvas').height=state.h;$('completionCanvas').width=state.w;$('completionCanvas').height=state.h;
+    recomputeVisible();recomputeCompletion();renderProgress(d.report.progress||[]);$('report').textContent=JSON.stringify(d.report,null,2);$('status').textContent='RAW_SAM_READY\\nTest ID: '+d.test_id+'\\n请在 B2 和 C 手工编辑后运行 PowerPaint';$('run').disabled=true;
+  }catch(e){$('status').textContent=String(e)}finally{$('prepare').disabled=false}}
+async function run(){
+  if(!state.prep)return;$('run').disabled=true;$('prepare').disabled=true;$('status').textContent='POWERPAINT_RUNNING\\n正在执行 MANUAL_V2 fitting_degree=0.8';const mode=$('maskMode').value;
+  try{
+    const body={dataset_version:state.selected.dataset_version,dataset_item_id:String(state.selected.dataset_item_id),mask_mode:mode,fitting_degree:'0.8'};
+    if(mode==='MANUAL_V2'){body.visible_add_mask=maskDataUrl(state.add);body.visible_remove_mask=maskDataUrl(state.remove);body.manual_completion_mask=maskDataUrl(state.completion)}
+    const form=new URLSearchParams(body);const d=await fetchJson('/api/debug/powerpaint-shape-guided-lab/run',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form},'SHAPE_GUIDED');state.currentTestId=d.test_id;const report=d.report||{};
+    renderProgress(report.progress||[]);$('report').textContent=JSON.stringify(report,null,2);setImg('original',report.preview_original);setImg('rawSamOutput',report.preview_raw_sam);setImg('refinedOutput',report.preview_refined_visible||report.preview_sam);setImg('completionOutput',report.preview_completion_mask);const item=(report.results||[]).find(x=>Number(x.fitting_degree)===.8);setImg('generatedOutput',item?.output_asset?item.output_asset:item?.result_preview);setImg('finalOutput',item?.final_asset?item.final_asset:report.result_preview);$('status').textContent=showRunStatus(report,d);state.prep=d;
+  }catch(e){const p=e.payload||{};$('status').textContent=p.report?showRunStatus(p.report,p):String(e);if(p.report){$('report').textContent=JSON.stringify(p.report,null,2);renderProgress(p.report.progress||[])}}
+  finally{$('run').disabled=false;$('prepare').disabled=false}
+}
+function resetProgress(){renderProgress([{stage:'raw_sam',label:'RAW_SAM_READY',status:'PENDING'},{stage:'refined_visible',label:'REFINED_VISIBLE_READY',status:'PENDING'},{stage:'completion_mask',label:'COMPLETION_MASK_READY',status:'PENDING'},{stage:'worker',label:'WORKER_READY',status:'PENDING'},{stage:'powerpaint',label:'POWERPAINT_SUCCESS',status:'PENDING'},{stage:'final_compose',label:'FINAL_COMPOSE_READY',status:'PENDING'}])}
+$('visibleAdd').onclick=()=>{state.visibleMode='add';$('visibleAdd').classList.add('active');$('visibleRemove').classList.remove('active')};$('visibleRemove').onclick=()=>{state.visibleMode='remove';$('visibleRemove').classList.add('active');$('visibleAdd').classList.remove('active')};
+$('completionAdd').onclick=()=>{state.completionMode='add';$('completionAdd').classList.add('active');$('completionErase').classList.remove('active')};$('completionErase').onclick=()=>{state.completionMode='erase';$('completionErase').classList.add('active');$('completionAdd').classList.remove('active')};
+$('visibleUndo').onclick=undoVisible;$('visibleClear').onclick=()=>{state.add=blank();state.remove=blank();recomputeVisible()};$('visibleReset').onclick=()=>{state.add=blank();state.remove=blank();recomputeVisible()};$('completionUndo').onclick=undoCompletion;$('completionClear').onclick=()=>{state.completion=blank();recomputeCompletion()};
+$('visibleBrush').oninput=e=>$('visibleBrushValue').textContent=e.target.value+' px';$('completionBrush').oninput=e=>$('completionBrushValue').textContent=e.target.value+' px';
+$('datasetVersion').onchange=loadItems;$('split').onchange=loadItems;$('prepare').onclick=prepare;$('run').onclick=run;wireCanvas('visibleCanvas','visible');wireCanvas('completionCanvas','completion');resetProgress();load();
 </script>
 </body>
 </html>

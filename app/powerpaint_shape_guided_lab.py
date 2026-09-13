@@ -49,13 +49,19 @@ EXPERIMENT_STAGES = (
     "INPUT_READY",
     "DETECTOR_READY",
     "SAM_READY",
+    "RAW_SAM_READY",
+    "REFINED_VISIBLE_READY",
     "MASK_READY",
+    "COMPLETION_MASK_READY",
     "WORKER_READY",
     "POWERPAINT_RUNNING",
+    "FINAL_COMPOSE_READY",
     "SUCCESS",
     "FAILED",
 )
 PROMPT = "a realistic fish body matching the visible fish"
+P2_DEFAULT_FITTING_DEGREE = 0.8
+MASK_MODES = ("AUTO_V1", "MANUAL_V2")
 
 
 def _bucket():
@@ -146,6 +152,86 @@ def _png(image: Image.Image) -> bytes:
 
 def _mask_png(mask: np.ndarray) -> bytes:
     return _png(Image.fromarray(np.where(mask, 255, 0).astype("uint8"), "L"))
+
+
+
+def _visible_fish_png(crop: Image.Image, mask: np.ndarray) -> bytes:
+    rgb = np.asarray(crop.convert("RGB"), dtype=np.uint8)
+    visible = np.asarray(mask, dtype=bool)
+    return _png(Image.fromarray(np.where(visible[..., None], rgb, 0).astype("uint8"), "RGB"))
+
+
+def _decode_mask_data_url(value: Any, shape: tuple[int, int], field: str) -> np.ndarray:
+    if not value:
+        return np.zeros(shape, dtype=bool)
+    data = _decode_data_url(str(value))
+    if data is None:
+        raise ValueError(f"{field} must be a PNG data URL")
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            image = image.convert("L")
+            if image.size != (shape[1], shape[0]):
+                raise ValueError(f"{field} dimensions must be {shape[1]}x{shape[0]}")
+            return np.asarray(image, dtype=np.uint8) > 0
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(f"{field} is not a readable mask") from exc
+
+
+def validate_manual_completion_mask(mask: np.ndarray, visible: np.ndarray) -> dict[str, Any]:
+    completion = np.asarray(mask, dtype=bool)
+    visible = np.asarray(visible, dtype=bool)
+    if completion.shape != visible.shape:
+        raise ValueError("completion and visible masks must have identical shape")
+    overlap = int((completion & visible).sum())
+    area = int(completion.sum())
+    denominator = max(int((completion | visible).sum()), 1)
+    ratio = area / denominator
+    return {
+        "valid": overlap == 0 and area > 0 and ratio <= 0.60,
+        "warning": bool(0.35 < ratio <= 0.60),
+        "completion_area_pixels": area,
+        "completion_area_ratio": round(ratio, 6),
+        "visible_overlap_pixels": overlap,
+        "ratio_warning_threshold": 0.35,
+        "ratio_fail_threshold": 0.60,
+    }
+
+
+def _prepare_input(db, dataset_version: str, item_id: int) -> dict[str, Any]:
+    item = db.scalar(select(DatasetItem).where(DatasetItem.dataset_version == dataset_version, DatasetItem.id == item_id))
+    dataset = db.get(DatasetVersion, dataset_version)
+    if not dataset or dataset.status != "FROZEN":
+        raise ExperimentFailure(409, "INIT", "DATASET_VERSION_NOT_FROZEN", dataset_version)
+    if not item:
+        raise ExperimentFailure(404, "INIT", "DATASET_ITEM_NOT_FOUND", str(item_id))
+    raw = _read_dataset_image(item)
+    with Image.open(io.BytesIO(raw)) as uploaded:
+        source = normalize_android_source(uploaded)
+    detector_run = detect(source)
+    assessment = assess_detections(detector_run.detections)
+    if assessment.primary is None:
+        source.close()
+        raise ExperimentFailure(422, "DETECTOR_READY", "NO_RELIABLE_PRIMARY_FISH", assessment.status.value, "FAILED_VALIDATION")
+    primary = assessment.primary
+    x1, y1, x2, y2 = _crop_box(primary.box, source.width, source.height)
+    crop = source.crop((x1, y1, x2, y2)).convert("RGB")
+    segmentation = generate_fish_cutout(source, primary.box)
+    visible_full = np.asarray(segmentation.mask, dtype=bool)
+    visible = visible_full[y1:y2, x1:x2]
+    return {
+        "item": item,
+        "raw": raw,
+        "source": source,
+        "detector_run": detector_run,
+        "assessment": assessment,
+        "primary": primary,
+        "bbox": [x1, y1, x2, y2],
+        "crop": crop,
+        "segmentation": segmentation,
+        "visible": visible,
+    }
 
 
 def _data_url(data: bytes, media_type: str) -> str:
@@ -336,11 +422,15 @@ def _check_worker_health() -> dict[str, Any]:
     return {"status_code": status_code, **payload} if isinstance(payload, dict) else {"status_code": status_code}
 
 
-def _invoke_shape_guided(*, image_uri: str, mask_uri: str, fitting_degree: float) -> dict[str, Any]:
+def _invoke_shape_guided(*, image_uri: str, mask_uri: str, fitting_degree: float, visible_reference_uri: str | None = None) -> dict[str, Any]:
     base_url = _worker_base_url()
     if not base_url:
         raise RuntimeError("COMPLETION_WORKER_NOT_CONFIGURED")
-    payload = json.dumps({"task": "fish_completion", "task_mode": TASK_MODE, "fitting_degree": fitting_degree, "image_uri": image_uri, "mask_uri": mask_uri, "image": image_uri, "mask": mask_uri, "prompt": PROMPT}, separators=(",", ":")).encode()
+    payload_data = {"task": "fish_completion", "task_mode": TASK_MODE, "fitting_degree": fitting_degree, "image_uri": image_uri, "mask_uri": mask_uri, "image": image_uri, "mask": mask_uri, "prompt": PROMPT}
+    if visible_reference_uri:
+        payload_data["visible_reference_uri"] = visible_reference_uri
+        payload_data["visible_reference"] = visible_reference_uri
+    payload = json.dumps(payload_data, separators=(",", ":")).encode()
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     token = os.getenv("FISH_COMPLETION_WORKER_TOKEN", "").strip()
     if token:
@@ -413,16 +503,100 @@ def images(dataset_version: str, split: str | None = None, limit: int = Query(60
     return _images(db, dataset_version, split, limit, offset)
 
 
+@router.post("/api/debug/powerpaint-shape-guided-lab/prepare")
+async def prepare(request: Request, db=Depends(get_db)):
+    test_id = _new_test_id()
+    source = None
+    try:
+        data = await _payload(request)
+        dataset_version = str(data.get("dataset_version") or "").strip()
+        try:
+            item_id = int(data.get("dataset_item_id"))
+        except (TypeError, ValueError) as exc:
+            raise ExperimentFailure(400, "INIT", "INVALID_DATASET_ITEM", "dataset_item_id is required") from exc
+        prepared = _prepare_input(db, dataset_version, item_id)
+        source = prepared["source"]
+        crop = prepared["crop"]
+        visible = prepared["visible"]
+        original_bytes = _png(crop)
+        raw_sam_mask_bytes = _mask_png(visible)
+        raw_sam_visible_bytes = _visible_fish_png(crop, visible)
+        report = {
+            "experiment": VERSION,
+            "runtime": _runtime(test_id),
+            "test_id": test_id,
+            "status": "READY_FOR_MANUAL_EDIT",
+            "experiment_stage": "RAW_SAM_READY",
+            "mask_mode": "MANUAL_V2",
+            "prompt_id": PROMPT_ID,
+            "fitting_degree": P2_DEFAULT_FITTING_DEGREE,
+            "input": {
+                "dataset_version": dataset_version,
+                "dataset_item_id": item_id,
+                "image_id": prepared["item"].image_id,
+                "species": prepared["item"].species_name,
+                "source_type": "dataset_freeze",
+            },
+            "raw_sam_pixels": int(visible.sum()),
+            "progress": [
+                {"stage": "raw_sam", "label": "RAW_SAM_READY", "status": "READY"},
+                {"stage": "refined_visible", "label": "REFINED_VISIBLE_READY", "status": "PENDING"},
+                {"stage": "completion_mask", "label": "COMPLETION_MASK_READY", "status": "PENDING"},
+                {"stage": "worker", "label": "WORKER_READY", "status": "PENDING"},
+                {"stage": "powerpaint", "label": "POWERPAINT_SUCCESS", "status": "PENDING"},
+                {"stage": "final_compose", "label": "FINAL_COMPOSE_READY", "status": "PENDING"},
+            ],
+            "assets": {},
+        }
+        report["assets"]["original"] = _safe_persist(test_id, "original.png", original_bytes, "image/png", report)
+        report["assets"]["raw_sam_mask"] = _safe_persist(test_id, "raw_sam_mask.png", raw_sam_mask_bytes, "image/png", report)
+        report["assets"]["raw_sam_visible"] = _safe_persist(test_id, "raw_sam_visible.png", raw_sam_visible_bytes, "image/png", report)
+        report["assets"]["sam_mask"] = report["assets"]["raw_sam_mask"]
+        report["assets"]["sam_visible"] = report["assets"]["raw_sam_visible"]
+        return {
+            "status": "ok",
+            "stage": "raw_sam_ready",
+            "test_id": test_id,
+            "input": report["input"],
+            "report": report,
+            "width": crop.width,
+            "height": crop.height,
+            "preview_original": _data_url(original_bytes, "image/png"),
+            "preview_raw_sam": _data_url(raw_sam_visible_bytes, "image/png"),
+            "raw_sam_mask": _data_url(raw_sam_mask_bytes, "image/png"),
+            "visible_add_mask": _data_url(_mask_png(np.zeros_like(visible)), "image/png"),
+            "visible_remove_mask": _data_url(_mask_png(np.zeros_like(visible)), "image/png"),
+            "manual_completion_mask": _data_url(_mask_png(np.zeros_like(visible)), "image/png"),
+        }
+    except ExperimentFailure as exc:
+        return _error(exc.http_status, test_id, exc.stage, exc.error_code, str(exc))
+    except Exception as exc:
+        logger.exception("Shape Guided prepare failed test_id=%s", test_id)
+        return _error(500, test_id, "INIT", "SHAPE_GUIDED_PREPARE_FAILED", f"{exc.__class__.__name__}: {exc}")
+    finally:
+        if source is not None:
+            source.close()
+
+
 @router.post("/api/debug/powerpaint-shape-guided-lab/run")
 async def run(request: Request, db=Depends(get_db)):
     started = time.perf_counter()
     test_id = _new_test_id()
     source = None
     raw = None
+    crop = None
+    visible = None
     original_bytes = None
     detector_bytes = None
     sam_visible_bytes = None
     sam_mask_bytes = None
+    raw_sam_mask_bytes = None
+    raw_sam_visible_bytes = None
+    visible_add_mask_bytes = None
+    visible_remove_mask_bytes = None
+    refined_visible_mask_bytes = None
+    refined_visible_fish_bytes = None
+    manual_completion_mask_bytes = None
     completion_mask_bytes = None
     request_log: list[dict[str, Any]] = []
     response_log: list[dict[str, Any]] = []
@@ -436,14 +610,16 @@ async def run(request: Request, db=Depends(get_db)):
         "experiment_stage": "INIT",
         "result_classification": None,
         "completion_required": None,
+        "mask_mode": None,
         "assets": {},
         "results": [],
         "progress": [
-            {"stage": "input", "label": "Input", "status": "PENDING"},
-            {"stage": "detector", "label": "Detector", "status": "PENDING"},
-            {"stage": "sam", "label": "SAM", "status": "PENDING"},
-            {"stage": "completion_mask", "label": "Completion Mask", "status": "PENDING"},
-            {"stage": "shape_guided", "label": "PowerPaint Shape Guided", "status": "PENDING"},
+            {"stage": "raw_sam", "label": "RAW_SAM_READY", "status": "PENDING"},
+            {"stage": "refined_visible", "label": "REFINED_VISIBLE_READY", "status": "PENDING"},
+            {"stage": "completion_mask", "label": "COMPLETION_MASK_READY", "status": "PENDING"},
+            {"stage": "worker", "label": "WORKER_READY", "status": "PENDING"},
+            {"stage": "powerpaint", "label": "POWERPAINT_SUCCESS", "status": "PENDING"},
+            {"stage": "final_compose", "label": "FINAL_COMPOSE_READY", "status": "PENDING"},
         ],
         "timings": {"total_ms": None},
     }
@@ -462,68 +638,136 @@ async def run(request: Request, db=Depends(get_db)):
             item_id = int(data.get("dataset_item_id"))
         except (TypeError, ValueError) as exc:
             raise ExperimentFailure(400, "INIT", "INVALID_DATASET_ITEM", "dataset_item_id is required") from exc
-        report["input"] = {"dataset_version": dataset_version, "dataset_item_id": item_id, "source_type": "dataset_freeze"}
-        requested = data.get("fitting_degrees") or data.get("fitting_degree") or [str(x) for x in FITTING_DEGREES]
+        mask_mode = str(data.get("mask_mode") or "AUTO_V1").strip().upper()
+        if mask_mode not in MASK_MODES:
+            raise ExperimentFailure(400, "INIT", "INVALID_MASK_MODE", "mask_mode must be AUTO_V1 or MANUAL_V2")
+        requested = data.get("fitting_degree") if mask_mode == "MANUAL_V2" else (data.get("fitting_degrees") or data.get("fitting_degree") or [str(x) for x in FITTING_DEGREES])
         try:
             degrees = normalize_fitting_degrees(requested)
         except ValueError as exc:
             raise ExperimentFailure(400, "INIT", "INVALID_FITTING_DEGREE", str(exc)) from exc
-        report["input"]["fitting_degrees"] = degrees
-        item = db.scalar(select(DatasetItem).where(DatasetItem.dataset_version == dataset_version, DatasetItem.id == item_id))
-        dataset = db.get(DatasetVersion, dataset_version)
-        if not dataset or dataset.status != "FROZEN":
-            raise ExperimentFailure(409, "INIT", "DATASET_VERSION_NOT_FROZEN", dataset_version)
-        if not item:
-            raise ExperimentFailure(404, "INIT", "DATASET_ITEM_NOT_FOUND", str(item_id))
-        raw = _read_dataset_image(item)
-        with Image.open(io.BytesIO(raw)) as uploaded:
-            source = normalize_android_source(uploaded)
-        report["input"].update({"image_id": item.image_id, "image_hash": hashlib.sha256(raw).hexdigest()[:16], "width": source.width, "height": source.height})
-        mark_progress("input", "READY")
-        _set_stage(report, "INPUT_READY")
-        detector_run = detect(source)
-        assessment = assess_detections(detector_run.detections)
-        report["detector"] = {"model": detector_run.model_version, "assessment": assessment.status.value, "detections": len(detector_run.detections)}
-        _persist_json(test_id, "detector_report.json", report["detector"])
-        if assessment.primary is None:
-            raise ExperimentFailure(422, "DETECTOR_READY", "NO_RELIABLE_PRIMARY_FISH", assessment.status.value, "FAILED_VALIDATION")
-        primary = assessment.primary
-        x1, y1, x2, y2 = _crop_box(primary.box, source.width, source.height)
-        crop = source.crop((x1, y1, x2, y2)).convert("RGB")
+        if mask_mode == "MANUAL_V2" and degrees != [P2_DEFAULT_FITTING_DEGREE]:
+            raise ExperimentFailure(400, "INIT", "P2_FIXED_FITTING_DEGREE", "MANUAL_V2 requires fitting_degree=0.8")
+        report["mask_mode"] = mask_mode
+        report["prompt_id"] = PROMPT_ID
+        report["input"] = {
+            "dataset_version": dataset_version,
+            "dataset_item_id": item_id,
+            "source_type": "dataset_freeze",
+            "mask_mode": mask_mode,
+            "prompt_id": PROMPT_ID,
+            "fitting_degree": degrees[0] if mask_mode == "MANUAL_V2" else None,
+        }
+        prepared = _prepare_input(db, dataset_version, item_id)
+        source = prepared["source"]
+        raw = prepared["raw"]
+        crop = prepared["crop"]
+        visible = prepared["visible"]
+        detector_run = prepared["detector_run"]
+        assessment = prepared["assessment"]
+        primary = prepared["primary"]
+        report["input"].update({
+            "image_id": prepared["item"].image_id,
+            "image_hash": hashlib.sha256(raw).hexdigest()[:16],
+            "width": crop.width,
+            "height": crop.height,
+        })
         original_bytes = _png(crop)
         detector_bytes = original_bytes
-        report["detector"].update({"confidence": float(primary.confidence), "bbox_pixels": [x1, y1, x2, y2]})
+        report["detector"] = {"model": detector_run.model_version, "assessment": assessment.status.value, "detections": len(detector_run.detections), "confidence": float(primary.confidence), "bbox_pixels": prepared["bbox"]}
         report["assets"]["original"] = _persist(test_id, "original.png", original_bytes, "image/png")
         report["assets"]["detector_crop"] = _persist(test_id, "detector_crop.png", detector_bytes, "image/png")
+        mark_progress("input", "READY")
+        _set_stage(report, "INPUT_READY")
         mark_progress("detector", "READY", assessment.status.value)
         _set_stage(report, "DETECTOR_READY")
-        segmentation = generate_fish_cutout(source, primary.box)
-        visible_full = np.asarray(segmentation.mask, dtype=bool)
-        visible = visible_full[y1:y2, x1:x2]
-        report["sam"] = {"model": "SAM_VIT_B", "quality": segmentation.quality.value, "mask_area_pixels": int(visible.sum())}
-        sam_visible_bytes = _png(Image.fromarray(np.where(visible[..., None], np.asarray(crop), 0).astype("uint8"), "RGB"))
-        sam_mask_bytes = _mask_png(visible)
-        report["assets"]["sam_visible"] = _persist(test_id, "sam_visible.png", sam_visible_bytes, "image/png")
+
+        raw_sam_mask_bytes = _mask_png(visible)
+        raw_sam_visible_bytes = _visible_fish_png(crop, visible)
+        sam_visible_bytes = raw_sam_visible_bytes
+        sam_mask_bytes = raw_sam_mask_bytes
+        report["sam"] = {"model": "SAM_VIT_B", "quality": prepared["segmentation"].quality.value, "raw_sam_pixels": int(visible.sum()), "mask_area_pixels": int(visible.sum())}
+        report["assets"]["raw_sam_mask"] = _persist(test_id, "raw_sam_mask.png", raw_sam_mask_bytes, "image/png")
+        report["assets"]["raw_sam_visible"] = _persist(test_id, "raw_sam_visible.png", raw_sam_visible_bytes, "image/png")
         report["assets"]["sam_mask"] = _persist(test_id, "sam_mask.png", sam_mask_bytes, "image/png")
+        report["assets"]["sam_visible"] = _persist(test_id, "sam_visible.png", sam_visible_bytes, "image/png")
         _persist_json(test_id, "sam_report.json", report["sam"])
-        mark_progress("sam", "READY", segmentation.quality.value)
-        _set_stage(report, "SAM_READY")
-        completion = build_completion_mask(visible)
-        validation = validate_completion_mask(completion, visible)
-        if not validation["valid"]:
-            raise ExperimentFailure(422, "MASK_READY", "INVALID_COMPLETION_MASK", json.dumps(validation), "FAILED_MASK")
-        completion_mask_bytes = _mask_png(completion)
-        report["completion_mask"] = validation
-        report["assets"]["completion_mask"] = _persist(test_id, "completion_mask.png", completion_mask_bytes, "image/png")
-        _persist_json(test_id, "completion_report.json", validation)
+        mark_progress("raw_sam", "READY", {"pixels": int(visible.sum())})
+        _set_stage(report, "RAW_SAM_READY")
+
+        if mask_mode == "MANUAL_V2":
+            visible_add = _decode_mask_data_url(data.get("visible_add_mask"), visible.shape, "visible_add_mask")
+            visible_remove = _decode_mask_data_url(data.get("visible_remove_mask"), visible.shape, "visible_remove_mask")
+            refined_visible = (visible | visible_add) & ~visible_remove
+            visible_add_mask_bytes = _mask_png(visible_add)
+            visible_remove_mask_bytes = _mask_png(visible_remove)
+            refined_visible_mask_bytes = _mask_png(refined_visible)
+            refined_visible_fish_bytes = _visible_fish_png(crop, refined_visible)
+            report["sam"].update({
+                "refined_visible_pixels": int(refined_visible.sum()),
+                "visible_add_pixels": int(visible_add.sum()),
+                "visible_remove_pixels": int(visible_remove.sum()),
+            })
+            report["assets"]["visible_add_mask"] = _persist(test_id, "visible_add_mask.png", _mask_png(visible_add), "image/png")
+            report["assets"]["visible_remove_mask"] = _persist(test_id, "visible_remove_mask.png", _mask_png(visible_remove), "image/png")
+            report["assets"]["refined_visible_mask"] = _persist(test_id, "refined_visible_mask.png", refined_visible_mask_bytes, "image/png")
+            report["assets"]["refined_visible_fish"] = _persist(test_id, "refined_visible_fish.png", refined_visible_fish_bytes, "image/png")
+            visible = refined_visible
+            mark_progress("refined_visible", "READY", {"pixels": int(visible.sum()), "added": int(visible_add.sum()), "removed": int(visible_remove.sum())})
+            _set_stage(report, "REFINED_VISIBLE_READY")
+            completion = _decode_mask_data_url(data.get("manual_completion_mask") or data.get("completion_mask"), visible.shape, "manual_completion_mask")
+            requested_overlap = int((completion & visible).sum())
+            completion = completion & ~visible
+            validation = validate_manual_completion_mask(completion, visible)
+            validation["requested_visible_overlap_pixels"] = requested_overlap
+            validation["mask_mode"] = "MANUAL_V2"
+            if not validation["valid"]:
+                raise ExperimentFailure(422, "COMPLETION_MASK_READY", "INVALID_MANUAL_COMPLETION_MASK", json.dumps(validation), "FAILED_MASK")
+            completion_mask_bytes = _mask_png(completion)
+            manual_completion_mask_bytes = completion_mask_bytes
+            report["completion_mask"] = validation
+            report["raw_sam_pixels"] = int(prepared["visible"].sum())
+            report["refined_visible_pixels"] = int(visible.sum())
+            report["visible_add_pixels"] = int(visible_add.sum())
+            report["visible_remove_pixels"] = int(visible_remove.sum())
+            report["completion_area_pixels"] = validation["completion_area_pixels"]
+            report["completion_area_ratio"] = validation["completion_area_ratio"]
+            report["visible_overlap_pixels"] = validation["visible_overlap_pixels"]
+            report["assets"]["manual_completion_mask"] = _persist(test_id, "manual_completion_mask.png", manual_completion_mask_bytes, "image/png")
+            report["assets"]["completion_mask"] = _persist(test_id, "completion_mask.png", completion_mask_bytes, "image/png")
+            _persist_json(test_id, "completion_mask_report.json", validation)
+            _persist_json(test_id, "completion_report.json", validation)
+            report["preview_raw_sam"] = _data_url(raw_sam_visible_bytes, "image/png")
+            report["preview_refined_visible"] = _data_url(refined_visible_fish_bytes, "image/png")
+            report["preview_sam"] = report["preview_refined_visible"]
+            report["preview_completion_mask"] = _data_url(completion_mask_bytes, "image/png")
+            mark_progress("completion_mask", "READY", validation)
+            _set_stage(report, "COMPLETION_MASK_READY")
+            degrees = [P2_DEFAULT_FITTING_DEGREE]
+        else:
+            completion = build_completion_mask(visible)
+            validation = validate_completion_mask(completion, visible)
+            if not validation["valid"]:
+                raise ExperimentFailure(422, "MASK_READY", "INVALID_COMPLETION_MASK", json.dumps(validation), "FAILED_MASK")
+            completion_mask_bytes = _mask_png(completion)
+            manual_completion_mask_bytes = completion_mask_bytes
+            report["completion_mask"] = validation
+            report["completion_area_pixels"] = validation["completion_area_pixels"]
+            report["completion_area_ratio"] = validation["completion_area_ratio"]
+            report["visible_overlap_pixels"] = validation["visible_overlap_pixels"]
+            report["assets"]["completion_mask"] = _persist(test_id, "completion_mask.png", completion_mask_bytes, "image/png")
+            _persist_json(test_id, "completion_report.json", validation)
+            report["preview_raw_sam"] = _data_url(raw_sam_visible_bytes, "image/png")
+            report["preview_refined_visible"] = _data_url(raw_sam_visible_bytes, "image/png")
+            report["preview_sam"] = report["preview_refined_visible"]
+            report["preview_completion_mask"] = _data_url(completion_mask_bytes, "image/png")
+            mark_progress("refined_visible", "READY", {"pixels": int(visible.sum()), "added": 0, "removed": 0})
+            mark_progress("completion_mask", "READY", validation)
+            _set_stage(report, "MASK_READY")
         report["preview_original"] = _data_url(original_bytes, "image/png")
-        report["preview_sam"] = _data_url(sam_visible_bytes, "image/png")
-        report["preview_completion_mask"] = _data_url(completion_mask_bytes, "image/png")
-        mark_progress("completion_mask", "READY", validation)
-        _set_stage(report, "MASK_READY")
-        report["task_mode"] = TASK_MODE
-        report["prompt_id"] = PROMPT_ID
         report["completion_required"] = bool(validation["completion_area_pixels"] > 0 and validation["completion_area_ratio"] >= 0.001)
+        if mask_mode == "MANUAL_V2" and not report["completion_required"]:
+            raise ExperimentFailure(422, "COMPLETION_MASK_READY", "EMPTY_MANUAL_COMPLETION_MASK", "MANUAL_V2 requires a non-empty completion mask", "FAILED_MASK")
         if not report["completion_required"]:
             for degree in degrees:
                 report["results"].append({"task_mode": TASK_MODE, "fitting_degree": degree, "status": "NOT_REQUIRED", "result": "NOT_REQUIRED", "worker_called": False, "result_uri": None, "generated_area_pixels": 0, "visible_pixel_change_ratio": 0.0})
@@ -533,27 +777,29 @@ async def run(request: Request, db=Depends(get_db)):
             report["assets"]["powerpaint_output"] = _persist(test_id, "powerpaint_output.png", original_bytes, "image/png")
             report["assets"]["final_result"] = _persist(test_id, "final_result.png", original_bytes, "image/png")
             report["result_preview"] = _data_url(original_bytes, "image/png")
-            mark_progress("shape_guided", "SUCCESS", "NOT_REQUIRED")
+            mark_progress("powerpaint", "SUCCESS", "NOT_REQUIRED")
+            mark_progress("final_compose", "READY", "NOT_REQUIRED")
+            _set_stage(report, "FINAL_COMPOSE_READY")
             _set_stage(report, "SUCCESS")
         else:
             try:
                 report["worker"] = {"health": _check_worker_health()}
-                mark_progress("shape_guided", "RUNNING", "worker health ready")
+                mark_progress("worker", "READY", report["worker"]["health"])
                 _set_stage(report, "WORKER_READY")
             except Exception as exc:
                 report["worker"] = {"health": {"status": "unreachable", "error": str(exc)}}
-                for degree in degrees:
-                    request_log.append({"task_mode": TASK_MODE, "fitting_degree": degree, "prompt_version": PROMPT_ID, "image_uri": report["assets"]["detector_crop"], "mask_uri": report["assets"]["completion_mask"], "mask_ratio": validation["completion_area_ratio"], "worker_called": False})
-                    response_log.append({"fitting_degree": degree, "worker_called": False, "http_status": None, "result_uri": None, "latency_ms": 0, "error": str(exc)})
+                request_log.append({"task_mode": TASK_MODE, "mask_mode": mask_mode, "fitting_degree": degrees[0], "prompt_version": PROMPT_ID, "image_uri": report["assets"]["detector_crop"], "mask_uri": report["assets"]["completion_mask"], "visible_reference_uri": report["assets"].get("refined_visible_fish"), "worker_called": False})
+                response_log.append({"fitting_degree": degrees[0], "worker_called": False, "http_status": None, "result_uri": None, "latency_ms": 0, "error": str(exc)})
                 raise ExperimentFailure(503, "WORKER_READY", "SHAPE_GUIDED_WORKER_FAILED", str(exc), "FAILED_WORKER") from exc
             _set_stage(report, "POWERPAINT_RUNNING")
+            mark_progress("powerpaint", "RUNNING", {"fitting_degree": degrees[0]})
             for degree in degrees:
                 result_started = time.perf_counter()
-                request_entry = {"task_mode": TASK_MODE, "fitting_degree": degree, "prompt_version": PROMPT_ID, "image_uri": report["assets"]["detector_crop"], "mask_uri": report["assets"]["completion_mask"], "mask_ratio": validation["completion_area_ratio"], "worker_called": True}
+                request_entry = {"task_mode": TASK_MODE, "mask_mode": mask_mode, "fitting_degree": degree, "prompt_version": PROMPT_ID, "image_uri": report["assets"]["detector_crop"], "mask_uri": report["assets"]["completion_mask"], "visible_reference_uri": report["assets"].get("refined_visible_fish"), "mask_ratio": validation["completion_area_ratio"], "worker_called": True}
                 request_log.append(request_entry)
-                item_result: dict[str, Any] = {"task_mode": TASK_MODE, "fitting_degree": degree, "status": "PENDING", "worker_called": True, "visible_pixel_change_ratio": None, "generated_area_pixels": int(completion.sum()), "result_uri": None}
+                item_result: dict[str, Any] = {"task_mode": TASK_MODE, "mask_mode": mask_mode, "fitting_degree": degree, "status": "PENDING", "worker_called": True, "visible_pixel_change_ratio": None, "generated_area_pixels": int(completion.sum()), "result_uri": None}
                 try:
-                    worker = _invoke_shape_guided(image_uri=report["assets"]["detector_crop"], mask_uri=report["assets"]["completion_mask"], fitting_degree=degree)
+                    worker = _invoke_shape_guided(image_uri=report["assets"]["detector_crop"], mask_uri=report["assets"]["completion_mask"], visible_reference_uri=report["assets"].get("refined_visible_fish"), fitting_degree=degree)
                     generated = _decode_data_url(worker.get("result_uri")) or _decode_data_url(worker.get("generated_roi"))
                     if generated is None and worker.get("result_uri"):
                         generated = _read_uri(worker["result_uri"])
@@ -564,11 +810,13 @@ async def run(request: Request, db=Depends(get_db)):
                         final_bytes, visible_change = _compose(crop, generated_image, completion)
                     final_uri = _persist(test_id, f"final_result_{degree:g}.png", final_bytes, "image/png")
                     latency_ms = round((time.perf_counter() - result_started) * 1000, 2)
-                    item_result.update({"status": "SUCCESS", "result_uri": worker.get("result_uri"), "output_asset": output_uri, "final_asset": final_uri, "worker_ms": latency_ms, "inference_time_ms": worker.get("inference_time_ms"), "visible_pixel_change_ratio": visible_change, "fish_identity_check": "PENDING", "background_change": "PENDING", "result_preview": _data_url(final_bytes, "image/png")})
-                    response_log.append({"fitting_degree": degree, "worker_called": True, "http_status": worker.get("http_status"), "result_uri": worker.get("result_uri"), "latency_ms": latency_ms, "error": None})
+                    item_result.update({"status": "SUCCESS", "result_uri": worker.get("result_uri"), "output_asset": output_uri, "final_asset": final_uri, "worker_ms": latency_ms, "inference_time_ms": worker.get("inference_time_ms"), "model_version": worker.get("model_version"), "raw_output_preview": _data_url(generated, "image/png"), "visible_pixel_change_ratio": visible_change, "fish_identity_check": "PENDING", "background_change": "PENDING", "result_preview": _data_url(final_bytes, "image/png")})
+                    response_log.append({"fitting_degree": degree, "worker_called": True, "http_status": worker.get("http_status"), "result_uri": worker.get("result_uri"), "inference_time_ms": worker.get("inference_time_ms"), "model_version": worker.get("model_version"), "latency_ms": latency_ms, "error": None})
                     report["assets"][f"powerpaint_output_{degree:g}"] = output_uri
                     report["assets"][f"final_result_{degree:g}"] = final_uri
                     report["result_preview"] = _data_url(final_bytes, "image/png")
+                    mark_progress("powerpaint", "SUCCESS", {"fitting_degree": degree, "inference_time_ms": worker.get("inference_time_ms"), "model_version": worker.get("model_version")})
+                    mark_progress("final_compose", "READY", {"fitting_degree": degree, "final_asset": final_uri})
                 except Exception as exc:
                     latency_ms = round((time.perf_counter() - result_started) * 1000, 2)
                     item_result.update({"status": "FAILED_POWERPAINT", "error_code": "SHAPE_GUIDED_POWERPAINT_FAILED", "error": str(exc), "worker_ms": latency_ms})
@@ -579,19 +827,36 @@ async def run(request: Request, db=Depends(get_db)):
                 best = successful[-1]
                 report["assets"]["powerpaint_output"] = _persist(test_id, "powerpaint_output.png", _read_uri(best["output_asset"]), "image/png")
                 report["assets"]["final_result"] = _persist(test_id, "final_result.png", _read_uri(best["final_asset"]), "image/png")
+                report["result_uri"] = best.get("result_uri")
+                report["model_version"] = best.get("model_version")
+                report["inference_time_ms"] = best.get("inference_time_ms")
                 report["result_classification"] = "SUCCESS_COMPLETED"
-                mark_progress("shape_guided", "SUCCESS", {"successful_degrees": [x["fitting_degree"] for x in successful]})
+                _set_stage(report, "FINAL_COMPOSE_READY")
+                mark_progress("powerpaint", "SUCCESS", {"successful_degrees": [x["fitting_degree"] for x in successful]})
+                mark_progress("final_compose", "READY", {"successful_degrees": [x["fitting_degree"] for x in successful]})
                 _set_stage(report, "SUCCESS")
             else:
                 raise ExperimentFailure(502, "POWERPAINT_RUNNING", "SHAPE_GUIDED_POWERPAINT_FAILED", "all fitting degrees failed", "FAILED_POWERPAINT")
         report["shape_guided_report"] = shape_guided_report_entry(fitting_degree=degrees[-1], visible_pixel_change_ratio=(0.0 if not report["completion_required"] else next((x.get("visible_pixel_change_ratio") for x in report["results"] if x.get("status") == "SUCCESS"), None)), completion_area_ratio=validation["completion_area_ratio"], generated_area_pixels=validation["completion_area_pixels"], status=report["result_classification"] or "SUCCESS")
+        report["p2"] = {
+            "mask_mode": mask_mode,
+            "raw_sam_pixels": report.get("raw_sam_pixels", int(prepared["visible"].sum())),
+            "refined_visible_pixels": report.get("refined_visible_pixels", int(visible.sum())),
+            "visible_add_pixels": report.get("visible_add_pixels", 0),
+            "visible_remove_pixels": report.get("visible_remove_pixels", 0),
+            "completion_area_pixels": validation["completion_area_pixels"],
+            "completion_area_ratio": validation["completion_area_ratio"],
+            "visible_overlap_pixels": validation["visible_overlap_pixels"],
+            "fitting_degree": degrees[0] if mask_mode == "MANUAL_V2" else degrees[-1],
+            "result_uri": report.get("result_uri"),
+        }
     except ExperimentFailure as exc:
         response_status = exc.http_status
         error_info = {"error_code": exc.error_code, "message": str(exc), "stage": exc.stage, "classification": exc.classification}
         report["result_classification"] = exc.classification
         report["error"] = error_info
         report["completion_required"] = report.get("completion_required")
-        mark_progress("shape_guided" if exc.stage in {"WORKER_READY", "POWERPAINT_RUNNING"} else "completion_mask", "FAILED", str(exc))
+        mark_progress("completion_mask" if exc.stage in {"COMPLETION_MASK_READY", "MASK_READY"} else "worker", "FAILED", str(exc))
         _set_stage(report, "FAILED")
     except (TypeError, ValueError) as exc:
         response_status = 400
@@ -619,20 +884,38 @@ async def run(request: Request, db=Depends(get_db)):
             original_bytes = _placeholder_png()
         if detector_bytes is None:
             detector_bytes = original_bytes
-        if sam_visible_bytes is None:
-            sam_visible_bytes = original_bytes
-        if sam_mask_bytes is None:
-            sam_mask_bytes = _mask_png(np.zeros((1, 1), dtype=bool))
+        if raw_sam_mask_bytes is None:
+            raw_sam_mask_bytes = _mask_png(np.zeros((1, 1), dtype=bool))
+        if raw_sam_visible_bytes is None:
+            raw_sam_visible_bytes = original_bytes
+        if visible_add_mask_bytes is None:
+            visible_add_mask_bytes = _mask_png(np.zeros((1, 1), dtype=bool))
+        if visible_remove_mask_bytes is None:
+            visible_remove_mask_bytes = _mask_png(np.zeros((1, 1), dtype=bool))
+        if refined_visible_mask_bytes is None:
+            refined_visible_mask_bytes = raw_sam_mask_bytes
+        if refined_visible_fish_bytes is None:
+            refined_visible_fish_bytes = raw_sam_visible_bytes
+        if manual_completion_mask_bytes is None:
+            manual_completion_mask_bytes = _mask_png(np.zeros((1, 1), dtype=bool))
         if completion_mask_bytes is None:
-            completion_mask_bytes = _mask_png(np.zeros((1, 1), dtype=bool))
+            completion_mask_bytes = manual_completion_mask_bytes
         _safe_persist(test_id, "original.png", original_bytes, "image/png", report)
         _safe_persist(test_id, "detector_crop.png", detector_bytes, "image/png", report)
-        _safe_persist(test_id, "sam_visible.png", sam_visible_bytes, "image/png", report)
-        _safe_persist(test_id, "sam_mask.png", sam_mask_bytes, "image/png", report)
+        _safe_persist(test_id, "raw_sam_mask.png", raw_sam_mask_bytes, "image/png", report)
+        _safe_persist(test_id, "raw_sam_visible.png", raw_sam_visible_bytes, "image/png", report)
+        _safe_persist(test_id, "visible_add_mask.png", visible_add_mask_bytes, "image/png", report)
+        _safe_persist(test_id, "visible_remove_mask.png", visible_remove_mask_bytes, "image/png", report)
+        _safe_persist(test_id, "refined_visible_mask.png", refined_visible_mask_bytes, "image/png", report)
+        _safe_persist(test_id, "refined_visible_fish.png", refined_visible_fish_bytes, "image/png", report)
+        _safe_persist(test_id, "sam_visible.png", refined_visible_fish_bytes, "image/png", report)
+        _safe_persist(test_id, "sam_mask.png", refined_visible_mask_bytes, "image/png", report)
+        _safe_persist(test_id, "manual_completion_mask.png", manual_completion_mask_bytes, "image/png", report)
         _safe_persist(test_id, "completion_mask.png", completion_mask_bytes, "image/png", report)
         report["assets"]["detector_report"] = _safe_persist_json(test_id, "detector_report.json", report.get("detector", {"status": "NOT_REACHED"}))
         report["assets"]["sam_report"] = _safe_persist_json(test_id, "sam_report.json", report.get("sam", {"status": "NOT_REACHED"}))
         report["assets"]["completion_report"] = _safe_persist_json(test_id, "completion_report.json", report.get("completion_mask", {"status": "NOT_REACHED"}))
+        report["assets"]["completion_mask_report"] = _safe_persist_json(test_id, "completion_mask_report.json", report.get("completion_mask", {"status": "NOT_REACHED"}))
         report["assets"]["shape_guided_request"] = _safe_persist_json(test_id, "shape_guided_request.json", {"requests": request_log})
         report["assets"]["shape_guided_response"] = _safe_persist_json(test_id, "shape_guided_response.json", {"responses": response_log})
         if "powerpaint_output" not in report["assets"]:
