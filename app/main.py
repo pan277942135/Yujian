@@ -144,6 +144,45 @@ def _bbox(value):
     return [round(item, 6) for item in result]
 
 
+def _review_bbox_dict(db: Session, image: ImageAsset) -> dict:
+    row = db.scalar(select(BatchCropReview).where(BatchCropReview.image_asset_id == image.id))
+    presence = db.scalar(select(FishPresenceResult).where(FishPresenceResult.image_asset_id == image.id))
+    candidates = _candidate_boxes(presence)
+    candidate = _bbox(row.candidate_bbox_json) if row else None
+    if candidate is None and candidates:
+        candidate = _bbox(candidates[0].get("bbox"))
+    accepted = _bbox(row.accepted_bbox_json) if row else None
+    confirmed = bool(row and row.status in {"ACCEPTED", "TRAINING_READY"} and accepted)
+    return {
+        "candidate_bbox": candidate,
+        "accepted_bbox": accepted,
+        "bbox_status": "ACCEPTED" if confirmed else ("CANDIDATE" if candidate else "MISSING"),
+        "bbox_review_status": row.status if row else "REVIEW_REQUIRED",
+    }
+
+
+def _upsert_review_bbox(db: Session, image: ImageAsset, box: list[float], reviewer: str, notes: str | None):
+    row = db.scalar(select(BatchCropReview).where(BatchCropReview.image_asset_id == image.id))
+    presence = db.scalar(select(FishPresenceResult).where(FishPresenceResult.image_asset_id == image.id))
+    candidates = _candidate_boxes(presence)
+    if row is None:
+        row = BatchCropReview(batch_id=image.batch_id, image_asset_id=image.id, image_id=image.image_id)
+        db.add(row)
+        db.flush()
+    if candidates and not row.candidate_bbox_json:
+        candidate = _bbox(candidates[0].get("bbox"))
+        if candidate:
+            row.candidate_bbox_json = json.dumps(candidate, separators=(",", ":"))
+    row.accepted_bbox_json = json.dumps(box, separators=(",", ":"))
+    row.species_name = image.truth_species
+    row.status = "ACCEPTED"
+    row.reviewer = reviewer
+    row.reviewed_at = datetime.now(timezone.utc)
+    row.notes = notes
+    row.updated_at = datetime.now(timezone.utc)
+    return row
+
+
 def image_dict(
     image: ImageAsset,
     *,
