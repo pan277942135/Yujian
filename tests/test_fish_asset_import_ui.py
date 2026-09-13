@@ -22,6 +22,8 @@ def test_fish_asset_batch_import_api_and_page_are_registered():
         "history-batch",
         "data-batch-id",
         "closeModal()",
+        "closeBtn",
+        "closeModalOnBackdrop",
     ):
         assert marker in source
     templates.env.from_string(source)
