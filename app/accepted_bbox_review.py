@@ -33,6 +33,22 @@ templates = Jinja2Templates(directory="app/templates")
 ACCEPTED_STATUSES = {"ACCEPTED", "TRAINING_READY"}
 
 
+class AcceptedBBoxUpdate(BaseModel):
+    decision: str = Field(default="ACCEPTED", max_length=32)
+    accepted_bbox: list[float] | None = Field(default=None, min_length=4, max_length=4)
+    reviewer: str = Field(default="dataset-accepted-bbox", max_length=256)
+    notes: str | None = Field(default=None, max_length=4000)
+
+
+class AcceptedBBoxBulkItem(AcceptedBBoxUpdate):
+    batch_id: str
+    image_id: str
+
+
+class AcceptedBBoxBulk(BaseModel):
+    items: list[AcceptedBBoxBulkItem] = Field(min_length=1, max_length=200)
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -291,22 +307,6 @@ def update_accepted_bbox(
     except Exception:
         db.rollback()
         raise
-
-
-class AcceptedBBoxUpdate(BaseModel):
-    decision: str = Field(default="ACCEPTED", max_length=32)
-    accepted_bbox: list[float] | None = Field(default=None, min_length=4, max_length=4)
-    reviewer: str = Field(default="dataset-accepted-bbox", max_length=256)
-    notes: str | None = Field(default=None, max_length=4000)
-
-
-class AcceptedBBoxBulkItem(AcceptedBBoxUpdate):
-    batch_id: str
-    image_id: str
-
-
-class AcceptedBBoxBulk(BaseModel):
-    items: list[AcceptedBBoxBulkItem] = Field(min_length=1, max_length=200)
 
 
 @router.post("/api/dataset-accepted-bbox/bulk")
