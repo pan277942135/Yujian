@@ -35,6 +35,9 @@ jobs:
           gcloud auth list --filter=status:ACTIVE --format='table(account,status)'
           for PROJECT_ID in ${CANDIDATE_PROJECTS}; do
             echo "=== PROJECT=${PROJECT_ID} ZONE=${ZONE} VM=${VM} ==="
+            set +e
             gcloud compute instances describe "${VM}" --project="${PROJECT_ID}" --zone="${ZONE}" --format='yaml(name,status,networkInterfaces,tags.items)' 2>&1
-            echo "DESCRIBE_RC=$?"
+            RC=$?
+            set -e
+            echo "DESCRIBE_RC=${RC}"
           done
