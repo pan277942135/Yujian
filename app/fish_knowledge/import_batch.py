@@ -681,7 +681,7 @@ def activate_version(batch_id: str, version_id: int, db: Session = Depends(get_d
     if version.asset_type == "COVER":
         current = db.scalar(select(FishSpeciesCover).where(FishSpeciesCover.species_id == species.id))
         if current is None:
-            current = FishSpeciesCover(species_id=species.id, image_url=version.image_url, title=f"{species.name_cn}封面", status="DRAFT")
+            current = FishSpeciesCover(species_id=species.id, image_url=version.image_url, title=f"{species.name_cn}封面", status="ACTIVE")
             db.add(current)
         else:
             current.image_url = version.image_url
