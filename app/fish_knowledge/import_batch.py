@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, Response
 from google.cloud import storage
 from PIL import Image, UnidentifiedImageError
@@ -131,6 +131,26 @@ class FishKnowledgeAssetVersion(Base):
 
 class CreateBatchPayload(BaseModel):
     source_gcs_uri: str = Field(min_length=1, max_length=2048)
+
+
+class CreateLocalBatchPayload(BaseModel):
+    batch_id: str = Field(min_length=3, max_length=128)
+
+
+def _normalize_upload_path(value: str) -> str:
+    raw = (value or "").replace("\\", "/").strip()
+    if not raw or raw.startswith("/") or re.match(r"^[A-Za-z]:", raw):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_UPLOAD_PATH", "message": "relative_path 必须是本地文件夹内的相对路径"},
+        )
+    parts = raw.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_UPLOAD_PATH", "message": "relative_path 不允许包含空目录、. 或 .."},
+        )
+    return "/".join(parts)
 
 
 class ExecuteBatchPayload(BaseModel):
@@ -346,9 +366,13 @@ def _scan_item(db: Session, client: Any, bucket: Any, batch: FishAssetImportBatc
     if not filename or name.endswith("/"):
         return None
     lowered = filename.lower()
-    if len(parts) == 1 and lowered in IGNORED_FILES:
+    if lowered in IGNORED_FILES:
         return None
     folder = parts[0] if parts else ""
+    for candidate in parts[:-1]:
+        if _resolve_species(db, candidate) is not None:
+            folder = candidate
+            break
     asset_type = _asset_type_for_filename(filename)
     suffix = "." + _image_extension(filename) if "." in filename else ""
     errors: list[dict[str, str]] = []
@@ -666,7 +690,61 @@ def create_batch(payload: CreateBatchPayload, db: Session = Depends(get_db)) -> 
     row = FishAssetImportBatch(batch_id=batch_id, source_gcs_uri=payload.source_gcs_uri.strip(), status="CREATED", created_by="admin")
     db.add(row)
     _commit(db)
-    return {"batch_id": row.batch_id, "status": row.status}
+    return {"batch_id": row.batch_id, "status": row.status, "source_gcs_uri": row.source_gcs_uri}
+
+
+@router.post("/local", status_code=201)
+def create_local_batch(payload: CreateLocalBatchPayload, db: Session = Depends(get_db)) -> dict[str, Any]:
+    batch_id = payload.batch_id.strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{2,127}", batch_id):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_BATCH_ID", "message": "batch_id 只能包含字母、数字、下划线和连字符，长度 3-128"},
+        )
+    source_gcs_uri = f"gs://{get_bucket_name()}/{SOURCE_PREFIX}{batch_id}/"
+    existing = db.scalar(select(FishAssetImportBatch).where(FishAssetImportBatch.batch_id == batch_id))
+    if existing is not None:
+        raise HTTPException(status_code=409, detail={"code": "BATCH_EXISTS", "message": "batch_id 已存在，请使用新的导入批次 ID"})
+    row = FishAssetImportBatch(batch_id=batch_id, source_gcs_uri=source_gcs_uri, status="CREATED", created_by="admin")
+    db.add(row)
+    _commit(db)
+    return {"batch_id": row.batch_id, "status": row.status, "source_gcs_uri": row.source_gcs_uri}
+
+
+@router.post("/{batch_id}/upload")
+async def upload_batch_file(
+    batch_id: str,
+    relative_path: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    batch = _batch_or_404(db, batch_id)
+    if batch.status != "CREATED":
+        raise HTTPException(status_code=409, detail={"code": "BATCH_NOT_UPLOADABLE", "message": "只有 CREATED 批次可以继续上传文件"})
+    normalized_path = _normalize_upload_path(relative_path)
+    size = getattr(file, "size", None)
+    if size is not None and size > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail={"code": "FILE_TOO_LARGE", "message": "单个图片文件不能超过 10 MB"})
+    try:
+        client, bucket, prefix = _storage(batch)
+        blob = bucket.blob(prefix + normalized_path)
+        blob.upload_from_file(
+            file.file,
+            content_type=file.content_type or "application/octet-stream",
+            rewind=True,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail={"code": "GCS_UPLOAD_FAILED", "message": str(exc)}) from exc
+    finally:
+        await file.close()
+    return {
+        "batch_id": batch.batch_id,
+        "relative_path": normalized_path,
+        "source_object": prefix + normalized_path,
+        "size": size,
+    }
 
 
 @router.post("/{batch_id}/scan")
