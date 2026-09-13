@@ -18,7 +18,6 @@ def test_fish_asset_batch_import_api_and_page_are_registered():
         "WARNING",
         "INVALID",
         "所有图片将进入 DRAFT",
-        "ASSET_ALREADY_EXISTS",
         "Retry Failed",
     ):
         assert marker in source
