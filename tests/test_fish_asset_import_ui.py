@@ -44,5 +44,5 @@ def test_fish_asset_import_template_has_valid_control_bindings():
     source, _filename, _uptodate = templates.env.loader.get_source(templates.env, "fish_asset_import.html")
     assert "data-batch-id" in source
     assert "history-batch" in source
-    history_block = source.split("async function history", 1)[1].split("$('scanBtn')", 1)[0]
+    history_block = source.split("async function history", 1)[1].split("\n$('historyRows')", 1)[0]
     assert "onclick" not in history_block
