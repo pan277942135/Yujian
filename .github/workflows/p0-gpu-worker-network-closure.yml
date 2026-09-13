@@ -1,0 +1,110 @@
+name: P0 GPU Worker Network Closure
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: yujian-p0-gpu-worker-network-closure
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: gemini-api-project-503706
+  VM: fish-completion-worker
+
+jobs:
+  inspect-gpu-worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud with GitHub OIDC/WIF
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+          service_account: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          version: '>= 416.0.0'
+
+      - name: Inspect VM network and Worker runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          PROJECT_ID="${PROJECT_ID}"
+          VM="${VM}"
+
+          echo "=== AUTH ==="
+          gcloud auth list --filter=status:ACTIVE --format='table(account,status)'
+          echo "PROJECT_ID=${PROJECT_ID}"
+
+          echo "=== ZONE ==="
+          ZONE="$(gcloud compute instances list --project="${PROJECT_ID}" --filter="name=${VM}" --format="value(zone.basename())" | head -1)"
+          echo "ZONE=${ZONE}"
+          test -n "${ZONE}"
+
+          echo "=== VM NETWORK ==="
+          gcloud compute instances describe "${VM}" \
+            --project="${PROJECT_ID}" \
+            --zone="${ZONE}" \
+            --format='yaml(name,status,networkInterfaces.network,networkInterfaces.subnetwork,networkInterfaces.networkIP,networkInterfaces.accessConfigs.natIP,tags.items)'
+
+          NETWORK="$(gcloud compute instances describe "${VM}" --project="${PROJECT_ID}" --zone="${ZONE}" --format="value(networkInterfaces[0].network.basename())")"
+          INTERNAL_IP="$(gcloud compute instances describe "${VM}" --project="${PROJECT_ID}" --zone="${ZONE}" --format="value(networkInterfaces[0].networkIP)")"
+          EXTERNAL_IP="$(gcloud compute instances describe "${VM}" --project="${PROJECT_ID}" --zone="${ZONE}" --format="value(networkInterfaces[0].accessConfigs[0].natIP)")"
+          echo "NETWORK=${NETWORK}"
+          echo "INTERNAL_IP=${INTERNAL_IP}"
+          echo "EXTERNAL_IP=${EXTERNAL_IP}"
+
+          echo "=== VM SSH / LOCAL WORKER CHECK ==="
+          set +e
+          gcloud compute ssh "${VM}" --project="${PROJECT_ID}" --zone="${ZONE}" --quiet --command='
+            set +x
+            echo "=== HOST ==="
+            hostname
+            echo "=== LISTEN ==="
+            sudo ss -lntp | grep ":8000" || true
+            echo "=== LOCAL HEALTH ==="
+            curl -sS -D - --connect-timeout 3 --max-time 8 http://127.0.0.1:8000/health || true
+            echo
+            echo "=== INTERNAL HEALTH ==="
+            IP=$(hostname -I | awk "{print $1}")
+            echo "INTERNAL_IP=$IP"
+            curl -sS -D - --connect-timeout 3 --max-time 8 http://$IP:8000/health || true
+            echo
+            echo "=== PROCESS ==="
+            ps -ef | grep -Ei "uvicorn|gunicorn|powerpaint|worker_app|8000" | grep -v grep || true
+            echo "=== WORKER LOG TAIL ==="
+            for f in /tmp/powerpaint-worker.log /tmp/worker.log /opt/powerpaint/PowerPaint/worker.log; do
+              if [ -f "$f" ]; then
+                echo "--- $f"
+                tail -80 "$f"
+              fi
+            done
+          ' > /tmp/vm-worker-check.log 2>&1
+          SSH_RC=$?
+          set -e
+          cat /tmp/vm-worker-check.log
+          echo "VM_SSH_EXIT=${SSH_RC}"
+
+          echo "=== VPC SUBNETS IN asia-east1 ==="
+          gcloud compute networks subnets list --project="${PROJECT_ID}" --filter="network:${NETWORK} AND region:(asia-east1)" --format='table(name,region.basename(),network.basename(),ipCidrRange)' || true
+
+          echo "=== FIREWALL RULES ==="
+          gcloud compute firewall-rules list --project="${PROJECT_ID}" --filter="network:${NETWORK}" --format='yaml(name,direction,priority,sourceRanges,allowed,targetTags,disabled)' || true
+
+          if [[ "${SSH_RC}" -ne 0 ]]; then
+            echo "P0_RESULT=VM_SSH_OR_IAM_BLOCKED"
+            exit "${SSH_RC}"
+          fi
+          echo "P0_RESULT=VM_INSPECTION_COMPLETE"
