@@ -9,6 +9,7 @@ from app.db import Base
 from app.fish_knowledge.import_batch import (
     _asset_type_for_filename,
     _bind_imported_version,
+    _normalize_upload_path,
     _parse_source_uri,
     _resolve_species_name,
     _scan_item,
@@ -43,6 +44,18 @@ def _add_species(db):
         status="DRAFT",
     ))
     db.commit()
+
+
+def test_local_upload_path_normalization_accepts_folder_selection_and_rejects_traversal():
+    assert _normalize_upload_path("Yujian_Fish_Knowledge/01_白条/00_cover.png") == "Yujian_Fish_Knowledge/01_白条/00_cover.png"
+    assert _normalize_upload_path(r"01_白条\00_cover.png") == "01_白条/00_cover.png"
+    for value in ("../secret.png", "/absolute.png", "C:/secret.png", "species//00_cover.png"):
+        try:
+            _normalize_upload_path(value)
+        except Exception as exc:
+            assert "INVALID_UPLOAD_PATH" in str(exc)
+        else:
+            raise AssertionError("expected upload path validation")
 
 
 def test_parse_source_uri_requires_configured_import_prefix(monkeypatch):
@@ -111,6 +124,36 @@ def test_valid_image_scan_marks_square_file(tmp_path, monkeypatch):
     assert item.validation_status == "VALID"
     assert item.width == 1024
     assert item.height == 1024
+
+
+def test_scan_resolves_species_after_browser_selected_outer_folder(tmp_path, monkeypatch):
+    db = _session(tmp_path)
+    _add_species(db)
+    image = BytesIO()
+    Image.new("RGB", (1024, 1024), "white").save(image, format="PNG")
+    data = image.getvalue()
+
+    class Blob:
+        name = "fish-assets/imports/FK_001/Yujian_Fish_Knowledge/01_白条/01_hero.png"
+        size = len(data)
+
+        def download_as_bytes(self, timeout=None):
+            return data
+
+    class Bucket:
+        def blob(self, _):
+            return Blob()
+
+    monkeypatch.setattr(
+        "app.fish_knowledge.import_batch._source_parts",
+        lambda _: ("bucket", "fish-assets/imports/FK_001/", "FK_001"),
+    )
+    batch = type("Batch", (), {"source_gcs_uri": "gs://bucket/fish-assets/imports/FK_001/", "batch_id": "FK_001"})()
+    item = _scan_item(db, None, Bucket(), batch, Blob.name)
+    assert item.species_id == "sharpbelly"
+    assert item.asset_type == "HERO"
+    assert item.validation_status == "VALID"
+
 
 def test_imported_version_binds_existing_draft_card_without_overwriting_content(tmp_path):
     db = _session(tmp_path)
