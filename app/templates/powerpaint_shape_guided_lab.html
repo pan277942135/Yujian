@@ -118,6 +118,12 @@ function maskDataUrl(mask){
   for(let i=0;i<mask.length;i++){const v=mask[i]?255:0;d.data[i*4]=v;d.data[i*4+1]=v;d.data[i*4+2]=v;d.data[i*4+3]=255}
   ctx.putImageData(d,0,0);return c.toDataURL('image/png')
 }
+async function maskedFishDataUrl(url,mask){
+  const img=new Image();img.src=url;await img.decode();const c=document.createElement('canvas');c.width=state.w;c.height=state.h;
+  const ctx=c.getContext('2d');ctx.drawImage(img,0,0,state.w,state.h);const d=ctx.getImageData(0,0,state.w,state.h);
+  for(let i=0;i<mask.length;i++)if(!mask[i])d.data[i*4+3]=0;
+  ctx.putImageData(d,0,0);return c.toDataURL('image/png')
+}
 async function readMask(url){
   const img=new Image();img.src=url;await img.decode();const c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;
   const ctx=c.getContext('2d');ctx.drawImage(img,0,0);const d=ctx.getImageData(0,0,c.width,c.height).data;const m=new Uint8Array(d.length/4);
@@ -134,14 +140,15 @@ function renderOverlay(canvasId,base,accent){
   }
   ctx.putImageData(d,0,0)
 }
-function recomputeVisible(){
+async function recomputeVisible(){
   state.refined=new Uint8Array(state.raw);
-  for(let i=0;i<state.refined.length;i++)state.refined[i]=state.add[i]||0; 
+  for(let i=0;i<state.refined.length;i++)state.refined[i]=state.raw[i]||state.add[i]?1:0;
   for(let i=0;i<state.refined.length;i++)if(state.remove[i])state.refined[i]=0;
   renderOverlay('visibleCanvas',state.refined,state.add.map((v,i)=>state.remove[i]?2:v?1:0));
-  setImg('refinedVisiblePreview',maskDataUrl(state.refined));
+  const fish=await maskedFishDataUrl(state.originalUrl,state.refined);
+  setImg('refinedVisiblePreview',fish);
   setImg('refinedVisibleMaskPreview',maskDataUrl(state.refined));
-  setImg('completionVisible',maskDataUrl(state.refined));
+  setImg('completionVisible',fish);
   updateStats()
 }
 function clipCompletion(){for(let i=0;i<state.completion.length;i++)if(state.refined[i])state.completion[i]=0}
@@ -179,10 +186,10 @@ async function prepare(){
   if(!state.selected)return;$('prepare').disabled=true;$('run').disabled=true;$('status').textContent='PREPARE_RUNNING\\nInput → Detector → Raw SAM';try{
     const form=new URLSearchParams({dataset_version:state.selected.dataset_version,dataset_item_id:String(state.selected.dataset_item_id)});
     const d=await fetchJson('/api/debug/powerpaint-shape-guided-lab/prepare',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form},'PREPARE');
-    const rm=await readMask(d.raw_sam_mask);state.w=rm.w;state.h=rm.h;state.raw=rm.mask;state.add=blank();state.remove=blank();state.refined=new Uint8Array(state.raw);state.completion=blank();state.visibleHistory=[];state.completionHistory=[];state.prep=d;
+    const rm=await readMask(d.raw_sam_mask);state.w=rm.w;state.h=rm.h;state.originalUrl=d.preview_original;state.raw=rm.mask;state.add=blank();state.remove=blank();state.refined=new Uint8Array(state.raw);state.completion=blank();state.visibleHistory=[];state.completionHistory=[];state.prep=d;
     setImg('rawSamPreview',d.preview_raw_sam);setImg('rawSamMaskPreview',d.raw_sam_mask);setImg('original',d.preview_original);setImg('visibleEditorImage',d.preview_raw_sam);setImg('completionOriginal',d.preview_original);setImg('completionEditorImage',d.preview_original);setImg('completionVisible',maskDataUrl(state.refined));
     $('visibleCanvas').width=state.w;$('visibleCanvas').height=state.h;$('completionCanvas').width=state.w;$('completionCanvas').height=state.h;
-    recomputeVisible();recomputeCompletion();renderProgress(d.report.progress||[]);$('report').textContent=JSON.stringify(d.report,null,2);$('status').textContent='RAW_SAM_READY\\nTest ID: '+d.test_id+'\\n请在 B2 和 C 手工编辑后运行 PowerPaint';$('run').disabled=true;
+    await recomputeVisible();recomputeCompletion();renderProgress(d.report.progress||[]);$('report').textContent=JSON.stringify(d.report,null,2);$('status').textContent='RAW_SAM_READY\\nTest ID: '+d.test_id+'\\n请在 B2 和 C 手工编辑后运行 PowerPaint';$('run').disabled=true;
   }catch(e){$('status').textContent=String(e)}finally{$('prepare').disabled=false}}
 async function run(){
   if(!state.prep)return;$('run').disabled=true;$('prepare').disabled=true;$('status').textContent='POWERPAINT_RUNNING\\n正在执行 MANUAL_V2 fitting_degree=0.8';const mode=$('maskMode').value;
