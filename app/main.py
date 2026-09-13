@@ -186,6 +186,7 @@ def _upsert_review_bbox(db: Session, image: ImageAsset, box: list[float], review
 def image_dict(
     image: ImageAsset,
     *,
+    db: Session | None = None,
     classifier_prediction: str | None = None,
     classifier_confidence: float | None = None,
     species_check: str | None = None,
@@ -239,6 +240,7 @@ def image_dict(
         "reviewed_by": image.reviewed_by,
         "reviewed_at": image.reviewed_at.isoformat() if image.reviewed_at else None,
         "media_url": f"/media/{image.batch_id}/{image.image_id}",
+        **(_review_bbox_dict(db, image) if db is not None else {}),
     }
 
 
