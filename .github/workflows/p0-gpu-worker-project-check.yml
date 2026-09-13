@@ -11,6 +11,7 @@ env:
   VM: fish-completion-worker
   ZONE: us-central1-a
   CANDIDATE_PROJECTS: gemini-api-project-503706 gen-lang-client-0224022273
+  WORKER_PUBLIC_URL: http://34.69.75.199:8000
 
 jobs:
   check-projects:
@@ -41,3 +42,12 @@ jobs:
             set -e
             echo "DESCRIBE_RC=${RC}"
           done
+      - name: Probe public Worker health from GitHub runner
+        shell: bash
+        run: |
+          set +e
+          echo "=== PUBLIC_WORKER_HEALTH ==="
+          curl -v --connect-timeout 5 --max-time 12 -w "\nHTTP_STATUS=%{http_code}\nTIME_TOTAL_SECONDS=%{time_total}\n" "${WORKER_PUBLIC_URL}/health"
+          RC=$?
+          echo "PUBLIC_CURL_RC=${RC}"
+          exit 0
