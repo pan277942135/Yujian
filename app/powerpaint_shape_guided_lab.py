@@ -38,7 +38,7 @@ from app.segmentation.service import generate_fish_cutout
 router = APIRouter(tags=["powerpaint-shape-guided-lab"])
 templates = Jinja2Templates(directory="app/templates")
 VERSION = "POWERPAINT_SHAPE_GUIDED_V0.3"
-PROMPT_ID = "FIXED_FISH_SHAPE_GUIDED_V0.3"
+PROMPT_ID = "FIXED_FISH_SHAPE_GUIDED_V0.3.1"
 TASK_MODE = "SHAPE_GUIDED"
 FITTING_DEGREES = (0.6, 0.8, 0.95)
 PREFIX = "experiments/powerpaint_shape_guided_lab/v0.3"
@@ -55,23 +55,7 @@ EXPERIMENT_STAGES = (
     "SUCCESS",
     "FAILED",
 )
-PROMPT = """Complete only the missing biological parts of this fish.
-
-Use the existing visible fish as the identity reference.
-
-Preserve:
-- species
-- head shape
-- body proportion
-- scale pattern
-- fin structure
-- tail anatomy
-- original color
-
-Only generate inside the provided completion mask.
-Do not modify visible fish pixels.
-Do not change background.
-Do not create another fish."""
+PROMPT = "a realistic fish body matching the visible fish"
 
 
 def _bucket():
