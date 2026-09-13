@@ -99,6 +99,17 @@ def main():
             add_qa(db, image)
         p_nofish, _ = add_qa(db, nofish, presence="no_fish")
         _, fp_dup = add_qa(db, duplicate, duplicate_kind="near")
+        db.add(
+            BatchCropReview(
+                batch_id=unscanned.batch_id,
+                image_asset_id=unscanned.id,
+                image_id=unscanned.image_id,
+                accepted_bbox_json="[0.1,0.1,0.8,0.8]",
+                status="ACCEPTED",
+                species_name=unscanned.truth_species,
+                reviewer="smoke",
+            )
+        )
         db.commit()
 
         # Statistics are Ground Truth only: I1 is black, not yellow; legacy null is explicit unconfirmed.
