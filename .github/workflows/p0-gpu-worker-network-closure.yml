@@ -14,6 +14,7 @@ concurrency:
 env:
   PROJECT_ID: gemini-api-project-503706
   VM: fish-completion-worker
+  ZONE: us-central1-a
 
 jobs:
   inspect-gpu-worker:
@@ -41,17 +42,11 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          PROJECT_ID="${PROJECT_ID}"
-          VM="${VM}"
-
           echo "=== AUTH ==="
           gcloud auth list --filter=status:ACTIVE --format='table(account,status)'
           echo "PROJECT_ID=${PROJECT_ID}"
-
-          echo "=== ZONE ==="
-          ZONE="$(gcloud compute instances list --project="${PROJECT_ID}" --filter="name=${VM}" --format="value(zone.basename())" | head -1)"
+          echo "VM=${VM}"
           echo "ZONE=${ZONE}"
-          test -n "${ZONE}"
 
           echo "=== VM NETWORK ==="
           gcloud compute instances describe "${VM}" \
@@ -78,7 +73,7 @@ jobs:
             curl -sS -D - --connect-timeout 3 --max-time 8 http://127.0.0.1:8000/health || true
             echo
             echo "=== INTERNAL HEALTH ==="
-            IP=$(hostname -I | awk "{print $1}")
+            IP=$(hostname -I | awk "{print \$1}")
             echo "INTERNAL_IP=$IP"
             curl -sS -D - --connect-timeout 3 --max-time 8 http://$IP:8000/health || true
             echo
