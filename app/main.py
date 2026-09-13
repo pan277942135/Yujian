@@ -36,7 +36,7 @@ from app.data_policy import (
     truth_filter_clause,
     valid_truth_for_image,
 )
-from app.models import Batch, DatasetVersion, ImageAsset, ReviewEvent
+from app.models import Batch, DatasetVersion, FeedbackEvent, ImageAsset, ReviewEvent
 from app.secure import install_access_guard
 from app.services.manifest_normalizer import ManifestNormalizationError
 from app.services.review_prefill import parse_review_signals, trusted_truth_prefill
