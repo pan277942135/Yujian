@@ -170,6 +170,7 @@ def test_imported_version_keeps_active_card_and_creates_draft(tmp_path):
     db.flush()
 
     assert _bind_imported_version(db, version) == "BOUND"
+    db.flush()
     assert active.status == "ACTIVE"
     drafts = [
         row for row in db.query(FishCard).all()
