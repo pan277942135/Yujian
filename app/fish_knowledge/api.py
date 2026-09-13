@@ -451,7 +451,7 @@ def get_knowledge_media(species_id: str, asset_type: str, asset_key: str, db: Se
 
         version = db.scalar(select(FishKnowledgeAssetVersion).where(
             FishKnowledgeAssetVersion.species_id == row.id,
-            FishKnowledgeAssetVersion.asset_type == normalized_type,
+            FishKnowledgeAssetVersion.asset_type == ("COVER" if normalized_type == "cover" else normalized_type),
             FishKnowledgeAssetVersion.image_url == expected_url,
             FishKnowledgeAssetVersion.status == "ACTIVE",
         ))
