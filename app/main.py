@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from google.cloud import storage
 from pydantic import BaseModel, Field
@@ -278,9 +278,9 @@ def batches_page(request: Request):
     return templates.TemplateResponse(request=request, name="batches.html", context={})
 
 
-@app.get("/crop-datasets", response_class=HTMLResponse)
-def crop_datasets_page(request: Request):
-    return templates.TemplateResponse(request=request, name="crop_datasets.html", context={})
+@app.get("/crop-datasets")
+def crop_datasets_page():
+    return RedirectResponse(url="/datasets/accepted-bbox", status_code=307)
 
 
 @app.get("/review", response_class=HTMLResponse)
