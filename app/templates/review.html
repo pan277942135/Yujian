@@ -39,7 +39,7 @@ async function init(){
 }
 async function fetchOne(status){const p=baseParams();if(status)p.set('status',status);p.set('limit','1');p.set('offset',offset);return api('/api/review?'+p)}
 async function load(){
-  const selected=document.getElementById('status').value;const statParams=baseParams();const stats=await api('/api/review/stats?'+statParams);const fly=await api('/api/flywheel/summary');const s=stats.status||{};const pendingTotal=(s.pending||0)+(s.needs_review||0)+(s.hard_case||0);document.getElementById('summary').innerHTML=`<span class="pill">通过 ${s.approved||0}</span><span class="pill">待定 ${pendingTotal}</span><span class="pill">不通过 ${s.rejected||0}</span><span class="pill">累计可用 ${fly.approved_master_pool}</span>`;
+  const selected=document.getElementById('status').value;const statParams=baseParams();const stats=await api('/api/review/stats?'+statParams);const fly=await api('/api/flywheel/summary');const s=stats.status||{};const pendingTotal=(s.pending||0)+(s.needs_review||0)+(s.hard_case||0);document.getElementById('summary').innerHTML=`<span class="pill">通过 ${s.approved||0}</span><span class="pill">待定 ${pendingTotal}</span><span class="pill">不通过 ${s.rejected||0}</span><span class="pill">accepted_bbox 可用 ${fly.accepted_bbox_pool??fly.approved_master_pool}</span>`;
   let items=[];currentBackendStatus=selected||'';
   if(selected==='pending'){for(const legacyStatus of ['pending','needs_review','hard_case']){items=await fetchOne(legacyStatus);if(items.length){currentBackendStatus=legacyStatus;break}}}else{items=await fetchOne(selected)}
   current=items[0]||null;render();if(current)await showPresence();
