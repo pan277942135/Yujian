@@ -16,7 +16,7 @@ permissions:
 
 concurrency:
   group: yujian-uat-deploy
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   PROJECT_ID: gemini-api-project-503706
