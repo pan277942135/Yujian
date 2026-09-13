@@ -8,6 +8,8 @@ def test_fish_asset_batch_import_api_and_page_are_registered():
     assert "/api/v1/admin/fish/assets/import-batches/{batch_id}/scan" in paths
     assert "/api/v1/admin/fish/assets/import-batches/{batch_id}/execute" in paths
     assert "/api/v1/admin/fish/assets/import-batches/{batch_id}/retry" in paths
+    assert "/api/v1/admin/fish/assets/import-batches/{batch_id}/sync-content" in paths
+    assert "/api/v1/admin/fish/assets/import-batches/{batch_id}/versions/{version_id}/preview" in paths
     assert "/fish-knowledge/assets/import" in paths
     source, _filename, _uptodate = templates.env.loader.get_source(templates.env, "fish_asset_import.html")
     for marker in (
@@ -19,6 +21,7 @@ def test_fish_asset_batch_import_api_and_page_are_registered():
         "INVALID",
         "所有图片将进入 DRAFT",
         "Retry Failed",
+        "同步到鱼鉴内容",
         "history-batch",
         "data-batch-id",
         "closeModal()",
