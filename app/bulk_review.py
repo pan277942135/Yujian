@@ -217,6 +217,11 @@ def api_bulk_apply(payload: BulkReviewApply, db: Session = Depends(get_db)):
             raise HTTPException(status_code=400, detail=f"不可分配真实鱼种: {truth}")
         if item.review_status == "approved" and not truth:
             raise HTTPException(status_code=400, detail=f"{item.image_id}: 通过前必须确认真实鱼种")
+        crop = db.scalar(select(BatchCropReview).where(BatchCropReview.image_asset_id == image.id))
+        existing_bbox = _bbox(crop.accepted_bbox_json) if crop else None
+        accepted_bbox = _bbox(item.accepted_bbox) if "accepted_bbox" in item.model_fields_set else existing_bbox
+        if item.review_status == "approved" and accepted_bbox is None:
+            raise HTTPException(status_code=400, detail={"error": "ACCEPTED_BBOX_REQUIRED", "reason": f"{item.image_id}: 通过前必须确认 accepted_bbox"})
 
         before = {
             "review_status": image.review_status,
@@ -232,6 +237,17 @@ def api_bulk_apply(payload: BulkReviewApply, db: Session = Depends(get_db)):
         image.reviewed_by = "批量审核"
         image.reviewed_at = utcnow()
         mark_feedback_reviewed(db, image)
+        if item.review_status == "approved":
+            if crop is None:
+                crop = BatchCropReview(batch_id=image.batch_id, image_asset_id=image.id, image_id=image.image_id)
+                db.add(crop)
+                db.flush()
+            crop.accepted_bbox_json = json.dumps(accepted_bbox, separators=(",", ":"))
+            crop.species_name = truth
+            crop.status = "ACCEPTED"
+            crop.reviewer = "批量审核"
+            crop.reviewed_at = utcnow()
+            crop.notes = item.notes
         db.add(
             ReviewEvent(
                 image_asset_id=image.id,
@@ -244,6 +260,7 @@ def api_bulk_apply(payload: BulkReviewApply, db: Session = Depends(get_db)):
                         "truth_species": image.truth_species,
                         "truth_status": image.truth_status,
                         "notes": image.notes,
+                        "accepted_bbox": accepted_bbox if item.review_status == "approved" else None,
                     },
                     ensure_ascii=False,
                 ),
