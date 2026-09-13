@@ -48,6 +48,7 @@ jobs:
       - name: Promote current Worker IP and verify health
         shell: bash
         run: |
+          set +e
           set -uo pipefail
           collapse() { tr '\n' ' ' | tr -s ' ' | cut -c1-1800; }
           IAM_BLOCKER=""
