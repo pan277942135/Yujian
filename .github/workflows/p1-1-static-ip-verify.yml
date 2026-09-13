@@ -55,13 +55,14 @@ jobs:
           VM_OUTPUT="$(gcloud compute instances describe "$VM" \
             --project="$PROJECT_ID" \
             --zone="$ZONE" \
-            --format="yaml(status,networkInterfaces.networkIP,networkInterfaces.accessConfigs.natIP)" 2>&1)"
+            --format="yaml(status,networkInterfaces[0].networkIP,networkInterfaces[0].accessConfigs[0].natIP)" 2>&1)"
           VM_RC=$?
           printf '%s\n' "$VM_OUTPUT"
           echo "VM_RC=$VM_RC"
 
           VM_STATUS="$(printf '%s\n' "$VM_OUTPUT" | awk '/^status:/{print $2; exit}')"
-          VM_EXTERNAL_IP="$(printf '%s\n' "$VM_OUTPUT" | awk '/  natIP:/{print $2; exit}')"
+          VM_INTERNAL_IP="$(printf '%s\n' "$VM_OUTPUT" | awk '/networkIP:/{print $2; exit}')"
+          VM_EXTERNAL_IP="$(printf '%s\n' "$VM_OUTPUT" | awk '/natIP:/{print $2; exit}')"
 
           echo "=== WORKER HEALTH ==="
           set +e
@@ -79,6 +80,7 @@ jobs:
           echo "STATIC_IP_STATUS=$STATIC_IP_STATUS"
           echo "STATIC_IP_USERS=$STATIC_IP_USERS"
           echo "VM_STATUS=$VM_STATUS"
+          echo "VM_INTERNAL_IP=$VM_INTERNAL_IP"
           echo "VM_EXTERNAL_IP=$VM_EXTERNAL_IP"
           echo "WORKER_HEALTH_CURL_RC=$CURL_RC"
 
