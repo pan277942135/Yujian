@@ -28,7 +28,7 @@ input,button{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:10p
 <div class="help">点击每个槽位的 Preview 可查看真实源图、尺寸、SHA-256、校验信息和目标 GCS 路径。执行后所有新版本保持 DRAFT。</div>
 </section>
 <section class="section history"><h2>导入历史</h2><div class="table-wrap"><table><thead><tr><th>Batch</th><th>状态</th><th>鱼种</th><th>图片</th><th>Valid</th><th>Warning</th><th>Invalid</th><th>时间</th></tr></thead><tbody id="historyRows"></tbody></table></div></section>
-<div id="modal" class="modal" hidden><div><h3 id="modalTitle">素材详情</h3><div id="modalBody"></div><div class="actions"><button id="activateBtn" class="primary" hidden>将此版本设为 ACTIVE</button><button onclick="closeModal()">关闭</button></div></div></div>
+<div id="modal" class="modal" hidden><div><h3 id="modalTitle">素材详情</h3><div id="modalBody"></div><div class="actions"><button id="activateBtn" class="primary" hidden>将此版本设为 ACTIVE</button><button id="closeBtn" type="button">关闭</button></div></div></div>
 </main>
 <script>
 const TYPES=['COVER','HERO','IDENTIFICATION','ECO','GEAR','SKILL'];
@@ -51,9 +51,10 @@ async function retry(){if(!currentBatch)return;try{const data=await api('/api/v1
 async function openItem(id){if(!currentBatch)return;try{const data=currentBatch.items.find(x=>x.id===id);if(!data)return;currentItem=data;$('modalTitle').textContent=(data.species_id||'未解析')+' · '+(data.asset_type||'未知');$('modalBody').innerHTML='<img src="'+esc(data.source_preview_url)+'" style="width:100%;max-height:300px;object-fit:contain;border-radius:8px"><p><b>状态：</b>'+statusBadge(data.validation_status)+'</p><p><b>源文件：</b>'+esc(data.source_object)+'</p><p><b>尺寸：</b>'+esc(data.width||'-')+' × '+esc(data.height||'-')+'<br><b>大小：</b>'+esc(data.file_size||'-')+' bytes<br><b>SHA-256：</b><code>'+esc(data.sha256||'-')+'</code></p><p><b>校验错误：</b>'+esc(JSON.stringify(data.validation_errors||[]))+'<br><b>校验警告：</b>'+esc(JSON.stringify(data.validation_warnings||[]))+'</p><p><b>目标：</b><code>'+esc(data.target_object||'-')+'</code></p>';const b=$('activateBtn');b.hidden=!(data.validation_status==='IMPORTED'&&data.version_id);b.onclick=()=>activate(data.version_id);$('modal').hidden=false}catch(e){show(e.message,true)}}
 async function activate(versionId){if(!currentBatch||!confirm('确认将此 DRAFT 图片版本设为 ACTIVE？旧 ACTIVE 会保留为非当前版本。'))return;try{await api('/api/v1/admin/fish/assets/import-batches/'+encodeURIComponent(currentBatch.batch_id)+'/versions/'+versionId+'/activate',{method:'POST'});closeModal();await loadBatch(currentBatch.batch_id);show('已显式发布该单卡版本到 ACTIVE')}catch(e){show(e.message,true)}}
 function closeModal(){$('modal').hidden=true}
+function closeModalOnBackdrop(event){if(event.target===$('modal'))closeModal()}
 async function history(){try{const rows=await api('/api/v1/admin/fish/assets/import-batches');$('historyRows').innerHTML=rows.map(x=>'<tr><td><button class="history-batch" data-batch-id="'+esc(x.batch_id)+'">'+esc(x.batch_id)+'</button></td><td>'+statusBadge(x.status)+'</td><td>'+x.summary.species_count+'</td><td>'+x.summary.total_files+'</td><td class="good">'+x.summary.valid+'</td><td class="warn">'+x.summary.warning+'</td><td class="bad">'+x.summary.invalid+'</td><td>'+esc(x.created_at||'')+'</td></tr>').join('')||'<tr><td colspan="8" class="muted">暂无历史</td></tr>'}catch(e){show(e.message,true)}}
 $('historyRows').addEventListener('click',event=>{const button=event.target.closest('[data-batch-id]');if(button)loadBatch(button.dataset.batchId)});
-$('scanBtn').onclick=createAndScan;$('rescanBtn').onclick=rescan;$('executeBtn').onclick=execute;$('retryBtn').onclick=retry;$('cancelBtn').onclick=()=>show('取消操作保留审计记录；如需取消请通过管理员操作。',true);history();
+$('scanBtn').onclick=createAndScan;$('rescanBtn').onclick=rescan;$('executeBtn').onclick=execute;$('retryBtn').onclick=retry;$('cancelBtn').onclick=()=>show('取消操作保留审计记录；如需取消请通过管理员操作。',true);$('closeBtn').addEventListener('click',closeModal);$('modal').addEventListener('click',closeModalOnBackdrop);history();
 const q=new URLSearchParams(location.search);if(q.get('batch_id')){ $('source').value=q.get('batch_id');loadBatch(q.get('batch_id'))}
 </script>
 </body></html>
