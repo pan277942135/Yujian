@@ -212,16 +212,38 @@ async function prepare(){
     await recomputeVisible();recomputeCompletion();renderProgress(d.report.progress||[]);$('report').textContent=JSON.stringify(d.report,null,2);$('status').textContent='RAW_SAM_READY\\nBase Test: '+(d.base_test_id||state.baseTestId)+'\\n复用固定 Manual V2 Mask，可直接运行 P2.5';$('run').disabled=false;$('runP25').disabled=false;
   }catch(e){$('status').textContent=String(e)}finally{$('prepare').disabled=false}}
 
+async function renderP25(report){
+  const results=report.results||[];
+  const item08=results.find(x=>Number(x.fitting_degree)===0.8)||results[results.length-1]||{};
+  setImg('original',report.preview_original);setImg('rawSamOutput',report.preview_raw_sam);setImg('refinedOutput',report.preview_refined_visible||report.preview_sam);setImg('completionOutput',report.preview_completion_mask);setImg('completionOverlay',report.preview_completion_overlay);
+  setImg('generatedOutput',item08.raw_output_preview||item08.result_preview);setImg('hardComposeOutput',item08.hard_compose_preview||item08.result_preview);setImg('feather3Output',item08.feather_3px_preview);setImg('feather5Output',item08.feather_5px_preview);
+  const m=report.mask_boundary||report.p25?.mask_boundary||{};const b=m.completion_bbox||{};
+  $('boundaryStats').innerHTML='<b>completion_area_pixels='+(m.completion_area_pixels??'-')+'</b><b>completion_bbox='+(b.x??'-')+','+(b.y??'-')+' '+(b.width??'-')+'×'+(b.height??'-')+'</b><b>completion_width='+(m.completion_width??'-')+'</b><b>completion_height='+(m.completion_height??'-')+'</b><b>distance_to_visible_fish='+(m.distance_to_visible_fish??'-')+' px</b><span class="muted">fill=yellow · completion contour=red · refined visible contour=green</span>';
+  $('degreeResults').innerHTML=[.6,.8,.95].map(d=>{const r=results.find(x=>Number(x.fitting_degree)===d)||{};return '<div class="degree-card"><h3>Degree '+d+'</h3><figure><img src="'+esc(r.raw_output_preview||'')+'" alt="Raw '+d+'"><figcaption>D'+String(d).replace('.','')+' Raw PowerPaint</figcaption></figure><figure><img src="'+esc(r.hard_compose_preview||'')+'" alt="Hard '+d+'"><figcaption>Hard Compose</figcaption></figure><figure><img src="'+esc(r.feather_3px_preview||'')+'" alt="Feather 3 '+d+'"><figcaption>Feather 3px Compose</figcaption></figure><div class="stats"><b>HTTP='+(r.http_status??'-')+'</b><b>inference_ms='+(r.inference_time_ms??'-')+'</b><b>status='+(r.status??'-')+'</b></div></div>'}).join('');
+}
+function scorePayload(){
+  return {body_continuity:$('scoreBodyContinuity').value,scale_texture:$('scoreScaleTexture').value,color_match:$('scoreColorMatch').value,edge_seam:$('scoreEdgeSeam').value,anatomy:$('scoreAnatomy').value,background_preservation:$('scoreBackgroundPreservation').value}
+}
 async function run(){
-  if(!state.prep)return;$('run').disabled=true;$('prepare').disabled=true;$('status').textContent='POWERPAINT_RUNNING\\n正在执行 MANUAL_V2 fitting_degree=0.8';const mode=$('maskMode').value;
+  if(!state.prep)return;$('run').disabled=true;$('runP25').disabled=true;$('prepare').disabled=true;$('status').textContent='POWERPAINT_RUNNING\\n正在执行 MANUAL_V2 fitting_degree=0.8';const mode=$('maskMode').value;
   try{
-    const body={dataset_version:state.selected.dataset_version,dataset_item_id:String(state.selected.dataset_item_id),mask_mode:mode,fitting_degree:'0.8'};
+    const body={dataset_version:state.selected.dataset_version,dataset_item_id:String(state.selected.dataset_item_id),mask_mode:mode,fitting_degree:'0.8',base_test_id:state.baseTestId};
     if(mode==='MANUAL_V2'){body.visible_add_mask=maskDataUrl(state.add);body.visible_remove_mask=maskDataUrl(state.remove);body.manual_completion_mask=maskDataUrl(state.completion)}
     const form=new URLSearchParams(body);const d=await fetchJson('/api/debug/powerpaint-shape-guided-lab/run',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form},'SHAPE_GUIDED');state.currentTestId=d.test_id;const report=d.report||{};
-    renderProgress(report.progress||[]);$('report').textContent=JSON.stringify(report,null,2);setImg('original',report.preview_original);setImg('rawSamOutput',report.preview_raw_sam);setImg('refinedOutput',report.preview_refined_visible||report.preview_sam);setImg('completionOutput',report.preview_completion_mask);const item=(report.results||[]).find(x=>Number(x.fitting_degree)===.8);setImg('generatedOutput',item?.raw_output_preview||item?.result_preview);setImg('finalOutput',item?.result_preview||report.result_preview);$('status').textContent=showRunStatus(report,d);state.prep=d;
-  }catch(e){const p=e.payload||{};$('status').textContent=p.report?showRunStatus(p.report,p):String(e);if(p.report){$('report').textContent=JSON.stringify(p.report,null,2);renderProgress(p.report.progress||[])}}
-  finally{$('run').disabled=false;$('prepare').disabled=false}
+    renderProgress(report.progress||[]);$('report').textContent=JSON.stringify(report,null,2);await renderP25(report);$('status').textContent=showRunStatus(report,d);state.prep=d;
+  }catch(e){const p=e.payload||{};$('status').textContent=p.report?showRunStatus(p.report,p):String(e);if(p.report){$('report').textContent=JSON.stringify(p.report,null,2);renderProgress(p.report.progress||[]);await renderP25(p.report)}}
+  finally{$('run').disabled=false;$('runP25').disabled=false;$('prepare').disabled=false}
 }
+async function runP25(){
+  if(!state.prep)return;$('run').disabled=true;$('runP25').disabled=true;$('prepare').disabled=true;$('status').textContent='P2.5 POWERPAINT_RUNNING\\nSame Manual V2 Mask → fitting_degree 0.6 / 0.8 / 0.95';
+  try{
+    const body={dataset_version:state.selected.dataset_version,dataset_item_id:String(state.selected.dataset_item_id),mask_mode:'MANUAL_V2',p25_compare:'1',fitting_degrees:'0.6,0.8,0.95',base_test_id:state.baseTestId,...scorePayload(),visible_add_mask:maskDataUrl(state.add),visible_remove_mask:maskDataUrl(state.remove),manual_completion_mask:maskDataUrl(state.completion)};
+    const form=new URLSearchParams(body);const d=await fetchJson('/api/debug/powerpaint-shape-guided-lab/run',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form},'P25');state.currentTestId=d.test_id;const report=d.report||{};
+    renderProgress(report.progress||[]);$('report').textContent=JSON.stringify(report,null,2);await renderP25(report);$('status').textContent=showRunStatus(report,d);state.prep=d;
+  }catch(e){const p=e.payload||{};$('status').textContent=p.report?showRunStatus(p.report,p):String(e);if(p.report){$('report').textContent=JSON.stringify(p.report,null,2);renderProgress(p.report.progress||[]);await renderP25(p.report)}}
+  finally{$('run').disabled=false;$('runP25').disabled=false;$('prepare').disabled=false}
+}
+
 function resetProgress(){renderProgress([{stage:'raw_sam',label:'RAW_SAM_READY',status:'PENDING'},{stage:'refined_visible',label:'REFINED_VISIBLE_READY',status:'PENDING'},{stage:'completion_mask',label:'COMPLETION_MASK_READY',status:'PENDING'},{stage:'worker',label:'WORKER_READY',status:'PENDING'},{stage:'powerpaint',label:'POWERPAINT_SUCCESS',status:'PENDING'},{stage:'final_compose',label:'FINAL_COMPOSE_READY',status:'PENDING'}])}
 $('visibleAdd').onclick=()=>{state.visibleMode='add';$('visibleAdd').classList.add('active');$('visibleRemove').classList.remove('active')};$('visibleRemove').onclick=()=>{state.visibleMode='remove';$('visibleRemove').classList.add('active');$('visibleAdd').classList.remove('active')};
 $('completionAdd').onclick=()=>{state.completionMode='add';$('completionAdd').classList.add('active');$('completionErase').classList.remove('active')};$('completionErase').onclick=()=>{state.completionMode='erase';$('completionErase').classList.add('active');$('completionAdd').classList.remove('active')};
