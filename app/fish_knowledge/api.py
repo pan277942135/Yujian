@@ -435,16 +435,16 @@ def get_knowledge_media(species_id: str, asset_type: str, asset_key: str, db: Se
     normalized_type = normalize_card_type(asset_type) if asset_type.upper() != "COVER" else "cover"
     if normalized_type != "cover" and normalized_type not in {"HERO", "IDENTIFICATION", "ECO", "GEAR", "SKILL"}:
         raise HTTPException(status_code=404, detail="knowledge asset not found")
-    is_hashed_asset = bool(re.fullmatch(r"[a-f0-9]{64}\.(?:jpg|png|webp)", asset_key))
+    is_hashed_asset = bool(re.fullmatch(r"[a-f0-9]{64}\\.(?:jpg|png|webp)", asset_key))\n    is_version_asset = bool(re.fullmatch(r"v\\d+\\.webp", asset_key))
     fixed_asset_key = "cover.webp" if normalized_type == "cover" else f"{normalized_type.lower()}.webp"
-    if not is_hashed_asset and asset_key != fixed_asset_key:
+    if not is_hashed_asset and not is_version_asset and asset_key != fixed_asset_key:
         raise HTTPException(status_code=404, detail="knowledge asset not found")
     row = load_species_with_knowledge(db, species_id, active_only=False)
     if row is None:
         raise HTTPException(status_code=404, detail="fish species not found")
     storage_type = "cover" if normalized_type == "cover" else normalized_type.lower()
-    expected_url = f"/api/v1/fish/knowledge-media/{row.id}/{storage_type}/{asset_key}"
-    if normalized_type == "cover":
+    expected_url = f"/api/v1/fish/knowledge-media/{row.id}/{storage_type}/{asset_key}"\n    version = None\n    if is_version_asset:\n        from app.fish_knowledge.import_batch import FishKnowledgeAssetVersion\n\n        version = db.scalar(select(FishKnowledgeAssetVersion).where(\n            FishKnowledgeAssetVersion.species_id == row.id,\n            FishKnowledgeAssetVersion.asset_type == normalized_type,\n            FishKnowledgeAssetVersion.image_url == expected_url,\n            FishKnowledgeAssetVersion.status == "ACTIVE",\n        ))\n        is_referenced = version is not None
+    if not is_version_asset and normalized_type == "cover":
         is_referenced = (
             row.cover is not None
             and managed_knowledge_asset_url(row.id, "COVER", row.cover.image_url) == expected_url
@@ -460,9 +460,7 @@ def get_knowledge_media(species_id: str, asset_type: str, asset_key: str, db: Se
 
     try:
         client = storage.Client()
-        object_prefix = "fish_knowledge" if is_hashed_asset else "fish-assets"
-        object_directory = storage_type if is_hashed_asset else ("cover" if storage_type == "cover" else "cards")
-        blob = client.bucket(get_bucket_name()).blob(f"{object_prefix}/{row.id}/{object_directory}/{asset_key}")
+        if version is not None:\n            blob = client.bucket(get_bucket_name()).blob(version.object_name)\n        else:\n            object_prefix = "fish_knowledge" if is_hashed_asset else "fish-assets"\n            object_directory = storage_type if is_hashed_asset else ("cover" if storage_type == "cover" else "cards")\n            blob = client.bucket(get_bucket_name()).blob(f"{object_prefix}/{row.id}/{object_directory}/{asset_key}")
         if not blob.exists(client):
             raise HTTPException(status_code=404, detail="knowledge asset not found")
         content = blob.download_as_bytes(timeout=120, retry=DOWNLOAD_RETRY)
