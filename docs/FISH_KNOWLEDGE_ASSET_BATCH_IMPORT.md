@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The importer moves a GCS staging folder into versioned Fish Knowledge assets. It never accepts a large ZIP in a Cloud Run request and it never changes imported Cover/Card records to ACTIVE automatically.
+The importer moves a GCS staging folder into versioned Fish Knowledge assets and binds the resulting image URL to the existing Cover/Card draft slots. It never accepts a large ZIP in a Cloud Run request and it never changes imported Cover/Card records to ACTIVE automatically.
 
 ## Cloud workflow
 
@@ -10,8 +10,8 @@ The importer moves a GCS staging folder into versioned Fish Knowledge assets. It
 2. Unpack the asset package in Cloud Shell/Work and copy the files into that folder. A canonical folder uses an existing species_id; numbered Chinese folders are accepted as a compatibility format.
 3. Open /fish-knowledge/assets/import, enter the GCS folder, and click Scan.
 4. Resolve every INVALID row. WARNING rows require the explicit allow-warnings confirmation.
-5. Review the matrix and click Execute. Source objects are read from GCS, decoded and converted through the existing Pillow/WebP pipeline, then copied to fish-assets/fish-knowledge/<species_id>/<asset-directory>/vN.webp.
-6. Imported versions are stored as DRAFT. Use the per-item set ACTIVE action only after Admin QA.
+5. Review the matrix and click Execute. Source objects are read from GCS, decoded and converted through the existing Pillow/WebP pipeline, then copied to fish-assets/fish-knowledge/<species_id>/<asset-directory>/vN.webp and bound to the existing Cover/Card image field only; structured text is preserved.
+6. Imported versions and bound Cover/Card records are stored as DRAFT. Use the per-item set ACTIVE action only after Admin QA. An already completed batch can use `同步到鱼鉴内容` to repair a prior import that only created version rows.
 
 ## File contract
 
@@ -44,14 +44,16 @@ All endpoints use the existing console authentication middleware:
 - GET /api/v1/admin/fish/assets/import-batches
 - POST /api/v1/admin/fish/assets/import-batches/{batch_id}/execute
 - POST /api/v1/admin/fish/assets/import-batches/{batch_id}/retry
+- POST /api/v1/admin/fish/assets/import-batches/{batch_id}/sync-content
 - GET /api/v1/admin/fish/assets/import-batches/{batch_id}/items/{item_id}/source
+- GET /api/v1/admin/fish/assets/import-batches/{batch_id}/versions/{version_id}/preview
 - POST /api/v1/admin/fish/assets/import-batches/{batch_id}/versions/{version_id}/activate
 
 Execute requires READY, always blocks INVALID, and requires allow_warnings=true when warnings exist.
 
 ## DRAFT isolation
 
-The public /api/v1/fish/species/{species_id}/detail endpoint continues to read only ACTIVE species, Cover and Cards. Versioned imported objects are served by the managed media endpoint only after the corresponding version has been explicitly activated. Structured card content is not overwritten by Execute.
+The public /api/v1/fish/species/{species_id}/detail endpoint continues to read only ACTIVE species, Cover and Cards. DRAFT imported images are previewed through the authenticated Admin preview endpoint; the public managed media endpoint serves a version only after it has been explicitly activated. Structured card content is not overwritten by Execute.
 
 ## UAT / production checklist
 
