@@ -6,16 +6,22 @@ on:
       - p0-8080-probe-20260913
   workflow_dispatch:
 
+permissions:
+  actions: write
+  contents: read
+
 jobs:
-  probe:
+  cleanup-old-uat:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Probe 8080 health
+      - name: Cancel pending old 8000 UAT deploy
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set +e
-          curl -v --connect-timeout 5 --max-time 10             -w '\nHTTP_STATUS=%{http_code}\nCONNECT=%{time_connect}\nTOTAL=%{time_total}\n'             http://136.111.134.128:8080/health
-          CURL_RC=$?
-          echo "CURL_RC=${CURL_RC}"
+          gh api --method POST             repos/pan277942135/Yujian/actions/runs/34742331046/cancel
+          RC=$?
+          echo "CANCEL_RC=$RC"
           exit 0
