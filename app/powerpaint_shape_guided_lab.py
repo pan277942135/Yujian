@@ -1099,7 +1099,7 @@ async def run(request: Request, db=Depends(get_db)):
             completion_mask_bytes = manual_completion_mask_bytes
         if completion_overlay_bytes is None:
             completion_overlay_bytes = _placeholder_png()
-        _safe_persist(test_id, "original.png, original_bytes, "image/png", report)
+        _safe_persist(test_id, "original.png", original_bytes, "image/png", report)
         _safe_persist(test_id, "detector_crop.png", detector_bytes, "image/png", report)
         _safe_persist(test_id, "raw_sam_mask.png", raw_sam_mask_bytes, "image/png", report)
         _safe_persist(test_id, "raw_sam_visible.png", raw_sam_visible_bytes, "image/png", report)
