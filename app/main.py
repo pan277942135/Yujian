@@ -36,8 +36,10 @@ from app.data_policy import (
     truth_filter_clause,
     valid_truth_for_image,
 )
-from app.models import Batch, DatasetVersion, FeedbackEvent, ImageAsset, ReviewEvent
+from app.models import Batch, BatchCropReview, DatasetVersion, FeedbackEvent, ImageAsset, ReviewEvent
 from app.secure import install_access_guard
+from app.presence import FishPresenceResult
+from app.crop_review import _candidate_boxes
 from app.services.manifest_normalizer import ManifestNormalizationError
 from app.services.review_prefill import parse_review_signals, trusted_truth_prefill
 
@@ -69,6 +71,7 @@ class ReviewUpdate(BaseModel):
     review_status: str | None = None
     truth_species: str | None = None
     truth_status: str | None = None
+    accepted_bbox: list[float] | None = Field(default=None, min_length=4, max_length=4)
     notes: str | None = None
     reviewer: str = Field(default="web-review")
 
