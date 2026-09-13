@@ -14,7 +14,7 @@
 <header class="app-nav"></header>
 {% include "_mobile_ux.html" %}
 <main>
-  <div class="top"><div><h1 style="margin:0">Crop Review</h1><div class="muted">只把人工明确确认的 bbox 写入 Crop Dataset；候选框永远只是建议。</div></div><a href="/crop-datasets">返回 Crop Dataset</a></div>
+  <div class="top"><div><h1 style="margin:0">Crop Review</h1><div class="muted">只把人工明确确认的 bbox 写入 Crop Dataset；候选框永远只是建议。</div></div><a href="/datasets/accepted-bbox">返回数据集 accepted_bbox 补确认</a></div>
   <section class="section"><div class="controls"><input id="batch" placeholder="BATCH_C70BA2D53823" /><input id="datasetVersion" placeholder="DS_M1_v0.5" /><select id="status"><option value="REVIEW_REQUIRED">待审核</option><option value="BBOX_REQUIRED">待标注 bbox</option><option value="ACCEPTED">已接受</option><option value="TRAINING_READY">训练就绪</option><option value="REJECTED">已拒绝</option><option value="ALL">全部</option></select><button class="primary" onclick="loadItems()">加载</button><span id="summary" class="muted"></span></div><div id="sourceInfo" class="muted" style="margin-top:8px"></div><div id="banner" class="banner"></div><div class="controls" style="margin-top:10px"><button id="prevPage" onclick="changePage(-1)" disabled>上一页</button><span id="pageInfo" class="muted">第 1 页</span><button id="nextPage" onclick="changePage(1)" disabled>下一页</button></div></section>
   <div id="items" class="grid"></div>
 </main>
