@@ -24,6 +24,7 @@ def test_fish_asset_batch_import_api_and_page_are_registered():
         "closeModal()",
         "closeBtn",
         "closeModalOnBackdrop",
+        ".modal[hidden]{display:none!important}",
     ):
         assert marker in source
     templates.env.from_string(source)
