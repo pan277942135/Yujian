@@ -62,6 +62,17 @@ def add_qa(db, image: ImageAsset, *, presence: str = "single_fish", representati
         )
     )
     db.add(
+        BatchCropReview(
+            batch_id=image.batch_id,
+            image_asset_id=image.id,
+            image_id=image.image_id,
+            accepted_bbox_json="[0.1,0.1,0.8,0.8]",
+            status="ACCEPTED",
+            species_name=image.truth_species,
+            reviewer="smoke",
+        )
+    )
+    db.add(
         ImageFingerprint(
             image_asset_id=image.id,
             batch_id=image.batch_id,
