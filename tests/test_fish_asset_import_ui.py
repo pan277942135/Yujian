@@ -19,6 +19,16 @@ def test_fish_asset_batch_import_api_and_page_are_registered():
         "INVALID",
         "所有图片将进入 DRAFT",
         "Retry Failed",
+        "history-batch",
+        "data-batch-id",
+        "closeModal()",
     ):
         assert marker in source
     templates.env.from_string(source)
+
+
+def test_fish_asset_import_template_has_valid_control_bindings():
+    source, _filename, _uptodate = templates.env.loader.get_source(templates.env, "fish_asset_import.html")
+    assert "data-batch-id" in source
+    assert "history-batch" in source
+    assert "onclick=\\"loadBatch(\\\\'" not in source
