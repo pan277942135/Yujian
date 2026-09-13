@@ -650,7 +650,9 @@ def execute_batch(batch_id: str, payload: ExecuteBatchPayload, db: Session = Dep
     batch.status = "IMPORTING"
     db.commit()
     result = _run_import(db, batch)
-    return {"batch_id": batch.batch_id, "status": batch.status, "summary": _summary(batch), "result": result}
+    payload = _batch_dict(batch, include_items=True)
+    payload["result"] = result
+    return payload
 
 
 @router.post("/{batch_id}/retry")
@@ -664,7 +666,9 @@ def retry_batch(batch_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     batch.status = "IMPORTING"
     db.commit()
     result = _run_import(db, batch, retry_failed=True)
-    return {"batch_id": batch.batch_id, "status": batch.status, "summary": _summary(batch), "result": result}
+    payload = _batch_dict(batch, include_items=True)
+    payload["result"] = result
+    return payload
 
 
 @router.post("/{batch_id}/versions/{version_id}/activate")
