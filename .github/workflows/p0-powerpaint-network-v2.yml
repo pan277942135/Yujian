@@ -84,6 +84,32 @@ jobs:
             exit 20
           fi
 
+          VM_STATUS_NOW="$(gcloud compute instances describe "${VM_NAME}" --project="${FOUND_PROJECT}" --zone="${ZONE}" --format='value(status)')"
+          echo "VM_STATUS_BEFORE_START=${VM_STATUS_NOW}"
+          if [[ "${VM_STATUS_NOW}" != "RUNNING" ]]; then
+            echo "=== START_VM ==="
+            set +e
+            START_OUT="$(gcloud compute instances start "${VM_NAME}" --project="${FOUND_PROJECT}" --zone="${ZONE}" --quiet 2>&1)"
+            START_RC=$?
+            set -e
+            printf '%s\n' "${START_OUT}"
+            echo "START_RC=${START_RC}"
+            if [[ "${START_RC}" -ne 0 ]]; then
+              echo "VM_START_FAILURE"
+              exit "${START_RC}"
+            fi
+            for WAIT_N in 1 2 3 4 5 6 7 8 9 10 11 12; do
+              VM_STATUS_NOW="$(gcloud compute instances describe "${VM_NAME}" --project="${FOUND_PROJECT}" --zone="${ZONE}" --format='value(status)')"
+              echo "VM_STATUS_AFTER_START_${WAIT_N}=${VM_STATUS_NOW}"
+              [[ "${VM_STATUS_NOW}" == "RUNNING" ]] && break
+              sleep 10
+            done
+            if [[ "${VM_STATUS_NOW}" != "RUNNING" ]]; then
+              echo "VM_START_TIMEOUT"
+              exit 21
+            fi
+          fi
+
           echo "GPU_PROJECT_ID=${FOUND_PROJECT}"
           echo "VM_NAME=${VM_NAME}"
           echo "ZONE=${ZONE}"
