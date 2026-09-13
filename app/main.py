@@ -125,6 +125,25 @@ class FeedbackMaterialize(BaseModel):
     limit: int = Field(default=500, ge=1, le=2000)
 
 
+def _bbox(value):
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return None
+    try:
+        result = [float(item) for item in value]
+    except (TypeError, ValueError):
+        return None
+    if not all(0 <= item <= 1 for item in result) or result[2] <= 0 or result[3] <= 0:
+        return None
+    if result[0] + result[2] > 1.00001 or result[1] + result[3] > 1.00001:
+        return None
+    return [round(item, 6) for item in result]
+
+
 def image_dict(
     image: ImageAsset,
     *,
