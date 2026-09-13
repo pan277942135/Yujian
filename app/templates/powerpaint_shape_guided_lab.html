@@ -122,7 +122,7 @@
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const state={items:[],selected:null,prep:null,w:0,h:0,raw:null,add:null,remove:null,refined:null,completion:null,visibleMode:'add',completionMode:'add',visibleHistory:[],completionHistory:[],currentTestId:''};
+const state={items:[],selected:null,prep:null,w:0,h:0,raw:null,add:null,remove:null,refined:null,completion:null,visibleMode:'add',completionMode:'add',visibleHistory:[],completionHistory:[],currentTestId:'',baseTestId:'PSG_20260913_144334_2195'};
 
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function count(m){return m?m.reduce((a,x)=>a+(x?1:0),0):0}
@@ -177,7 +177,7 @@ function updateStats(){
   $('visibleStats').innerHTML='<b>refined_visible_pixels='+refined+'</b><b>visible_add_pixels='+add+'</b><b>visible_remove_pixels='+remove+'</b>';
   $('completionStats').innerHTML='<b>completion_area_pixels='+area+'</b><b>completion_area_ratio='+ratio.toFixed(6)+'</b><b>visible_overlap_pixels='+overlap+'</b>'+(ratio>.35?'<span class="warning">WARNING: ratio &gt; 0.35</span>':'');
   const valid=state.prep&&( $('maskMode').value==='AUTO_V1' || (area>0&&overlap===0&&ratio<=.60) );
-  $('run').disabled=!valid;
+  $('run').disabled=!valid;$('runP25').disabled=!valid;
 }
 function point(e,canvas){const r=canvas.getBoundingClientRect();return {x:(e.clientX-r.left)*state.w/r.width,y:(e.clientY-r.top)*state.h/r.height}}
 function paint(mask,canvas,e,brush,value){
@@ -196,7 +196,7 @@ function renderProgress(stages){$('progress').innerHTML=(stages||[]).map(x=>{con
 function showRunStatus(report,result){const err=report.error||result?.error||{};return (report.result_classification||result?.status||'UNKNOWN')+'\\nTest ID: '+(result?.test_id||report.test_id||'-')+'\\nStage: '+(report.experiment_stage||result?.stage||'-')+'\\nError: '+(err.error_code||'-')+(err.message?' — '+err.message:'')+'\\nReport: '+(report.assets?.report||'-')}
 async function fetchJson(url,options={},kind='REQUEST'){const r=await fetch(url,{credentials:'include',...options});let d={};try{d=await r.json()}catch(e){throw new Error(kind+'_RESPONSE_JSON_ERROR HTTP '+r.status)}if(!r.ok){const e=new Error(kind+'_HTTP_ERROR HTTP '+r.status+': '+JSON.stringify(d.error||d.detail||d));e.payload=d;throw e}return d}
 function renderItems(){$('items').innerHTML=state.items.length?state.items.map((x,i)=>'<button class="item '+(state.selected&&String(state.selected.dataset_item_id)===String(x.dataset_item_id)?'selected':'')+'" onclick="choose('+i+')"><img src="'+esc(x.preview_url)+'" alt="'+esc(x.image_id)+'"><b>'+esc(x.image_id)+'</b><small>'+esc(x.species||'-')+' · '+esc(x.split||'-')+' · item '+esc(x.dataset_item_id)+'</small></button>').join(''):'<span class="muted">没有图片</span>'}
-function choose(i){state.selected=state.items[i]||null;renderItems();$('prepare').disabled=!state.selected;$('run').disabled=true;$('selected').textContent=state.selected?'已选择 '+state.selected.image_id+' · item '+state.selected.dataset_item_id+' · '+(state.selected.species||'-'):'请选择图片'}
+function choose(i){state.selected=state.items[i]||null;renderItems();$('prepare').disabled=!state.selected;$('run').disabled=true;$('runP25').disabled=true;$('selected').textContent=state.selected?'已选择 '+state.selected.image_id+' · item '+state.selected.dataset_item_id+' · '+(state.selected.species||'-'):'请选择图片'}
 async function loadItems(){const v=$('datasetVersion').value;if(!v)return;try{const p=new URLSearchParams({limit:'200'});if($('split').value)p.set('split',$('split').value);state.items=await fetchJson('/api/debug/powerpaint-shape-guided-lab/datasets/'+encodeURIComponent(v)+'/images?'+p,{},'DATASET');state.selected=null;state.prep=null;renderItems();const target=state.items.find(x=>String(x.dataset_item_id)==='5100');if(v==='DS_M1_v0.7'&&target)choose(state.items.indexOf(target))}catch(e){$('status').textContent=String(e)}}
 async function load(){try{const versions=await fetchJson('/api/debug/powerpaint-shape-guided-lab/datasets',{},'DATASET');$('datasetVersion').innerHTML=versions.map(x=>'<option value="'+esc(x.dataset_version)+'">'+esc(x.dataset_version)+' · '+esc(x.image_count)+' 张</option>').join('');const preferred=versions.find(x=>x.dataset_version==='DS_M1_v0.7');if(preferred)$('datasetVersion').value=preferred.dataset_version;await loadItems()}catch(e){$('status').textContent=String(e)}}
 async function prepare(){
