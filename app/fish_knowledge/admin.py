@@ -527,11 +527,30 @@ def _video_dict(row: FishVideo) -> dict:
     }
 
 
-def _cover_dict(row: FishSpeciesCover) -> dict:
+def _draft_preview_url(db: Session | None, image_url: str | None) -> str | None:
+    if db is None or not (image_url or "").startswith("/api/v1/fish/knowledge-media/"):
+        return None
+    # Import lazily because the batch importer also imports these CMS models.
+    from app.fish_knowledge.import_batch import FishKnowledgeAssetVersion
+
+    version = db.scalar(
+        select(FishKnowledgeAssetVersion).where(
+            FishKnowledgeAssetVersion.image_url == image_url,
+            FishKnowledgeAssetVersion.status == "DRAFT",
+        )
+    )
+    if version is None:
+        return None
+    return f"/api/v1/admin/fish/assets/import-batches/{version.batch_id}/versions/{version.id}/preview"
+
+
+def _cover_dict(row: FishSpeciesCover, db: Session | None = None) -> dict:
+    image_url = managed_knowledge_asset_url(row.species_id, "COVER", row.image_url)
     return {
         "id": row.id,
         "species_id": row.species_id,
-        "image_url": managed_knowledge_asset_url(row.species_id, "COVER", row.image_url),
+        "image_url": image_url,
+        "preview_url": _draft_preview_url(db, image_url) or image_url,
         "style": row.style,
         "title": row.title,
         "status": row.status,
@@ -660,9 +679,10 @@ def _publication_missing(db: Session, species: FishSpecies) -> list[str]:
     return missing
 
 
-def _card_dict(row: FishCard) -> dict:
+def _card_dict(row: FishCard, db: Session | None = None) -> dict:
     card_type = normalize_card_type(row.card_type)
     content = parse_card_content(row.description)
+    image_url = managed_knowledge_asset_url(row.species_id, card_type, row.image_url)
     return {
         "id": row.id,
         "species_id": row.species_id,
@@ -671,7 +691,8 @@ def _card_dict(row: FishCard) -> dict:
         # the database field name explicit for Admin clients.
         "type": card_type,
         "title": row.title,
-        "image_url": managed_knowledge_asset_url(row.species_id, card_type, row.image_url),
+        "image_url": image_url,
+        "preview_url": _draft_preview_url(db, image_url) or image_url,
         "description": card_display_description(content, row.description),
         "content": content,
         "sort_order": row.sort_order,
@@ -888,7 +909,7 @@ def get_species_cover(species_id: str, db: Session = Depends(get_db)) -> dict:
     row = _get_species_cover(db, species.id)
     if row is None:
         raise HTTPException(status_code=404, detail="fish species cover not found")
-    return _cover_dict(row)
+    return _cover_dict(row, db)
 
 
 @router.post("/species/{species_id}/cover", status_code=201)
@@ -900,7 +921,7 @@ def create_species_cover(species_id: str, payload: CoverCreate, db: Session = De
     db.add(row)
     _commit(db)
     db.refresh(row)
-    return _cover_dict(row)
+    return _cover_dict(row, db)
 
 
 @router.patch("/species/{species_id}/cover")
@@ -917,7 +938,7 @@ def update_species_cover(species_id: str, payload: CoverPatch, db: Session = Dep
             raise HTTPException(status_code=400, detail="style 不能为空")
         setattr(row, field, value)
     _commit(db)
-    return _cover_dict(row)
+    return _cover_dict(row, db)
 
 
 @router.delete("/species/{species_id}/cover")
@@ -939,7 +960,7 @@ def list_species_cards(species_id: str, db: Session = Depends(get_db)) -> list[d
         .where(FishCard.species_id == species.id)
         .order_by(FishCard.sort_order, FishCard.id)
     ).all()
-    return [_card_dict(row) for row in rows]
+    return [_card_dict(row, db) for row in rows]
 
 
 @router.post("/species/{species_id}/cards", status_code=201)
@@ -960,7 +981,7 @@ def create_species_card(species_id: str, payload: CardCreate, db: Session = Depe
     db.add(row)
     _commit(db)
     db.refresh(row)
-    return _card_dict(row)
+    return _card_dict(row, db)
 
 
 @router.patch("/cards/{card_id}")
@@ -991,7 +1012,7 @@ def update_species_card(card_id: int, payload: CardPatch, db: Session = Depends(
     if "content" in payload.model_fields_set:
         row.description = card_description(payload.content or {})
     _commit(db)
-    return _card_dict(row)
+    return _card_dict(row, db)
 
 
 @router.delete("/cards/{card_id}")
@@ -1241,7 +1262,7 @@ async def upload_fish_asset(
         db.rollback()
         raise HTTPException(status_code=503, detail="鱼鉴素材存储失败") from exc
 
-    result = _cover_dict(row) if normalized_type == "cover" else _card_dict(row)
+    result = _cover_dict(row, db) if normalized_type == "cover" else _card_dict(row, db)
     return {
         **result,
         "asset_type": normalized_type,
@@ -1408,7 +1429,7 @@ async def upload_cms_fish_asset(
             )
         return _cms_asset_error("storage_error", "鱼鉴图片上传失败", status_code=503)
 
-    result = _cover_dict(row) if normalized_type == "COVER" else _card_dict(row)
+    result = _cover_dict(row, db) if normalized_type == "COVER" else _card_dict(row, db)
     return {
         "success": True,
         "url": image_url,
