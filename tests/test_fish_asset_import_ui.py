@@ -5,6 +5,8 @@ from app.main import templates
 def test_fish_asset_batch_import_api_and_page_are_registered():
     paths = app.openapi()["paths"]
     assert "/api/v1/admin/fish/assets/import-batches" in paths
+    assert "/api/v1/admin/fish/assets/import-batches/local" in paths
+    assert "/api/v1/admin/fish/assets/import-batches/{batch_id}/upload" in paths
     assert "/api/v1/admin/fish/assets/import-batches/{batch_id}/scan" in paths
     assert "/api/v1/admin/fish/assets/import-batches/{batch_id}/execute" in paths
     assert "/api/v1/admin/fish/assets/import-batches/{batch_id}/retry" in paths
@@ -15,6 +17,11 @@ def test_fish_asset_batch_import_api_and_page_are_registered():
     for marker in (
         "Fish Knowledge Asset Batch Import V1",
         "扫描并预检",
+        "选择文件夹",
+        "上传文件夹",
+        "上传文件夹格式要求（更新和新增）",
+        "webkitdirectory",
+        "relative_path",
         "Batch Preview",
         "VALID",
         "WARNING",
