@@ -1,0 +1,125 @@
+name: P0 temporary authenticated Shape Guided E2E
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  run:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PROJECT_ID: gemini-api-project-503706
+      PROJECT_NUMBER: '571785698442'
+      REGION: asia-east1
+      SERVICE: yujian-model-factory-console
+      SERVICE_URL: https://yujian-model-factory-console-6254hdioya-de.a.run.app
+      WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+      DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+      GCS_BUCKET: yujian-model-factory-571785698442
+    steps:
+      - name: Authenticate to Google Cloud with GitHub OIDC/WIF
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          version: '>= 416.0.0'
+
+      - name: Run authenticated fixed Shape Guided case
+        shell: bash
+        run: |
+          set -euo pipefail
+          COOKIE_FILE="$(mktemp)"
+          LOGIN_BODY="$(mktemp)"
+          RESPONSE_BODY="$(mktemp)"
+          RESPONSE_HEADERS="$(mktemp)"
+          trap 'rm -f "$COOKIE_FILE" "$LOGIN_BODY" "$RESPONSE_BODY" "$RESPONSE_HEADERS"' EXIT
+
+          set +e
+          CONSOLE_ACCESS_KEY="$(gcloud secrets versions access latest --secret=yujian-console-access-key --project="$PROJECT_ID" 2>/tmp/secret.err)"
+          SECRET_RC=$?
+          set -e
+          if [[ "$SECRET_RC" -ne 0 ]]; then
+            echo "SECRET_ACCESS_RC=$SECRET_RC"
+            echo "SECRET_ACCESS_ERROR_START"
+            sed 's/[[:space:]]\+/ /g' /tmp/secret.err
+            echo "SECRET_ACCESS_ERROR_END"
+            exit 20
+          fi
+
+          LOGIN_STATUS="$(curl -sS --connect-timeout 10 --max-time 30 \
+            -o "$LOGIN_BODY" -D /tmp/login.headers -c "$COOKIE_FILE" \
+            -w '%{http_code}' \
+            -X POST "$SERVICE_URL/login" \
+            --data-urlencode "access_key=$CONSOLE_ACCESS_KEY")"
+          unset CONSOLE_ACCESS_KEY
+          echo "LOGIN_HTTP_STATUS=$LOGIN_STATUS"
+          if [[ "$LOGIN_STATUS" != "303" && "$LOGIN_STATUS" != "200" ]]; then
+            echo "LOGIN_BODY=$(tr '\n' ' ' < "$LOGIN_BODY" | cut -c1-500)"
+            exit 21
+          fi
+
+          START_EPOCH="$(date +%s%3N)"
+          HTTP_STATUS="$(curl -sS --connect-timeout 10 --max-time 900 \
+            -o "$RESPONSE_BODY" -D "$RESPONSE_HEADERS" -b "$COOKIE_FILE" \
+            -w '%{http_code}' \
+            -X POST "$SERVICE_URL/api/debug/powerpaint-shape-guided-lab/run" \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            --data 'dataset_version=DS_M1_v0.7&dataset_item_id=5098&fitting_degrees=0.6,0.8,0.95')"
+          END_EPOCH="$(date +%s%3N)"
+          TOTAL_MS=$((END_EPOCH-START_EPOCH))
+          echo "SHAPE_GUIDED_HTTP_STATUS=$HTTP_STATUS"
+          echo "SHAPE_GUIDED_TOTAL_MS=${TOTAL_MS}"
+
+          python3 - "$RESPONSE_BODY" <<'PY'
+          import json, sys
+          path = sys.argv[1]
+          raw = open(path, encoding="utf-8").read()
+          try:
+              payload = json.loads(raw)
+          except Exception:
+              print("SHAPE_GUIDED_RAW_RESPONSE=" + raw[:10000].replace("\n", " "))
+              raise SystemExit(0)
+          report = payload.get("report") or {}
+          out = {
+              "status": payload.get("status"),
+              "stage": payload.get("stage"),
+              "test_id": payload.get("test_id"),
+              "error": payload.get("error"),
+              "report_status": report.get("status"),
+              "experiment_stage": report.get("experiment_stage"),
+              "result_classification": report.get("result_classification"),
+              "input": report.get("input"),
+              "progress": report.get("progress"),
+              "worker": report.get("worker"),
+              "completion_required": report.get("completion_required"),
+              "timings": report.get("timings"),
+              "results": report.get("results"),
+              "assets": report.get("assets"),
+          }
+          print("SHAPE_GUIDED_RESULT_JSON=" + json.dumps(out, ensure_ascii=False, separators=(",", ":")))
+          print("SHAPE_GUIDED_RAW_RESPONSE=" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))[:12000])
+          with open("/tmp/shape_guided_test_id", "w", encoding="utf-8") as f:
+              f.write(str(payload.get("test_id") or ""))
+          PY
+
+          TEST_ID="$(cat /tmp/shape_guided_test_id 2>/dev/null || true)"
+          if [[ -n "$TEST_ID" ]]; then
+            echo "TEST_ID=$TEST_ID"
+            echo "SHAPE_GUIDED_REQUEST_ARTIFACT_START"
+            gcloud storage cat "gs://$GCS_BUCKET/experiments/powerpaint_shape_guided_lab/v0.3/$TEST_ID/shape_guided_request.json" 2>&1 || true
+            echo "SHAPE_GUIDED_REQUEST_ARTIFACT_END"
+            echo "SHAPE_GUIDED_RESPONSE_ARTIFACT_START"
+            gcloud storage cat "gs://$GCS_BUCKET/experiments/powerpaint_shape_guided_lab/v0.3/$TEST_ID/shape_guided_response.json" 2>&1 || true
+            echo "SHAPE_GUIDED_RESPONSE_ARTIFACT_END"
+          fi
