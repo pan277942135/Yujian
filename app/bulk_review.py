@@ -15,7 +15,7 @@ from app.data_policy import mark_feedback_reviewed, review_group_clause, review_
 from app.db import get_db
 from app.dedupe import ImageFingerprint
 from app.flywheel import species_names
-from app.models import Batch, ImageAsset, ReviewEvent
+from app.models import Batch, BatchCropReview, ImageAsset, ReviewEvent
 from app.presence import FishPresenceResult, effective_status
 
 router = APIRouter(tags=["bulk-review"])
@@ -33,6 +33,7 @@ class BulkReviewItem(BaseModel):
     image_id: str
     review_status: str
     truth_species: str | None = None
+    accepted_bbox: list[float] | None = Field(default=None, min_length=4, max_length=4)
     notes: str | None = None
 
 
@@ -63,6 +64,25 @@ def _presence_dict(row: FishPresenceResult | None) -> dict:
         "fish_count": row.fish_count or 0,
         "fish_score": row.fish_score or 0.0,
     }
+
+
+def _bbox(value) -> list[float] | None:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return None
+    try:
+        result = [float(item) for item in value]
+    except (TypeError, ValueError):
+        return None
+    if not all(0 <= item <= 1 for item in result) or result[2] <= 0 or result[3] <= 0:
+        return None
+    if result[0] + result[2] > 1.00001 or result[1] + result[3] > 1.00001:
+        return None
+    return [round(item, 6) for item in result]
 
 
 def _duplicate_dict(row: ImageFingerprint | None) -> dict:
@@ -130,6 +150,7 @@ def api_bulk_images(
     image_ids = [x.id for x in images]
     presence_rows = {}
     duplicate_rows = {}
+    crop_rows = {}
     if image_ids:
         presence_rows = {
             row.image_asset_id: row
@@ -139,6 +160,10 @@ def api_bulk_images(
             row.image_asset_id: row
             for row in db.scalars(select(ImageFingerprint).where(ImageFingerprint.image_asset_id.in_(image_ids))).all()
         }
+        crop_rows = {
+            row.image_asset_id: row
+            for row in db.scalars(select(BatchCropReview).where(BatchCropReview.image_asset_id.in_(image_ids))).all()
+        }
 
     filtered = []
     for image in images:
@@ -146,6 +171,10 @@ def api_bulk_images(
         if presence and p["status"] != presence:
             continue
         d = _duplicate_dict(duplicate_rows.get(image.id))
+        crop = crop_rows.get(image.id)
+        candidate = _bbox(crop.candidate_bbox_json) if crop else None
+        accepted = _bbox(crop.accepted_bbox_json) if crop else None
+        bbox_confirmed = bool(crop and crop.status in {"ACCEPTED", "TRAINING_READY"} and accepted)
         filtered.append(
             {
                 "image_id": image.image_id,
@@ -156,6 +185,9 @@ def api_bulk_images(
                 "notes": image.notes or "",
                 "presence": p,
                 "duplicate": d,
+                "candidate_bbox": candidate,
+                "accepted_bbox": accepted,
+                "bbox_status": "ACCEPTED" if bbox_confirmed else ("CANDIDATE" if candidate else "MISSING"),
             }
         )
     total = len(filtered)
