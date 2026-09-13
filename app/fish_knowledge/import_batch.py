@@ -71,7 +71,7 @@ class FishAssetImportBatch(Base):
 
     items = relationship(
         "FishAssetImportItem",
-        primaryjoin="FishAssetImportBatch.batch_id == foreign(FishAssetImportItem.batch_id)",
+        primaryjoin=lambda: FishAssetImportBatch.batch_id == FishAssetImportItem.batch_id,
         cascade="all, delete-orphan",
         order_by="FishAssetImportItem.id",
     )
