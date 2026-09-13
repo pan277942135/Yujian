@@ -22,8 +22,8 @@
     .preview-grid img,.columns figure img{width:100%;height:220px;object-fit:contain;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px}
     figcaption{font-weight:700;margin-top:8px}.toolrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}.toolrow label{font-size:13px;font-weight:700}
     .toolrow input[type=range]{width:170px}.toolrow .active{background:#2563eb;color:#fff;border-color:#2563eb}
-    .editor-wrap{position:relative;width:100%;max-width:620px;min-height:260px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden}
-    .editor-wrap img{display:block;width:100%;height:auto;max-height:520px;object-fit:contain}.editor-wrap canvas{position:absolute;left:0;top:0;width:100%;height:100%;touch-action:none;cursor:crosshair}
+    .editor-wrap{position:relative;width:100%;max-width:620px;aspect-ratio:1/1;min-height:0;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden}
+    .editor-wrap img{display:block;width:100%;height:100%;object-fit:contain}.editor-wrap canvas{position:absolute;left:0;top:0;width:100%;height:100%;touch-action:none;cursor:crosshair}
     .compare{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.compare img{width:100%;height:180px;object-fit:contain;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px}
     .stats{display:flex;gap:18px;flex-wrap:wrap;font-size:13px}.stats b{color:#0f766e}.warning{color:#b45309}.error{color:#b91c1c}
     .json{max-height:620px;overflow:auto;background:#0f172a;color:#dbeafe;padding:14px;border-radius:10px;white-space:pre-wrap;word-break:break-word}
@@ -186,7 +186,7 @@ async function prepare(){
   if(!state.selected)return;$('prepare').disabled=true;$('run').disabled=true;$('status').textContent='PREPARE_RUNNING\\nInput → Detector → Raw SAM';try{
     const form=new URLSearchParams({dataset_version:state.selected.dataset_version,dataset_item_id:String(state.selected.dataset_item_id)});
     const d=await fetchJson('/api/debug/powerpaint-shape-guided-lab/prepare',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form},'PREPARE');
-    const rm=await readMask(d.raw_sam_mask);state.w=rm.w;state.h=rm.h;state.originalUrl=d.preview_original;state.raw=rm.mask;state.add=blank();state.remove=blank();state.refined=new Uint8Array(state.raw);state.completion=blank();state.visibleHistory=[];state.completionHistory=[];state.prep=d;
+    const rm=await readMask(d.raw_sam_mask);state.w=rm.w;state.h=rm.h;state.originalUrl=d.preview_original;$('visibleEditorWrap').style.aspectRatio=state.w+'/'+state.h;$('completionEditorWrap').style.aspectRatio=state.w+'/'+state.h;state.raw=rm.mask;state.add=blank();state.remove=blank();state.refined=new Uint8Array(state.raw);state.completion=blank();state.visibleHistory=[];state.completionHistory=[];state.prep=d;
     setImg('rawSamPreview',d.preview_raw_sam);setImg('rawSamMaskPreview',d.raw_sam_mask);setImg('original',d.preview_original);setImg('visibleEditorImage',d.preview_raw_sam);setImg('completionOriginal',d.preview_original);setImg('completionEditorImage',d.preview_original);setImg('completionVisible',maskDataUrl(state.refined));
     $('visibleCanvas').width=state.w;$('visibleCanvas').height=state.h;$('completionCanvas').width=state.w;$('completionCanvas').height=state.h;
     await recomputeVisible();recomputeCompletion();renderProgress(d.report.progress||[]);$('report').textContent=JSON.stringify(d.report,null,2);$('status').textContent='RAW_SAM_READY\\nTest ID: '+d.test_id+'\\n请在 B2 和 C 手工编辑后运行 PowerPaint';$('run').disabled=true;
