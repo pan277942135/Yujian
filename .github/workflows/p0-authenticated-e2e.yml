@@ -1,0 +1,129 @@
+name: P0 Authenticated Shape Guided E2E
+
+on:
+  push:
+    paths:
+      - .github/workflows/p0-authenticated-e2e.yml
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: yujian-p0-authenticated-e2e
+  cancel-in-progress: true
+
+env:
+  PROJECT_ID: gemini-api-project-503706
+  REGION: asia-east1
+  SERVICE: yujian-model-factory-console
+  WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+  DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+  GCS_BUCKET: yujian-model-factory-571785698442
+
+jobs:
+  authenticated-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: uat
+    steps:
+      - name: Authenticate to Google Cloud with GitHub OIDC/WIF
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          version: '>= 416.0.0'
+
+      - name: Read serving revision and runtime contract
+        id: runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          SERVICE_JSON="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json)"
+          python3 - "$SERVICE_JSON" <<'PY'
+          import json
+          import os
+          import sys
+          data = json.loads(sys.argv[1])
+          metadata = data.get("metadata") or {}
+          annotations = metadata.get("annotations") or {}
+          status = data.get("status") or {}
+          revision = annotations.get("serving.knative.dev/lastPinnedRevision") or status.get("latestReadyRevisionName") or status.get("latestCreatedRevisionName") or "unknown"
+          containers = ((data.get("spec") or {}).get("template") or {}).get("spec", {}).get("containers") or []
+          env = (containers[0].get("env") if containers else []) or []
+          values = {item.get("name"): item.get("value", "") for item in env}
+          print("CLOUD_RUN_REVISION=" + revision)
+          print("APP_GIT_COMMIT=" + values.get("APP_GIT_COMMIT", "unknown"))
+          print("FISH_COMPLETION_WORKER_URL=" + values.get("FISH_COMPLETION_WORKER_URL", "unknown"))
+          print("SERVICE_URL=https://yujian-model-factory-console-571785698442.asia-east1.run.app")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write("service_url=https://yujian-model-factory-console-571785698442.asia-east1.run.app\n")
+              out.write("revision=" + revision + "\n")
+              out.write("app_git_commit=" + values.get("APP_GIT_COMMIT", "unknown") + "\n")
+              out.write("worker_url=" + values.get("FISH_COMPLETION_WORKER_URL", "unknown") + "\n")
+          PY
+
+      - name: Authenticated Shape Guided fixed case
+        env:
+          SERVICE_URL: ${{ steps.runtime.outputs.service_url }}
+          REVISION: ${{ steps.runtime.outputs.revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          COOKIE_FILE="$(mktemp)"
+          LOGIN_BODY="$(mktemp)"
+          RESPONSE_BODY="$(mktemp)"
+          trap 'rm -f "$COOKIE_FILE" "$LOGIN_BODY" /tmp/login.headers /tmp/shape_guided_test_id' EXIT
+
+          CONSOLE_ACCESS_KEY="$(gcloud secrets versions access latest --secret=yujian-console-access-key --project="$PROJECT_ID")"
+          LOGIN_STATUS="$(curl -sS --connect-timeout 10 --max-time 30             -o "$LOGIN_BODY" -D /tmp/login.headers -c "$COOKIE_FILE"             -w '%{http_code}' -X POST "$SERVICE_URL/login"             --data-urlencode "access_key=$CONSOLE_ACCESS_KEY")"
+          unset CONSOLE_ACCESS_KEY
+          echo "AUTH_LOGIN_HTTP_STATUS=$LOGIN_STATUS"
+          if [[ "$LOGIN_STATUS" != "303" && "$LOGIN_STATUS" != "200" ]]; then
+            echo "AUTH_LOGIN_BODY=$(tr '\n' ' ' < "$LOGIN_BODY" | cut -c1-500)"
+            exit 21
+          fi
+
+          START_EPOCH="$(date +%s%3N)"
+          HTTP_STATUS="$(curl -sS --connect-timeout 10 --max-time 900             -o "$RESPONSE_BODY" -b "$COOKIE_FILE"             -w '%{http_code}' -X POST             "$SERVICE_URL/api/debug/powerpaint-shape-guided-lab/run"             -H 'Content-Type: application/x-www-form-urlencoded'             --data 'dataset_version=DS_M1_v0.7&dataset_item_id=5098&fitting_degrees=0.6,0.8,0.95')"
+          END_EPOCH="$(date +%s%3N)"
+          echo "SHAPE_GUIDED_HTTP_STATUS=$HTTP_STATUS"
+          echo "SHAPE_GUIDED_TOTAL_MS=$((END_EPOCH-START_EPOCH))"
+
+          python3 - "$RESPONSE_BODY" "$REVISION" <<'PY'
+          import json
+          import sys
+          raw = open(sys.argv[1], encoding="utf-8").read()
+          revision = sys.argv[2]
+          try:
+              payload = json.loads(raw)
+          except Exception:
+              print("SHAPE_GUIDED_RAW_RESPONSE=" + raw[:16000].replace("\n", " "))
+              raise SystemExit(23)
+          report = payload.get("report") or {}
+          print("CLOUD_RUN_REVISION=" + revision)
+          print("NEW_PSG_TEST_ID=" + str(payload.get("test_id") or ""))
+          print("PIPELINE_STATUS=" + str(payload.get("status") or ""))
+          print("PIPELINE_STAGE=" + str(payload.get("stage") or ""))
+          print("PIPELINE_ERROR=" + str(payload.get("error") or ""))
+          print("REPORT_JSON=" + json.dumps(report, ensure_ascii=False, separators=(",", ":"))[:30000])
+          open("/tmp/shape_guided_test_id", "w", encoding="utf-8").write(str(payload.get("test_id") or ""))
+          PY
+
+          TEST_ID="$(cat /tmp/shape_guided_test_id 2>/dev/null || true)"
+          if [[ -n "$TEST_ID" ]]; then
+            echo "SHAPE_GUIDED_REQUEST_ARTIFACT_START"
+            gcloud storage cat "gs://$GCS_BUCKET/experiments/powerpaint_shape_guided_lab/v0.3/$TEST_ID/shape_guided_request.json" 2>&1 || true
+            echo "SHAPE_GUIDED_REQUEST_ARTIFACT_END"
+            echo "SHAPE_GUIDED_RESPONSE_ARTIFACT_START"
+            gcloud storage cat "gs://$GCS_BUCKET/experiments/powerpaint_shape_guided_lab/v0.3/$TEST_ID/shape_guided_response.json" 2>&1 || true
+            echo "SHAPE_GUIDED_RESPONSE_ARTIFACT_END"
+          fi
+
+          [[ "$HTTP_STATUS" == "200" ]]
