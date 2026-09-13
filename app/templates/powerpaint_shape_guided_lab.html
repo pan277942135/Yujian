@@ -249,7 +249,7 @@ $('visibleAdd').onclick=()=>{state.visibleMode='add';$('visibleAdd').classList.a
 $('completionAdd').onclick=()=>{state.completionMode='add';$('completionAdd').classList.add('active');$('completionErase').classList.remove('active')};$('completionErase').onclick=()=>{state.completionMode='erase';$('completionErase').classList.add('active');$('completionAdd').classList.remove('active')};
 $('visibleUndo').onclick=undoVisible;$('visibleClear').onclick=()=>{state.add=blank();state.remove=blank();recomputeVisible()};$('visibleReset').onclick=()=>{state.add=blank();state.remove=blank();recomputeVisible()};$('completionUndo').onclick=undoCompletion;$('completionClear').onclick=()=>{state.completion=blank();recomputeCompletion()};
 $('visibleBrush').oninput=e=>$('visibleBrushValue').textContent=e.target.value+' px';$('completionBrush').oninput=e=>$('completionBrushValue').textContent=e.target.value+' px';
-$('datasetVersion').onchange=loadItems;$('split').onchange=loadItems;$('prepare').onclick=prepare;$('run').onclick=run;wireCanvas('visibleCanvas','visible');wireCanvas('completionCanvas','completion');resetProgress();load();
+$('datasetVersion').onchange=loadItems;$('split').onchange=loadItems;$('prepare').onclick=prepare;$('run').onclick=run;$('runP25').onclick=runP25;wireCanvas('visibleCanvas','visible');wireCanvas('completionCanvas','completion');resetProgress();load();
 </script>
 </body>
 </html>
