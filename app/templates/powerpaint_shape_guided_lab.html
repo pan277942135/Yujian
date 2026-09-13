@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PowerPaint Shape Guided Lab P2</title>
+  <title>PowerPaint Shape Guided Lab P2.5</title>
   <style>
     body{margin:0;background:#f6f8fb;color:#172033;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
     main{max-width:1400px;margin:0 auto;padding:28px 20px 60px}h1{margin:12px 0 6px;font-size:30px}.muted{color:#667085}
@@ -35,18 +35,20 @@
 <body>
 <header>{% include "_mobile_ux.html" %}</header>
 <main>
-  <h1>PowerPaint Shape Guided Lab P2</h1>
-  <p class="muted">固定样本支持：B1 Raw SAM → B2 Refined Visible Fish → C Manual Completion Mask V2 → PowerPaint 0.8 → Final Compose。</p>
+  <h1>PowerPaint Shape Guided Lab P2.5</h1>
+  <p class="muted">Visual Quality Isolation：复用固定 Manual V2 Mask，独立比较 Original / Refined Visible / Completion Mask / Hard Compose / Feather Compose。</p>
 
   <section class="card">
     <div class="toolbar">
       <label>Dataset Freeze <select id="datasetVersion"></select></label>
       <label>Split <select id="split"><option value="">全部</option><option value="test">test</option><option value="train">train</option><option value="val">val</option></select></label>
       <label>Mask Mode <select id="maskMode"><option value="MANUAL_V2" selected>MANUAL_V2</option><option value="AUTO_V1">AUTO_V1</option></select></label>
-      <button id="prepare" class="primary" disabled>准备 B1 Raw SAM</button>
+      <label>Base Test ID <input id="baseTestId" value="PSG_20260913_144334_2195" size="24"></label>
+      <button id="prepare" class="primary" disabled>准备/载入固定 Mask</button>
       <button id="run" class="primary" disabled>运行 PowerPaint 0.8</button>
+      <button id="runP25" class="primary" disabled>运行 P2.5 三档对比</button>
     </div>
-    <div class="status">Task Mode: <code>SHAPE_GUIDED</code> · Fitting Degree: <b>0.8</b> · Prompt ID: <code>FIXED_FISH_SHAPE_GUIDED_V0.3.1</code></div>
+    <div class="status">Task Mode: <code>SHAPE_GUIDED</code> · Prompt ID: <code>FIXED_FISH_SHAPE_GUIDED_V0.3.1</code> · P2.5 fitting degrees: <b>0.6 / 0.8 / 0.95</b></div>
     <div id="selected" class="muted status">请选择图片</div><div id="status" class="status muted"></div>
   </section>
 
