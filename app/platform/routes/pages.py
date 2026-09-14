@@ -31,11 +31,11 @@ PLATFORM_PAGES = (
     PlatformPage("/platform/model/registry", "platform/model_registry.html", "模型仓库", "模型工厂", "查看模型版本、指标和发布状态。", "/api/platform/models"),
     PlatformPage("/platform/model/evaluation", "platform/model_evaluation.html", "模型评估", "模型工厂", "查看指标、混淆关系和错误案例。", "/api/platform/models/{model_id}/evaluation"),
     PlatformPage("/platform/pipeline", "platform/pipeline.html", "智能流水线", "智能流水线", "追踪一张鱼照片如何经过 AI 节点生成资产。", "/api/platform/pipelines"),
-    PlatformPage("/platform/assets", "platform/placeholder.html", "数字资产工厂", "数字资产工厂", "查看原图、Mask、透明鱼和 Sticker 资产。", "/api/platform/assets"),
-    PlatformPage("/platform/knowledge", "platform/placeholder.html", "鱼类知识库", "鱼类知识库", "复用现有 Fish Knowledge CMS 数据。", "/api/platform/knowledge"),
-    PlatformPage("/platform/habitat", "platform/placeholder.html", "渔境生态", "渔境生态", "管理鱼缸、鱼塘、湖湾等渔境生态配置。", "/api/platform/habitat"),
-    PlatformPage("/platform/system/tasks", "platform/placeholder.html", "任务中心", "系统管理", "统一查看训练、流水线和资产任务。", "/api/platform/system/tasks"),
-    PlatformPage("/platform/system/logs", "platform/placeholder.html", "日志中心", "系统管理", "查看 Platform 操作、警告和失败记录。", "/api/platform/system/logs"),
+    PlatformPage("/platform/assets", "platform/assets.html", "数字资产工厂", "数字资产工厂", "查看原图、Mask、透明鱼和 Sticker 资产。", "/api/platform/assets"),
+    PlatformPage("/platform/knowledge", "platform/knowledge.html", "鱼类知识库", "鱼类知识库", "复用现有 Fish Knowledge CMS 数据。", "/api/platform/knowledge"),
+    PlatformPage("/platform/habitat", "platform/habitat.html", "渔境生态", "渔境生态", "管理鱼缸、鱼塘、湖湾等渔境生态配置。", "/api/platform/habitat"),
+    PlatformPage("/platform/system/tasks", "platform/system_tasks.html", "任务中心", "系统管理", "统一查看训练、流水线和资产任务。", "/api/platform/system/tasks"),
+    PlatformPage("/platform/system/logs", "platform/system_logs.html", "日志中心", "系统管理", "查看 Platform 操作、警告和失败记录。", "/api/platform/system/logs"),
 )
 
 

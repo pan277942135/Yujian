@@ -1,0 +1,11 @@
+{% extends "platform/base.html" %}
+{% block content %}
+<div class="page-heading"><div><h1>渔境生态</h1><p>V1 提供场景配置入口，先统一容量、资源和生态规则，暂不影响 App 渲染。</p></div><div class="page-actions"><span class="status-tag status-neutral">V1 配置预留</span></div></div>
+<section class="panel"><div class="panel-heading"><div><h2>场景等级</h2><p><span class="code">/api/platform/habitat</span></p></div></div><div id="habitatState"><div class="loading">加载中…</div></div></section>
+{% endblock %}
+{% block scripts %}
+<script>
+async function loadHabitat(){const target=document.getElementById('habitatState');try{const rows=await platformFetch('/api/platform/habitat');target.innerHTML=`<div class="table-wrap"><table class="data-table"><thead><tr><th>场景等级</th><th>名称</th><th>容量</th><th>背景资源</th><th>生态规则</th></tr></thead><tbody>${rows.map(row=>`<tr><td>Lv.${esc(row.level)}</td><td><strong>${esc(row.name)}</strong></td><td>${esc(row.capacity)} 条鱼</td><td>${esc(row.resources)}</td><td>${esc(row.rules)}</td></tr>`).join('')}</tbody></table></div>`}catch(error){renderState(target,'error',platformError(error))}}
+loadHabitat();
+</script>
+{% endblock %}

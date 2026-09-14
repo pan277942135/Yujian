@@ -1,0 +1,11 @@
+{% extends "platform/base.html" %}
+{% block content %}
+<div class="page-heading"><div><h1>日志中心</h1><p>记录 Platform 适配层的操作、警告和失败原因。</p></div><button class="button" onclick="loadLogs()">刷新</button></div>
+<section class="panel"><div class="panel-heading"><div><h2>运行记录</h2><p><span class="code">/api/platform/system/logs</span></p></div></div><div id="logState"><div class="loading">加载中…</div></div></section>
+{% endblock %}
+{% block scripts %}
+<script>
+async function loadLogs(){const target=document.getElementById('logState');renderState(target,'loading');try{const rows=await platformFetch('/api/platform/system/logs');target.innerHTML=rows.length?`<div class="table-wrap"><table class="data-table"><thead><tr><th>时间</th><th>操作</th><th>资源</th><th>状态</th><th>消息</th></tr></thead><tbody>${rows.map(row=>`<tr><td>${esc(row.created_at||'—')}</td><td>${esc(row.operation)}</td><td>${esc(row.resource_type)} · ${esc(row.resource_id||'—')}</td><td><span class="status-tag status-${String(row.status||'').toLowerCase()}"><span class="status-dot"></span>${esc(row.status)}</span></td><td>${esc(row.message||'—')}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">暂无日志</div>'}catch(error){renderState(target,'error',platformError(error))}}
+loadLogs();
+</script>
+{% endblock %}

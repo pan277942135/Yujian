@@ -1,0 +1,16 @@
+{% extends "platform/base.html" %}
+{% block content %}
+<div class="page-heading"><div><h1>鱼类知识库</h1><p>复用现有 Fish Knowledge CMS，提供基础信息、识别特征、钓法和相似鱼的统一入口。</p></div><div class="page-actions"><a class="button primary" href="/fish-knowledge">打开知识库 CMS</a><button class="button" onclick="loadKnowledge()">刷新</button></div></div>
+<section class="panel"><div class="panel-heading"><div><h2>鱼种</h2><p><span class="code">/api/platform/knowledge</span></p></div></div><div id="knowledgeState"><div class="loading">加载中…</div></div></section>
+<section id="knowledgeDetail" class="panel" style="margin-top:16px" hidden><div class="panel-heading"><div><h2>知识详情</h2><p id="knowledgeDetailTitle"></p></div><button class="button" onclick="document.getElementById('knowledgeDetail').hidden=true">关闭</button></div><div id="knowledgeDetailState"></div></section>
+{% endblock %}
+{% block scripts %}
+<script>
+const knowledgeState=document.getElementById('knowledgeState');
+function renderKnowledge(rows){if(!rows.length){knowledgeState.innerHTML='<div class="empty">暂无鱼类知识数据</div>';return}knowledgeState.innerHTML=`<div class="table-wrap"><table class="data-table"><thead><tr><th>鱼种</th><th>图片</th><th>状态</th><th>知识内容</th><th></th></tr></thead><tbody>${rows.map(row=>`<tr><td><strong>${esc(row.species)}</strong><br><span class="muted">${esc(row.id)}</span></td><td>${esc(row.images??0)}</td><td><span class="status-tag status-${String(row.status||'').toLowerCase()}"><span class="status-dot"></span>${esc(row.status)}</span></td><td>特征 ${row.profile_ready?'✓':'—'} · 钓法 ${row.fishing_ready?'✓':'—'} · 卡片 ${esc(row.cards_ready??0)}</td><td><button class="button" onclick="showKnowledge('${esc(row.id)}')">查看详情</button></td></tr>`).join('')}</tbody></table></div>`}
+function renderKnowledgeDetail(data){const tabs=data.tabs||{};document.getElementById('knowledgeDetailState').innerHTML=`<div class="inline" style="justify-content:space-between"><strong>${esc(data.species)}</strong><span class="code">${esc(data.status)}</span></div><div class="stat-grid" style="margin-top:14px"><div class="stat"><strong>${esc(tabs['基础信息']?.category||'—')}</strong><span>基础信息</span></div><div class="stat"><strong>${esc((tabs['识别特征']?.features||[]).length)}</strong><span>识别特征</span></div><div class="stat"><strong>${esc((tabs['钓法']?.method||[]).length)}</strong><span>钓法条目</span></div></div><div class="panel" style="margin-top:14px;padding:15px"><div class="inline" style="gap:16px"><strong>基础信息</strong><span>识别特征</span><span>钓法</span><span>相似鱼</span></div><p class="muted">${esc(tabs['基础信息']?.summary||'暂无摘要')}</p></div>`}
+async function showKnowledge(id){const panel=document.getElementById('knowledgeDetail');panel.hidden=false;document.getElementById('knowledgeDetailTitle').textContent=id;const target=document.getElementById('knowledgeDetailState');renderState(target,'loading');try{renderKnowledgeDetail(await platformFetch(`/api/platform/knowledge/${encodeURIComponent(id)}`))}catch(error){renderState(target,'error',platformError(error))}}
+async function loadKnowledge(){renderState(knowledgeState,'loading');try{renderKnowledge(await platformFetch('/api/platform/knowledge'))}catch(error){renderState(knowledgeState,'error',platformError(error))}}
+loadKnowledge();
+</script>
+{% endblock %}

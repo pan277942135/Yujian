@@ -1,0 +1,11 @@
+{% extends "platform/base.html" %}
+{% block content %}
+<div class="page-heading"><div><h1>任务中心</h1><p>训练任务、Pipeline 任务和资产任务统一查看。</p></div><button class="button" onclick="loadTasks()">刷新</button></div>
+<section class="panel"><div class="panel-heading"><div><h2>全部任务</h2><p><span class="code">/api/platform/system/tasks</span></p></div></div><div id="taskState"><div class="loading">加载中…</div></div></section>
+{% endblock %}
+{% block scripts %}
+<script>
+async function loadTasks(){const target=document.getElementById('taskState');renderState(target,'loading');try{const rows=await platformFetch('/api/platform/system/tasks');target.innerHTML=rows.length?`<div class="table-wrap"><table class="data-table"><thead><tr><th>任务</th><th>类型</th><th>状态</th><th>耗时</th><th>时间</th></tr></thead><tbody>${rows.map(row=>`<tr><td><strong class="code">${esc(row.id)}</strong></td><td>${esc(row.type)}</td><td><span class="status-tag status-${String(row.status||'').toLowerCase()}"><span class="status-dot"></span>${esc(row.status)}</span></td><td>${row.duration_ms==null?'—':esc(row.duration_ms+' ms')}</td><td>${esc(row.created_at||'—')}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">暂无任务</div>'}catch(error){renderState(target,'error',platformError(error))}}
+loadTasks();
+</script>
+{% endblock %}
