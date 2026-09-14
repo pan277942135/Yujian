@@ -882,6 +882,40 @@ def get_random_50_qa(dataset_name: str) -> dict[str, Any]:
     return qa
 
 
+def _qa_manifest_row_key(row: dict[str, Any]) -> tuple[str, str]:
+    return (
+        str(row.get("image_id") or row.get("id") or "").strip(),
+        str(row.get("crop_path") or "").strip(),
+    )
+
+
+def _qa_enrich_frozen_rows(client, bucket, dataset_name: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Enrich legacy manifest.csv rows from the same frozen audit artifact.
+
+    The sample universe remains manifest.csv. manifest_all.csv is only used to
+    restore split/audit columns that were absent from an older frozen export.
+    """
+    if all(_qa_split(row) for row in rows):
+        return rows
+    audit_blob = bucket.blob(f"datasets/{dataset_name}/manifest_all.csv")
+    if not audit_blob.exists(client):
+        return rows
+    audit_rows = list(csv.DictReader(audit_blob.download_as_text(encoding="utf-8")))
+    by_key = {_qa_manifest_row_key(row): row for row in audit_rows}
+    enriched: list[dict[str, Any]] = []
+    for row in rows:
+        current = dict(row)
+        audit = by_key.get(_qa_manifest_row_key(row))
+        if audit:
+            for field in MANIFEST_FIELDS:
+                if not str(current.get(field) or "").strip() and str(audit.get(field) or "").strip():
+                    current[field] = audit[field]
+        if not str(current.get("quality_status") or "").strip():
+            current["quality_status"] = "GOOD"
+        enriched.append(current)
+    return enriched
+
+
 def start_random_50_qa(dataset_name: str, db) -> dict[str, Any]:
     dataset = db.get(DatasetVersion, dataset_name)
     if dataset is None:
@@ -896,6 +930,7 @@ def start_random_50_qa(dataset_name: str, db) -> dict[str, Any]:
     if not manifest_blob.exists(client):
         raise FileNotFoundError(f"{QA_SOURCE_MANIFEST} not found")
     rows = list(csv.DictReader(manifest_blob.download_as_text(encoding="utf-8")))
+    rows = _qa_enrich_frozen_rows(client, bucket, dataset_name, rows)
     selected = select_random_50_qa_rows(rows, dataset_name)
     return _persist_qa(dataset_name, _qa_payload(dataset_name, selected), db)
 
