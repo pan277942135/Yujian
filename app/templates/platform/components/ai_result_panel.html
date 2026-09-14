@@ -1,0 +1,26 @@
+{% macro ai_result_panel(target_id='aiResultPanel') -%}
+<section class="panel ai-panel" id="{{ target_id }}" aria-label="AI结果">
+  <div class="panel-heading"><div><h2>AI 结果</h2><p>先看模型结论，再决定是否需要人工处理。</p></div></div>
+  <div class="empty" data-ai-empty>选择一张图片查看详情</div>
+  <div data-ai-content hidden>
+    <div class="bbox-preview" data-ai-preview>
+      <img data-ai-image alt="待审核图片">
+      <span class="bbox-box" data-ai-bbox hidden></span>
+    </div>
+    <dl>
+      <dt>预测</dt><dd data-ai-species>—</dd>
+      <dt>置信度</dt><dd data-ai-confidence>—</dd>
+      <dt>质量</dt><dd data-ai-quality>—</dd>
+      <dt>模型版本</dt><dd data-ai-model>—</dd>
+      <dt>审核状态</dt><dd data-ai-status>—</dd>
+      <dt>BBox</dt><dd data-ai-bbox-status>—</dd>
+    </dl>
+    <div class="review-actions" style="margin-top:15px">
+      <button class="button primary" type="button" data-single-action="confirm">确认正确</button>
+      <button class="button" type="button" data-single-action="species">修改鱼种</button>
+      <button class="button" type="button" data-single-action="bbox">调整框</button>
+      <button class="button danger" type="button" data-single-action="reject">删除</button>
+    </div>
+  </div>
+</section>
+{%- endmacro %}

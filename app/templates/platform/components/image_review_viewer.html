@@ -1,0 +1,6 @@
+{% macro image_review_viewer(target_id='imageReviewViewer') -%}
+<div id="{{ target_id }}" class="panel" hidden>
+  <div class="panel-heading"><div><h2>图片详情</h2><p>仅在选中时加载原图，列表默认使用懒加载缩略图。</p></div></div>
+  <div class="bbox-preview"><img data-viewer-image alt="图片详情"><span class="bbox-box" data-viewer-bbox hidden></span></div>
+</div>
+{%- endmacro %}
