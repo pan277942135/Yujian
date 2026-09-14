@@ -205,7 +205,9 @@ def _set_job(job_id, **values):
 
 
 def _persist_job(job_id, **values):
-    job = _set_job(job_id, updated_at=_now(), **values)
+    values = dict(values)
+    values.setdefault("updated_at", _now())
+    job = _set_job(job_id, **values)
     _client, bucket = _storage()
     _write_json(bucket, _job_name(job_id), job)
     return job
