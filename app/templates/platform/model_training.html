@@ -1,0 +1,76 @@
+{% extends "platform/base.html" %}
+{% from "platform/components/status_tag.html" import status_tag %}
+{% block content %}
+<div class="page-heading">
+  <div><h1>模型训练</h1><p>选择已准备好的数据集和模型类型；高级参数默认折叠，训练仍由现有 Trainer 执行。</p></div>
+  <div class="page-actions"><a class="button" href="/platform/model/registry">模型仓库</a></div>
+</div>
+<div class="form-grid">
+  <section class="panel">
+    <div class="panel-heading"><div><h2>创建训练</h2><p>简单模式</p></div><span class="status-tag status-neutral">复用现有训练</span></div>
+    <form id="trainingForm">
+      <div class="field"><label for="trainDataset">数据集</label><select id="trainDataset" required><option value="">加载中…</option></select><small>仅可选择已冻结或准备训练的数据集</small></div>
+      <div class="field" style="margin-top:13px"><label for="modelType">模型类型</label><select id="modelType"><option value="classifier">Classifier 分类模型</option><option value="detector">Detector 检测模型</option></select></div>
+      <details style="margin-top:16px">
+        <summary style="cursor:pointer;font-weight:800;color:#365a50">高级参数</summary>
+        <div class="form-grid" style="margin-top:13px">
+          <div class="field"><label for="epoch">Epoch</label><input id="epoch" type="number" min="1" max="100" value="12"></div>
+          <div class="field"><label for="batchSize">Batch Size</label><input id="batchSize" type="number" min="1" max="128" value="16"></div>
+          <div class="field"><label for="imageSize">Image Size</label><input id="imageSize" type="number" min="128" max="512" value="224"></div>
+          <div class="field"><label for="learningRate">Learning Rate</label><input id="learningRate" type="number" min="0.00001" max="0.1" step="0.00001" value="0.001"></div>
+          <div class="field"><label for="freeze">Freeze</label><select id="freeze"><option value="true">是</option><option value="false">否</option></select></div>
+          <div class="field"><label for="seed">Seed</label><input id="seed" type="number" value="20260827"></div>
+        </div>
+      </details>
+      <div id="trainingNotice" style="margin-top:14px"></div>
+      <div class="form-actions"><button class="button primary" type="submit">开始训练</button></div>
+    </form>
+  </section>
+  <section class="panel">
+    <div class="panel-heading"><div><h2>训练说明</h2><p>生产闭环中的模型阶段</p></div></div>
+    <div class="notice">训练前请先在数据审核中心处理低置信和 BBox 异常样本。<br>通过后，模型结果会和上一版本对比，并生成下一轮采集建议。</div>
+    <div class="timeline" style="margin-top:22px"><div class="timeline-step success"><div>1</div><strong>数据集</strong><small>冻结且可追溯</small></div><div class="timeline-step"><div>2</div><strong>训练</strong><small>现有 Trainer</small></div><div class="timeline-step"><div>3</div><strong>评估</strong><small>指标与错误案例</small></div></div>
+  </section>
+</div>
+<section class="panel" style="margin-top:16px">
+  <div class="panel-heading"><div><h2>历史任务列表</h2><p><span class="code">/api/platform/training/jobs</span></p></div><button class="button" type="button" onclick="loadTrainingJobs()">刷新</button></div>
+  <div id="trainingJobs"><div class="loading">加载中…</div></div>
+</section>
+<section id="trainingReport" class="panel" style="margin-top:16px" hidden>
+  <div class="panel-heading"><div><h2>训练结果报告</h2><p id="reportTitle"></p></div><button class="button" type="button" onclick="document.getElementById('trainingReport').hidden=true">关闭</button></div>
+  <div id="reportState"></div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+const jobsTarget=document.getElementById('trainingJobs');
+function pct(value){return value==null?'—':(Number(value)*100).toFixed(1)+'%'}
+function renderJobs(rows){
+  if(!rows.length){jobsTarget.innerHTML='<div class="empty">暂无训练任务</div>';return}
+  jobsTarget.innerHTML=`<div class="table-wrap"><table class="data-table"><thead><tr><th>任务 ID</th><th>数据集</th><th>模型</th><th>状态</th><th>开始时间</th><th>结果</th><th></th></tr></thead><tbody>${rows.map(row=>`<tr><td><strong class="code">${esc(row.task_id)}</strong></td><td>${esc(row.dataset)}</td><td>${esc(row.model)}</td><td><span class="status-tag status-${String(row.status||'').toLowerCase()}"><span class="status-dot"></span>${esc(row.status)}</span></td><td>${esc(row.started_at||'—')}</td><td>${row.result&&row.result.f1?`F1 ${esc(pct(row.result.f1))}`:'—'}</td><td><button class="button" onclick="showReport('${esc(row.id)}')">查看报告</button></td></tr>`).join('')}</tbody></table></div>`
+}
+async function loadDatasets(){
+  try{const rows=await platformFetch('/api/platform/datasets');const eligible=rows.filter(row=>['FROZEN','READY_FOR_TRAINING'].includes(String(row.status||'').toUpperCase()));const select=document.getElementById('trainDataset');select.innerHTML='<option value="">请选择可训练数据集</option>'+eligible.map(row=>`<option value="${esc(row.id)}">${esc(row.name)} · ${esc(row.status)}</option>`).join('')}
+  catch{document.getElementById('trainDataset').innerHTML='<option value="">数据加载失败</option>'}
+}
+async function loadTrainingJobs(){renderState(jobsTarget,'loading');try{renderJobs(await platformFetch('/api/platform/training/jobs'))}catch(error){renderState(jobsTarget,'error',platformError(error))}}
+async function showReport(id){
+  const panel=document.getElementById('trainingReport');panel.hidden=false;document.getElementById('reportTitle').textContent=id;const target=document.getElementById('reportState');renderState(target,'loading');
+  try{
+    const data=await platformFetch(`/api/platform/training/${encodeURIComponent(id)}/report`);const current=data.current||{},previous=data.previous||{};const changes=data.category_changes||[];
+    const rows=[['Top1','top1'],['Top3','top3'],['F1','f1']];
+    const changeHtml=changes.length?changes.slice(0,8).map(row=>`<div class="inline" style="justify-content:space-between;border-bottom:1px solid #e8efec;padding:8px 0"><span>${esc(row.species)}</span><span>${esc(pct(row.previous))} → ${esc(pct(row.current))} <strong style="color:${Number(row.delta)>=0?'#19714f':'#a63b34'}">${Number(row.delta)>=0?'+':''}${esc(pct(row.delta))}</strong></span></div>`).join(''):'<span class="muted">暂无类别对比数据</span>';
+    const recommendations=(data.recommendations||[]).map(text=>`<div class="recommendation"><strong>建议增加样本</strong><span>${esc(text)}</span></div>`).join('')||'<div class="empty">暂无建议</div>';
+    target.innerHTML=`<div class="stat-grid"><div class="stat"><strong>${esc(pct(current.top1))}</strong><span>当前 Top1</span></div><div class="stat"><strong>${esc(pct(current.top3))}</strong><span>当前 Top3</span></div><div class="stat"><strong>${esc(pct(current.f1))}</strong><span>当前 F1</span></div></div><div class="table-wrap" style="margin-top:14px"><table class="data-table"><thead><tr><th>指标</th><th>${esc(data.previous_model_version||'上一版本')}</th><th>${esc(data.model_version||'当前版本')}</th></tr></thead><tbody>${rows.map(([label,key])=>`<tr><td>${label}</td><td>${esc(pct(previous[key]))}</td><td>${esc(pct(current[key]))}</td></tr>`).join('')}</tbody></table></div><div class="panel" style="margin-top:14px;padding:15px"><div class="panel-heading"><h2>类别变化</h2></div>${changeHtml}</div><h2 style="font-size:18px;margin:18px 0 8px">下一轮采集建议</h2>${recommendations}`
+  }catch(error){renderState(target,'error',platformError(error))}
+}
+document.getElementById('trainingForm').addEventListener('submit',async event=>{
+  event.preventDefault();const notice=document.getElementById('trainingNotice');notice.innerHTML='<div class="notice">正在提交训练任务…</div>';
+  try{
+    const data=await platformFetch('/api/platform/training/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dataset_id:document.getElementById('trainDataset').value,model_type:document.getElementById('modelType').value,epoch:Number(document.getElementById('epoch').value),batch_size:Number(document.getElementById('batchSize').value),image_size:Number(document.getElementById('imageSize').value),learning_rate:Number(document.getElementById('learningRate').value),freeze:document.getElementById('freeze').value==='true',seed:Number(document.getElementById('seed').value)})});
+    notice.innerHTML=`<div class="notice">任务已创建：<span class="code">${esc(data.task_id||'')}</span></div>`;loadTrainingJobs()
+  }catch(error){notice.innerHTML=`<div class="error-state">${esc(platformError(error))}</div>`}
+});
+loadDatasets();loadTrainingJobs();
+</script>
+{% endblock %}
