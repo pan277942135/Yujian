@@ -1,0 +1,114 @@
+{% extends "platform/base.html" %}
+{% block content %}
+<div id="datasetDetailState"><div class="loading">正在加载数据集详情…</div></div>
+
+<div id="datasetDetail" hidden>
+  <div class="page-heading">
+    <div>
+      <div class="breadcrumb"><a href="/platform/data/datasets">数据集管理</a><strong id="datasetDetailId"></strong></div>
+      <h1 id="datasetDetailTitle" style="margin-top:10px"></h1>
+      <p id="datasetDetailMeta"></p>
+    </div>
+    <div class="page-actions">
+      <a class="button primary" id="trainingLink" href="#">生成训练任务</a>
+      <button class="button" type="button" onclick="focusCleanReport()">查看清洗报告</button>
+      <a class="button" id="manifestLink" href="#">导出 Manifest</a>
+    </div>
+  </div>
+
+  <section class="panel">
+    <div class="panel-heading"><div><h2>数据规模</h2><p>统计来自当前 DatasetVersion 的固定分片计数。</p></div><span id="datasetStatus"></span></div>
+    <div id="datasetCounts" class="metric-grid"></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-heading"><div><h2>来源数据</h2><p>只展示 Dataset metadata 中明确记录的来源 Batch。</p></div></div>
+    <div id="datasetSources" class="inline"></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-heading"><div><h2>版本链</h2><p>从最早父版本到当前版本。</p></div></div>
+    <div id="datasetVersionChain" class="timeline"></div>
+  </section>
+
+  <section id="cleanReportSection" class="panel">
+    <div class="panel-heading"><div><h2>AI 清洗报告</h2><p>清洗报告属于 Dataset 详情的可追溯信息，列表页可单独打开。</p></div></div>
+    <div id="datasetCleanReport" class="stat-grid"></div>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const datasetId = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop() || '');
+const datasetDetailState = document.getElementById('datasetDetailState');
+const datasetDetail = document.getElementById('datasetDetail');
+const detailCleanLabels = {
+  duplicate: '重复图片',
+  blur: '模糊',
+  no_fish: '无鱼',
+  multi_fish: '多鱼',
+  scene: '异常场景',
+};
+
+function detailStatus(status) {
+  const normalized = String(status || 'UNKNOWN').toUpperCase();
+  const labels = {READY: '可训练', FROZEN: '可训练', READY_FOR_TRAINING: '可训练', REVIEW: '待审核', DRAFT: '草稿'};
+  return `<span class="status-tag status-${normalized.toLowerCase()}"><span class="status-dot"></span>${esc(labels[normalized] || normalized || '未知')}</span>`;
+}
+
+function detailMetric(label, value) {
+  return `<div class="metric-card"><div class="metric-label">${esc(label)}</div><div class="metric-value">${esc(value ?? 0)}</div></div>`;
+}
+
+function renderDetail(detail) {
+  const counts = detail.counts || {};
+  document.getElementById('datasetDetailId').textContent = detail.id || datasetId;
+  document.getElementById('datasetDetailTitle').textContent = detail.id || datasetId;
+  document.getElementById('datasetDetailMeta').textContent = `${detail.type || 'WHOLE_IMAGE_V1'} · DatasetVersion 生命周期详情`;
+  document.getElementById('datasetStatus').innerHTML = detailStatus(detail.status);
+  document.getElementById('datasetCounts').innerHTML = [
+    detailMetric('总样本', counts.total),
+    detailMetric('训练', counts.train),
+    detailMetric('验证', counts.val),
+    detailMetric('测试', counts.test),
+  ].join('');
+
+  const sources = Array.isArray(detail.source_batches) ? detail.source_batches : [];
+  document.getElementById('datasetSources').innerHTML = sources.length
+    ? sources.map(source => `<span class="code">${esc(source)}</span>`).join('')
+    : '<span class="muted">来源待补充</span>';
+
+  const chain = Array.isArray(detail.version_chain) && detail.version_chain.length ? detail.version_chain : [detail.id || datasetId];
+  document.getElementById('datasetVersionChain').innerHTML = chain.map((version, index) => `<div class="timeline-step ${index === chain.length - 1 ? 'success' : ''}"><div>${index + 1}</div><strong>${esc(version)}</strong><small>${index === chain.length - 1 ? '当前版本' : '历史版本'}</small></div>`).join('');
+
+  const report = detail.clean_report || {};
+  document.getElementById('datasetCleanReport').innerHTML = Object.entries(detailCleanLabels).map(([key, label]) => `<div class="stat"><strong>${esc(report[key] ?? 0)}</strong><span>${label}</span></div>`).join('');
+
+  const encodedId = encodeURIComponent(String(detail.id || datasetId));
+  document.getElementById('trainingLink').href = `/platform/model/training?dataset_id=${encodedId}`;
+  document.getElementById('manifestLink').href = `/api/platform/datasets/${encodedId}/manifest`;
+}
+
+function focusCleanReport() {
+  document.getElementById('cleanReportSection').scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
+async function loadDatasetDetail() {
+  if (!datasetId || datasetId === 'datasets') {
+    renderState(datasetDetailState, 'error', '数据集不存在');
+    return;
+  }
+  try {
+    const detail = await platformFetch(`/api/platform/datasets/${encodeURIComponent(datasetId)}`);
+    renderDetail(detail);
+    datasetDetail.hidden = false;
+    datasetDetailState.hidden = true;
+  } catch (error) {
+    renderState(datasetDetailState, 'error', platformError(error));
+  }
+}
+
+loadDatasetDetail();
+</script>
+{% endblock %}

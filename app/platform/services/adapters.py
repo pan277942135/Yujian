@@ -488,64 +488,70 @@ def _dataset_counts(db: Session, dataset: DatasetVersion) -> dict[str, int]:
     }
 
 
-def datasets(db: Session) -> list[dict[str, Any]]:
-    rows = _safe_scalars(db, select(DatasetVersion).order_by(DatasetVersion.created_at.desc()))
-    result = []
-    for row in rows:
-        counts = _dataset_counts(db, row)
-        metadata = _json(getattr(row, "metadata_json", None), {}) or {}
-        source_batch = metadata.get("source_batch_id") or metadata.get("source_batch") if isinstance(metadata, dict) else None
-        result.append(
-            {
-                "id": row.dataset_version,
-                "name": row.dataset_version,
-                "type": getattr(row, "pipeline_type", None) or "WHOLE_IMAGE_V1",
-                "total": counts["total"],
-                "train": int(row.train_count or 0),
-                "val": int(row.val_count or 0),
-                "test": int(row.test_count or 0),
-                "status": _status(row.status),
-                "pipeline_type": getattr(row, "pipeline_type", None),
-                "source_batch": source_batch if isinstance(source_batch, str) else None,
-                "created_at": _iso(row.created_at),
-            }
-        )
+def _dataset_version_counts(dataset: DatasetVersion) -> dict[str, int]:
+    """Return counts owned by the immutable DatasetVersion snapshot.
+
+    The list endpoint intentionally uses only these persisted DatasetVersion
+    counters. DatasetItem and ImageAsset lineage is detail/report work and
+    must not turn the list into an N+1 query.
+    """
+
+    train = int(dataset.train_count or 0)
+    val = int(dataset.val_count or 0)
+    test = int(dataset.test_count or 0)
+    return {"total": train + val + test, "train": train, "val": val, "test": test}
+
+
+def _source_batches(metadata: Any) -> list[str]:
+    """Normalize legacy Dataset metadata without inventing lineage."""
+
+    if not isinstance(metadata, dict):
+        return []
+    raw = metadata.get("source_batches")
+    if raw is None or raw == [] or raw == "":
+        raw = metadata.get("source_batch_ids")
+    if raw is None or raw == [] or raw == "":
+        raw = [metadata.get("source_batch_id"), metadata.get("source_batch")]
+    pending = list(raw) if isinstance(raw, (list, tuple, set)) else [raw]
+    result: list[str] = []
+    while pending:
+        value = pending.pop(0)
+        if isinstance(value, (list, tuple, set)):
+            pending[0:0] = list(value)
+            continue
+        if isinstance(value, dict):
+            value = value.get("batch_id") or value.get("id") or value.get("source_batch_id")
+        if not isinstance(value, str):
+            continue
+        value = value.strip()
+        if value and value not in result:
+            result.append(value)
     return result
 
 
-def dataset_detail(db: Session, dataset_id: str) -> dict[str, Any] | None:
-    row = db.get(DatasetVersion, dataset_id)
-    if not row:
-        return None
-    counts = _dataset_counts(db, row)
-    metadata = _json(getattr(row, "metadata_json", None), {}) or {}
-    status = _status(row.status)
-    pipeline_type = getattr(row, "pipeline_type", None) or "WHOLE_IMAGE_V1"
-    created_at = _iso(row.created_at)
-    source_batch = metadata.get("source_batch_id") or metadata.get("source_batch") if isinstance(metadata, dict) else None
-    return {
-        "id": dataset_id,
-        "name": dataset_id,
-        "status": status,
-        "pipeline_type": pipeline_type,
-        "source_batch": source_batch if isinstance(source_batch, str) else None,
-        "created_at": created_at,
-        "counts": {
-            "total": counts["total"],
-            "train": int(row.train_count or 0),
-            "val": int(row.val_count or 0),
-            "test": int(row.test_count or 0),
-        },
-        "cleaning": metadata.get("clean_report", metadata.get("cleaning", {})) if isinstance(metadata, dict) else {},
-    }
+def _dataset_version_chain(db: Session, row: DatasetVersion) -> list[str]:
+    """Build a bounded parent chain for the detail page."""
+
+    chain: list[str] = []
+    seen: set[str] = set()
+    current: DatasetVersion | None = row
+    while current and current.dataset_version not in seen:
+        chain.append(current.dataset_version)
+        seen.add(current.dataset_version)
+        current = db.get(DatasetVersion, current.parent_version) if current.parent_version else None
+    return list(reversed(chain))
 
 
-def clean_report(db: Session, dataset_id: str) -> dict[str, Any] | None:
-    detail = dataset_detail(db, dataset_id)
-    if detail is None:
-        return None
-    stored = detail.get("cleaning") if isinstance(detail.get("cleaning"), dict) else {}
-    total = int(detail["counts"]["total"] or 0)
+def _dataset_clean_report(
+    db: Session,
+    dataset_id: str,
+    *,
+    total: int,
+    stored: dict[str, Any],
+    fallback_valid: int = 0,
+) -> dict[str, Any]:
+    """Reuse the existing cleaning signals for detail and report endpoints."""
+
     invalid = {
         "blur": int(stored.get("blur", stored.get("blurred", 0)) or 0),
         "duplicate": int(stored.get("duplicate", stored.get("duplicates", 0)) or 0),
@@ -569,14 +575,14 @@ def clean_report(db: Session, dataset_id: str) -> dict[str, Any] | None:
                     db,
                     select(FishPresenceResult).where(FishPresenceResult.image_asset_id.in_(image_ids)),
                 )
-                for row in presence_rows:
-                    state = effective_status(row)
+                for presence in presence_rows:
+                    state = effective_status(presence)
                     if state in {"no_fish", "multi_fish"}:
                         invalid[state] += 1
         except SQLAlchemyError:
             db.rollback()
     invalid_total = min(sum(invalid.values()), total)
-    valid = max(total - invalid_total, 0)
+    valid = max(total - invalid_total, fallback_valid)
     return {
         "dataset_id": dataset_id,
         "total": total,
@@ -585,6 +591,82 @@ def clean_report(db: Session, dataset_id: str) -> dict[str, Any] | None:
         "invalid_total": invalid_total,
         "valid_ratio": round(valid / total, 4) if total else 0.0,
     }
+
+
+def datasets(db: Session) -> list[dict[str, Any]]:
+    """List DatasetVersion snapshots only; Batch is a separate lifecycle."""
+
+    rows = _safe_scalars(db, select(DatasetVersion).order_by(DatasetVersion.created_at.desc()))
+    result = []
+    for row in rows:
+        counts = _dataset_version_counts(row)
+        metadata = _json(getattr(row, "metadata_json", None), {}) or {}
+        result.append(
+            {
+                "id": row.dataset_version,
+                "type": getattr(row, "pipeline_type", None) or "WHOLE_IMAGE_V1",
+                "total": counts["total"],
+                "train": counts["train"],
+                "val": counts["val"],
+                "test": counts["test"],
+                "status": _status(row.status),
+                "source_batches": _source_batches(metadata),
+                "parent_version": row.parent_version,
+                "created_at": _iso(row.created_at),
+            }
+        )
+    return result
+
+
+def dataset_detail(db: Session, dataset_id: str) -> dict[str, Any] | None:
+    row = db.get(DatasetVersion, dataset_id)
+    if not row:
+        return None
+    counts = _dataset_version_counts(row)
+    lineage_counts = _dataset_counts(db, row)
+    metadata = _json(getattr(row, "metadata_json", None), {}) or {}
+    status = _status(row.status)
+    pipeline_type = getattr(row, "pipeline_type", None) or "WHOLE_IMAGE_V1"
+    report = _dataset_clean_report(
+        db,
+        dataset_id,
+        total=counts["total"],
+        stored=metadata.get("clean_report", metadata.get("cleaning", {})) if isinstance(metadata, dict) else {},
+        fallback_valid=min(lineage_counts["valid"], counts["total"]),
+    )
+    return {
+        "id": dataset_id,
+        "type": pipeline_type,
+        "status": status,
+        "counts": {
+            "total": counts["total"],
+            "train": int(row.train_count or 0),
+            "val": int(row.val_count or 0),
+            "test": int(row.test_count or 0),
+        },
+        "source_batches": _source_batches(metadata),
+        "parent_version": row.parent_version,
+        "version_chain": _dataset_version_chain(db, row),
+        "created_at": _iso(row.created_at),
+        "clean_report": {key: int(value or 0) for key, value in report["invalid"].items()},
+    }
+
+
+def clean_report(db: Session, dataset_id: str) -> dict[str, Any] | None:
+    row = db.get(DatasetVersion, dataset_id)
+    if not row:
+        return None
+    counts = _dataset_version_counts(row)
+    lineage_counts = _dataset_counts(db, row)
+    metadata = _json(getattr(row, "metadata_json", None), {}) or {}
+    stored = metadata.get("clean_report", metadata.get("cleaning", {})) if isinstance(metadata, dict) else {}
+    return _dataset_clean_report(
+        db,
+        dataset_id,
+        total=counts["total"],
+        stored=stored if isinstance(stored, dict) else {},
+        fallback_valid=min(lineage_counts["valid"], counts["total"]),
+    )
 
 
 def training_jobs(db: Session) -> list[dict[str, Any]]:

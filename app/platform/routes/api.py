@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.bulk_review import BulkReviewApply, BulkReviewItem, api_bulk_apply
 from app.crop_review import CropReviewUpdate, update_crop_review
 from app.db import get_db
-from app.models import ImageAsset
+from app.models import DatasetVersion, ImageAsset
 from app.platform.services import adapters
 from app.training_api import TrainingCreate, queue_training_run
 from app.frozen_crop_bridge import _read_uri
@@ -130,6 +130,32 @@ def platform_clean_report(dataset_id: str, db: Session = Depends(get_db)) -> dic
     if result is None:
         raise HTTPException(status_code=404, detail="数据集不存在")
     return result
+
+
+@router.get("/datasets/{dataset_id}/manifest")
+def platform_dataset_manifest(dataset_id: str, db: Session = Depends(get_db)) -> Response:
+    """Download the registered manifest through the controlled Platform API."""
+
+    dataset = db.get(DatasetVersion, dataset_id)
+    if not dataset:
+        raise HTTPException(status_code=404, detail="数据集不存在")
+    try:
+        content, _ = _read_uri(dataset.manifest_uri)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Manifest 不存在") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Manifest 暂时不可用") from exc
+    media_type = mimetypes.guess_type(str(dataset.manifest_uri or ""))[0] or "application/octet-stream"
+    extension = ".json" if media_type == "application/json" else ".csv" if media_type == "text/csv" else ".manifest"
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="dataset-manifest{extension}"',
+            "Cache-Control": "private, max-age=300",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.get("/review/items")
