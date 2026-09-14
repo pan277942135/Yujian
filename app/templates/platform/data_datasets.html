@@ -18,21 +18,24 @@
 <section class="panel" style="margin-top:16px" id="cropDatasetPanel">
   <div class="panel-heading">
     <div>
-      <h2>生成鱼体裁剪数据集</h2>
-      <p>使用已确认鱼体框生成 Crop Dataset，用于鱼种分类模型训练。</p>
+      <h2>鱼体裁剪数据集</h2>
+      <p>先运行 20 张真实测试，确认裁剪、质量和 split 逻辑，再生成完整训练数据集。</p>
     </div>
     <span class="code">CROP_IMAGE_V1</span>
   </div>
   <div id="cropPoolState" class="loading">加载 Accepted Fish Pool…</div>
   <div class="stat-grid" style="margin-top:14px">
-    <div class="stat"><strong>1.25</strong><span>鱼体框扩展比例</span></div>
-    <div class="stat"><strong>416 × 416</strong><span>输出尺寸</span></div>
-    <div class="stat"><strong>Accepted BBox</strong><span>唯一数据来源</span></div>
+    <div class="stat"><strong>1.25×</strong><span>鱼体框扩展</span></div>
+    <div class="stat"><strong>416 × 416</strong><span>Crop 输出</span></div>
+    <div class="stat"><strong>Accepted BBox</strong><span>唯一来源，不使用候选框</span></div>
   </div>
   <div class="page-actions" style="margin-top:14px">
-    <button class="button primary" type="button" id="startCropDataset">开始生成</button>
-    <span id="cropJobState" class="muted">等待开始</span>
+    <button class="button" type="button" id="startCropSmoke">先运行20张测试</button>
+    <button class="button primary" type="button" id="startCropFull" disabled>生成完整数据集</button>
+    <button class="button" type="button" id="continueCropJob" hidden>继续生成</button>
   </div>
+  <div id="cropJobState" class="muted" style="margin-top:12px">等待测试</div>
+  <div id="cropJobProgress" class="muted" style="margin-top:8px"></div>
 </section>
 
 <section class="panel" style="margin-top:16px">
@@ -177,68 +180,142 @@ async function loadDatasets() {
 
 loadDatasets();
 let cropJobTimer = null;
+let cropJobId = null;
+let cropSmokePassed = false;
+
+function cropJobKey(mode) {
+  return mode === 'SMOKE' ? 'yujian.crop.smoke.job' : 'yujian.crop.full.job';
+}
 
 function renderCropPool(pool) {
   const count = Number(pool.count || 0);
   document.getElementById('cropPoolState').innerHTML = count
-    ? '<strong>Accepted Fish Pool：' + esc(count) + '</strong><span class="muted"> 条已确认鱼体框，可生成 DS_CROP_M1_v0.1。</span>'
+    ? '<strong>Accepted Fish Pool：' + esc(count) + '</strong><span class="muted"> 条已确认鱼体框。候选框不会进入生成。</span>'
     : '<span class="muted">当前没有可用的 Accepted BBox。</span>';
-  document.getElementById('startCropDataset').disabled = !count;
+  document.getElementById('startCropSmoke').disabled = !count;
 }
 
 function renderCropJob(job) {
   const target = document.getElementById('cropJobState');
-  if (!job) { target.textContent = '等待开始'; return; }
+  const progress = document.getElementById('cropJobProgress');
+  const full = document.getElementById('startCropFull');
+  const continueButton = document.getElementById('continueCropJob');
+  if (!job) {
+    target.textContent = '等待测试';
+    progress.textContent = '';
+    continueButton.hidden = true;
+    full.disabled = !cropSmokePassed;
+    return;
+  }
   const status = String(job.status || 'PENDING').toUpperCase();
-  const detail = job.processed != null && job.source_count ? '（' + job.processed + '/' + job.source_count + '）' : '';
+  const processed = Number(job.processed || job.cursor || 0);
+  const source = Number(job.source_count || 0);
+  const counts = 'GOOD ' + Number(job.good_count || 0) + ' · WARNING ' +
+    Number(job.warning_count || 0) + ' · INVALID ' + Number(job.invalid_count || 0);
+  progress.textContent = source
+    ? '已处理 ' + processed + ' / ' + source + '　' + counts
+    : counts;
   if (status === 'SUCCESS') {
-    target.innerHTML = '<span class="status-tag status-ready"><span class="status-dot"></span>已完成 ' + esc(job.generated_count || 0) + ' 条' + detail + '</span>';
+    target.innerHTML = '<span class="status-tag status-ready"><span class="status-dot"></span>' +
+      (job.mode === 'SMOKE' ? '20张测试通过' : '完整数据集已生成') + '</span>';
+    continueButton.hidden = true;
+    if (job.mode === 'SMOKE') {
+      cropSmokePassed = true;
+      full.disabled = false;
+      localStorage.setItem('yujian.crop.smoke.passed', '1');
+    }
+    if (job.mode === 'FULL') full.disabled = true;
   } else if (status === 'FAILED') {
-    target.innerHTML = '<span class="status-tag status-error"><span class="status-dot"></span>生成失败：' + esc(job.error || '请查看日志') + '</span>';
+    target.innerHTML = '<span class="status-tag status-error"><span class="status-dot"></span>生成中断：' +
+      esc(job.error || '请查看高级错误信息') + '</span>';
+    continueButton.hidden = false;
+    full.disabled = !cropSmokePassed;
   } else {
-    target.innerHTML = '<span class="status-tag status-review"><span class="status-dot"></span>' + (status === 'RUNNING' ? '生成中' : '排队中') + detail + '</span>';
+    target.innerHTML = '<span class="status-tag status-review"><span class="status-dot"></span>' +
+      (status === 'RUNNING' ? '正在生成' : '任务已创建') + '</span>';
+    continueButton.hidden = true;
+    full.disabled = !cropSmokePassed;
   }
 }
 
-async function pollCropJob(jobId) {
+async function advanceCropJob(jobId) {
+  cropJobId = jobId;
   if (cropJobTimer) clearTimeout(cropJobTimer);
   try {
-    const job = await platformFetch('/api/platform/datasets/crop/jobs/' + encodeURIComponent(jobId));
+    let job = await platformFetch('/api/platform/datasets/crop/jobs/' + encodeURIComponent(jobId));
     renderCropJob(job);
-    if (!['SUCCESS', 'FAILED'].includes(String(job.status || '').toUpperCase())) {
-      cropJobTimer = setTimeout(() => pollCropJob(jobId), 1500);
-    } else if (String(job.status).toUpperCase() === 'SUCCESS') {
+    if (['SUCCESS', 'FAILED'].includes(String(job.status || '').toUpperCase())) {
+      if (String(job.status).toUpperCase() === 'SUCCESS' && job.mode === 'FULL') await loadDatasets();
+      return;
+    }
+    job = await platformFetch('/api/platform/datasets/crop/jobs/' + encodeURIComponent(jobId) + '/step', {method:'POST'});
+    renderCropJob(job);
+    if (String(job.status || '').toUpperCase() === 'SUCCESS' && job.mode === 'FULL') {
       await loadDatasets();
+      return;
+    }
+    if (String(job.status || '').toUpperCase() !== 'FAILED') {
+      cropJobTimer = setTimeout(() => advanceCropJob(jobId), 250);
     }
   } catch (error) {
     document.getElementById('cropJobState').textContent = platformError(error);
+    document.getElementById('continueCropJob').hidden = false;
   }
 }
 
-async function startCropDataset() {
-  const button = document.getElementById('startCropDataset');
+async function createCropJob(mode) {
+  const button = mode === 'SMOKE' ? document.getElementById('startCropSmoke') : document.getElementById('startCropFull');
   button.disabled = true;
-  renderCropJob({status:'PENDING'});
+  renderCropJob({status:'PENDING', mode:mode, source_count: mode === 'SMOKE' ? 20 : 0});
   try {
     const job = await platformFetch('/api/platform/datasets/crop/create', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({source:'accepted_bbox', dataset_name:'DS_CROP_M1_v0.1', expand_ratio:1.25, size:416}),
+      body: JSON.stringify({
+        source:'accepted_bbox',
+        dataset_name: mode === 'SMOKE' ? 'DS_CROP_M1_v0.1_SMOKE' : 'DS_CROP_M1_v0.1',
+        expand_ratio:1.25,
+        size:416,
+        mode:mode,
+        limit: mode === 'SMOKE' ? 20 : null,
+      }),
     });
-    renderCropJob(job);
-    pollCropJob(job.job_id);
+    localStorage.setItem(cropJobKey(mode), job.job_id);
+    if (mode === 'SMOKE') cropSmokePassed = false;
+    await advanceCropJob(job.job_id);
   } catch (error) {
     button.disabled = false;
     document.getElementById('cropJobState').textContent = platformError(error);
   }
 }
 
+async function resumeCropJob() {
+  if (cropJobId) await advanceCropJob(cropJobId);
+}
+
 document.getElementById('openCropGenerator').addEventListener('click', () => {
   document.getElementById('cropDatasetPanel').scrollIntoView({behavior:'smooth', block:'start'});
 });
-document.getElementById('startCropDataset').addEventListener('click', startCropDataset);
+document.getElementById('startCropSmoke').addEventListener('click', () => createCropJob('SMOKE'));
+document.getElementById('startCropFull').addEventListener('click', () => createCropJob('FULL'));
+document.getElementById('continueCropJob').addEventListener('click', resumeCropJob);
+
 platformFetch('/api/platform/fish-pool/accepted').then(renderCropPool).catch(error => {
   document.getElementById('cropPoolState').textContent = platformError(error);
 });
+
+if (localStorage.getItem('yujian.crop.smoke.passed') === '1') cropSmokePassed = true;
+for (const mode of ['SMOKE', 'FULL']) {
+  const savedJob = localStorage.getItem(cropJobKey(mode));
+  if (savedJob) {
+    platformFetch('/api/platform/datasets/crop/jobs/' + encodeURIComponent(savedJob))
+      .then(job => {
+        if (job.mode === 'SMOKE' && job.status === 'SUCCESS') cropSmokePassed = true;
+        renderCropJob(job);
+        if (!['SUCCESS','FAILED'].includes(String(job.status || '').toUpperCase())) advanceCropJob(savedJob);
+      })
+      .catch(() => {});
+  }
+}
 </script>
 {% endblock %}
