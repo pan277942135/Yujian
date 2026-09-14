@@ -577,7 +577,7 @@ def update_review(batch_id: str, image_id: str, payload: ReviewUpdate, db: Sessi
 
 
 @app.get("/media/{batch_id}/{image_id}")
-def media(batch_id: str, image_id: str, db: Session = Depends(get_db)):
+def media(batch_id: str, image_id: str, variant: str | None = Query(default=None), db: Session = Depends(get_db)):
     image = db.scalar(select(ImageAsset).where(ImageAsset.batch_id == batch_id, ImageAsset.image_id == image_id))
     if not image:
         raise HTTPException(status_code=404, detail="image not found")
@@ -587,6 +587,22 @@ def media(batch_id: str, image_id: str, db: Session = Depends(get_db)):
     if not blob.exists(client):
         raise HTTPException(status_code=404, detail="GCS object not found")
     content = blob.download_as_bytes(timeout=120, retry=DOWNLOAD_RETRY)
+    if variant == "thumbnail":
+        try:
+            with Image.open(BytesIO(content)) as source:
+                preview = source.convert("RGB") if source.mode not in {"RGB", "RGBA"} else source.copy()
+                preview.thumbnail((320, 320), Image.Resampling.LANCZOS)
+                output = BytesIO()
+                preview.save(output, format="WEBP", quality=78, method=4)
+                return Response(
+                    content=output.getvalue(),
+                    media_type="image/webp",
+                    headers={"Cache-Control": "private, max-age=3600"},
+                )
+        except Exception:
+            # Keep the controlled media gateway usable for unusual formats;
+            # the normal review path still never asks for the original here.
+            pass
     media_type = mimetypes.guess_type(image.file_name)[0] or "application/octet-stream"
     return Response(content=content, media_type=media_type, headers={"Cache-Control": "private, max-age=300"})
 
