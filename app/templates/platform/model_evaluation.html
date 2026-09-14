@@ -1,0 +1,29 @@
+{% extends "platform/base.html" %}
+{% block content %}
+<div class="page-heading"><div><h1>模型评估</h1><p>查看指标、混淆矩阵和错误案例，为下一轮数据采集提供依据。</p></div><div class="page-actions"><select id="evaluationModel" style="border:1px solid #cfddd8;border-radius:9px;background:#fff;padding:9px 10px"><option value="">选择模型版本</option></select></div></div>
+<div id="evaluationMetrics" class="metric-grid"><div class="metric-card"><div class="loading">请选择模型</div></div></div>
+<section class="panel" style="margin-top:16px"><div class="panel-heading"><div><h2>混淆矩阵</h2><p id="evaluationTitle">选择模型后加载评估结果</p></div><span class="code">/api/platform/models/{id}/evaluation</span></div><div id="matrixState" class="empty">暂无评估数据</div></section>
+<section class="panel" style="margin-top:16px"><div class="panel-heading"><div><h2>错误案例</h2><p>真实类别与预测类别不一致的样本。</p></div></div><div id="errorState" class="empty">暂无错误案例</div></section>
+{% endblock %}
+{% block scripts %}
+<script>
+const modelSelect=document.getElementById('evaluationModel');
+function valuePct(value){return value==null?'—':(Number(value)*100).toFixed(1)+'%'}
+function matrixHtml(matrix){
+  if(!Array.isArray(matrix)||!matrix.length)return '<div class="empty">暂无混淆矩阵</div>';
+  if(!Array.isArray(matrix[0]))return '<div class="empty">评估文件格式暂不支持矩阵展示</div>';
+  return `<div class="table-wrap"><table class="matrix"><tbody>${matrix.map(row=>`<tr>${row.map(value=>`<td>${esc(value)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`
+}
+function renderEvaluation(data){
+  const m=data.metrics||{};
+  document.getElementById('evaluationMetrics').innerHTML=[['Accuracy',m.accuracy],['Precision',m.precision],['Recall',m.recall],['F1',m.f1]].map(([label,value])=>`<div class="metric-card"><div class="metric-label">${label}</div><div class="metric-value">${esc(valuePct(value))}</div><div class="metric-detail">${data.available?'已读取评估结果':'等待评估结果'}</div></div>`).join('');
+  document.getElementById('evaluationTitle').textContent=data.model_version||'';document.getElementById('matrixState').className='';document.getElementById('matrixState').innerHTML=matrixHtml(data.confusion_matrix);
+  const errors=data.errors||[];document.getElementById('errorState').className=errors.length?'':'empty';document.getElementById('errorState').innerHTML=errors.length?`<div class="table-wrap"><table class="data-table"><thead><tr><th>图片</th><th>真实</th><th>预测</th><th>置信度</th></tr></thead><tbody>${errors.map(row=>`<tr><td>${esc(row.image_id||'—')}</td><td>${esc(row.truth||row.truth_species||'—')}</td><td>${esc(row.prediction||row.predicted_species||'—')}</td><td>${row.confidence==null?'—':esc(valuePct(row.confidence))}</td></tr>`).join('')}</tbody></table></div>`:'暂无错误案例'
+}
+async function loadModels(){
+  try{const rows=await platformFetch('/api/platform/models');modelSelect.innerHTML='<option value="">选择模型版本</option>'+rows.map(row=>`<option value="${esc(row.id)}">${esc(row.version)} · ${esc(row.status_label||row.status)}</option>`).join('');const requested=new URLSearchParams(location.search).get('model');if(requested&&rows.some(row=>row.id===requested)){modelSelect.value=requested;loadEvaluation(requested)}}catch{modelSelect.innerHTML='<option value="">模型加载失败</option>'}
+}
+async function loadEvaluation(id){if(!id)return;const target=document.getElementById('matrixState');renderState(target,'loading');try{renderEvaluation(await platformFetch(`/api/platform/models/${encodeURIComponent(id)}/evaluation`))}catch(error){renderState(target,'error',platformError(error))}}
+modelSelect.addEventListener('change',()=>loadEvaluation(modelSelect.value));loadModels();
+</script>
+{% endblock %}

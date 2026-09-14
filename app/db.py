@@ -54,6 +54,7 @@ def get_db():
 def init_db():
     from app import models  # noqa: F401
     from app import fish_knowledge  # noqa: F401
+    from app.platform import models as platform_models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     _ensure_production_pipeline_columns()

@@ -1,0 +1,12 @@
+{% macro batch_action_bar(target_id='reviewBatchActions') -%}
+<div id="{{ target_id }}" class="batch-action-bar" hidden>
+  <strong>已选择 <span data-selected-count>0</span> 条</strong>
+  <span class="muted">批量操作会复用现有审核状态机</span>
+  <div class="batch-action-buttons">
+    <button class="button primary" type="button" data-batch-action="confirm">批量确认</button>
+    <button class="button" type="button" data-batch-action="species">批量修改鱼种</button>
+    <button class="button" type="button" data-batch-action="bbox">批量调整框</button>
+    <button class="button danger" type="button" data-batch-action="reject">批量删除</button>
+  </div>
+</div>
+{%- endmacro %}

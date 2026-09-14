@@ -1,0 +1,30 @@
+{# Source of truth for the preserved legacy workbench navigation. #}
+<style id="yujian-unified-nav-style">
+  header.app-nav{background:#fff;border-bottom:1px solid #e5e7eb;padding:10px 20px;display:flex;gap:6px;align-items:center;position:sticky;top:0;z-index:50;overflow-x:auto;white-space:nowrap;scrollbar-width:thin}
+  header.app-nav a{display:inline-flex;align-items:center;min-height:34px;padding:0 10px;border-radius:8px;text-decoration:none;color:#4b5563;font-weight:650;font-size:14px;flex:0 0 auto}
+  header.app-nav a:hover{background:#f3f4f6;color:#111827}
+  header.app-nav a.active{background:#111827;color:#fff}
+  header.app-nav .filters{flex:0 0 auto;margin-left:auto}
+  @media(max-width:760px){header.app-nav{padding:8px 12px;gap:4px}header.app-nav a{padding:0 9px;font-size:13px}}
+</style>
+{% set nav_path = request.url.path %}
+<header class="app-nav" aria-label="旧版模型工作台导航">
+  <a href="/legacy" class="{{ 'active' if nav_path == '/legacy' else '' }}" {% if nav_path == '/legacy' %}aria-current="page"{% endif %}>旧版总览</a>
+  <a href="/batches" class="{{ 'active' if nav_path == '/batches' else '' }}" {% if nav_path == '/batches' %}aria-current="page"{% endif %}>数据批次</a>
+  <a href="/batches/upload" class="{{ 'active' if nav_path.startswith('/batches/upload') else '' }}">数据导入</a>
+  <a href="/review/bulk" class="{{ 'active' if nav_path.startswith('/review/bulk') else '' }}">快速审核</a>
+  <a href="/review" class="{{ 'active' if nav_path == '/review' else '' }}">单张审核</a>
+  <a href="/species" class="{{ 'active' if nav_path.startswith('/species') else '' }}">鱼种管理</a>
+  <a href="/fish-knowledge" class="{{ 'active' if nav_path.startswith('/fish-knowledge') else '' }}">鱼鉴内容</a>
+  <a href="/feedback" class="{{ 'active' if nav_path.startswith('/feedback') else '' }}">用户反馈</a>
+  <a href="/datasets" class="{{ 'active' if nav_path.startswith('/datasets') else '' }}">数据集</a>
+  <a href="/training" class="{{ 'active' if nav_path.startswith('/training') else '' }}">模型训练</a>
+  <a href="/inference" class="{{ 'active' if nav_path.startswith('/inference') else '' }}">模型实测</a>
+  <a href="/intelligence" class="{{ 'active' if nav_path.startswith('/intelligence') else '' }}">模型智能分析</a>
+  <a href="/crop-qa" class="{{ 'active' if nav_path.startswith('/crop-qa') else '' }}">Crop QA</a>
+  <a href="/debug/detector-parity" class="{{ 'active' if nav_path.startswith('/debug/detector-parity') else '' }}">Detector Parity</a>
+  <a href="/debug/fish-completion-lab" class="{{ 'active' if nav_path.startswith('/debug/fish-completion-lab') else '' }}">鱼体补全实验室 · Fish Completion Lab</a>
+  <a href="/debug/fish-completion-lab-v02" class="{{ 'active' if nav_path.startswith('/debug/fish-completion-lab-v02') else '' }}">自动鱼体资产 · Fish Asset Pipeline V0.2</a>
+  <a href="/debug/powerpaint-direct-lab" class="{{ 'active' if nav_path.startswith('/debug/powerpaint-direct-lab') else '' }}">PowerPaint Direct Lab</a>
+  <a href="/debug/powerpaint-shape-guided-lab" class="{{ 'active' if nav_path.startswith('/debug/powerpaint-shape-guided-lab') else '' }}">PowerPaint Shape Guided Lab</a>
+</header>

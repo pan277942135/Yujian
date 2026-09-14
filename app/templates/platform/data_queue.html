@@ -1,0 +1,16 @@
+{% extends "platform/base.html" %}
+{% from "platform/components/status_tag.html" import status_tag %}
+{% block content %}
+<div class="page-heading"><div><h1>数据处理队列</h1><p>系统自动把低置信、BBox 异常和质量异常样本集中到这里。</p></div><div class="page-actions"><a class="button primary" href="/platform/data/review">进入审核中心</a></div></div>
+<div id="queueMetrics" class="metric-grid"><div class="metric-card"><div class="loading">加载中…</div></div></div>
+<section class="panel" style="margin-top:16px"><div class="panel-heading"><div><h2>需要人工处理的样本</h2><p>处理后回到审核中心确认，所有写入继续使用旧审核逻辑。</p></div><span class="code">/api/platform/review/queue</span></div><div id="queueState"><div class="loading">加载中…</div></div></section>
+{% endblock %}
+{% block scripts %}
+<script>
+const queueState=document.getElementById('queueState');
+const queueLabels={low_confidence:'低置信',bbox_error:'BBox 异常',quality_issue:'质量异常'};
+function renderQueue(data){const keys=['low_confidence','bbox_error','quality_issue'];document.getElementById('queueMetrics').innerHTML=keys.map(key=>`<a class="metric-card" href="/platform/data/review?issue=${key}" style="text-decoration:none;color:inherit"><div class="metric-label">${queueLabels[key]}</div><div class="metric-value">${esc(data[key]??0)}</div><div class="metric-detail">点击查看异常样本</div></a>`).join('');const examples=data.examples||{};const rows=keys.flatMap(key=>(examples[key]||[]).map(item=>({key,item})));if(!rows.length){queueState.innerHTML='<div class="empty">暂无待处理异常</div>';return}queueState.innerHTML=`<div class="table-wrap"><table class="data-table"><thead><tr><th>异常类型</th><th>图片</th><th>AI 预测</th><th>置信度</th><th>状态</th><th></th></tr></thead><tbody>${rows.map(({key,item})=>`<tr><td><span class="status-tag status-review"><span class="status-dot"></span>${queueLabels[key]}</span></td><td><strong>${esc(item.file_name||item.image_id)}</strong><br><span class="muted">${esc(item.batch_id)}</span></td><td>${esc(item.predicted_species||'暂无')}</td><td>${item.confidence==null?'—':esc((Number(item.confidence)*100).toFixed(1)+'%')}</td><td>${item.review_status?`<span class="code">${esc(item.review_status)}</span>`:'—'}</td><td><a class="button" href="/platform/data/review?issue=${key}&q=${encodeURIComponent(item.image_id||'')}">处理</a></td></tr>`).join('')}</tbody></table></div>`}
+async function loadQueue(){try{renderQueue(await platformFetch('/api/platform/review/queue'))}catch(error){document.getElementById('queueMetrics').innerHTML='<div class="error-state" style="grid-column:1/-1">数据加载失败</div>';renderState(queueState,'error',platformError(error))}}
+loadQueue();
+</script>
+{% endblock %}

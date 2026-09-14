@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>渔见 AI · 选择工作台</title>
+<style>
+  :root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17252b;background:#eef4f2}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;background:radial-gradient(circle at 80% 0%,#fff7dc 0,transparent 32%),linear-gradient(145deg,#e9f2ef,#f7faf8 58%,#e9f0ee)}
+  main{width:min(1120px,calc(100% - 40px));margin:0 auto;padding:clamp(48px,9vw,104px) 0 64px}
+  .eyebrow{letter-spacing:.14em;text-transform:uppercase;color:#628078;font-size:12px;font-weight:800}
+  h1{font-size:clamp(34px,5vw,58px);line-height:1.05;margin:14px 0 12px;letter-spacing:-.04em}
+  .lead{max-width:680px;color:#557069;font-size:17px;line-height:1.7;margin:0 0 42px}
+  .workspaces{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
+  .workspace{display:flex;min-height:300px;flex-direction:column;justify-content:space-between;padding:28px;border-radius:24px;border:1px solid rgba(91,126,116,.23);background:rgba(255,255,255,.82);box-shadow:0 18px 54px rgba(52,83,75,.12);text-decoration:none;color:inherit;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease}
+  .workspace:hover,.workspace:focus-visible{transform:translateY(-4px);border-color:#66998a;box-shadow:0 24px 64px rgba(52,83,75,.2);outline:none}
+  .workspace.platform{background:linear-gradient(150deg,rgba(248,255,249,.96),rgba(255,252,235,.88))}
+  .icon{width:54px;height:54px;border-radius:16px;display:grid;place-items:center;background:#183c38;color:#fff;font-size:25px}
+  .platform .icon{background:#c48b35}
+  h2{font-size:26px;margin:24px 0 10px;letter-spacing:-.025em}
+  .workspace p{margin:0;color:#60756f;line-height:1.65}
+  .cta{display:flex;align-items:center;justify-content:space-between;margin-top:28px;font-weight:800;color:#1a5951}
+  .platform .cta{color:#98651d}
+  .meta{font-size:13px;color:#80918d;margin-top:42px}
+  @media(max-width:720px){main{width:min(100% - 28px,560px);padding-top:48px}.workspaces{grid-template-columns:1fr}.workspace{min-height:250px;padding:24px}}
+</style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">YuJian Console</div>
+  <h1>选择工作台</h1>
+  <p class="lead">渔见 AI 将研发实验与正式生产流程分开承载。请选择要进入的工作空间。</p>
+  <section class="workspaces" aria-label="工作台选择">
+    <a class="workspace" href="/legacy">
+      <div>
+        <div class="icon" aria-hidden="true">◌</div>
+        <h2>旧版模型工作台</h2>
+        <p>继续已有数据审核、模型实验、Detector、Classifier、SAM、Completion 和 Debug 工作。</p>
+      </div>
+      <div class="cta"><span>进入旧版工作台</span><span aria-hidden="true">→</span></div>
+    </a>
+    <a class="workspace platform" href="/platform">
+      <div>
+        <div class="icon" aria-hidden="true">✦</div>
+        <h2>AI 智能生产平台</h2>
+        <p>统一管理数据工厂、模型工厂、智能流水线、数字鱼体资产与后续渔境生态。</p>
+      </div>
+      <div class="cta"><span>进入 AI 生产平台</span><span aria-hidden="true">→</span></div>
+    </a>
+  </section>
+  <div class="meta">YuJian AI Platform V1.0 · 2026</div>
+</main>
+</body>
+</html>

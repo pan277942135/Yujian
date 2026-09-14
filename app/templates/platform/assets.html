@@ -1,0 +1,18 @@
+{% extends "platform/base.html" %}
+{% from "platform/components/status_tag.html" import status_tag %}
+{% block content %}
+<div class="page-heading"><div><h1>数字资产工厂</h1><p>把现有 Completion 输出组织成原图、Mask、透明鱼和 Sticker 四类资产。</p></div><div class="page-actions"><a class="button" href="/platform/pipeline">查看 Pipeline</a><button class="button" onclick="loadAssets()">刷新</button></div></div>
+<section class="panel"><div class="panel-heading"><div><h2>鱼体资产</h2><p><span class="code">/api/platform/assets</span> · FishAsset 轻量索引</p></div></div><div id="assetState"><div class="loading">加载中…</div></div></section>
+<section id="assetDetail" class="panel" style="margin-top:16px" hidden><div class="panel-heading"><div><h2>资产详情</h2><p id="assetDetailTitle"></p></div><button class="button" onclick="document.getElementById('assetDetail').hidden=true">关闭</button></div><div id="assetDetailState"></div></section>
+{% endblock %}
+{% block scripts %}
+<script>
+const assetState=document.getElementById('assetState');
+function assetImage(url,label){return url?`<img loading="lazy" src="${esc(url)}" alt="${esc(label)}" onerror="this.style.opacity=.25">`:'<div class="empty" style="padding:28px 8px">暂无资源</div>'}
+function renderAssets(rows){if(!rows.length){assetState.innerHTML='<div class="empty">暂无鱼体资产<br><span class="muted">接入 Completion 输出索引后，资产会出现在这里</span></div>';return}assetState.innerHTML=`<div class="table-wrap"><table class="data-table"><thead><tr><th>缩略图</th><th>鱼种</th><th>来源</th><th>版本</th><th>状态</th><th>资源</th><th></th></tr></thead><tbody>${rows.map(row=>`<tr><td style="width:90px">${row.transparent_url?`<img loading="lazy" src="${esc(row.transparent_url)}" style="width:72px;height:54px;object-fit:contain;background:#eff4f1;border-radius:7px" alt="透明鱼">`:'—'}</td><td><strong>${esc(row.species||'未标注')}</strong></td><td>${esc(row.source?.image_id||row.source?.batch_id||'—')}</td><td>${esc(row.version||'v1')}</td><td><span class="status-tag status-${String(row.status||'').toLowerCase()}"><span class="status-dot"></span>${esc(row.status)}</span></td><td>${['original_url','mask_url','transparent_url','sticker_url'].filter(key=>row[key]).length}/4</td><td><button class="button" onclick="showAsset('${esc(row.id)}')">查看详情</button></td></tr>`).join('')}</tbody></table></div>`}
+function renderAssetDetail(data){const tiles=[['原图','original_url'],['Mask','mask_url'],['透明鱼','transparent_url'],['Sticker','sticker_url']];document.getElementById('assetDetailState').innerHTML=`<div class="inline" style="justify-content:space-between;margin-bottom:14px"><span>鱼种：<strong>${esc(data.species||'未标注')}</strong> · ${esc(data.version||'v1')}</span>${data.pipeline_run_id?`<a class="button" href="/platform/pipeline?run=${encodeURIComponent(data.pipeline_run_id)}">查看 Pipeline</a>`:''}</div><div class="four-grid">${tiles.map(([label,key])=>`<div class="panel"><div class="metric-label">${label}</div>${assetImage(data[key],label)}</div>`).join('')}</div>`}
+async function showAsset(id){const panel=document.getElementById('assetDetail');panel.hidden=false;document.getElementById('assetDetailTitle').textContent=id;const target=document.getElementById('assetDetailState');renderState(target,'loading');try{renderAssetDetail(await platformFetch(`/api/platform/assets/${encodeURIComponent(id)}`))}catch(error){renderState(target,'error',platformError(error))}}
+async function loadAssets(){renderState(assetState,'loading');try{renderAssets(await platformFetch('/api/platform/assets'))}catch(error){renderState(assetState,'error',platformError(error))}}
+loadAssets();
+</script>
+{% endblock %}

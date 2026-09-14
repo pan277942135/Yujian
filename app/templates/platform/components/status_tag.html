@@ -1,0 +1,9 @@
+{% macro status_tag(status, label=None) -%}
+{% set normalized = (status or 'UNKNOWN')|upper %}
+{% set css = {
+  'SUCCESS':'status-success','COMPLETED':'status-success','ACTIVE':'status-active','PRODUCTION':'status-production','TRAINED':'status-trained',
+  'RUNNING':'status-running','QUEUED':'status-queued','REVIEW':'status-review','STAGING':'status-staging',
+  'FAILED':'status-failed','ERROR':'status-error','DEPRECATED':'status-deprecated'
+}.get(normalized, 'status-neutral') %}
+<span class="status-tag {{ css }}"><span class="status-dot"></span>{{ label or normalized }}</span>
+{%- endmacro %}
