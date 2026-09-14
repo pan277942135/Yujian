@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from fastapi import APIRouter
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
@@ -24,9 +24,9 @@ class PlatformPage:
 
 PLATFORM_PAGES = (
     PlatformPage("/platform", "platform/dashboard.html", "首页总览", "总览", "查看数据、模型、流水线和鱼体资产的生产状态。", "/api/platform/dashboard"),
+    PlatformPage("/platform/data/import", "platform/data_import.html", "导入采集数据", "AI 数据工厂", "复用现有 Batch 上传流程导入真实鱼获采集数据。", "/batches/upload"),
     PlatformPage("/platform/data/datasets", "platform/data_datasets.html", "数据集管理", "AI 数据工厂", "用数据集视角管理上传、AI 清洗和训练准备状态。", "/api/platform/datasets"),
     PlatformPage("/platform/data/review", "platform/data_review.html", "数据审核中心", "AI 数据工厂", "集中处理低置信、BBox 异常和质量异常样本。", "/api/platform/review/items"),
-    PlatformPage("/platform/data/queue", "platform/data_queue.html", "数据处理队列", "AI 数据工厂", "按异常类型查看需要人工快速处理的数据。", "/api/platform/review/queue"),
     PlatformPage("/platform/model/training", "platform/model_training.html", "模型训练", "模型工厂", "从已冻结数据集创建训练任务并追踪结果。", "/api/platform/training/jobs"),
     PlatformPage("/platform/model/registry", "platform/model_registry.html", "模型仓库", "模型工厂", "查看模型版本、指标和发布状态。", "/api/platform/models"),
     PlatformPage("/platform/model/evaluation", "platform/model_evaluation.html", "模型评估", "模型工厂", "查看指标、混淆关系和错误案例。", "/api/platform/models/{model_id}/evaluation"),
@@ -68,6 +68,13 @@ for _page in PLATFORM_PAGES:
         response_class=HTMLResponse,
         name=f"platform_{_page.title.replace(' ', '_')}",
     )
+
+
+@router.get("/platform/data/queue", include_in_schema=False)
+def platform_queue_compatibility_redirect() -> RedirectResponse:
+    """Keep old bookmarks working while the queue is part of Review Center."""
+
+    return RedirectResponse(url="/platform/data/review", status_code=307)
 
 
 __all__ = ["PLATFORM_PAGES", "router", "templates"]

@@ -1,0 +1,28 @@
+{% extends "platform/base.html" %}
+{% block content %}
+<div class="page-heading">
+  <div>
+    <h1>导入采集数据</h1>
+    <p>上传新的真实鱼获采集图片。系统沿用现有 Batch 流程完成导入、Manifest 处理、数据清洗和审核准备，审核完成后再形成可训练数据集。</p>
+  </div>
+  <div class="page-actions"><a class="button primary" href="/batches/upload">开始导入采集数据</a></div>
+</div>
+<section class="panel import-panel">
+  <div class="panel-heading"><div><h2>数据生产流程</h2><p>本入口不创建空数据集，也不重写既有上传系统。</p></div><span class="status-tag status-neutral"><span class="status-dot"></span>复用 Batch</span></div>
+  <div class="import-flow" aria-label="采集数据到训练数据集流程">
+    <div class="import-step"><span>1</span><strong>上传图片</strong><small>导入真实鱼获采集数据</small></div>
+    <div class="import-arrow">→</div>
+    <div class="import-step"><span>2</span><strong>数据批次</strong><small>沿用现有 Batch 记录</small></div>
+    <div class="import-arrow">→</div>
+    <div class="import-step"><span>3</span><strong>AI 自动清洗</strong><small>准备质量与审核信号</small></div>
+    <div class="import-arrow">→</div>
+    <div class="import-step"><span>4</span><strong>人工确认</strong><small>在审核中心处理异常</small></div>
+    <div class="import-arrow">→</div>
+    <div class="import-step"><span>5</span><strong>数据集</strong><small>形成可训练版本</small></div>
+  </div>
+</section>
+<section class="panel import-note">
+  <h2>下一步怎么做</h2>
+  <p>点击上方按钮进入成熟的 <a href="/batches/upload">数据导入</a> 页面。上传后可在 <a href="/platform/data/review">数据审核中心</a> 查看待处理样本，完成审核后再在 <a href="/platform/data/datasets">数据集管理</a> 查看 DatasetVersion。</p>
+</section>
+{% endblock %}
