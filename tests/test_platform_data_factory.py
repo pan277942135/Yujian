@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import time
+
 from sqlalchemy import create_engine
 from sqlalchemy import event
 from sqlalchemy.orm import sessionmaker
@@ -151,3 +154,73 @@ def test_platform_component_partials_are_present():
         "platform/components/status_tag.html",
     ):
         assert templates.env.get_template(name) is not None
+
+
+def test_platform_endpoint_perf_evidence_3700_review_rows(tmp_path, monkeypatch):
+    """Record endpoint-shaped query counts on a review pool similar to UAT."""
+    db = _session(tmp_path)
+    try:
+        db.add(Batch(batch_id="BATCH_PERF_3700", source="test", manifest_uri="/tmp/m", raw_uri="/tmp/r", image_count=3700, status="INGESTED"))
+        db.bulk_save_objects(
+            [
+                ImageAsset(
+                    batch_id="BATCH_PERF_3700",
+                    image_id=f"perf-{index:04d}",
+                    file_name=f"fish-{index:04d}.jpg",
+                    object_name=f"fish-{index:04d}.jpg",
+                    gcs_uri=f"gs://private/perf-{index:04d}.jpg",
+                    claimed_species="鲤鱼",
+                    review_status="pending",
+                    quality="GOOD",
+                )
+                for index in range(3700)
+            ]
+        )
+        db.commit()
+
+        def measure(callback):
+            statements = []
+
+            def before_cursor_execute(*args):
+                statements.append(args[2])
+
+            event.listen(db.bind, "before_cursor_execute", before_cursor_execute)
+            started = time.perf_counter()
+            result = callback()
+            elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
+            event.remove(db.bind, "before_cursor_execute", before_cursor_execute)
+            return result, len(statements), elapsed_ms
+
+        real_review_queue = adapters.review_queue
+        real_review_item = adapters._review_item
+        monkeypatch.setattr(adapters, "review_queue", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("dashboard must not call full review_queue")))
+        dashboard, dashboard_queries, dashboard_ms = measure(lambda: adapters.dashboard(db))
+
+        monkeypatch.setattr(adapters, "review_queue", real_review_queue)
+        monkeypatch.setattr(adapters, "_review_item", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("queue must not construct every review DTO")))
+        queue, queue_queries, queue_ms = measure(lambda: adapters.review_queue(db))
+
+        monkeypatch.setattr(adapters, "_review_item", real_review_item)
+        items, item_queries, items_ms = measure(lambda: adapters.review_items(db, page=1, page_size=30))
+
+        assert dashboard["review_queue"] == 3700
+        assert queue["pending"] == 3700
+        assert items["total"] == 3700
+        assert len(items["items"]) == 30
+        assert dashboard_queries < 20
+        assert queue_queries == 1
+        assert item_queries <= 5
+        print(
+            "PERF_EVIDENCE "
+            + json.dumps(
+                {
+                    "/api/platform/dashboard": {"queries": dashboard_queries, "latency_ms": dashboard_ms},
+                    "/api/platform/review/items?page=1&page_size=30": {"queries": item_queries, "latency_ms": items_ms, "total": items["total"]},
+                    "/api/platform/review/queue": {"queries": queue_queries, "latency_ms": queue_ms, "pending": queue["pending"]},
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+    finally:
+        db.close()
