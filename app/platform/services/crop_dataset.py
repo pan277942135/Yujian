@@ -642,7 +642,7 @@ def start_crop_dataset_job(*, source="accepted_bbox", dataset_name=CROP_DATASET_
             "created_at": _now(), "started_at": None, "updated_at": _now(),
             "finished_at": None, "error_code": None, "error": None,
         }
-        _persist_job(job_id, **job)
+        _persist_job(job_id, **{key: value for key, value in job.items() if key != "job_id"})
         return _public_job(job)
     finally:
         db.close()
