@@ -13,6 +13,7 @@
       <a class="button primary" id="trainingLink" href="#">生成训练任务</a>
       <small id="trainingGateHint" class="muted" style="display:block;max-width:180px"></small>
       <button class="button" type="button" onclick="focusCleanReport()">查看清洗报告</button>
+      <button class="button" type="button" onclick="loadQualityAnalysis()">查看 Quality Gate 分析</button>
       <a class="button" id="manifestLink" href="#">导出 Manifest</a>
     </div>
   </div>
@@ -44,6 +45,14 @@
   <section id="cleanReportSection" class="panel">
     <div class="panel-heading"><div><h2>AI 清洗报告</h2><p>清洗报告属于 Dataset 详情的可追溯信息，列表页可单独打开。</p></div></div>
     <div id="datasetCleanReport" class="stat-grid"></div>
+  </section>
+
+  <section id="qualityAnalysisSection" class="panel" hidden>
+    <div class="panel-heading"><div><h2>Quality Gate 分布分析</h2><p>只读分析冻结 manifest_all.csv，不修改 Dataset。</p></div></div>
+    <div id="qualityAnalysisSummary" class="metric-grid"></div>
+    <div id="qualityAnalysisCoverage" class="muted" style="margin-top:12px"></div>
+    <div id="qualityAnalysisReasons" style="margin-top:16px;overflow:auto"></div>
+    <div id="qualityAnalysisRecommendation" class="muted" style="margin-top:16px"></div>
   </section>
 </div>
 {% endblock %}
@@ -207,6 +216,46 @@ function renderDetail(detail) {
   document.getElementById('trainingLink').href = `/platform/model/training?dataset_id=${encodedId}`;
   document.getElementById('manifestLink').href = `/api/platform/datasets/${encodedId}/manifest`;
 }
+
+function renderQualityAnalysis(report) {
+  const section = document.getElementById('qualityAnalysisSection');
+  section.hidden = false;
+  const totals = report.totals || {};
+  document.getElementById('qualityAnalysisSummary').innerHTML = [
+    detailMetric('总样本', totals.TOTAL || 0),
+    detailMetric('GOOD', totals.GOOD || 0),
+    detailMetric('WARNING', totals.WARNING || 0),
+    detailMetric('INVALID', totals.INVALID || 0),
+  ].join('');
+  const coverage = report.warning_reason_coverage || {};
+  document.getElementById('qualityAnalysisCoverage').textContent =
+    'WARNING 原因覆盖：' + (coverage.rows_with_reason || 0) + ' / ' + (coverage.warning_count || 0) +
+    '（' + (((coverage.coverage_ratio || 0) * 100).toFixed(1)) + '%）。样例已按原因固定抽取，未改变数据集。';
+  const reasons = Array.isArray(report.reasons) ? report.reasons : [];
+  document.getElementById('qualityAnalysisReasons').innerHTML =
+    '<table class="data-table"><thead><tr><th>状态</th><th>原因</th><th>数量</th><th>占本状态</th><th>训练候选分析</th><th>样例</th></tr></thead><tbody>' +
+    reasons.map(item => '<tr><td>' + esc(item.status) + '</td><td><code>' + esc(item.reason) + '</code></td><td>' +
+      esc(item.count) + '</td><td>' + (((item.ratio_within_status || 0) * 100).toFixed(1)) +
+      '%</td><td>' + esc(item.train_candidate) + '</td><td>' + esc(item.sample_size || 0) + '</td></tr>').join('') +
+    '</tbody></table>';
+  const trainingValue = report.training_value || {};
+  document.getElementById('qualityAnalysisRecommendation').textContent =
+    '训练候选建议：' + (trainingValue.warning_train_candidate || 'PENDING_HUMAN_REVIEW') +
+    '。当前不会自动把 WARNING 提升为 GOOD，请结合导出的 quality_examples 人工制定 V1.1 规则。';
+  section.scrollIntoView({behavior:'smooth', block:'start'});
+}
+async function loadQualityAnalysis() {
+  const section = document.getElementById('qualityAnalysisSection');
+  section.hidden = false;
+  document.getElementById('qualityAnalysisRecommendation').textContent = '正在生成/读取分析报告…';
+  try {
+    const report = await platformFetch('/api/platform/datasets/' + encodeURIComponent(datasetId) + '/quality-gate-analysis');
+    renderQualityAnalysis(report);
+  } catch (error) {
+    document.getElementById('qualityAnalysisRecommendation').textContent = platformError(error);
+  }
+}
+
 
 function focusCleanReport() {
   document.getElementById('cleanReportSection').scrollIntoView({behavior: 'smooth', block: 'start'});

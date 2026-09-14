@@ -35,6 +35,8 @@ CROP_CHUNK_SIZE = 25
 QA_SCHEMA_VERSION = "RANDOM_50_QA_V1"
 QA_SAMPLE_SIZE = 50
 QA_DECISIONS = {"PASS", "ISSUE", "CRITICAL"}
+QUALITY_ANALYSIS_SCHEMA_VERSION = "QUALITY_GATE_ANALYSIS_V1"
+QUALITY_ANALYSIS_SAMPLE_SIZE = 10
 ACCEPTED_STATUSES = {"ACCEPTED", "TRAINING_READY"}
 JOB_STATES = {"PENDING", "RUNNING", "SUCCESS", "FAILED"}
 
@@ -864,6 +866,227 @@ def read_random_50_qa_media(dataset_name: str, qa_index: int) -> bytes:
     return blob.download_as_bytes(timeout=120)
 
 
+def _analysis_seed(dataset_name: str, label: str = "") -> int:
+    digest = hashlib.sha256(
+        f"{QUALITY_ANALYSIS_SCHEMA_VERSION}:{dataset_name}:{label}".encode("utf-8")
+    ).digest()
+    return int.from_bytes(digest[:8], "big") % 2147483647
+
+
+def _analysis_reason_parts(value: Any) -> list[str]:
+    parts = [part.strip() for part in str(value or "").split(";") if part.strip()]
+    return parts or ["NO_REASON"]
+
+
+def _analysis_row_key(row: dict[str, Any]) -> str:
+    return ":".join(str(row.get(field) or "") for field in ("batch_id", "image_id", "crop_path"))
+
+
+def _analysis_train_candidate(status: str, reason: str) -> str:
+    if status != "WARNING":
+        return "NOT_APPLICABLE"
+    return "PENDING_HUMAN_REVIEW"
+
+
+def _analysis_uri(dataset_name: str, filename: str) -> str:
+    return f"gs://{get_bucket_name()}/datasets/{dataset_name}/reports/{filename}"
+
+
+def _analysis_blob(dataset_name: str, filename: str) -> str:
+    return f"datasets/{dataset_name}/reports/{filename}"
+
+
+def _analysis_read(dataset_name: str) -> dict[str, Any] | None:
+    try:
+        client, bucket = _storage()
+        blob = bucket.blob(_analysis_blob(dataset_name, "quality_gate_analysis.json"))
+        if not blob.exists(client):
+            return None
+        value = json.loads(blob.download_as_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else None
+    except Exception:
+        return None
+
+
+def _analysis_recommendation_markdown(dataset_name, totals, reason_rows, warning_coverage) -> str:
+    lines = [
+        f"# Quality Gate V1.1 分布分析：{dataset_name}",
+        "",
+        "> 本报告只读分析冻结 Dataset 产物，不修改 quality_status、manifest、split 或 DatasetVersion。",
+        "",
+        "## 总体分布",
+        "",
+        f"- 总样本：{totals['TOTAL']}",
+        f"- GOOD：{totals['GOOD']}（{totals['GOOD'] / max(1, totals['TOTAL']):.1%}）",
+        f"- WARNING：{totals['WARNING']}（{totals['WARNING'] / max(1, totals['TOTAL']):.1%}）",
+        f"- INVALID：{totals['INVALID']}（{totals['INVALID'] / max(1, totals['TOTAL']):.1%}）",
+        "",
+        "## WARNING 原因",
+        "",
+        "| 原因 | 数量 | 占 WARNING | 当前分析建议 |",
+        "|---|---:|---:|---|",
+    ]
+    for item in reason_rows:
+        if item["status"] != "WARNING":
+            continue
+        lines.append(
+            f"| {item['reason']} | {item['count']} | "
+            f"{item['ratio_within_status']:.1%} | {item['train_candidate']} |"
+        )
+    lines.extend(
+        [
+            "",
+            f"WARNING 原因覆盖：{warning_coverage['rows_with_reason']} / "
+            f"{warning_coverage['warning_count']}（{warning_coverage['coverage_ratio']:.1%}）。",
+            "",
+            "## 训练候选评估",
+            "",
+            "当前字段只能确认几何/流程异常，不能可靠判断鱼体是否完整。因此本报告不把 WARNING 自动提升为 GOOD；所有 WARNING 的 train_candidate 暂定为 PENDING_HUMAN_REVIEW。",
+            "",
+            "下一步建议：先查看 reports/quality_examples/ 中按原因导出的样例，再基于人工抽查结果制定 Quality Gate V1.1 规则；不要直接修改 DS_CROP_M1_v0.1。",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def generate_quality_gate_analysis(dataset_name: str) -> dict[str, Any]:
+    existing = _analysis_read(dataset_name)
+    if existing is not None:
+        return existing
+    client, bucket = _storage()
+    manifest_name = f"datasets/{dataset_name}/manifest_all.csv"
+    manifest_blob = bucket.blob(manifest_name)
+    if not manifest_blob.exists(client):
+        raise FileNotFoundError("manifest_all.csv not found")
+    rows = list(csv.DictReader(manifest_blob.download_as_text(encoding="utf-8")))
+    totals = Counter(str(row.get("quality_status") or "").upper() for row in rows)
+    total = len(rows)
+    totals_payload = {
+        "TOTAL": total,
+        "GOOD": int(totals.get("GOOD", 0)),
+        "WARNING": int(totals.get("WARNING", 0)),
+        "INVALID": int(totals.get("INVALID", 0)),
+    }
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    warning_with_reason = 0
+    for row in rows:
+        status = str(row.get("quality_status") or "UNKNOWN").upper()
+        reasons = _analysis_reason_parts(row.get("quality_reason"))
+        if status == "WARNING" and reasons != ["NO_REASON"]:
+            warning_with_reason += 1
+        for reason in reasons:
+            grouped[(status, reason)].append(row)
+
+    example_uri_by_key: dict[str, list[str]] = {}
+    example_exported = 0
+    example_failed = 0
+    for status, reason in sorted(grouped):
+        candidates = _analysis_unique_rows(grouped[(status, reason)])
+        sample_size = min(QUALITY_ANALYSIS_SAMPLE_SIZE, len(candidates))
+        rng = random.Random(_analysis_seed(dataset_name, f"{status}:{reason}"))
+        selected = [candidates[i] for i in sorted(rng.sample(range(len(candidates)), sample_size))]
+        safe_reason = _slug(reason)
+        for index, row in enumerate(selected, start=1):
+            key = _analysis_row_key(row)
+            crop_path = str(row.get("crop_path") or "").strip()
+            if not crop_path or crop_path.startswith("/") or ".." in crop_path:
+                example_failed += 1
+                continue
+            source_blob = bucket.blob(f"datasets/{dataset_name}/{crop_path}")
+            destination = f"datasets/{dataset_name}/reports/quality_examples/{status}_{safe_reason}/{index:03d}.jpg"
+            try:
+                if not source_blob.exists(client):
+                    raise FileNotFoundError(crop_path)
+                source_blob.copy_to(bucket, destination)
+                example_uri_by_key.setdefault(key, []).append(f"gs://{get_bucket_name()}/{destination}")
+                example_exported += 1
+            except Exception:
+                example_failed += 1
+
+    reason_rows = []
+    for (status, reason), group in sorted(grouped.items()):
+        count = len(group)
+        reason_rows.append(
+            {
+                "status": status,
+                "reason": reason,
+                "count": count,
+                "ratio_within_status": count / max(1, totals_payload.get(status, count)),
+                "ratio_total": count / max(1, total),
+                "train_candidate": _analysis_train_candidate(status, reason),
+                "sample_size": min(QUALITY_ANALYSIS_SAMPLE_SIZE, count),
+                "example_uris": sorted({uri for row in group for uri in example_uri_by_key.get(_analysis_row_key(row), [])}),
+            }
+        )
+    warning_coverage = {
+        "warning_count": totals_payload["WARNING"],
+        "rows_with_reason": warning_with_reason,
+        "coverage_ratio": warning_with_reason / max(1, totals_payload["WARNING"]),
+    }
+
+    csv_output = io.StringIO(newline="")
+    csv_fields = (
+        "image_id", "batch_id", "species", "quality_status", "quality_reason",
+        "train_candidate", "split", "crop_path", "source_image", "bbox",
+        "pixel_bbox", "fish_bbox_ratio", "crop_clipped", "example_uri",
+    )
+    writer = csv.DictWriter(csv_output, fieldnames=csv_fields, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        status = str(row.get("quality_status") or "UNKNOWN").upper()
+        reason = ";".join(_analysis_reason_parts(row.get("quality_reason")))
+        writer.writerow({
+            **{field: row.get(field, "") for field in csv_fields},
+            "quality_status": status,
+            "quality_reason": reason,
+            "train_candidate": _analysis_train_candidate(status, reason),
+            "example_uri": ";".join(example_uri_by_key.get(_analysis_row_key(row), [])),
+        })
+
+    recommendation = _analysis_recommendation_markdown(dataset_name, totals_payload, reason_rows, warning_coverage)
+    report = {
+        "schema_version": QUALITY_ANALYSIS_SCHEMA_VERSION,
+        "dataset_version": dataset_name,
+        "generated_at": _now(),
+        "source": {
+            "manifest_uri": f"gs://{get_bucket_name()}/{manifest_name}",
+            "source_count": total,
+            "source_is_frozen_manifest_all": True,
+        },
+        "totals": totals_payload,
+        "ratios": {
+            "GOOD": totals_payload["GOOD"] / max(1, total),
+            "WARNING": totals_payload["WARNING"] / max(1, total),
+            "INVALID": totals_payload["INVALID"] / max(1, total),
+        },
+        "warning_reason_coverage": warning_coverage,
+        "reasons": reason_rows,
+        "training_value": {
+            "warning_train_candidate": "PENDING_HUMAN_REVIEW",
+            "warning_count": totals_payload["WARNING"],
+            "automatic_promotion": False,
+        },
+        "artifacts": {
+            "analysis_json_uri": _analysis_uri(dataset_name, "quality_gate_analysis.json"),
+            "analysis_csv_uri": _analysis_uri(dataset_name, "quality_gate_analysis.csv"),
+            "recommendation_uri": _analysis_uri(dataset_name, "quality_gate_recommendation.md"),
+            "examples_prefix": _analysis_uri(dataset_name, "quality_examples/"),
+            "example_requested": sum(item["sample_size"] for item in reason_rows),
+            "example_exported": example_exported,
+            "example_failed": example_failed,
+        },
+    }
+    _write_json(bucket, _analysis_blob(dataset_name, "quality_gate_analysis.json"), report)
+    bucket.blob(_analysis_blob(dataset_name, "quality_gate_analysis.csv")).upload_from_string(
+        csv_output.getvalue().encode("utf-8"), content_type="text/csv"
+    )
+    bucket.blob(_analysis_blob(dataset_name, "quality_gate_recommendation.md")).upload_from_string(
+        recommendation.encode("utf-8"), content_type="text/markdown"
+    )
+    return report
+
+
 
 def validate_crop_split_summary(rows):
     report, counts = _split_report(rows, "TEST")
@@ -884,4 +1107,5 @@ __all__ = [
     "start_crop_dataset_job", "step_crop_dataset_job", "validate_crop_split_summary",
     "get_release_gate_summary", "get_random_50_qa", "start_random_50_qa",
     "review_random_50_qa", "read_random_50_qa_media", "select_random_50_qa_rows",
+    "generate_quality_gate_analysis",
 ]

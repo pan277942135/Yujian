@@ -22,6 +22,7 @@ from app.platform.services.crop_dataset import (
     accepted_pool_snapshot,
     get_crop_dataset_job,
     get_random_50_qa,
+    generate_quality_gate_analysis,
     get_release_gate_summary,
     read_random_50_qa_media,
     review_random_50_qa,
@@ -238,6 +239,21 @@ def platform_release_qa_media(dataset_id: str, qa_index: int) -> Response:
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return Response(content=content, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"})
+
+
+@router.get("/datasets/{dataset_id}/quality-gate-analysis")
+def platform_quality_gate_analysis(dataset_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    if db.get(DatasetVersion, dataset_id) is None:
+        raise HTTPException(status_code=404, detail="数据集不存在")
+    try:
+        return generate_quality_gate_analysis(dataset_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "QUALITY_GATE_ANALYSIS_FAILED", "message": str(exc)[:500]},
+        ) from exc
 
 
 @router.get("/datasets/{dataset_id}/clean-report")
