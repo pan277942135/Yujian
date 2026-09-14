@@ -70,6 +70,21 @@ for _page in PLATFORM_PAGES:
     )
 
 
+@router.get("/platform/data/datasets/{dataset_id}", response_class=HTMLResponse, name="platform_dataset_detail")
+def platform_dataset_detail_page(request: Request, dataset_id: str) -> HTMLResponse:
+    """Render one DatasetVersion without adding it to the sidebar menu."""
+
+    page = PlatformPage(
+        "/platform/data/datasets/{dataset_id}",
+        "platform/data_dataset_detail.html",
+        "数据集详情",
+        "AI 数据工厂",
+        "查看 DatasetVersion 的规模、来源、版本链和 AI 清洗情况。",
+        f"/api/platform/datasets/{dataset_id}",
+    )
+    return _render(request, page)
+
+
 @router.get("/platform/data/queue", include_in_schema=False)
 def platform_queue_compatibility_redirect() -> RedirectResponse:
     """Keep old bookmarks working while the queue is part of Review Center."""
