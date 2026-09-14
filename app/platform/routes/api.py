@@ -148,7 +148,7 @@ def platform_crop_dataset_create(payload: CropDatasetCreate) -> dict[str, Any]:
             limit=payload.limit,
         )
     except Exception as exc:
-        raise HTTPException(status_code=400, detail={"error": "CROP_DATASET_CREATE_FAILED", "reason": str(exc)}) from exc
+        raise HTTPException(status_code=400, detail={"error": "CROP_DATASET_CREATE_FAILED", "message": str(exc)[:1000], "reason": str(exc)[:1000]}) from exc
 
 
 @router.get("/datasets/crop/jobs/{job_id}")
