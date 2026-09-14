@@ -22,6 +22,7 @@ from app.platform.services.crop_dataset import (
     accepted_pool_snapshot,
     get_crop_dataset_job,
     start_crop_dataset_job,
+    step_crop_dataset_job,
 )
 from app.training_api import TrainingCreate, queue_training_run
 from app.frozen_crop_bridge import _read_uri
@@ -63,6 +64,8 @@ class CropDatasetCreate(BaseModel):
     dataset_name: str = Field(default=CROP_DATASET_VERSION, max_length=128)
     expand_ratio: float = Field(default=CROP_EXPAND_RATIO, ge=1.25, le=1.25)
     size: int = Field(default=CROP_OUTPUT_SIZE, ge=416, le=416)
+    mode: str = Field(default="FULL", max_length=16)
+    limit: int | None = Field(default=None, ge=1, le=20)
 
 
 def _image_ref(value: str, batch_id: str | None) -> tuple[str | None, str]:
@@ -137,9 +140,12 @@ def platform_crop_dataset_create(payload: CropDatasetCreate) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail={"error": "SOURCE_NOT_SUPPORTED", "source": payload.source})
     try:
         return start_crop_dataset_job(
+            source=payload.source,
             dataset_name=payload.dataset_name.strip(),
             expand_ratio=payload.expand_ratio,
             size=payload.size,
+            mode=payload.mode,
+            limit=payload.limit,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail={"error": "CROP_DATASET_CREATE_FAILED", "reason": str(exc)}) from exc
@@ -151,6 +157,14 @@ def platform_crop_dataset_job(job_id: str) -> dict[str, Any]:
     if job is None:
         raise HTTPException(status_code=404, detail="裁剪数据集任务不存在")
     return job
+
+
+@router.post("/datasets/crop/jobs/{job_id}/step")
+def platform_crop_dataset_step(job_id: str) -> dict[str, Any]:
+    try:
+        return step_crop_dataset_job(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/datasets")
