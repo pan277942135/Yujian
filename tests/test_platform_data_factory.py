@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timezone
 
 from sqlalchemy import create_engine
 from sqlalchemy import event
@@ -9,8 +10,16 @@ from sqlalchemy.orm import sessionmaker
 from starlette.requests import Request
 
 from app.db import Base
+from app.entry import app
 from app.models import Batch, DatasetVersion, ImageAsset
-from app.platform.routes.pages import PLATFORM_PAGES, platform_queue_compatibility_redirect, templates
+from app.platform.routes.api import platform_dataset_manifest
+from app.platform.routes.pages import (
+    PLATFORM_PAGES,
+    PlatformPage,
+    platform_dataset_detail_page,
+    platform_queue_compatibility_redirect,
+    templates,
+)
 from app.platform.services import adapters
 
 
@@ -146,6 +155,226 @@ def test_platform_datasets_returns_only_dataset_versions(tmp_path):
         assert adapters.dataset_detail(db, "BATCH_RAW_001") is None
     finally:
         db.close()
+
+
+def test_platform_dataset_api_normalizes_version_fields_and_source_batches(tmp_path):
+    db = _session(tmp_path)
+    try:
+        db.add(Batch(batch_id="BATCH_RAW_002", source="upload", manifest_uri="/tmp/m", raw_uri="/tmp/r", image_count=40, status="READY"))
+        db.add_all(
+            [
+                DatasetVersion(
+                    dataset_version="DS_M1_v0.6",
+                    manifest_uri="/tmp/ds-v06.csv",
+                    train_count=3577,
+                    val_count=1000,
+                    test_count=520,
+                    git_commit="b" * 40,
+                    status="FROZEN",
+                    pipeline_type="WHOLE_IMAGE_V1",
+                    created_at=datetime(2026, 9, 5, tzinfo=timezone.utc),
+                ),
+                DatasetVersion(
+                    dataset_version="DS_M1_v0.7",
+                    parent_version="DS_M1_v0.6",
+                    manifest_uri="/tmp/ds-v07.csv",
+                    train_count=1483,
+                    val_count=314,
+                    test_count=320,
+                    git_commit="c" * 40,
+                    status="FROZEN",
+                    pipeline_type="WHOLE_IMAGE_V1",
+                    metadata_json=json.dumps(
+                        {
+                            "source_batch_id": "BATCH_20260913_DB_002",
+                            "source_batch": ["BATCH_20260905_07", "BATCH_20260913_DB_002"],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    created_at=datetime(2026, 9, 13, tzinfo=timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+
+        rows = adapters.datasets(db)
+
+        assert [row["id"] for row in rows] == ["DS_M1_v0.7", "DS_M1_v0.6"]
+        assert all(not row["id"].startswith("BATCH_") for row in rows)
+        assert set(rows[0]) == {
+            "id",
+            "type",
+            "total",
+            "train",
+            "val",
+            "test",
+            "status",
+            "source_batches",
+            "parent_version",
+            "created_at",
+        }
+        assert rows[0]["total"] == 2117
+        assert rows[0]["train"] == 1483
+        assert rows[0]["val"] == 314
+        assert rows[0]["test"] == 320
+        assert rows[0]["source_batches"] == ["BATCH_20260913_DB_002", "BATCH_20260905_07"]
+        assert rows[0]["parent_version"] == "DS_M1_v0.6"
+        assert "source_batch" not in rows[0]
+        assert "name" not in rows[0]
+        assert "pipeline_type" not in rows[0]
+    finally:
+        db.close()
+
+
+def test_platform_dataset_detail_exposes_counts_lineage_and_clean_report(tmp_path):
+    db = _session(tmp_path)
+    try:
+        db.add_all(
+            [
+                DatasetVersion(
+                    dataset_version="DS_M1_v0.6",
+                    manifest_uri="/tmp/ds-v06.csv",
+                    train_count=10,
+                    val_count=2,
+                    test_count=1,
+                    git_commit="b" * 40,
+                    status="FROZEN",
+                ),
+                DatasetVersion(
+                    dataset_version="DS_M1_v0.7",
+                    parent_version="DS_M1_v0.6",
+                    manifest_uri="/tmp/ds-v07.csv",
+                    train_count=1483,
+                    val_count=314,
+                    test_count=320,
+                    git_commit="c" * 40,
+                    status="FROZEN",
+                    metadata_json=json.dumps(
+                        {
+                            "source_batches": ["BATCH_20260913_DB_002"],
+                            "clean_report": {"duplicate": 4, "blur": 2, "no_fish": 1},
+                        },
+                        ensure_ascii=False,
+                    ),
+                ),
+            ]
+        )
+        db.commit()
+
+        detail = adapters.dataset_detail(db, "DS_M1_v0.7")
+
+        assert detail["id"] == "DS_M1_v0.7"
+        assert detail["type"] == "WHOLE_IMAGE_V1"
+        assert detail["status"] == "FROZEN"
+        assert detail["counts"] == {"total": 2117, "train": 1483, "val": 314, "test": 320}
+        assert detail["source_batches"] == ["BATCH_20260913_DB_002"]
+        assert detail["parent_version"] == "DS_M1_v0.6"
+        assert detail["version_chain"] == ["DS_M1_v0.6", "DS_M1_v0.7"]
+        assert detail["clean_report"] == {"blur": 2, "duplicate": 4, "no_fish": 1, "multi_fish": 0, "scene": 0}
+        assert adapters.dataset_detail(db, "BATCH_20260913_DB_002") is None
+    finally:
+        db.close()
+
+
+def test_platform_dataset_list_uses_one_dataset_version_query(tmp_path, monkeypatch):
+    db = _session(tmp_path)
+    try:
+        db.add(
+            DatasetVersion(
+                dataset_version="DS_QUERY_1",
+                manifest_uri="/tmp/ds.csv",
+                train_count=1,
+                val_count=1,
+                test_count=1,
+                git_commit="d" * 40,
+                status="FROZEN",
+            )
+        )
+        db.commit()
+        monkeypatch.setattr(
+            adapters,
+            "_dataset_counts",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("list must not load DatasetItem/ImageAsset details")),
+        )
+        queries = []
+        event.listen(db.bind, "before_cursor_execute", lambda *args: queries.append(args[2]))
+
+        rows = adapters.datasets(db)
+
+        assert len(rows) == 1
+        assert rows[0]["total"] == 3
+        assert len(queries) == 1
+    finally:
+        db.close()
+
+
+def test_platform_dataset_detail_page_and_manifest_endpoint(tmp_path):
+    db = _session(tmp_path)
+    manifest = tmp_path / "dataset-manifest.csv"
+    manifest.write_text("image_id\tspecies\nimage-1\t鲤鱼\n", encoding="utf-8")
+    try:
+        db.add(
+            DatasetVersion(
+                dataset_version="DS_MANIFEST_1",
+                manifest_uri=str(manifest),
+                train_count=1,
+                val_count=0,
+                test_count=0,
+                git_commit="e" * 40,
+                status="FROZEN",
+            )
+        )
+        db.commit()
+
+        response = platform_dataset_detail_page(_request("/platform/data/datasets/DS_MANIFEST_1"), "DS_MANIFEST_1")
+        assert response.template.name == "platform/data_dataset_detail.html"
+        assert "/platform/data/datasets/{dataset_id}" in app.openapi()["paths"]
+        assert "/api/platform/datasets/{dataset_id}/manifest" in app.openapi()["paths"]
+        manifest_response = platform_dataset_manifest("DS_MANIFEST_1", db)
+        assert manifest_response.status_code == 200
+        assert manifest_response.media_type == "text/csv"
+        assert manifest_response.body.startswith(b"image_id")
+        assert "attachment" in manifest_response.headers["content-disposition"]
+    finally:
+        db.close()
+
+
+def test_dataset_templates_separate_detail_and_clean_report_actions():
+    dataset_page = next(page for page in PLATFORM_PAGES if page.path == "/platform/data/datasets")
+    rendered = templates.env.get_template(dataset_page.template).render(
+        request=_request(dataset_page.path), page=dataset_page, page_title=dataset_page.title, platform_pages=PLATFORM_PAGES
+    )
+    detail_page = PlatformPage(
+        "/platform/data/datasets/{dataset_id}",
+        "platform/data_dataset_detail.html",
+        "数据集详情",
+        "AI 数据工厂",
+        "详情",
+        "/api/platform/datasets/{dataset_id}",
+    )
+    detail_rendered = templates.env.get_template(detail_page.template).render(
+        request=_request("/platform/data/datasets/DS_M1_v0.7"),
+        page=detail_page,
+        page_title=detail_page.title,
+        platform_pages=PLATFORM_PAGES,
+    )
+
+    assert "当前生产版本" in rendered
+    assert "历史版本累计样本" in rendered
+    assert "当前训练数据" in rendered
+    assert "查看详情" in rendered
+    assert "清洗报告" in rendered
+    assert "row.name" not in rendered
+    assert "row.source_batch||" not in rendered
+    assert "暂无完整关联信息" not in rendered
+    assert "/api/platform/datasets/${encodeURIComponent(id)}/clean-report" in rendered
+    assert "datasetDetailTitle" in detail_rendered
+    assert "datasetId" in detail_rendered
+    assert "总样本" in detail_rendered
+    assert "来源数据" in detail_rendered
+    assert "版本链" in detail_rendered
+    assert "导出 Manifest" in detail_rendered
+    assert "生成训练任务" in detail_rendered
 
 
 def test_platform_component_partials_are_present():
