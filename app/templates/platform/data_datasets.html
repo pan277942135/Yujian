@@ -7,12 +7,33 @@
   </div>
   <div class="page-actions">
     <a class="button primary" href="/platform/data/import">导入采集数据</a>
+    <button class="button" type="button" id="openCropGenerator">生成鱼体裁剪数据集</button>
   </div>
 </div>
 
 <div id="datasetMetrics" class="metric-grid" aria-label="数据集统计">
   <div class="metric-card"><div class="loading">加载中…</div></div>
 </div>
+
+<section class="panel" style="margin-top:16px" id="cropDatasetPanel">
+  <div class="panel-heading">
+    <div>
+      <h2>生成鱼体裁剪数据集</h2>
+      <p>使用已确认鱼体框生成 Crop Dataset，用于鱼种分类模型训练。</p>
+    </div>
+    <span class="code">CROP_IMAGE_V1</span>
+  </div>
+  <div id="cropPoolState" class="loading">加载 Accepted Fish Pool…</div>
+  <div class="stat-grid" style="margin-top:14px">
+    <div class="stat"><strong>1.25</strong><span>鱼体框扩展比例</span></div>
+    <div class="stat"><strong>416 × 416</strong><span>输出尺寸</span></div>
+    <div class="stat"><strong>Accepted BBox</strong><span>唯一数据来源</span></div>
+  </div>
+  <div class="page-actions" style="margin-top:14px">
+    <button class="button primary" type="button" id="startCropDataset">开始生成</button>
+    <span id="cropJobState" class="muted">等待开始</span>
+  </div>
+</section>
 
 <section class="panel" style="margin-top:16px">
   <div class="panel-heading">
@@ -155,5 +176,69 @@ async function loadDatasets() {
 }
 
 loadDatasets();
+let cropJobTimer = null;
+
+function renderCropPool(pool) {
+  const count = Number(pool.count || 0);
+  document.getElementById('cropPoolState').innerHTML = count
+    ? '<strong>Accepted Fish Pool：' + esc(count) + '</strong><span class="muted"> 条已确认鱼体框，可生成 DS_CROP_M1_v0.1。</span>'
+    : '<span class="muted">当前没有可用的 Accepted BBox。</span>';
+  document.getElementById('startCropDataset').disabled = !count;
+}
+
+function renderCropJob(job) {
+  const target = document.getElementById('cropJobState');
+  if (!job) { target.textContent = '等待开始'; return; }
+  const status = String(job.status || 'PENDING').toUpperCase();
+  const detail = job.processed != null && job.source_count ? '（' + job.processed + '/' + job.source_count + '）' : '';
+  if (status === 'SUCCESS') {
+    target.innerHTML = '<span class="status-tag status-ready"><span class="status-dot"></span>已完成 ' + esc(job.generated_count || 0) + ' 条' + detail + '</span>';
+  } else if (status === 'FAILED') {
+    target.innerHTML = '<span class="status-tag status-error"><span class="status-dot"></span>生成失败：' + esc(job.error || '请查看日志') + '</span>';
+  } else {
+    target.innerHTML = '<span class="status-tag status-review"><span class="status-dot"></span>' + (status === 'RUNNING' ? '生成中' : '排队中') + detail + '</span>';
+  }
+}
+
+async function pollCropJob(jobId) {
+  if (cropJobTimer) clearTimeout(cropJobTimer);
+  try {
+    const job = await platformFetch('/api/platform/datasets/crop/jobs/' + encodeURIComponent(jobId));
+    renderCropJob(job);
+    if (!['SUCCESS', 'FAILED'].includes(String(job.status || '').toUpperCase())) {
+      cropJobTimer = setTimeout(() => pollCropJob(jobId), 1500);
+    } else if (String(job.status).toUpperCase() === 'SUCCESS') {
+      await loadDatasets();
+    }
+  } catch (error) {
+    document.getElementById('cropJobState').textContent = platformError(error);
+  }
+}
+
+async function startCropDataset() {
+  const button = document.getElementById('startCropDataset');
+  button.disabled = true;
+  renderCropJob({status:'PENDING'});
+  try {
+    const job = await platformFetch('/api/platform/datasets/crop/create', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({source:'accepted_bbox', dataset_name:'DS_CROP_M1_v0.1', expand_ratio:1.25, size:416}),
+    });
+    renderCropJob(job);
+    pollCropJob(job.job_id);
+  } catch (error) {
+    button.disabled = false;
+    document.getElementById('cropJobState').textContent = platformError(error);
+  }
+}
+
+document.getElementById('openCropGenerator').addEventListener('click', () => {
+  document.getElementById('cropDatasetPanel').scrollIntoView({behavior:'smooth', block:'start'});
+});
+document.getElementById('startCropDataset').addEventListener('click', startCropDataset);
+platformFetch('/api/platform/fish-pool/accepted').then(renderCropPool).catch(error => {
+  document.getElementById('cropPoolState').textContent = platformError(error);
+});
 </script>
 {% endblock %}
