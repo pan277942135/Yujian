@@ -140,7 +140,7 @@ def platform_review_items(
     issue: str | None = Query(default=None, max_length=32),
     q: str | None = Query(default=None, max_length=256),
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=40, ge=1, le=100),
+    page_size: int = Query(default=30, ge=1, le=100),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     return adapters.review_items(

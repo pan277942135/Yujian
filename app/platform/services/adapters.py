@@ -10,11 +10,10 @@ from __future__ import annotations
 
 import json
 import math
-from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
@@ -46,6 +45,7 @@ from app.services.review_prefill import parse_review_signals
 
 REVIEW_PENDING = {"pending", "needs_review", "hard_case"}
 VALID_QUALITY = {"GOOD", "OK", "CLEAR", "PASS", "VALID"}
+REVIEW_PAGE_DEFAULT = 30
 ISSUE_LABELS = {
     "low_confidence": "低置信",
     "bbox_error": "BBox 异常",
@@ -123,22 +123,77 @@ def _feedback_for_image(db: Session, image: ImageAsset) -> FeedbackEvent | None:
         return None
 
 
-def _review_item(db: Session, image: ImageAsset) -> dict[str, Any]:
-    feedback = _feedback_for_image(db, image)
+_UNSET = object()
+
+
+def _bbox_value(value: Any) -> list[float] | None:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+    if isinstance(value, dict):
+        value = value.get("bbox", value)
+        if isinstance(value, dict) and {"x", "y", "width", "height"} <= set(value):
+            value = [value["x"], value["y"], value["width"], value["height"]
+            ]
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return None
+    try:
+        values = [float(item) for item in value]
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(item) and 0 <= item <= 1 for item in values):
+        return None
+    if values[2] <= 0 or values[3] <= 0 or values[0] + values[2] > 1.00001 or values[1] + values[3] > 1.00001:
+        return None
+    return values
+
+
+def _review_item(
+    db: Session,
+    image: ImageAsset,
+    *,
+    feedback: FeedbackEvent | None | object = _UNSET,
+    presence: FishPresenceResult | None | object = _UNSET,
+    bbox_review: BatchCropReview | None | object = _UNSET,
+) -> dict[str, Any]:
+    """Build one review DTO, optionally from page-prefetched relations.
+
+    The optional arguments are important: list endpoints must not turn one
+    image into several database round trips. Direct callers retain the old
+    lazy behavior for compatibility with existing services/tests.
+    """
+    if feedback is _UNSET:
+        feedback = _feedback_for_image(db, image)
+    if presence is _UNSET:
+        rows = _safe_scalars(db, select(FishPresenceResult).where(FishPresenceResult.image_asset_id == image.id).limit(1))
+        presence = rows[0] if rows else None
+    if bbox_review is _UNSET:
+        bbox_review = db.scalar(select(BatchCropReview).where(BatchCropReview.image_asset_id == image.id))
     signals = parse_review_signals(image.notes)
     raw = image_dict(
         image,
-        db=db,
-        classifier_prediction=(feedback.predicted_species if feedback else None) or signals.get("prediction"),
-        classifier_confidence=(feedback.confidence if feedback else None),
+        # Related review rows were prefetched by the caller; passing no DB
+        # here prevents image_dict from opening its legacy per-image lookup.
+        db=None,
+        classifier_prediction=(feedback.predicted_species if isinstance(feedback, FeedbackEvent) else None) or signals.get("prediction"),
+        classifier_confidence=(feedback.confidence if isinstance(feedback, FeedbackEvent) else None),
     )
     confidence = _number(raw.get("ai_confidence"))
-    presence = _safe_scalars(
-        db,
-        select(FishPresenceResult).where(FishPresenceResult.image_asset_id == image.id).limit(1),
-    )
-    presence_row = presence[0] if presence else None
+    presence_row = presence if isinstance(presence, FishPresenceResult) else None
     presence_status = effective_status(presence_row) if presence_row else None
+    candidate_bbox = _bbox_value(bbox_review.candidate_bbox_json) if isinstance(bbox_review, BatchCropReview) else None
+    if candidate_bbox is None and presence_row:
+        try:
+            from app.crop_review import _candidate_boxes
+
+            candidates = _candidate_boxes(presence_row)
+            candidate_bbox = candidates[0]["bbox"] if candidates else None
+        except Exception:
+            candidate_bbox = None
+    accepted_bbox = _bbox_value(bbox_review.accepted_bbox_json) if isinstance(bbox_review, BatchCropReview) else None
+    bbox_status = "ACCEPTED" if isinstance(bbox_review, BatchCropReview) and bbox_review.status in {"ACCEPTED", "TRAINING_READY"} and accepted_bbox else ("CANDIDATE" if candidate_bbox else "MISSING")
     issues: list[str] = []
     if confidence is None or confidence < 0.80:
         issues.append("low_confidence")
@@ -155,7 +210,7 @@ def _review_item(db: Session, image: ImageAsset) -> dict[str, Any]:
         # /media is the existing controlled gateway; the registry GCS URI is
         # deliberately not returned by Platform APIs.
         "image_url": raw.get("media_url"),
-        "thumbnail_url": raw.get("media_url"),
+        "thumbnail_url": f"/media/{image.batch_id}/{image.image_id}?variant=thumbnail",
         "predicted_species": raw.get("ai_suggestion"),
         "confidence": confidence,
         "quality": image.quality,
@@ -164,10 +219,10 @@ def _review_item(db: Session, image: ImageAsset) -> dict[str, Any]:
         "truth_species": image.truth_species,
         "claimed_species": image.claimed_species,
         "truth_status": image.truth_status,
-        "candidate_bbox": raw.get("candidate_bbox"),
-        "accepted_bbox": raw.get("accepted_bbox"),
-        "bbox_status": raw.get("bbox_status"),
-        "bbox_review_status": raw.get("bbox_review_status"),
+        "candidate_bbox": candidate_bbox,
+        "accepted_bbox": accepted_bbox,
+        "bbox_status": bbox_status,
+        "bbox_review_status": bbox_review.status if isinstance(bbox_review, BatchCropReview) else "REVIEW_REQUIRED",
         "issue_types": issues,
         "issue_labels": [ISSUE_LABELS[item] for item in issues],
         "model_version": feedback.model_version if feedback else None,
@@ -188,6 +243,86 @@ def _matches_status(image: ImageAsset, status: str | None) -> bool:
     return image.review_status == status
 
 
+def _latest_feedback_value(column: Any):
+    return (
+        select(column)
+        .where(
+            or_(
+                and_(FeedbackEvent.materialized_batch_id == ImageAsset.batch_id, FeedbackEvent.materialized_image_id == ImageAsset.image_id),
+                FeedbackEvent.image_gcs_uri == ImageAsset.gcs_uri,
+            )
+        )
+        .order_by(FeedbackEvent.created_at.desc(), FeedbackEvent.id.desc())
+        .limit(1)
+        .correlate(ImageAsset)
+        .scalar_subquery()
+    )
+
+
+def _review_filter_clauses(*, status: str | None, batch_id: str | None, species: str | None, issue: str | None, q: str | None):
+    clauses = []
+    if batch_id:
+        clauses.append(ImageAsset.batch_id == batch_id)
+    if species:
+        clauses.append(review_group_clause(species))
+    if q:
+        term = f"%{q.strip()}%"
+        clauses.append(or_(ImageAsset.image_id.ilike(term), ImageAsset.file_name.ilike(term), ImageAsset.source_url.ilike(term)))
+    if status and status != "all":
+        clauses.append(ImageAsset.review_status.in_(REVIEW_PENDING) if status == "pending" else ImageAsset.review_status == status)
+
+    feedback_confidence = _latest_feedback_value(FeedbackEvent.confidence)
+    quality = func.upper(func.trim(func.coalesce(ImageAsset.quality, "")))
+    presence_issue = select(FishPresenceResult.id).where(
+        FishPresenceResult.image_asset_id == ImageAsset.id,
+        or_(
+            FishPresenceResult.status.in_({"no_fish", "multi_fish", "uncertain"}),
+            and_(FishPresenceResult.status == "fish_present", FishPresenceResult.fish_count != 1),
+        ),
+    ).correlate(ImageAsset)
+    accepted_bbox = select(BatchCropReview.id).where(
+        BatchCropReview.image_asset_id == ImageAsset.id,
+        BatchCropReview.status.in_({"ACCEPTED", "TRAINING_READY"}),
+        BatchCropReview.accepted_bbox_json.is_not(None),
+        func.length(func.trim(BatchCropReview.accepted_bbox_json)) > 0,
+    ).correlate(ImageAsset)
+    if issue == "low_confidence":
+        clauses.append(or_(feedback_confidence.is_(None), feedback_confidence < 0.80))
+    elif issue == "bbox_error":
+        clauses.append(~accepted_bbox.exists())
+    elif issue == "quality_issue":
+        clauses.append(or_(~quality.in_(VALID_QUALITY), presence_issue.exists()))
+    return clauses
+
+
+def _prefetch_review_relations(db: Session, rows: list[ImageAsset]):
+    if not rows:
+        return {}, {}, {}
+    image_ids = [row.id for row in rows]
+    feedback_conditions = []
+    for image in rows:
+        feedback_conditions.append(
+            or_(
+                and_(FeedbackEvent.materialized_batch_id == image.batch_id, FeedbackEvent.materialized_image_id == image.image_id),
+                FeedbackEvent.image_gcs_uri == image.gcs_uri,
+            )
+        )
+    feedback_by_key: dict[tuple[str, str], FeedbackEvent] = {}
+    feedback_rows = _safe_scalars(db, select(FeedbackEvent).where(or_(*feedback_conditions)).order_by(FeedbackEvent.created_at.desc(), FeedbackEvent.id.desc()))
+    for row in feedback_rows:
+        keys = []
+        if row.materialized_batch_id and row.materialized_image_id:
+            keys.append((row.materialized_batch_id, row.materialized_image_id))
+        for image in rows:
+            if row.image_gcs_uri and row.image_gcs_uri == image.gcs_uri:
+                keys.append((image.batch_id, image.image_id))
+        for key in keys:
+            feedback_by_key.setdefault(key, row)
+    presence_by_id = {row.image_asset_id: row for row in _safe_scalars(db, select(FishPresenceResult).where(FishPresenceResult.image_asset_id.in_(image_ids)))}
+    bbox_by_id = {row.image_asset_id: row for row in _safe_scalars(db, select(BatchCropReview).where(BatchCropReview.image_asset_id.in_(image_ids)))}
+    return feedback_by_key, presence_by_id, bbox_by_id
+
+
 def review_items(
     db: Session,
     *,
@@ -201,51 +336,62 @@ def review_items(
 ) -> dict[str, Any]:
     page = max(int(page or 1), 1)
     page_size = min(max(int(page_size or 40), 1), 100)
-    statement = select(ImageAsset).order_by(ImageAsset.id)
-    if batch_id:
-        statement = statement.where(ImageAsset.batch_id == batch_id)
-    if species:
-        statement = statement.where(review_group_clause(species))
-    if q:
-        term = f"%{q.strip()}%"
-        statement = statement.where(
-            or_(ImageAsset.image_id.ilike(term), ImageAsset.file_name.ilike(term), ImageAsset.source_url.ilike(term))
-        )
-    rows = _safe_scalars(db, statement)
-    selected = []
-    for image in rows:
-        if not _matches_status(image, status):
-            continue
-        item = _review_item(db, image)
-        if _matches_issue(item, issue):
-            selected.append(item)
+    clauses = _review_filter_clauses(status=status, batch_id=batch_id, species=species, issue=issue, q=q)
+    total = _safe_count(db, ImageAsset, *clauses)
     start = (page - 1) * page_size
+    rows = _safe_scalars(db, select(ImageAsset).where(*clauses).order_by(ImageAsset.id).offset(start).limit(page_size))
+    feedback_by_key, presence_by_id, bbox_by_id = _prefetch_review_relations(db, rows)
+    selected = [
+        _review_item(
+            db,
+            image,
+            feedback=feedback_by_key.get((image.batch_id, image.image_id)),
+            presence=presence_by_id.get(image.id),
+            bbox_review=bbox_by_id.get(image.id),
+        )
+        for image in rows
+    ]
     return {
-        "items": selected[start : start + page_size],
+        "items": selected,
         "page": page,
         "page_size": page_size,
-        "total": len(selected),
-        "has_next": start + page_size < len(selected),
+        "total": total,
+        "has_next": start + page_size < total,
     }
 
 
 def review_queue(db: Session) -> dict[str, Any]:
-    rows = _safe_scalars(db, select(ImageAsset).order_by(ImageAsset.id))
-    counts = Counter()
-    examples: dict[str, list[dict[str, Any]]] = {key: [] for key in ISSUE_LABELS}
-    for image in rows:
-        item = _review_item(db, image)
-        for issue in item["issue_types"]:
-            counts[issue] += 1
-            if len(examples[issue]) < 8:
-                examples[issue].append(item)
+    feedback_confidence = _latest_feedback_value(FeedbackEvent.confidence)
+    quality = func.upper(func.trim(func.coalesce(ImageAsset.quality, "")))
+    presence_issue = select(FishPresenceResult.id).where(
+        FishPresenceResult.image_asset_id == ImageAsset.id,
+        or_(FishPresenceResult.status.in_({"no_fish", "multi_fish", "uncertain"}), and_(FishPresenceResult.status == "fish_present", FishPresenceResult.fish_count != 1)),
+    ).correlate(ImageAsset)
+    accepted_bbox = select(BatchCropReview.id).where(
+        BatchCropReview.image_asset_id == ImageAsset.id,
+        BatchCropReview.status.in_({"ACCEPTED", "TRAINING_READY"}),
+        BatchCropReview.accepted_bbox_json.is_not(None),
+        func.length(func.trim(BatchCropReview.accepted_bbox_json)) > 0,
+    ).correlate(ImageAsset)
+    low = or_(feedback_confidence.is_(None), feedback_confidence < 0.80)
+    bbox = ~accepted_bbox.exists()
+    quality_issue = or_(~quality.in_(VALID_QUALITY), presence_issue.exists())
+    pending = ImageAsset.review_status.in_(REVIEW_PENDING)
+    low_case = case((low, 1), else_=0)
+    bbox_case = case((bbox, 1), else_=0)
+    quality_case = case((quality_issue, 1), else_=0)
+    high_case = case((feedback_confidence >= 0.80, 1), else_=0)
+    pending_case = case((pending, 1), else_=0)
+    result = db.execute(select(func.sum(low_case), func.sum(bbox_case), func.sum(quality_case), func.sum(high_case), func.sum(pending_case)).select_from(ImageAsset)).one()
+    low_count, bbox_count, quality_count, high_count, pending_count = [int(value or 0) for value in result]
     return {
-        "low_confidence": counts.get("low_confidence", 0),
-        "bbox_error": counts.get("bbox_error", 0),
-        "quality_issue": counts.get("quality_issue", 0),
-        "total": sum(counts.values()),
+        "high_confidence": high_count,
+        "low_confidence": low_count,
+        "bbox_error": bbox_count,
+        "quality_issue": quality_count,
+        "pending": pending_count,
+        "total": low_count + bbox_count + quality_count,
         "labels": ISSUE_LABELS,
-        "examples": examples,
     }
 
 
@@ -261,12 +407,13 @@ def dashboard(db: Session) -> dict[str, Any]:
     approved_images = _safe_count(db, ImageAsset, ImageAsset.review_status == "approved")
     frozen_images = 0
     try:
-        frozen_images = sum(
-            _dataset_counts(db, row)["total"]
-            for row in _safe_scalars(
-                db,
-                select(DatasetVersion).where(DatasetVersion.status.in_({"FROZEN", "READY_FOR_TRAINING"})),
+        frozen_images = int(
+            db.scalar(
+                select(func.coalesce(func.sum(DatasetVersion.train_count + DatasetVersion.val_count + DatasetVersion.test_count), 0)).where(
+                    DatasetVersion.status.in_({"FROZEN", "READY_FOR_TRAINING"})
+                )
             )
+            or 0
         )
     except Exception:
         frozen_images = 0
@@ -283,7 +430,7 @@ def dashboard(db: Session) -> dict[str, Any]:
         latest_model = db.scalar(select(ModelVersion).order_by(ModelVersion.created_at.desc()).limit(1))
     except SQLAlchemyError:
         db.rollback()
-    queue = review_queue(db)
+    review_pending = _safe_count(db, ImageAsset, ImageAsset.review_status.in_(REVIEW_PENDING))
     asset_count = _safe_count(db, FishAsset)
     active_assets = _safe_count(db, FishAsset, FishAsset.status == "ACTIVE")
     return {
@@ -292,7 +439,7 @@ def dashboard(db: Session) -> dict[str, Any]:
         "valid_images": valid_images,
         "models": models,
         "evaluations": evaluations,
-        "review_queue": queue["total"],
+        "review_queue": review_pending,
         "current_model": latest_model.model_version if latest_model else None,
         "latest_model_version": latest_model.model_version if latest_model else None,
         "pipelines": pipeline_counts,
@@ -346,37 +493,21 @@ def datasets(db: Session) -> list[dict[str, Any]]:
     result = []
     for row in rows:
         counts = _dataset_counts(db, row)
+        metadata = _json(getattr(row, "metadata_json", None), {}) or {}
+        source_batch = metadata.get("source_batch_id") or metadata.get("source_batch") if isinstance(metadata, dict) else None
         result.append(
             {
                 "id": row.dataset_version,
                 "name": row.dataset_version,
-                "total_images": counts["total"],
-                "valid_images": counts["valid"],
-                "pending_review": counts["pending"],
-                "train_ready": counts["training"],
+                "type": getattr(row, "pipeline_type", None) or "WHOLE_IMAGE_V1",
+                "total": counts["total"],
+                "train": int(row.train_count or 0),
+                "val": int(row.val_count or 0),
+                "test": int(row.test_count or 0),
                 "status": _status(row.status),
                 "pipeline_type": getattr(row, "pipeline_type", None),
+                "source_batch": source_batch if isinstance(source_batch, str) else None,
                 "created_at": _iso(row.created_at),
-            }
-        )
-    known = {item["id"] for item in result}
-    for batch in _safe_scalars(db, select(Batch).order_by(Batch.created_at.desc())):
-        if batch.batch_id in known:
-            continue
-        total = int(batch.image_count or 0) or _safe_count(db, ImageAsset, ImageAsset.batch_id == batch.batch_id)
-        valid = _safe_count(db, ImageAsset, ImageAsset.batch_id == batch.batch_id, ImageAsset.review_status == "approved")
-        pending = _safe_count(db, ImageAsset, ImageAsset.batch_id == batch.batch_id, ImageAsset.review_status.in_(REVIEW_PENDING))
-        result.append(
-            {
-                "id": batch.batch_id,
-                "name": batch.batch_id,
-                "total_images": total,
-                "valid_images": valid,
-                "pending_review": pending,
-                "train_ready": 0,
-                "status": _status(batch.status),
-                "pipeline_type": "BATCH_INGEST",
-                "created_at": _iso(batch.created_at),
             }
         )
     return result
@@ -384,37 +515,26 @@ def datasets(db: Session) -> list[dict[str, Any]]:
 
 def dataset_detail(db: Session, dataset_id: str) -> dict[str, Any] | None:
     row = db.get(DatasetVersion, dataset_id)
-    if row:
-        counts = _dataset_counts(db, row)
-        metadata = _json(getattr(row, "metadata_json", None), {}) or {}
-        status = _status(row.status)
-        pipeline_type = getattr(row, "pipeline_type", None)
-        created_at = _iso(row.created_at)
-    else:
-        batch = db.get(Batch, dataset_id)
-        if not batch:
-            return None
-        total = int(batch.image_count or 0) or _safe_count(db, ImageAsset, ImageAsset.batch_id == dataset_id)
-        valid = _safe_count(db, ImageAsset, ImageAsset.batch_id == dataset_id, ImageAsset.review_status == "approved")
-        pending = _safe_count(db, ImageAsset, ImageAsset.batch_id == dataset_id, ImageAsset.review_status.in_(REVIEW_PENDING))
-        counts = {"total": total, "valid": valid, "pending": pending, "training": 0}
-        metadata = {}
-        status = _status(batch.status)
-        pipeline_type = "BATCH_INGEST"
-        created_at = _iso(batch.created_at)
+    if not row:
+        return None
+    counts = _dataset_counts(db, row)
+    metadata = _json(getattr(row, "metadata_json", None), {}) or {}
+    status = _status(row.status)
+    pipeline_type = getattr(row, "pipeline_type", None) or "WHOLE_IMAGE_V1"
+    created_at = _iso(row.created_at)
+    source_batch = metadata.get("source_batch_id") or metadata.get("source_batch") if isinstance(metadata, dict) else None
     return {
         "id": dataset_id,
         "name": dataset_id,
         "status": status,
         "pipeline_type": pipeline_type,
+        "source_batch": source_batch if isinstance(source_batch, str) else None,
         "created_at": created_at,
         "counts": {
-            "uploaded": counts["total"],
-            "valid": counts["valid"],
-            "ai_filtered": max(counts["total"] - counts["valid"], 0),
-            "pending_review": counts["pending"],
-            "human_confirmed": counts["valid"] - counts["pending"],
-            "train_ready": counts["training"],
+            "total": counts["total"],
+            "train": int(row.train_count or 0),
+            "val": int(row.val_count or 0),
+            "test": int(row.test_count or 0),
         },
         "cleaning": metadata.get("clean_report", metadata.get("cleaning", {})) if isinstance(metadata, dict) else {},
     }
@@ -425,7 +545,7 @@ def clean_report(db: Session, dataset_id: str) -> dict[str, Any] | None:
     if detail is None:
         return None
     stored = detail.get("cleaning") if isinstance(detail.get("cleaning"), dict) else {}
-    total = int(detail["counts"]["uploaded"] or 0)
+    total = int(detail["counts"]["total"] or 0)
     invalid = {
         "blur": int(stored.get("blur", stored.get("blurred", 0)) or 0),
         "duplicate": int(stored.get("duplicate", stored.get("duplicates", 0)) or 0),
@@ -456,7 +576,7 @@ def clean_report(db: Session, dataset_id: str) -> dict[str, Any] | None:
         except SQLAlchemyError:
             db.rollback()
     invalid_total = min(sum(invalid.values()), total)
-    valid = max(total - invalid_total, int(detail["counts"].get("valid", 0) or 0))
+    valid = max(total - invalid_total, 0)
     return {
         "dataset_id": dataset_id,
         "total": total,
