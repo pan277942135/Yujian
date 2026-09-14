@@ -1,6 +1,6 @@
 {% macro ai_result_panel(target_id='aiResultPanel') -%}
 <section class="panel ai-panel" id="{{ target_id }}" aria-label="AI结果">
-  <div class="panel-heading"><div><h2>AI 结果</h2><p>先看模型结论，再决定是否需要人工处理。</p></div></div>
+  <div class="panel-heading"><div><h2>AI 结果</h2><p>先看模型结论，再决定是否需要人工处理。</p></div><button class="button review-drawer-close" type="button" onclick="closeReviewDetail()">关闭详情</button></div>
   <div class="empty" data-ai-empty>选择一张图片查看详情</div>
   <div data-ai-content hidden>
     <div class="bbox-preview" data-ai-preview>
