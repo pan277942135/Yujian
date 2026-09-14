@@ -42,6 +42,7 @@ from app.p0_automation import install_feedback_automation, router as automation_
 from app.unified_nav import install_unified_nav
 from app.db import SessionLocal
 from app.species_policy import ensure_target_species
+from app.platform.routes.pages import router as platform_pages_router
 
 
 for template_engine in (
@@ -143,3 +144,4 @@ app.include_router(fish_knowledge_admin_compat_router)
 
 app.include_router(fish_asset_import_router)
 app.include_router(fish_asset_import_page_router)
+app.include_router(platform_pages_router)

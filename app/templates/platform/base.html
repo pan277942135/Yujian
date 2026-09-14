@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ page_title or '渔见 AI 智能生产平台' }} · 渔见</title>
+<style>
+  :root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17252b;background:#f4f7f6;--ink:#17252b;--muted:#71817d;--line:#dfe8e4;--panel:#fff;--brand:#164f48;--gold:#b07b2a;--soft:#edf5f1}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;background:linear-gradient(135deg,#eef5f2,#f8faf8 52%,#fbf7ed)}
+  button,input,select,textarea{font:inherit}
+  button,a{-webkit-tap-highlight-color:transparent}
+  a{color:inherit}.platform-app{min-height:100vh}
+  .platform-sidebar{position:fixed;inset:0 auto 0 0;width:260px;z-index:40;display:flex;flex-direction:column;background:#143e39;color:#e9f4ef;padding:22px 14px;box-shadow:12px 0 30px rgba(14,44,38,.08)}
+  .brand{display:flex;align-items:center;gap:11px;padding:2px 10px 22px;border-bottom:1px solid rgba(233,244,239,.14)}
+  .brand-mark{display:grid;place-items:center;width:36px;height:36px;border-radius:12px;background:#d7a348;color:#24463f;font-weight:900}.brand-title{font-weight:850;letter-spacing:.02em}.brand-subtitle{display:block;color:#a8c4ba;font-size:11px;margin-top:2px;font-weight:550}
+  .nav-scroll{overflow-y:auto;padding:16px 0;scrollbar-width:thin}.nav-group{margin:0 0 17px}.nav-group-title{padding:0 11px 6px;color:#8fb1a5;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
+  .nav-link{display:flex;align-items:center;gap:9px;padding:9px 11px;margin:2px 0;border-radius:10px;color:#d5e6df;text-decoration:none;font-size:13px;font-weight:650}.nav-link:hover,.nav-link:focus-visible{background:rgba(255,255,255,.1);color:#fff;outline:none}.nav-link.active{background:#edf5f1;color:#143e39;box-shadow:0 4px 12px rgba(0,0,0,.1)}.nav-dot{width:7px;height:7px;border-radius:50%;background:#7fae9f;flex:0 0 auto}.nav-link.active .nav-dot{background:#c1872d}
+  .sidebar-foot{margin-top:auto;padding:14px 10px 0;border-top:1px solid rgba(233,244,239,.14);font-size:12px;color:#9fbbb1;line-height:1.6}.sidebar-foot a{color:#f4d58f;text-decoration:none}
+  .platform-main{margin-left:260px;min-height:100vh;padding:0 34px 52px}.platform-topbar{display:flex;align-items:center;gap:14px;min-height:76px;border-bottom:1px solid var(--line)}.mobile-menu{display:none;border:1px solid var(--line);background:#fff;border-radius:10px;padding:8px 11px;cursor:pointer}.breadcrumb{font-size:13px;color:var(--muted)}.breadcrumb strong{color:var(--ink);font-size:16px;margin-left:6px}.topbar-spacer{flex:1}.topbar-link{font-size:13px;color:#4f6e67;text-decoration:none}.topbar-link:hover{text-decoration:underline}
+  .page-wrap{width:min(1380px,100%);margin:0 auto;padding-top:29px}.page-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:24px}.page-heading h1{margin:0;font-size:clamp(25px,3vw,34px);letter-spacing:-.035em}.page-heading p{margin:8px 0 0;color:var(--muted);line-height:1.55}.page-actions{display:flex;gap:8px;flex-wrap:wrap}
+  .button{border:1px solid #cad8d3;border-radius:10px;background:#fff;padding:9px 14px;color:#34534c;cursor:pointer;font-weight:750;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:7px}.button:hover{border-color:#8eb1a6;background:#f8fcfa}.button.primary{background:var(--brand);border-color:var(--brand);color:#fff}.button.gold{background:#fff8e9;border-color:#e6c786;color:#875d1e}.button.danger{color:#a63d35;border-color:#e9b3ad;background:#fff9f8}.button:disabled{opacity:.5;cursor:not-allowed}
+  .metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.metric-card{background:rgba(255,255,255,.88);border:1px solid var(--line);border-radius:16px;padding:17px 18px;box-shadow:0 8px 24px rgba(39,75,65,.05)}.metric-label{color:var(--muted);font-size:13px;font-weight:700}.metric-value{font-size:31px;font-weight:850;letter-spacing:-.04em;margin-top:8px}.metric-detail{font-size:12px;color:#879994;margin-top:5px}
+  .panel{background:rgba(255,255,255,.9);border:1px solid var(--line);border-radius:16px;box-shadow:0 8px 24px rgba(39,75,65,.04);padding:20px}.panel + .panel{margin-top:16px}.panel-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:15px}.panel-heading h2{font-size:18px;margin:0;letter-spacing:-.02em}.panel-heading p{font-size:12px;color:var(--muted);margin:5px 0 0}.muted{color:var(--muted)}.empty{padding:42px 20px;text-align:center;color:var(--muted);border:1px dashed #cfded8;border-radius:12px;background:#fbfdfc}.error-state{padding:14px;border-radius:10px;background:#fff3f1;color:#9e3f36;border:1px solid #f0c1bb;white-space:pre-wrap}.loading{color:var(--muted);padding:28px;text-align:center}
+  .data-table{width:100%;border-collapse:collapse;font-size:13px}.data-table th{text-align:left;color:#7b8b87;font-size:11px;letter-spacing:.04em;font-weight:800;background:#f7faf9}.data-table th,.data-table td{padding:12px 11px;border-bottom:1px solid #e8efec;vertical-align:middle}.data-table tr:last-child td{border-bottom:0}.data-table td strong{font-weight:800}.table-wrap{overflow:auto;border:1px solid #e5eeea;border-radius:12px}
+  .status-tag{display:inline-flex;align-items:center;gap:5px;border-radius:99px;padding:4px 9px;font-size:11px;font-weight:800;white-space:nowrap}.status-dot{width:6px;height:6px;border-radius:50%;background:currentColor}.status-success,.status-active,.status-production,.status-trained{color:#19714f;background:#e8f7ef}.status-running,.status-queued,.status-review,.status-staging{color:#8b641c;background:#fff5db}.status-failed,.status-error,.status-deprecated{color:#a63b34;background:#fff0ed}.status-neutral,.status-draft{color:#60736d;background:#eef3f1}
+  .toolbar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:16px}.toolbar input,.toolbar select,.field input,.field select,.field textarea{border:1px solid #cfddd8;border-radius:9px;background:#fff;padding:9px 10px;color:var(--ink);min-height:40px}.toolbar input{min-width:220px}.field{display:flex;flex-direction:column;gap:6px}.field label{font-size:12px;color:#657873;font-weight:750}.field small{font-size:11px;color:#879994}.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px}.form-grid .full{grid-column:1/-1}.form-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}
+  .split-layout{display:grid;grid-template-columns:230px minmax(0,1fr) 300px;gap:14px;align-items:start}.filter-panel,.ai-panel{position:sticky;top:18px}.filter-list{display:flex;flex-direction:column;gap:6px}.filter-button{display:flex;justify-content:space-between;border:1px solid transparent;background:#f5f9f7;border-radius:9px;padding:10px;color:#4c6860;cursor:pointer;text-align:left;font-size:13px}.filter-button:hover,.filter-button.selected{border-color:#b8d4c9;background:#e7f3ed;color:#164f48}.filter-count{font-weight:850}.review-card{display:grid;grid-template-columns:150px minmax(0,1fr);gap:14px;border:1px solid #e0ebe6;border-radius:13px;padding:11px;margin-bottom:10px;background:#fff}.review-thumb{width:150px;height:112px;object-fit:cover;border-radius:9px;background:#e9efed}.review-meta{display:flex;flex-direction:column;gap:7px;min-width:0}.review-id{font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.review-sub{font-size:12px;color:var(--muted)}.review-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:auto}.review-actions .button{padding:7px 10px;font-size:12px}.ai-panel dl{display:grid;grid-template-columns:1fr auto;gap:10px;margin:0;font-size:13px}.ai-panel dt{color:var(--muted)}.ai-panel dd{font-weight:800;margin:0;text-align:right}.bbox-preview{position:relative;aspect-ratio:4/3;background:#152522;border-radius:10px;overflow:hidden;margin-bottom:14px}.bbox-preview img{width:100%;height:100%;object-fit:contain}.bbox-box{position:absolute;border:2px solid #e4b044;pointer-events:none}
+  .progress{height:8px;background:#e7efec;border-radius:99px;overflow:hidden}.progress > span{display:block;height:100%;background:#2a8068;border-radius:inherit}.recommendation{border-left:3px solid #c88b32;padding:11px 13px;background:#fff9ed;border-radius:0 10px 10px 0;margin-top:9px}.recommendation strong{display:block}.recommendation span{display:block;color:#7c6c50;font-size:12px;margin-top:4px}
+  @media(max-width:1100px){.platform-sidebar{width:220px}.platform-main{margin-left:220px;padding-left:24px;padding-right:24px}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.split-layout{grid-template-columns:190px minmax(0,1fr)}}
+  @media(max-width:780px){.platform-sidebar{transform:translateX(-105%);transition:transform .2s ease;width:270px}.platform-sidebar.open{transform:translateX(0)}.platform-main{margin-left:0;padding:0 14px 36px}.platform-topbar{min-height:64px}.mobile-menu{display:inline-flex}.page-wrap{padding-top:22px}.page-heading{display:block}.page-actions{margin-top:16px}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.metric-card{padding:14px}.metric-value{font-size:25px}.split-layout{grid-template-columns:1fr}.filter-panel,.ai-panel{position:static}.review-card{grid-template-columns:96px minmax(0,1fr)}.review-thumb{width:96px;height:80px}.form-grid{grid-template-columns:1fr}.form-grid .full{grid-column:auto}}
+  @media(max-width:420px){.metric-grid{grid-template-columns:1fr 1fr}.metric-label{font-size:12px}.metric-value{font-size:23px}.topbar-link{display:none}}
+</style>
+{% block head %}{% endblock %}
+</head>
+<body>
+<div class="platform-app">
+  {% include "platform/sidebar.html" %}
+  <div class="platform-main">
+    <header class="platform-topbar">
+      <button class="mobile-menu" type="button" onclick="togglePlatformSidebar()" aria-label="打开导航">☰</button>
+      <div class="breadcrumb"><span>渔见 AI 智能生产平台</span><strong>{{ page_title }}</strong></div>
+      <div class="topbar-spacer"></div>
+      <a class="topbar-link" href="/">切换工作台</a>
+      <a class="topbar-link" href="/logout">退出</a>
+    </header>
+    <main class="page-wrap">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+<script>
+function togglePlatformSidebar(){document.querySelector('.platform-sidebar')?.classList.toggle('open')}
+function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function platformError(error){return error instanceof Error?error.message:String(error||'请求失败')}
+async function platformFetch(url,options){const response=await fetch(url,options);const text=await response.text();let data={};try{data=text?JSON.parse(text):{}}catch{data={detail:text}}if(!response.ok){throw new Error(typeof data.detail==='string'?data.detail:(data.detail?.message||data.message||`请求失败 (${response.status})`))}return data}
+function renderState(target,state,message){const node=typeof target==='string'?document.getElementById(target):target;if(!node)return;node.innerHTML=state==='loading'?'<div class="loading">加载中…</div>':state==='error'?`<div class="error-state">${esc(message||'数据加载失败')}</div>`:''}
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

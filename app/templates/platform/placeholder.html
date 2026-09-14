@@ -1,0 +1,5 @@
+{% extends "platform/base.html" %}
+{% block content %}
+<div class="page-heading"><div><h1>{{ page_title }}</h1><p>{{ page.description }}</p></div><div class="page-actions"><a class="button" href="/platform">返回总览</a></div></div>
+<div class="panel"><div class="panel-heading"><div><h2>Platform V1 页面已接入</h2><p>数据接口：{{ page.api_path or '待接入' }}</p></div><span class="status-tag status-neutral"><span class="status-dot"></span>基础框架</span></div><div class="empty">该页面的业务组件将在对应 Sprint 接入已有 API。旧版能力继续保留，不会被此入口覆盖。</div></div>
+{% endblock %}
