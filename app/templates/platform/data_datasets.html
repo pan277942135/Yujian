@@ -1,0 +1,30 @@
+{% extends "platform/base.html" %}
+{% from "platform/components/metric_card.html" import metric_card %}
+{% from "platform/components/status_tag.html" import status_tag %}
+{% block content %}
+<div class="page-heading">
+  <div><h1>数据集管理</h1><p>上传图片后，系统会沿用现有 Batch / Dataset 流程完成 AI 清洗和训练准备。</p></div>
+  <div class="page-actions"><a class="button primary" href="/batches">＋ 新建数据集</a><a class="button" href="/platform/data/queue">查看处理队列</a></div>
+</div>
+<div id="datasetMetrics" class="metric-grid" aria-label="数据集统计"><div class="metric-card"><div class="loading">加载中…</div></div></div>
+<section class="panel" style="margin-top:16px">
+  <div class="panel-heading"><div><h2>数据集</h2><p>面向业务展示上传、AI 有效、待确认和训练状态。</p></div><span class="code">/api/platform/datasets</span></div>
+  <div id="datasetState"><div class="loading">加载中…</div></div>
+</section>
+<section id="cleanReportPanel" class="panel" style="margin-top:16px" hidden>
+  <div class="panel-heading"><div><h2>AI 清洗报告</h2><p id="cleanReportTitle"></p></div><button class="button" type="button" onclick="document.getElementById('cleanReportPanel').hidden=true">关闭</button></div>
+  <div id="cleanReportState"></div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+const datasetState=document.getElementById('datasetState');
+function datasetStatus(status){const labels={FROZEN:'可训练',READY_FOR_TRAINING:'可训练',UPLOADING:'上传中',AI_CLEANING:'AI 清洗中',REVIEW:'待审核'};return `<span class="status-tag status-${String(status||'').toLowerCase()}"><span class="status-dot"></span>${esc(labels[status]||status||'未知')}</span>`}
+function datasetMetric(label,value,detail){return `<div class="metric-card"><div class="metric-label">${esc(label)}</div><div class="metric-value">${esc(value??0)}</div><div class="metric-detail">${esc(detail||'')}</div></div>`}
+function renderDatasetMetrics(rows){const total=rows.reduce((sum,row)=>sum+Number(row.total_images||0),0);const valid=rows.reduce((sum,row)=>sum+Number(row.valid_images||0),0);const pending=rows.reduce((sum,row)=>sum+Number(row.pending_review||0),0);const train=rows.reduce((sum,row)=>sum+Number(row.train_ready||0),0);document.getElementById('datasetMetrics').innerHTML=[datasetMetric('数据集',rows.length,'已登记 Dataset'),datasetMetric('上传图片',total,'所有 Batch 汇总'),datasetMetric('AI 有效',valid,'通过清洗或已冻结'),datasetMetric('待确认',pending,'进入审核中心'),datasetMetric('训练数据',train,'当前训练集图片')].join('')}
+function renderDatasets(rows){if(!rows.length){datasetState.innerHTML='<div class="empty">暂无数据集<br><span class="muted">从“新建数据集”开始上传图片</span></div>';return}datasetState.innerHTML=`<div class="table-wrap"><table class="data-table"><thead><tr><th>数据集</th><th>上传</th><th>AI 有效</th><th>待确认</th><th>训练</th><th>状态</th><th>操作</th></tr></thead><tbody>${rows.map(row=>`<tr><td><strong>${esc(row.name)}</strong><br><span class="muted">${esc(row.pipeline_type||'默认生产链路')}</span></td><td>${esc(row.total_images??0)}</td><td>${esc(row.valid_images??0)}</td><td>${esc(row.pending_review??0)}</td><td>${esc(row.train_ready??0)}</td><td>${datasetStatus(row.status)}</td><td><button class="button" type="button" onclick="showCleanReport('${esc(row.id)}')">清洗报告</button></td></tr>`).join('')}</tbody></table></div>`}
+async function showCleanReport(id){const panel=document.getElementById('cleanReportPanel');panel.hidden=false;document.getElementById('cleanReportTitle').textContent=id;const target=document.getElementById('cleanReportState');renderState(target,'loading');try{const report=await platformFetch(`/api/platform/datasets/${encodeURIComponent(id)}/clean-report`);const invalid=report.invalid||{};target.innerHTML=`<div class="stat-grid"><div class="stat"><strong>${esc(report.total??0)}</strong><span>上传图片</span></div><div class="stat"><strong>${esc(report.valid??0)}</strong><span>AI 有效</span></div><div class="stat"><strong>${esc((Number(report.valid_ratio||0)*100).toFixed(1))}%</strong><span>有效比例</span></div></div><div class="table-wrap" style="margin-top:14px"><table class="data-table"><tbody>${Object.entries(invalid).map(([key,value])=>`<tr><td>${esc({blur:'模糊',duplicate:'重复',no_fish:'无鱼',multi_fish:'多鱼',scene:'非目标场景'}[key]||key)}</td><td>${esc(value)}</td></tr>`).join('')}</tbody></table></div>`}catch(error){renderState(target,'error',platformError(error))}}
+async function loadDatasets(){try{const rows=await platformFetch('/api/platform/datasets');renderDatasetMetrics(rows);renderDatasets(rows);const requested=new URLSearchParams(location.search).get('dataset');if(requested)showCleanReport(requested)}catch(error){document.getElementById('datasetMetrics').innerHTML='<div class="error-state" style="grid-column:1/-1">数据加载失败</div>';renderState(datasetState,'error',platformError(error))}}
+loadDatasets();
+</script>
+{% endblock %}

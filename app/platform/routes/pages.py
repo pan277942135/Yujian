@@ -24,7 +24,7 @@ class PlatformPage:
 
 PLATFORM_PAGES = (
     PlatformPage("/platform", "platform/dashboard.html", "首页总览", "总览", "查看数据、模型、流水线和鱼体资产的生产状态。", "/api/platform/dashboard"),
-    PlatformPage("/platform/data/datasets", "platform/placeholder.html", "数据集管理", "AI 数据工厂", "用数据集视角管理上传、AI 清洗和训练准备状态。", "/api/platform/datasets"),
+    PlatformPage("/platform/data/datasets", "platform/data_datasets.html", "数据集管理", "AI 数据工厂", "用数据集视角管理上传、AI 清洗和训练准备状态。", "/api/platform/datasets"),
     PlatformPage("/platform/data/review", "platform/placeholder.html", "数据审核中心", "AI 数据工厂", "集中处理低置信、BBox 异常和质量异常样本。", "/api/platform/review/items"),
     PlatformPage("/platform/data/queue", "platform/placeholder.html", "数据处理队列", "AI 数据工厂", "按异常类型查看需要人工快速处理的数据。", "/api/platform/review/queue"),
     PlatformPage("/platform/model/training", "platform/placeholder.html", "模型训练", "模型工厂", "从已冻结数据集创建训练任务并追踪结果。", "/api/platform/training/jobs"),

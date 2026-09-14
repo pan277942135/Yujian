@@ -1,0 +1,7 @@
+{% macro metric_card(label, value, detail='', href='') -%}
+{% if href %}<a class="metric-card" href="{{ href }}" style="text-decoration:none;color:inherit">{% else %}<div class="metric-card">{% endif %}
+  <div class="metric-label">{{ label }}</div>
+  <div class="metric-value">{{ value if value is not none else '—' }}</div>
+  {% if detail %}<div class="metric-detail">{{ detail }}</div>{% endif %}
+{% if href %}</a>{% else %}</div>{% endif %}
+{%- endmacro %}
