@@ -71,7 +71,7 @@ fish_asset_import
 fish_asset_import_page
 ```
 
-`app.main` 中的页面和核心 API 在 `include_router` 之前已经注册。新增 Platform 应作为 additive router 接入 `app.entry`，不能替换或重新注册旧 router。
+`app.main` 中的页面和核心 API 在 `include_router` 之前已经注册。新增 Platform 应作为 additive router 接入 `app.entry`，不能替换或重新注册旧 router。升级后，旧导航的模板源文件是 `app/templates/legacy/sidebar.html`，而 Platform 使用 `app/templates/platform/sidebar.html`。
 
 ### 1.4 Middleware 与启动事件
 
@@ -84,6 +84,10 @@ fish_asset_import_page
 |扩展启动事件|`app/entry.py:seed_target_species_catalog`|初始化分割模型；目标鱼种、鱼鉴初始数据和内容种子。|不得改变旧启动顺序的语义。|
 
 当前没有 `StaticFiles` mount、全局异常 handler 或独立前端打包产物；页面是服务端模板加页面内 JavaScript。
+
+## 1.5 V1 增量边界
+
+Platform V1 通过 `app/platform/routes/` 和 `app/platform/services/adapters.py` 增加聚合页面与 `/api/platform/*` 适配器。现有 Batch、Dataset、Review、Training、Model 和 Completion 仍是业务真值；只增加 `pipeline_run`、`fish_asset`、`platform_operation_log` 三张索引 / 审计表。新平台不把内部 GCS URI、Worker 地址或服务账号信息放进响应。
 
 ## 2. 当前页面 Route 清单
 

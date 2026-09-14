@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 from jinja2 import BaseLoader
@@ -46,7 +47,7 @@ def _active_expr(path: str, mode: str) -> str:
     return f"nav_path.startswith('{path}')"
 
 
-def _canonical_nav() -> str:
+def _generated_canonical_nav() -> str:
     links = []
     for href, label, mode in _NAV_ITEMS:
         expr = _active_expr(href, mode)
@@ -65,7 +66,20 @@ def _canonical_nav() -> str:
 </style>
 {% set nav_path = request.url.path %}
 <header class="app-nav" aria-label="主导航">
-""" + "\n".join(links) + "\n</header>"
+    """ + "\n".join(links) + "\n</header>"
+
+
+def _canonical_nav() -> str:
+    """Load the legacy-only navigation partial with a safe code fallback."""
+
+    sidebar = Path(__file__).resolve().parent / "templates" / "legacy" / "sidebar.html"
+    try:
+        source = sidebar.read_text(encoding="utf-8").strip()
+        if "class=\"app-nav\"" in source:
+            return source
+    except OSError:
+        pass
+    return _generated_canonical_nav()
 
 
 CANONICAL_NAV = _canonical_nav()
