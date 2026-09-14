@@ -292,7 +292,14 @@ def health():
 
 
 @app.get("/", response_class=HTMLResponse)
-def overview_page(request: Request):
+def workspace_page(request: Request):
+    """Choose between the preserved legacy workbench and Platform V1."""
+    return templates.TemplateResponse(request=request, name="workspace.html", context={})
+
+
+@app.get("/legacy", response_class=HTMLResponse)
+def legacy_overview_page(request: Request):
+    """Preserve the original console overview behind an explicit legacy entry."""
     return templates.TemplateResponse(request=request, name="overview.html", context={})
 
 

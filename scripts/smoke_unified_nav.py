@@ -19,7 +19,7 @@ from app.unified_nav import UnifiedNavLoader  # noqa: E402
 
 
 EXPECTED_LINKS = [
-    ('href="/"', "总览"),
+    ('href="/legacy"', "旧版总览"),
     ('href="/batches"', "数据批次"),
     ('href="/batches/upload"', "数据导入"),
     ('href="/review/bulk"', "快速审核"),
