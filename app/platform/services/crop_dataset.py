@@ -882,11 +882,13 @@ def get_random_50_qa(dataset_name: str) -> dict[str, Any]:
     return qa
 
 
-def _qa_manifest_row_key(row: dict[str, Any]) -> tuple[str, str]:
-    return (
-        str(row.get("image_id") or row.get("id") or "").strip(),
-        str(row.get("crop_path") or "").strip(),
-    )
+def _qa_manifest_keys(row: dict[str, Any]) -> list[tuple[str, str]]:
+    keys: list[tuple[str, str]] = []
+    for field in ("image_id", "id", "crop_path", "source_image"):
+        value = str(row.get(field) or "").strip()
+        if value:
+            keys.append((field, value))
+    return keys
 
 
 def _qa_enrich_frozen_rows(client, bucket, dataset_name: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -901,11 +903,14 @@ def _qa_enrich_frozen_rows(client, bucket, dataset_name: str, rows: list[dict[st
     if not audit_blob.exists(client):
         return rows
     audit_rows = list(csv.DictReader(audit_blob.download_as_text(encoding="utf-8")))
-    by_key = {_qa_manifest_row_key(row): row for row in audit_rows}
+    by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for audit in audit_rows:
+        for key in _qa_manifest_keys(audit):
+            by_key.setdefault(key, audit)
     enriched: list[dict[str, Any]] = []
     for row in rows:
         current = dict(row)
-        audit = by_key.get(_qa_manifest_row_key(row))
+        audit = next((by_key.get(key) for key in _qa_manifest_keys(row) if by_key.get(key)), None)
         if audit:
             for field in MANIFEST_FIELDS:
                 if not str(current.get(field) or "").strip() and str(audit.get(field) or "").strip():
