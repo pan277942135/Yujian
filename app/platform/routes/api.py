@@ -201,8 +201,11 @@ def platform_release_qa(dataset_id: str, db: Session = Depends(get_db)) -> dict[
         raise HTTPException(status_code=404, detail="数据集不存在")
     qa = get_random_50_qa(dataset_id)
     for item in qa.get("items", []):
-        item["media_url"] = f"/api/platform/datasets/{dataset_id}/release-qa/media/{int(item.get('qa_index', 0))}"
+        qa_index = int(item.get("qa_index", 0))
+        item["media_url"] = f"/api/platform/datasets/{dataset_id}/release-qa/media/{qa_index}?kind=crop"
+        item["source_media_url"] = f"/api/platform/datasets/{dataset_id}/release-qa/media/{qa_index}?kind=source_bbox"
     return qa
+
 
 
 @router.post("/datasets/{dataset_id}/release-qa/start")
@@ -233,12 +236,13 @@ def platform_release_qa_review(dataset_id: str, payload: CropReleaseQaReview, db
 
 
 @router.get("/datasets/{dataset_id}/release-qa/media/{qa_index}")
-def platform_release_qa_media(dataset_id: str, qa_index: int) -> Response:
+def platform_release_qa_media(dataset_id: str, qa_index: int, kind: str = Query(default="crop", max_length=16)) -> Response:
     try:
-        content = read_random_50_qa_media(dataset_id, qa_index)
+        content = read_random_50_qa_media(dataset_id, qa_index, kind=kind)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return Response(content=content, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"})
+
 
 
 @router.get("/datasets/{dataset_id}/quality-gate-analysis")

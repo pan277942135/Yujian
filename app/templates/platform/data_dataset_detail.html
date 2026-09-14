@@ -102,15 +102,23 @@ function configureTrainingGate(detail) {
 
 function renderQaItem(item) {
   const index=Number(item.qa_index || 0);
-  const image=item.media_url
-    ? `<img src="${esc(item.media_url)}" alt="${esc(item.image_id || 'Crop样本')}" loading="lazy" style="width:100%;aspect-ratio:1;object-fit:contain;background:#f4f7f7;border-radius:10px" onerror="this.style.display='none';this.nextElementSibling.hidden=false"><div class="muted" hidden>预览不可用</div>`
-    : '<div class="muted" style="height:180px;display:grid;place-items:center;background:#f4f7f7;border-radius:10px">该样本没有可预览 Crop</div>';
+  const sourceImage=item.source_media_url
+    ? `<img src="${esc(item.source_media_url)}" alt="${esc(item.image_id || '原图')}" loading="lazy" style="width:100%;aspect-ratio:4/3;object-fit:contain;background:#f4f7f7;border-radius:10px" onerror="this.style.display='none';this.nextElementSibling.hidden=false"><div class="muted" hidden>原图预览不可用</div>`
+    : '<div class="muted" style="height:180px;display:grid;place-items:center;background:#f4f7f7;border-radius:10px">原图预览不可用</div>';
+  const cropImage=item.media_url
+    ? `<img src="${esc(item.media_url)}" alt="${esc(item.image_id || '冻结 Crop')}" loading="lazy" style="width:100%;aspect-ratio:1;object-fit:contain;background:#f4f7f7;border-radius:10px" onerror="this.style.display='none';this.nextElementSibling.hidden=false"><div class="muted" hidden>Crop预览不可用</div>`
+    : '<div class="muted" style="height:180px;display:grid;place-items:center;background:#f4f7f7;border-radius:10px">Crop预览不可用</div>';
   const decision=String(item.decision || '').toUpperCase();
   const decisionText=decision ? `已记录：${esc(decision)}` : '尚未检查';
-  return `<div class="metric-card" style="min-width:220px">${image}
-    <div style="margin-top:10px"><strong>${esc(item.quality_status || '')}</strong> · ${esc(item.split || '不进入分片')}</div>
-    <div class="muted" style="font-size:12px;margin-top:4px">${esc(item.species || '')} · ${esc(item.image_id || '')}</div>
-    <div class="muted" style="font-size:12px;margin-top:4px">${esc(item.quality_reason || '无机器质量原因')}</div>
+  const bboxText=item.pixel_bbox || item.bbox || '未记录';
+  return `<div class="metric-card" style="min-width:460px">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div><div class="muted" style="font-size:12px;margin-bottom:4px">原图 + Accepted BBox</div>${sourceImage}</div>
+      <div><div class="muted" style="font-size:12px;margin-bottom:4px">冻结 Crop</div>${cropImage}</div>
+    </div>
+    <div style="margin-top:10px"><strong>${esc(item.species || '')}</strong> · ${esc(item.split || '未分片')}</div>
+    <div class="muted" style="font-size:12px;margin-top:4px">image_id: ${esc(item.image_id || '')} · BBox: ${esc(bboxText)}</div>
+    <div class="muted" style="font-size:12px;margin-top:4px">质量状态：${esc(item.quality_status || 'GOOD')}</div>
     <div style="margin-top:8px">${decisionText}</div>
     <input id="qa-note-${index}" class="input" maxlength="1000" placeholder="可选：记录问题" value="${esc(item.note || '')}" style="width:100%;margin-top:8px">
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">

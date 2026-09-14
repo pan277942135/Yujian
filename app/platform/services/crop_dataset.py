@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageDraw, ImageOps
 from sqlalchemy import func, select
 
 from app.db import SessionLocal
@@ -34,6 +34,8 @@ CROP_SPLIT_SEED = 20260827
 CROP_CHUNK_SIZE = 25
 QA_SCHEMA_VERSION = "RANDOM_50_QA_V1"
 QA_SAMPLE_SIZE = 50
+QA_SOURCE_MANIFEST = "manifest.csv"
+QA_SPLIT_PLAN = (("train", 35), ("val", 8), ("test", 7))
 QA_DECISIONS = {"PASS", "ISSUE", "CRITICAL"}
 QUALITY_ANALYSIS_SCHEMA_VERSION = "QUALITY_GATE_ANALYSIS_V1"
 QUALITY_ANALYSIS_SAMPLE_SIZE = 10
@@ -691,6 +693,11 @@ def _qa_read(dataset_name: str) -> dict[str, Any] | None:
         return None
 
 
+def _qa_is_frozen_manifest(qa: dict[str, Any] | None) -> bool:
+    return isinstance(qa, dict) and str(qa.get("source_manifest") or "") == QA_SOURCE_MANIFEST
+
+
+
 def _qa_write_csv(bucket, dataset_name: str, qa: dict[str, Any]) -> None:
     output = io.StringIO(newline="")
     fields = ("qa_index", "item_id", *MANIFEST_FIELDS, "decision", "note", "reviewed_at")
@@ -730,6 +737,7 @@ def _qa_unique_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def select_random_50_qa_rows(rows: list[dict[str, Any]], dataset_name: str) -> list[dict[str, Any]]:
+    """Select a deterministic QA snapshot from the frozen training manifest."""
     rng = random.Random(_qa_seed(dataset_name))
 
     def choose(pool: list[dict[str, Any]], count: int, label: str) -> list[dict[str, Any]]:
@@ -738,14 +746,12 @@ def select_random_50_qa_rows(rows: list[dict[str, Any]], dataset_name: str) -> l
             raise ValueError(f"RANDOM_50_QA_INSUFFICIENT_{label}")
         return [candidates[index] for index in sorted(rng.sample(range(len(candidates)), count))]
 
-    good = [row for row in rows if str(row.get("quality_status") or "").upper() == "GOOD"]
-    warning = [row for row in rows if str(row.get("quality_status") or "").upper() == "WARNING"]
-    invalid = [row for row in rows if str(row.get("quality_status") or "").upper() == "INVALID"]
-    selected = []
-    for split, count in (("train", 20), ("val", 5), ("test", 5)):
-        selected.extend(choose([row for row in good if str(row.get("split") or "") == split], count, f"GOOD_{split.upper()}"))
-    selected.extend(choose(warning, 10, "WARNING"))
-    selected.extend(choose(invalid, 10, "INVALID"))
+    # manifest.csv is the frozen training manifest, so every row is GOOD by contract.
+    # Keep a defensive status filter so a malformed artifact cannot silently enter QA.
+    good = [row for row in rows if str(row.get("quality_status") or "GOOD").upper() == "GOOD"]
+    selected: list[dict[str, Any]] = []
+    for split, count in QA_SPLIT_PLAN:
+        selected.extend(choose([row for row in good if str(row.get("split") or "").lower() == split], count, f"GOOD_{split.upper()}"))
     if len({_qa_item_id(row) for row in selected}) != QA_SAMPLE_SIZE:
         raise ValueError("RANDOM_50_QA_DUPLICATE_SAMPLE")
     return selected
@@ -757,7 +763,7 @@ def _qa_payload(dataset_name: str, selected: list[dict[str, Any]]) -> dict[str, 
         item = {field: row.get(field, "") for field in MANIFEST_FIELDS}
         item.update({"qa_index": index, "item_id": _qa_item_id(row), "decision": None, "note": "", "reviewed_at": None})
         items.append(item)
-    payload = {"schema_version": QA_SCHEMA_VERSION, "dataset_version": dataset_name, "seed": _qa_seed(dataset_name), "sample_size": len(items), "created_at": _now(), "items": items}
+    payload = {"schema_version": QA_SCHEMA_VERSION, "dataset_version": dataset_name, "source_manifest": QA_SOURCE_MANIFEST, "sample_plan": {split: count for split, count in QA_SPLIT_PLAN}, "seed": _qa_seed(dataset_name), "sample_size": len(items), "created_at": _now(), "items": items}
     payload.update(_qa_summary(items))
     return payload
 
@@ -766,7 +772,7 @@ def _update_release_gate_metadata(db, dataset_name: str, qa: dict[str, Any]) -> 
     dataset = db.get(DatasetVersion, dataset_name)
     if dataset is None:
         raise ValueError("dataset not found")
-    metadata = _json(dataset.metadata_json, {}) or {}
+    metadata = _json(dataset.metadata_json) or {}
     metadata["release_gate"] = {
         "required": True,
         "random_50_qa": {
@@ -777,6 +783,8 @@ def _update_release_gate_metadata(db, dataset_name: str, qa: dict[str, Any]) -> 
             "pass_count": int(qa.get("pass_count", 0) or 0),
             "issue_count": int(qa.get("issue_count", 0) or 0),
             "critical_count": int(qa.get("critical_count", 0) or 0),
+            "source_manifest": qa.get("source_manifest", QA_SOURCE_MANIFEST),
+            "sample_plan": qa.get("sample_plan", {split: count for split, count in QA_SPLIT_PLAN}),
             "qa_uri": _qa_uri(dataset_name, "random_50_qa.json"),
             "qa_csv_uri": _qa_uri(dataset_name, "random_50_qa.csv"),
         },
@@ -801,15 +809,56 @@ def get_release_gate_summary(db, dataset_name: str) -> dict[str, Any] | None:
     if str(getattr(dataset, "pipeline_type", "") or "").upper() != CROP_PIPELINE_TYPE:
         return None
     qa = _qa_read(dataset_name)
-    if qa is None:
-        return {"required": True, "schema_version": QA_SCHEMA_VERSION, "status": "NOT_PERFORMED", "sample_size": QA_SAMPLE_SIZE, "reviewed_count": 0, "pass_count": 0, "issue_count": 0, "critical_count": 0, "final_release_gate": "PARTIAL_PASS", "qa_uri": _qa_uri(dataset_name, "random_50_qa.json"), "qa_csv_uri": _qa_uri(dataset_name, "random_50_qa.csv")}
-    return {"required": True, "schema_version": qa.get("schema_version", QA_SCHEMA_VERSION), "status": qa.get("status", "PENDING"), "sample_size": int(qa.get("sample_size", QA_SAMPLE_SIZE) or QA_SAMPLE_SIZE), "reviewed_count": int(qa.get("reviewed_count", 0) or 0), "pass_count": int(qa.get("pass_count", 0) or 0), "issue_count": int(qa.get("issue_count", 0) or 0), "critical_count": int(qa.get("critical_count", 0) or 0), "final_release_gate": qa.get("final_release_gate", "PARTIAL_PASS"), "qa_uri": _qa_uri(dataset_name, "random_50_qa.json"), "qa_csv_uri": _qa_uri(dataset_name, "random_50_qa.csv")}
+    if not _qa_is_frozen_manifest(qa):
+        return {
+            "required": True,
+            "schema_version": QA_SCHEMA_VERSION,
+            "source_manifest": QA_SOURCE_MANIFEST,
+            "status": "NOT_PERFORMED",
+            "sample_size": QA_SAMPLE_SIZE,
+            "reviewed_count": 0,
+            "pass_count": 0,
+            "issue_count": 0,
+            "critical_count": 0,
+            "final_release_gate": "PARTIAL_PASS",
+            "qa_uri": _qa_uri(dataset_name, "random_50_qa.json"),
+            "qa_csv_uri": _qa_uri(dataset_name, "random_50_qa.csv"),
+        }
+    return {
+        "required": True,
+        "schema_version": qa.get("schema_version", QA_SCHEMA_VERSION),
+        "source_manifest": QA_SOURCE_MANIFEST,
+        "sample_plan": qa.get("sample_plan", {split: count for split, count in QA_SPLIT_PLAN}),
+        "status": qa.get("status", "PENDING"),
+        "sample_size": int(qa.get("sample_size", QA_SAMPLE_SIZE) or QA_SAMPLE_SIZE),
+        "reviewed_count": int(qa.get("reviewed_count", 0) or 0),
+        "pass_count": int(qa.get("pass_count", 0) or 0),
+        "issue_count": int(qa.get("issue_count", 0) or 0),
+        "critical_count": int(qa.get("critical_count", 0) or 0),
+        "final_release_gate": qa.get("final_release_gate", "PARTIAL_PASS"),
+        "qa_uri": _qa_uri(dataset_name, "random_50_qa.json"),
+        "qa_csv_uri": _qa_uri(dataset_name, "random_50_qa.csv"),
+    }
 
 
 def get_random_50_qa(dataset_name: str) -> dict[str, Any]:
     qa = _qa_read(dataset_name)
-    if qa is None:
-        return {"schema_version": QA_SCHEMA_VERSION, "dataset_version": dataset_name, "seed": _qa_seed(dataset_name), "sample_size": QA_SAMPLE_SIZE, "status": "NOT_PERFORMED", "final_release_gate": "PARTIAL_PASS", "reviewed_count": 0, "pass_count": 0, "issue_count": 0, "critical_count": 0, "items": []}
+    if not _qa_is_frozen_manifest(qa):
+        return {
+            "schema_version": QA_SCHEMA_VERSION,
+            "dataset_version": dataset_name,
+            "source_manifest": QA_SOURCE_MANIFEST,
+            "sample_plan": {split: count for split, count in QA_SPLIT_PLAN},
+            "seed": _qa_seed(dataset_name),
+            "sample_size": QA_SAMPLE_SIZE,
+            "status": "NOT_PERFORMED",
+            "final_release_gate": "PARTIAL_PASS",
+            "reviewed_count": 0,
+            "pass_count": 0,
+            "issue_count": 0,
+            "critical_count": 0,
+            "items": [],
+        }
     return qa
 
 
@@ -820,13 +869,13 @@ def start_random_50_qa(dataset_name: str, db) -> dict[str, Any]:
     if str(getattr(dataset, "pipeline_type", "") or "").upper() != CROP_PIPELINE_TYPE:
         raise ValueError("RANDOM_50_QA_ONLY_FOR_CROP_DATASET")
     existing = _qa_read(dataset_name)
-    if existing is not None:
+    if _qa_is_frozen_manifest(existing):
         return existing
     client, bucket = _storage()
-    manifest_blob = bucket.blob(f"datasets/{dataset_name}/manifest_all.csv")
+    manifest_blob = bucket.blob(f"datasets/{dataset_name}/{QA_SOURCE_MANIFEST}")
     if not manifest_blob.exists(client):
-        raise FileNotFoundError("manifest_all.csv not found")
-    rows = list(csv.DictReader(io.StringIO(manifest_blob.download_as_text(encoding="utf-8"))))
+        raise FileNotFoundError(f"{QA_SOURCE_MANIFEST} not found")
+    rows = list(csv.DictReader(manifest_blob.download_as_text(encoding="utf-8")))
     selected = select_random_50_qa_rows(rows, dataset_name)
     return _persist_qa(dataset_name, _qa_payload(dataset_name, selected), db)
 
@@ -849,21 +898,76 @@ def review_random_50_qa(dataset_name: str, qa_index: int, decision: str, note: s
     return _persist_qa(dataset_name, qa, db)
 
 
-def read_random_50_qa_media(dataset_name: str, qa_index: int) -> bytes:
+def _qa_source_bytes(client, bucket, dataset_name: str, source_image: str) -> bytes:
+    source_image = str(source_image or "").strip()
+    if not source_image:
+        raise FileNotFoundError("RANDOM_50_QA_SOURCE_NOT_AVAILABLE")
+    if source_image.startswith("gs://"):
+        return _download(client, source_image)
+    candidate = source_image.lstrip("/")
+    if candidate.startswith("datasets/"):
+        blob = bucket.blob(candidate)
+    else:
+        blob = bucket.blob(f"datasets/{dataset_name}/{candidate}")
+    if not blob.exists(client):
+        raise FileNotFoundError("RANDOM_50_QA_SOURCE_NOT_AVAILABLE")
+    return blob.download_as_bytes(timeout=180)
+
+
+def _qa_bbox_pixels(item: dict[str, Any]) -> tuple[int, int, int, int] | None:
+    pixel_bbox = _json(item.get("pixel_bbox"))
+    if isinstance(pixel_bbox, (list, tuple)) and len(pixel_bbox) == 4:
+        try:
+            left, top, right, bottom = [int(round(float(value))) for value in pixel_bbox]
+            return left, top, right, bottom
+        except (TypeError, ValueError):
+            pass
+    bbox = _bbox(item.get("bbox"))
+    source_size = _json(item.get("source_size"))
+    if bbox is None or not isinstance(source_size, (list, tuple)) or len(source_size) != 2:
+        return None
+    try:
+        width, height = [float(value) for value in source_size]
+        x, y, box_width, box_height = bbox
+        return (
+            int(round(x * width)),
+            int(round(y * height)),
+            int(round((x + box_width) * width)),
+            int(round((y + box_height) * height)),
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def read_random_50_qa_media(dataset_name: str, qa_index: int, kind: str = "crop") -> bytes:
     qa = _qa_read(dataset_name)
-    if qa is None:
+    if not _qa_is_frozen_manifest(qa):
         raise FileNotFoundError("RANDOM_50_QA_NOT_STARTED")
     items = qa.get("items") or []
     if qa_index < 0 or qa_index >= len(items):
         raise FileNotFoundError("RANDOM_50_QA_ITEM_NOT_FOUND")
-    crop_path = str(items[qa_index].get("crop_path") or "")
-    if not crop_path or crop_path.startswith("/") or ".." in crop_path:
-        raise FileNotFoundError("RANDOM_50_QA_MEDIA_NOT_AVAILABLE")
+    item = items[qa_index]
     client, bucket = _storage()
-    blob = bucket.blob(f"datasets/{dataset_name}/{crop_path}")
-    if not blob.exists(client):
-        raise FileNotFoundError("RANDOM_50_QA_MEDIA_NOT_AVAILABLE")
-    return blob.download_as_bytes(timeout=120)
+    kind = str(kind or "crop").lower()
+    if kind == "crop":
+        crop_path = str(item.get("crop_path") or "")
+        if not crop_path or crop_path.startswith("/") or ".." in crop_path:
+            raise FileNotFoundError("RANDOM_50_QA_MEDIA_NOT_AVAILABLE")
+        blob = bucket.blob(f"datasets/{dataset_name}/{crop_path}")
+        if not blob.exists(client):
+            raise FileNotFoundError("RANDOM_50_QA_MEDIA_NOT_AVAILABLE")
+        return blob.download_as_bytes(timeout=120)
+    if kind != "source_bbox":
+        raise FileNotFoundError("RANDOM_50_QA_MEDIA_KIND_INVALID")
+    source = Image.open(io.BytesIO(_qa_source_bytes(client, bucket, dataset_name, item.get("source_image")))).convert("RGB")
+    bbox = _qa_bbox_pixels(item)
+    if bbox is not None:
+        draw = ImageDraw.Draw(source)
+        left, top, right, bottom = bbox
+        draw.rectangle((left, top, right, bottom), outline=(220, 38, 38), width=max(3, min(source.size) // 180))
+    output = io.BytesIO()
+    source.save(output, format="JPEG", quality=90)
+    return output.getvalue()
 
 
 def _analysis_seed(dataset_name: str, label: str = "") -> int:
@@ -982,7 +1086,7 @@ def generate_quality_gate_analysis(dataset_name: str) -> dict[str, Any]:
     example_exported = 0
     example_failed = 0
     for status, reason in sorted(grouped):
-        candidates = _analysis_unique_rows(grouped[(status, reason)])
+        candidates = _qa_unique_rows(grouped[(status, reason)])
         sample_size = min(QUALITY_ANALYSIS_SAMPLE_SIZE, len(candidates))
         rng = random.Random(_analysis_seed(dataset_name, f"{status}:{reason}"))
         selected = [candidates[i] for i in sorted(rng.sample(range(len(candidates)), sample_size))]
