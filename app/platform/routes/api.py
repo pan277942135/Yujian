@@ -21,7 +21,12 @@ from app.platform.services.crop_dataset import (
     CROP_OUTPUT_SIZE,
     accepted_pool_snapshot,
     get_crop_dataset_job,
+    get_random_50_qa,
+    get_release_gate_summary,
+    read_random_50_qa_media,
+    review_random_50_qa,
     start_crop_dataset_job,
+    start_random_50_qa,
     step_crop_dataset_job,
 )
 from app.training_api import TrainingCreate, queue_training_run
@@ -57,6 +62,12 @@ class PlatformTrainingCreate(BaseModel):
     learning_rate: float = Field(default=0.001, gt=0, le=0.1)
     freeze: bool | None = None
     seed: int = 20260827
+
+
+class CropReleaseQaReview(BaseModel):
+    qa_index: int = Field(ge=0, le=49)
+    decision: str = Field(min_length=1, max_length=16)
+    note: str = Field(default="", max_length=1000)
 
 
 class CropDatasetCreate(BaseModel):
@@ -177,7 +188,56 @@ def platform_dataset_detail(dataset_id: str, db: Session = Depends(get_db)) -> d
     result = adapters.dataset_detail(db, dataset_id)
     if result is None:
         raise HTTPException(status_code=404, detail="数据集不存在")
+    release_gate = get_release_gate_summary(db, dataset_id)
+    if release_gate is not None:
+        result["release_gate"] = release_gate
     return result
+
+
+@router.get("/datasets/{dataset_id}/release-qa")
+def platform_release_qa(dataset_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    if db.get(DatasetVersion, dataset_id) is None:
+        raise HTTPException(status_code=404, detail="数据集不存在")
+    qa = get_random_50_qa(dataset_id)
+    for item in qa.get("items", []):
+        item["media_url"] = f"/api/platform/datasets/{dataset_id}/release-qa/media/{int(item.get('qa_index', 0))}"
+    return qa
+
+
+@router.post("/datasets/{dataset_id}/release-qa/start")
+def platform_release_qa_start(dataset_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    try:
+        qa = start_random_50_qa(dataset_id, db)
+        adapters.record_operation(db, "RANDOM_50_QA_START", "dataset_release", dataset_id, detail={"sample_size": qa.get("sample_size", 0), "status": qa.get("status")})
+        db.commit()
+        return qa
+    except FileNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail={"error": "RANDOM_50_QA_START_FAILED", "message": str(exc)[:500]}) from exc
+
+
+@router.post("/datasets/{dataset_id}/release-qa/review")
+def platform_release_qa_review(dataset_id: str, payload: CropReleaseQaReview, db: Session = Depends(get_db)) -> dict[str, Any]:
+    try:
+        qa = review_random_50_qa(dataset_id, payload.qa_index, payload.decision, payload.note, db)
+        adapters.record_operation(db, "RANDOM_50_QA_REVIEW", "dataset_release", dataset_id, detail={"qa_index": payload.qa_index, "decision": payload.decision.upper(), "final_release_gate": qa.get("final_release_gate")})
+        db.commit()
+        return qa
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail={"error": "RANDOM_50_QA_REVIEW_FAILED", "message": str(exc)[:500]}) from exc
+
+
+@router.get("/datasets/{dataset_id}/release-qa/media/{qa_index}")
+def platform_release_qa_media(dataset_id: str, qa_index: int) -> Response:
+    try:
+        content = read_random_50_qa_media(dataset_id, qa_index)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(content=content, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"})
 
 
 @router.get("/datasets/{dataset_id}/clean-report")

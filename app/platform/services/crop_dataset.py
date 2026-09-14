@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 import os
+import random
 import re
 import threading
 import uuid
@@ -30,6 +32,9 @@ CROP_EXPAND_RATIO = 1.25
 CROP_OUTPUT_SIZE = 416
 CROP_SPLIT_SEED = 20260827
 CROP_CHUNK_SIZE = 25
+QA_SCHEMA_VERSION = "RANDOM_50_QA_V1"
+QA_SAMPLE_SIZE = 50
+QA_DECISIONS = {"PASS", "ISSUE", "CRITICAL"}
 ACCEPTED_STATUSES = {"ACCEPTED", "TRAINING_READY"}
 JOB_STATES = {"PENDING", "RUNNING", "SUCCESS", "FAILED"}
 
@@ -650,6 +655,216 @@ def start_crop_dataset_job(*, source="accepted_bbox", dataset_name=CROP_DATASET_
         db.close()
 
 
+
+def _qa_artifact_prefix(dataset_name: str) -> str:
+    return f"datasets/{dataset_name}/qa"
+
+
+def _qa_uri(dataset_name: str, filename: str) -> str:
+    return f"gs://{get_bucket_name()}/{_qa_artifact_prefix(dataset_name)}/{filename}"
+
+
+def _qa_blob_name(dataset_name: str, filename: str) -> str:
+    return f"{_qa_artifact_prefix(dataset_name)}/{filename}"
+
+
+def _qa_seed(dataset_name: str) -> int:
+    digest = hashlib.sha256(f"{QA_SCHEMA_VERSION}:{dataset_name}".encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big") % 2147483647
+
+
+def _qa_item_id(row: dict[str, Any]) -> str:
+    return f"{row.get('batch_id', '')}:{row.get('image_id', '')}"
+
+
+def _qa_read(dataset_name: str) -> dict[str, Any] | None:
+    try:
+        client, bucket = _storage()
+        blob = bucket.blob(_qa_blob_name(dataset_name, "random_50_qa.json"))
+        if not blob.exists(client):
+            return None
+        value = json.loads(blob.download_as_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else None
+    except Exception:
+        return None
+
+
+def _qa_write_csv(bucket, dataset_name: str, qa: dict[str, Any]) -> None:
+    output = io.StringIO(newline="")
+    fields = ("qa_index", "item_id", *MANIFEST_FIELDS, "decision", "note", "reviewed_at")
+    writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    for item in qa.get("items", []):
+        writer.writerow({field: item.get(field, "") for field in fields})
+    bucket.blob(_qa_blob_name(dataset_name, "random_50_qa.csv")).upload_from_string(
+        output.getvalue().encode("utf-8"),
+        content_type="text/csv",
+    )
+
+
+def _qa_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
+    reviewed = [item for item in items if str(item.get("decision") or "").upper() in QA_DECISIONS]
+    pass_count = sum(1 for item in reviewed if str(item.get("decision")).upper() == "PASS")
+    issue_count = sum(1 for item in reviewed if str(item.get("decision")).upper() in {"ISSUE", "CRITICAL"})
+    critical_count = sum(1 for item in reviewed if str(item.get("decision")).upper() == "CRITICAL")
+    if not reviewed:
+        status, final_gate = "PENDING", "PARTIAL_PASS"
+    elif len(reviewed) < len(items):
+        status, final_gate = "IN_PROGRESS", "PARTIAL_PASS"
+    elif issue_count:
+        status, final_gate = "FAIL", "FAIL"
+    else:
+        status, final_gate = "PASS", "PASS"
+    return {"status": status, "final_release_gate": final_gate, "reviewed_count": len(reviewed), "pass_count": pass_count, "issue_count": issue_count, "critical_count": critical_count}
+
+
+def _qa_unique_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique: dict[str, dict[str, Any]] = {}
+    for row in sorted(rows, key=lambda item: (str(item.get("image_id") or ""), str(item.get("batch_id") or ""), str(item.get("crop_path") or ""))):
+        image_id = str(row.get("image_id") or "")
+        if image_id and image_id not in unique:
+            unique[image_id] = row
+    return list(unique.values())
+
+
+def select_random_50_qa_rows(rows: list[dict[str, Any]], dataset_name: str) -> list[dict[str, Any]]:
+    rng = random.Random(_qa_seed(dataset_name))
+
+    def choose(pool: list[dict[str, Any]], count: int, label: str) -> list[dict[str, Any]]:
+        candidates = _qa_unique_rows(pool)
+        if len(candidates) < count:
+            raise ValueError(f"RANDOM_50_QA_INSUFFICIENT_{label}")
+        return [candidates[index] for index in sorted(rng.sample(range(len(candidates)), count))]
+
+    good = [row for row in rows if str(row.get("quality_status") or "").upper() == "GOOD"]
+    warning = [row for row in rows if str(row.get("quality_status") or "").upper() == "WARNING"]
+    invalid = [row for row in rows if str(row.get("quality_status") or "").upper() == "INVALID"]
+    selected = []
+    for split, count in (("train", 20), ("val", 5), ("test", 5)):
+        selected.extend(choose([row for row in good if str(row.get("split") or "") == split], count, f"GOOD_{split.upper()}"))
+    selected.extend(choose(warning, 10, "WARNING"))
+    selected.extend(choose(invalid, 10, "INVALID"))
+    if len({_qa_item_id(row) for row in selected}) != QA_SAMPLE_SIZE:
+        raise ValueError("RANDOM_50_QA_DUPLICATE_SAMPLE")
+    return selected
+
+
+def _qa_payload(dataset_name: str, selected: list[dict[str, Any]]) -> dict[str, Any]:
+    items = []
+    for index, row in enumerate(selected):
+        item = {field: row.get(field, "") for field in MANIFEST_FIELDS}
+        item.update({"qa_index": index, "item_id": _qa_item_id(row), "decision": None, "note": "", "reviewed_at": None})
+        items.append(item)
+    payload = {"schema_version": QA_SCHEMA_VERSION, "dataset_version": dataset_name, "seed": _qa_seed(dataset_name), "sample_size": len(items), "created_at": _now(), "items": items}
+    payload.update(_qa_summary(items))
+    return payload
+
+
+def _update_release_gate_metadata(db, dataset_name: str, qa: dict[str, Any]) -> None:
+    dataset = db.get(DatasetVersion, dataset_name)
+    if dataset is None:
+        raise ValueError("dataset not found")
+    metadata = _json(dataset.metadata_json, {}) or {}
+    metadata["release_gate"] = {
+        "required": True,
+        "random_50_qa": {
+            "schema_version": qa.get("schema_version", QA_SCHEMA_VERSION),
+            "status": qa.get("status", "NOT_PERFORMED"),
+            "sample_size": int(qa.get("sample_size", QA_SAMPLE_SIZE) or QA_SAMPLE_SIZE),
+            "reviewed_count": int(qa.get("reviewed_count", 0) or 0),
+            "pass_count": int(qa.get("pass_count", 0) or 0),
+            "issue_count": int(qa.get("issue_count", 0) or 0),
+            "critical_count": int(qa.get("critical_count", 0) or 0),
+            "qa_uri": _qa_uri(dataset_name, "random_50_qa.json"),
+            "qa_csv_uri": _qa_uri(dataset_name, "random_50_qa.csv"),
+        },
+        "final_release_gate": qa.get("final_release_gate", "PARTIAL_PASS"),
+    }
+    dataset.metadata_json = json.dumps(metadata, ensure_ascii=False)
+    db.commit()
+
+
+def _persist_qa(dataset_name: str, qa: dict[str, Any], db) -> dict[str, Any]:
+    _client, bucket = _storage()
+    _write_json(bucket, _qa_blob_name(dataset_name, "random_50_qa.json"), qa)
+    _qa_write_csv(bucket, dataset_name, qa)
+    _update_release_gate_metadata(db, dataset_name, qa)
+    return qa
+
+
+def get_release_gate_summary(db, dataset_name: str) -> dict[str, Any] | None:
+    dataset = db.get(DatasetVersion, dataset_name)
+    if dataset is None:
+        return None
+    if str(getattr(dataset, "pipeline_type", "") or "").upper() != CROP_PIPELINE_TYPE:
+        return None
+    qa = _qa_read(dataset_name)
+    if qa is None:
+        return {"required": True, "schema_version": QA_SCHEMA_VERSION, "status": "NOT_PERFORMED", "sample_size": QA_SAMPLE_SIZE, "reviewed_count": 0, "pass_count": 0, "issue_count": 0, "critical_count": 0, "final_release_gate": "PARTIAL_PASS", "qa_uri": _qa_uri(dataset_name, "random_50_qa.json"), "qa_csv_uri": _qa_uri(dataset_name, "random_50_qa.csv")}
+    return {"required": True, "schema_version": qa.get("schema_version", QA_SCHEMA_VERSION), "status": qa.get("status", "PENDING"), "sample_size": int(qa.get("sample_size", QA_SAMPLE_SIZE) or QA_SAMPLE_SIZE), "reviewed_count": int(qa.get("reviewed_count", 0) or 0), "pass_count": int(qa.get("pass_count", 0) or 0), "issue_count": int(qa.get("issue_count", 0) or 0), "critical_count": int(qa.get("critical_count", 0) or 0), "final_release_gate": qa.get("final_release_gate", "PARTIAL_PASS"), "qa_uri": _qa_uri(dataset_name, "random_50_qa.json"), "qa_csv_uri": _qa_uri(dataset_name, "random_50_qa.csv")}
+
+
+def get_random_50_qa(dataset_name: str) -> dict[str, Any]:
+    qa = _qa_read(dataset_name)
+    if qa is None:
+        return {"schema_version": QA_SCHEMA_VERSION, "dataset_version": dataset_name, "seed": _qa_seed(dataset_name), "sample_size": QA_SAMPLE_SIZE, "status": "NOT_PERFORMED", "final_release_gate": "PARTIAL_PASS", "reviewed_count": 0, "pass_count": 0, "issue_count": 0, "critical_count": 0, "items": []}
+    return qa
+
+
+def start_random_50_qa(dataset_name: str, db) -> dict[str, Any]:
+    dataset = db.get(DatasetVersion, dataset_name)
+    if dataset is None:
+        raise ValueError("dataset not found")
+    if str(getattr(dataset, "pipeline_type", "") or "").upper() != CROP_PIPELINE_TYPE:
+        raise ValueError("RANDOM_50_QA_ONLY_FOR_CROP_DATASET")
+    existing = _qa_read(dataset_name)
+    if existing is not None:
+        return existing
+    client, bucket = _storage()
+    manifest_blob = bucket.blob(f"datasets/{dataset_name}/manifest_all.csv")
+    if not manifest_blob.exists(client):
+        raise FileNotFoundError("manifest_all.csv not found")
+    rows = list(csv.DictReader(io.StringIO(manifest_blob.download_as_text(encoding="utf-8"))))
+    selected = select_random_50_qa_rows(rows, dataset_name)
+    return _persist_qa(dataset_name, _qa_payload(dataset_name, selected), db)
+
+
+def review_random_50_qa(dataset_name: str, qa_index: int, decision: str, note: str, db) -> dict[str, Any]:
+    qa = _qa_read(dataset_name)
+    if qa is None:
+        raise ValueError("RANDOM_50_QA_NOT_STARTED")
+    items = qa.get("items") or []
+    if qa_index < 0 or qa_index >= len(items):
+        raise ValueError("RANDOM_50_QA_ITEM_NOT_FOUND")
+    decision = str(decision or "").strip().upper()
+    if decision not in QA_DECISIONS:
+        raise ValueError("RANDOM_50_QA_DECISION_INVALID")
+    item = items[qa_index]
+    item["decision"] = decision
+    item["note"] = str(note or "").strip()[:1000]
+    item["reviewed_at"] = _now()
+    qa.update(_qa_summary(items))
+    return _persist_qa(dataset_name, qa, db)
+
+
+def read_random_50_qa_media(dataset_name: str, qa_index: int) -> bytes:
+    qa = _qa_read(dataset_name)
+    if qa is None:
+        raise FileNotFoundError("RANDOM_50_QA_NOT_STARTED")
+    items = qa.get("items") or []
+    if qa_index < 0 or qa_index >= len(items):
+        raise FileNotFoundError("RANDOM_50_QA_ITEM_NOT_FOUND")
+    crop_path = str(items[qa_index].get("crop_path") or "")
+    if not crop_path or crop_path.startswith("/") or ".." in crop_path:
+        raise FileNotFoundError("RANDOM_50_QA_MEDIA_NOT_AVAILABLE")
+    client, bucket = _storage()
+    blob = bucket.blob(f"datasets/{dataset_name}/{crop_path}")
+    if not blob.exists(client):
+        raise FileNotFoundError("RANDOM_50_QA_MEDIA_NOT_AVAILABLE")
+    return blob.download_as_bytes(timeout=120)
+
+
+
 def validate_crop_split_summary(rows):
     report, counts = _split_report(rows, "TEST")
     return {
@@ -664,7 +879,9 @@ def validate_crop_split_summary(rows):
 __all__ = [
     "CROP_DATASET_VERSION", "CROP_DATASET_TYPE", "CROP_PIPELINE_TYPE",
     "CROP_EXPAND_RATIO", "CROP_OUTPUT_SIZE", "CROP_SPLIT_SEED", "CROP_CHUNK_SIZE",
-    "SPLIT_STRATEGY", "MANIFEST_FIELDS", "accepted_pool_count",
+    "SPLIT_STRATEGY", "MANIFEST_FIELDS", "QA_SCHEMA_VERSION", "QA_SAMPLE_SIZE", "accepted_pool_count",
     "accepted_pool_snapshot", "evaluate_quality", "get_crop_dataset_job",
     "start_crop_dataset_job", "step_crop_dataset_job", "validate_crop_split_summary",
+    "get_release_gate_summary", "get_random_50_qa", "start_random_50_qa",
+    "review_random_50_qa", "read_random_50_qa_media", "select_random_50_qa_rows",
 ]
