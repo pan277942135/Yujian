@@ -1,29 +1,159 @@
 {% extends "platform/base.html" %}
-{% from "platform/components/status_tag.html" import status_tag %}
 {% block content %}
 <div class="page-heading">
-  <div><h1>数据集管理</h1><p>管理经过数据清洗与审核后形成的可训练数据集版本，并查看训练数据规模、状态及来源。</p></div>
-  <div class="page-actions"><a class="button primary" href="/platform/data/import">导入采集数据</a></div>
+  <div>
+    <h1>数据集管理</h1>
+    <p>管理经过数据清洗与审核后形成的可训练数据集版本，并查看训练数据规模、状态及来源。</p>
+  </div>
+  <div class="page-actions">
+    <a class="button primary" href="/platform/data/import">导入采集数据</a>
+  </div>
 </div>
-<div id="datasetMetrics" class="metric-grid" aria-label="数据集统计"><div class="metric-card"><div class="loading">加载中…</div></div></div>
+
+<div id="datasetMetrics" class="metric-grid" aria-label="数据集统计">
+  <div class="metric-card"><div class="loading">加载中…</div></div>
+</div>
+
 <section class="panel" style="margin-top:16px">
-  <div class="panel-heading"><div><h2>训练数据集版本</h2><p>这里仅展示 DatasetVersion；原始上传批次请从“导入采集数据”进入。</p></div><span class="code">/api/platform/datasets</span></div>
+  <div class="panel-heading">
+    <div>
+      <h2>数据集版本</h2>
+      <p>列表只展示已经形成的 DatasetVersion；原始上传批次属于采集生命周期。</p>
+    </div>
+    <span class="code">/api/platform/datasets</span>
+  </div>
   <div id="datasetState"><div class="loading">加载中…</div></div>
 </section>
+
 <section id="cleanReportPanel" class="panel" style="margin-top:16px" hidden>
-  <div class="panel-heading"><div><h2>AI 清洗报告</h2><p id="cleanReportTitle"></p></div><button class="button" type="button" onclick="document.getElementById('cleanReportPanel').hidden=true">关闭</button></div>
+  <div class="panel-heading">
+    <div><h2>AI 清洗报告</h2><p id="cleanReportTitle"></p></div>
+    <button class="button" type="button" onclick="closeCleanReport()">关闭</button>
+  </div>
   <div id="cleanReportState"></div>
 </section>
 {% endblock %}
+
 {% block scripts %}
 <script>
-const datasetState=document.getElementById('datasetState');
-function datasetStatus(status){const labels={FROZEN:'可训练',READY_FOR_TRAINING:'可训练',UPLOADING:'上传中',AI_CLEANING:'AI 清洗中',REVIEW:'待审核'};return `<span class="status-tag status-${String(status||'').toLowerCase()}"><span class="status-dot"></span>${esc(labels[status]||status||'未知')}</span>`}
-function datasetMetric(label,value,detail){return `<div class="metric-card"><div class="metric-label">${esc(label)}</div><div class="metric-value">${esc(value??0)}</div><div class="metric-detail">${esc(detail||'')}</div></div>`}
-function renderDatasetMetrics(rows){const total=rows.reduce((sum,row)=>sum+Number(row.total||0),0);const train=rows.reduce((sum,row)=>sum+Number(row.train||0),0);const val=rows.reduce((sum,row)=>sum+Number(row.val||0),0);const test=rows.reduce((sum,row)=>sum+Number(row.test||0),0);document.getElementById('datasetMetrics').innerHTML=[datasetMetric('数据集版本',rows.length,'DatasetVersion'),datasetMetric('数据总量',total,'当前 Dataset 样本总量'),datasetMetric('训练数据',train,'train_count'),datasetMetric('验证数据',val,'val_count'),datasetMetric('测试数据',test,'test_count')].join('')}
-function renderDatasets(rows){if(!rows.length){datasetState.innerHTML='<div class="empty">暂无数据集<br><span class="muted">请先从“导入采集数据”上传并完成审核。</span></div>';return}datasetState.innerHTML=`<div class="table-wrap"><table class="data-table"><thead><tr><th>数据集</th><th>类型</th><th>总样本</th><th>训练集</th><th>验证集</th><th>测试集</th><th>状态</th><th>来源批次</th><th>操作</th></tr></thead><tbody>${rows.map(row=>`<tr><td><strong>${esc(row.name)}</strong></td><td>${esc(row.type||'WHOLE_IMAGE_V1')}</td><td>${esc(row.total??0)}</td><td>${esc(row.train??0)}</td><td>${esc(row.val??0)}</td><td>${esc(row.test??0)}</td><td>${datasetStatus(row.status)}</td><td>${esc(row.source_batch||'暂无完整关联信息')}</td><td><button class="button" type="button" onclick="showCleanReport('${esc(row.id)}')">查看详情</button></td></tr>`).join('')}</tbody></table></div>`}
-async function showCleanReport(id){const panel=document.getElementById('cleanReportPanel');panel.hidden=false;document.getElementById('cleanReportTitle').textContent=id;const target=document.getElementById('cleanReportState');renderState(target,'loading');try{const report=await platformFetch(`/api/platform/datasets/${encodeURIComponent(id)}/clean-report`);const invalid=report.invalid||{};target.innerHTML=`<div class="stat-grid"><div class="stat"><strong>${esc(report.total??0)}</strong><span>数据总量</span></div><div class="stat"><strong>${esc(report.valid??0)}</strong><span>有效样本</span></div><div class="stat"><strong>${esc((Number(report.valid_ratio||0)*100).toFixed(1))}%</strong><span>有效比例</span></div></div><div class="table-wrap" style="margin-top:14px"><table class="data-table"><tbody>${Object.entries(invalid).map(([key,value])=>`<tr><td>${esc({blur:'模糊',duplicate:'重复',no_fish:'无鱼',multi_fish:'多鱼',scene:'非目标场景'}[key]||key)}</td><td>${esc(value)}</td></tr>`).join('')}</tbody></table></div>`}catch(error){renderState(target,'error',platformError(error))}}
-async function loadDatasets(){try{const rows=await platformFetch('/api/platform/datasets');renderDatasetMetrics(rows);renderDatasets(rows);const requested=new URLSearchParams(location.search).get('dataset');if(requested)showCleanReport(requested)}catch(error){document.getElementById('datasetMetrics').innerHTML='<div class="error-state" style="grid-column:1/-1">数据加载失败</div>';renderState(datasetState,'error',platformError(error))}}
+const datasetState = document.getElementById('datasetState');
+const cleanReportLabels = {
+  duplicate: '重复图片',
+  blur: '模糊',
+  no_fish: '无鱼',
+  multi_fish: '多鱼',
+  scene: '异常场景',
+};
+
+function datasetStatus(status) {
+  const normalized = String(status || 'UNKNOWN').toUpperCase();
+  const labels = {
+    READY: '可训练',
+    FROZEN: '可训练',
+    READY_FOR_TRAINING: '可训练',
+    UPLOADING: '上传中',
+    AI_CLEANING: 'AI 清洗中',
+    REVIEW: '待审核',
+    DRAFT: '草稿',
+  };
+  return `<span class="status-tag status-${normalized.toLowerCase()}"><span class="status-dot"></span>${esc(labels[normalized] || normalized || '未知')}</span>`;
+}
+
+function datasetMetric(label, value, detail) {
+  return `<div class="metric-card"><div class="metric-label">${esc(label)}</div><div class="metric-value">${esc(value ?? 0)}</div><div class="metric-detail">${esc(detail || '')}</div></div>`;
+}
+
+function renderDatasetMetrics(rows) {
+  const latest = rows[0] || null;
+  const historicalTotal = rows.reduce((sum, row) => sum + Number(row.total || 0), 0);
+  const currentTraining = rows.reduce((sum, row) => sum + Number(row.train || 0), 0);
+  document.getElementById('datasetMetrics').innerHTML = [
+    datasetMetric('当前生产版本', latest ? `${latest.id} · ${Number(latest.total || 0)}` : '暂无', latest ? '最新 DatasetVersion · 样本数' : '暂无 DatasetVersion'),
+    datasetMetric('历史版本累计样本', historicalTotal, '所有 DatasetVersion 样本计数合计'),
+    datasetMetric('当前训练数据', currentTraining, '各 DatasetVersion train_count 合计'),
+  ].join('');
+}
+
+function renderSourceBatches(row) {
+  const batches = Array.isArray(row.source_batches) ? row.source_batches : [];
+  if (!batches.length) return '<span class="muted">来源待补充</span>';
+  return `<div class="inline">${batches.map(batch => `<span class="code">${esc(batch)}</span>`).join('')}</div>`;
+}
+
+function datasetUrl(id) {
+  return `/platform/data/datasets/${encodeURIComponent(String(id || ''))}`;
+}
+
+function renderDatasets(rows) {
+  if (!rows.length) {
+    datasetState.innerHTML = '<div class="empty">暂无数据集<br><span class="muted">请先从“导入采集数据”上传并完成审核。</span><br><a class="button primary" style="margin-top:14px" href="/platform/data/import">导入采集数据</a></div>';
+    return;
+  }
+  datasetState.innerHTML = `<div class="table-wrap"><table class="data-table"><thead><tr>
+    <th>数据集</th><th>类型</th><th>总样本</th><th>训练集</th><th>验证集</th><th>测试集</th><th>状态</th><th>来源 Batch</th><th>父版本</th><th>操作</th>
+  </tr></thead><tbody>${rows.map(row => `<tr>
+    <td><strong>${esc(row.id)}</strong></td>
+    <td>${esc(row.type || 'WHOLE_IMAGE_V1')}</td>
+    <td>${esc(row.total ?? 0)}</td>
+    <td>${esc(row.train ?? 0)}</td>
+    <td>${esc(row.val ?? 0)}</td>
+    <td>${esc(row.test ?? 0)}</td>
+    <td>${datasetStatus(row.status)}</td>
+    <td>${renderSourceBatches(row)}</td>
+    <td>${row.parent_version ? `<span class="code">${esc(row.parent_version)}</span>` : '<span class="muted">—</span>'}</td>
+    <td><div class="page-actions">
+      <a class="button" href="${esc(datasetUrl(row.id))}">查看详情</a>
+      <button class="button" type="button" data-dataset-id="${esc(row.id)}" data-action="clean-report">清洗报告</button>
+    </div></td>
+  </tr>`).join('')}</tbody></table></div>`;
+  datasetState.querySelectorAll('[data-action="clean-report"]').forEach(button => {
+    button.addEventListener('click', () => showCleanReport(button.dataset.datasetId));
+  });
+}
+
+function renderCleanReport(report) {
+  const invalid = report.invalid || {};
+  const rows = Object.entries(cleanReportLabels).map(([key, label]) => `<tr><td>${label}</td><td>${esc(invalid[key] ?? 0)}</td></tr>`).join('');
+  return `<div class="stat-grid">
+    <div class="stat"><strong>${esc(report.total ?? 0)}</strong><span>数据总量</span></div>
+    <div class="stat"><strong>${esc(report.valid ?? 0)}</strong><span>有效样本</span></div>
+    <div class="stat"><strong>${esc((Number(report.valid_ratio || 0) * 100).toFixed(1))}%</strong><span>有效比例</span></div>
+  </div>
+  <div class="table-wrap" style="margin-top:14px"><table class="data-table"><tbody>${rows}</tbody></table></div>`;
+}
+
+async function showCleanReport(id) {
+  const panel = document.getElementById('cleanReportPanel');
+  panel.hidden = false;
+  document.getElementById('cleanReportTitle').textContent = `${id} · 仅查看清洗结果`;
+  const target = document.getElementById('cleanReportState');
+  renderState(target, 'loading');
+  panel.scrollIntoView({behavior: 'smooth', block: 'start'});
+  try {
+    const report = await platformFetch(`/api/platform/datasets/${encodeURIComponent(id)}/clean-report`);
+    target.innerHTML = renderCleanReport(report);
+  } catch (error) {
+    renderState(target, 'error', platformError(error));
+  }
+}
+
+function closeCleanReport() {
+  document.getElementById('cleanReportPanel').hidden = true;
+}
+
+async function loadDatasets() {
+  try {
+    const rows = await platformFetch('/api/platform/datasets');
+    renderDatasetMetrics(rows);
+    renderDatasets(rows);
+    const requested = new URLSearchParams(location.search).get('dataset');
+    if (requested) showCleanReport(requested);
+  } catch (error) {
+    document.getElementById('datasetMetrics').innerHTML = '<div class="error-state" style="grid-column:1/-1">数据加载失败</div>';
+    renderState(datasetState, 'error', platformError(error));
+  }
+}
+
 loadDatasets();
 </script>
 {% endblock %}
