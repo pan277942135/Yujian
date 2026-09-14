@@ -15,6 +15,14 @@ from app.crop_review import CropReviewUpdate, update_crop_review
 from app.db import get_db
 from app.models import DatasetVersion, ImageAsset
 from app.platform.services import adapters
+from app.platform.services.crop_dataset import (
+    CROP_DATASET_VERSION,
+    CROP_EXPAND_RATIO,
+    CROP_OUTPUT_SIZE,
+    accepted_pool_snapshot,
+    get_crop_dataset_job,
+    start_crop_dataset_job,
+)
 from app.training_api import TrainingCreate, queue_training_run
 from app.frozen_crop_bridge import _read_uri
 
@@ -48,6 +56,13 @@ class PlatformTrainingCreate(BaseModel):
     learning_rate: float = Field(default=0.001, gt=0, le=0.1)
     freeze: bool | None = None
     seed: int = 20260827
+
+
+class CropDatasetCreate(BaseModel):
+    source: str = Field(default="accepted_bbox", max_length=64)
+    dataset_name: str = Field(default=CROP_DATASET_VERSION, max_length=128)
+    expand_ratio: float = Field(default=CROP_EXPAND_RATIO, ge=1.25, le=1.25)
+    size: int = Field(default=CROP_OUTPUT_SIZE, ge=416, le=416)
 
 
 def _image_ref(value: str, batch_id: str | None) -> tuple[str | None, str]:
@@ -109,6 +124,33 @@ def _apply_review_items(db: Session, images: list[ImageAsset], *, status: str, s
 @router.get("/dashboard")
 def platform_dashboard(db: Session = Depends(get_db)) -> dict[str, Any]:
     return adapters.dashboard(db)
+
+
+@router.get("/fish-pool/accepted")
+def platform_accepted_fish_pool(db: Session = Depends(get_db)) -> dict[str, Any]:
+    return accepted_pool_snapshot(db)
+
+
+@router.post("/datasets/crop/create")
+def platform_crop_dataset_create(payload: CropDatasetCreate) -> dict[str, Any]:
+    if payload.source.strip().lower() != "accepted_bbox":
+        raise HTTPException(status_code=400, detail={"error": "SOURCE_NOT_SUPPORTED", "source": payload.source})
+    try:
+        return start_crop_dataset_job(
+            dataset_name=payload.dataset_name.strip(),
+            expand_ratio=payload.expand_ratio,
+            size=payload.size,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail={"error": "CROP_DATASET_CREATE_FAILED", "reason": str(exc)}) from exc
+
+
+@router.get("/datasets/crop/jobs/{job_id}")
+def platform_crop_dataset_job(job_id: str) -> dict[str, Any]:
+    job = get_crop_dataset_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="裁剪数据集任务不存在")
+    return job
 
 
 @router.get("/datasets")
