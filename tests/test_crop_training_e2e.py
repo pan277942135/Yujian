@@ -27,7 +27,7 @@ def test_ready_for_training_crop_dataset_can_queue_crop_run(tmp_path):
                 selection_mode="ACCEPTED_BBOX_CROP",
                 status="READY_FOR_TRAINING",
                 pipeline_type=CROP_CLASSIFIER_V1,
-                metadata_json='{"source":"accepted_bbox"}',
+                metadata_json='{"source":"accepted_bbox","release_gate":{"random_50_qa":{"schema_version":"RANDOM_50_QA_V1","status":"PASS","sample_size":50,"reviewed_count":50,"pass_count":50,"issue_count":0,"critical_count":0},"final_release_gate":"PASS"}}',
             )
         )
         db.commit()
