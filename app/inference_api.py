@@ -28,7 +28,15 @@ from app.detector_runtime import DetectorRun, detect
 from app.factory import get_bucket_name
 from app.pipeline_contract import CROP_CLASSIFIER_V1, WHOLE_IMAGE_V1, validate_pipeline_type
 from app.models import ModelVersion, TrainingRun
-from app.recognition_pipeline import BBox, Detection, PipelineStatus, assess_detections, crop_box_pixels, load_contract
+from app.recognition_pipeline import (
+    BBox,
+    Detection,
+    PipelineStatus,
+    assess_detections,
+    boundary_debug_payload,
+    crop_box_pixels,
+    load_contract,
+)
 
 router = APIRouter(tags=["model-inference"])
 templates = Jinja2Templates(directory="app/templates")
@@ -221,13 +229,22 @@ def _serialize_detection(detection: Detection) -> dict:
 def _input_message(status: PipelineStatus) -> tuple[str, str]:
     messages = {
         PipelineStatus.NO_FISH: ("没有检测到鱼", "请重新拍摄或选择包含鱼的照片"),
+        PipelineStatus.INVALID_BBOX: ("检测框无效", "无法生成有效的鱼体区域，请重试"),
         PipelineStatus.UNCERTAIN: ("鱼体检测结果不够确定", "请重新拍摄或选择更清晰、完整的单条鱼照片"),
         PipelineStatus.MULTIPLE_FISH: ("检测到多条鱼", "请重新拍摄单条鱼，或选择更清晰的照片"),
         PipelineStatus.INCOMPLETE_FISH: ("鱼体没有完整进入画面", "请尽量让鱼头、鱼尾和主要鳍部完整出现在照片中"),
         PipelineStatus.FISH_TOO_SMALL: ("鱼离镜头有点远", "靠近一点再拍，更容易准确识别鱼种"),
+        PipelineStatus.EMPTY_CROP: ("无法生成鱼体区域", "当前检测框没有生成有效 Crop，请重试"),
         PipelineStatus.READY: ("检测到完整单条鱼", "正在进行鱼种识别"),
     }
     return messages[status]
+
+
+def _quality_gate_status(assessment) -> str:
+    """Return the user-facing gate state without changing legacy wire status."""
+    if assessment.status is PipelineStatus.READY:
+        return "WARNING" if assessment.boundary.reason else "GOOD"
+    return "INVALID"
 
 
 def _run_production_detector(image: Image.Image) -> DetectorRun:
@@ -291,6 +308,7 @@ def _predict_bytes(db: Session, model_version: str, data: bytes) -> dict:
     detector_run = _run_production_detector(image)
     assessment = assess_detections(detector_run.detections)
     title, guidance = _input_message(assessment.status)
+    boundary_payload = boundary_debug_payload(assessment, image.width, image.height)
     detector_payload = {
         "model_version": detector_run.model_version,
         "onnx_sha256": detector_run.onnx_sha256,
@@ -304,6 +322,9 @@ def _predict_bytes(db: Session, model_version: str, data: bytes) -> dict:
     gate_payload = {
         "status": assessment.status.name,
         "status_wire": assessment.status.value,
+        "quality_status": _quality_gate_status(assessment),
+        "hard_block": assessment.status is not PipelineStatus.READY,
+        "classifier_allowed": assessment.status is PipelineStatus.READY,
         "reason": assessment.reason,
         "primary_bbox": _serialize_box(assessment.primary.box if assessment.primary else None),
         "strong_detection_count": len(assessment.strong_detections),
@@ -321,6 +342,7 @@ def _predict_bytes(db: Session, model_version: str, data: bytes) -> dict:
         "reason": assessment.reason,
         "detector": detector_payload,
         "quality_gate": gate_payload,
+        "boundary_check": boundary_payload,
         "classification_ran": False,
         "low_confidence": False,
     }
@@ -329,8 +351,36 @@ def _predict_bytes(db: Session, model_version: str, data: bytes) -> dict:
         return result
 
     assert assessment.crop_box is not None
-    crop_pixels = crop_box_pixels(assessment.crop_box, image.width, image.height)
-    crop = image.crop(crop_pixels)
+    try:
+        crop_pixels = crop_box_pixels(assessment.crop_box, image.width, image.height)
+        crop = image.crop(crop_pixels)
+        if crop.width <= 0 or crop.height <= 0:
+            raise ValueError("crop has no pixels")
+    except (OSError, ValueError) as exc:
+        status = PipelineStatus.EMPTY_CROP
+        empty_title, empty_guidance = _input_message(status)
+        result.update(
+            {
+                "status": status.name,
+                "status_wire": status.value,
+                "ready": False,
+                "message": empty_title,
+                "guidance": empty_guidance,
+                "reason": "empty_crop",
+                "quality_gate": {
+                    **gate_payload,
+                    "status": status.name,
+                    "status_wire": status.value,
+                    "quality_status": "INVALID",
+                    "hard_block": True,
+                    "classifier_allowed": False,
+                    "reason": "empty_crop",
+                },
+                "crop_error": str(exc),
+                "latency_ms": round((time.perf_counter() - pipeline_started) * 1000.0, 1),
+            }
+        )
+        return result
     model_row = db.get(ModelVersion, model_version)
     if not model_row:
         raise ValueError("模型不存在")
@@ -503,4 +553,3 @@ async def inference_batch(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"批量模型推理失败：{exc}") from exc
-
