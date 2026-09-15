@@ -1135,6 +1135,10 @@ def _analysis_blob(dataset_name: str, filename: str) -> str:
     return f"datasets/{dataset_name}/reports/{filename}"
 
 
+def _frozen_manifest_uri(dataset_name: str) -> str:
+    return f"gs://{get_bucket_name()}/datasets/{dataset_name}/{QA_SOURCE_MANIFEST}"
+
+
 def _analysis_read(dataset_name: str) -> dict[str, Any] | None:
     try:
         client, bucket = _storage()
@@ -1157,6 +1161,85 @@ def _analysis_read(dataset_name: str) -> dict[str, Any] | None:
         return value
     except Exception:
         return None
+
+
+def get_quality_gate_analysis_summary(dataset_name: str) -> dict[str, Any]:
+    """Return the cached quality report without scanning the manifest.
+
+    The detail API stays lightweight.  The full report is generated only by
+    the explicit Quality Gate action, and both paths advertise the same
+    frozen ``manifest.csv`` source.
+    """
+
+    report = _analysis_read(dataset_name)
+    if report is None:
+        return {
+            "status": "NOT_GENERATED",
+            "source": {
+                "manifest_uri": _frozen_manifest_uri(dataset_name),
+                "source_count": None,
+                "source_is_frozen_manifest": True,
+            },
+            "totals": {},
+            "quality_field_available": None,
+            "quality_sum_check": None,
+        }
+    return {
+        "status": "READY",
+        "source": report.get("source") or {
+            "manifest_uri": _frozen_manifest_uri(dataset_name),
+            "source_is_frozen_manifest": True,
+        },
+        "totals": report.get("totals") or {},
+        "quality_field_available": report.get("quality_field_available"),
+        "quality_sum_check": report.get("quality_sum_check"),
+        "warning_reason_coverage": report.get("warning_reason_coverage") or {},
+        "generated_at": report.get("generated_at"),
+    }
+
+
+def registered_manifest_counts(dataset: DatasetVersion) -> dict[str, int | str]:
+    """Read counts from the registered frozen ``manifest.csv`` when possible.
+
+    DatasetVersion counters remain the safe fallback for older/local records,
+    but a valid registered manifest is always preferred.  No bucket listing or
+    alternate manifest is consulted.
+    """
+
+    fallback = {
+        "total": int(dataset.train_count or 0) + int(dataset.val_count or 0) + int(dataset.test_count or 0),
+        "train": int(dataset.train_count or 0),
+        "val": int(dataset.val_count or 0),
+        "test": int(dataset.test_count or 0),
+        "source": "DatasetVersion.counters",
+    }
+    uri = str(dataset.manifest_uri or "").strip()
+    if not uri.lower().endswith(f"/{QA_SOURCE_MANIFEST}"):
+        return fallback
+    try:
+        if uri.startswith("gs://"):
+            client, _bucket = _storage()
+            data = _download(client, uri)
+        else:
+            from pathlib import Path
+
+            data = Path(uri).read_bytes()
+        rows = list(csv.DictReader(io.StringIO(data.decode("utf-8-sig"))))
+        split_counts = Counter(_qa_split(row) for row in rows)
+        if rows and sum(split_counts.get(split, 0) for split in ("train", "val", "test")) == len(rows):
+            return {
+                "total": len(rows),
+                "train": int(split_counts.get("train", 0)),
+                "val": int(split_counts.get("val", 0)),
+                "test": int(split_counts.get("test", 0)),
+                "source": "manifest.csv",
+            }
+        if rows:
+            fallback["total"] = len(rows)
+            fallback["source"] = "manifest.csv"
+    except Exception:
+        pass
+    return fallback
 
 
 def _analysis_recommendation_markdown(dataset_name, totals, reason_rows, warning_coverage) -> str:
@@ -1313,7 +1396,7 @@ def generate_quality_gate_analysis(dataset_name: str) -> dict[str, Any]:
         "dataset_version": dataset_name,
         "generated_at": _now(),
         "source": {
-            "manifest_uri": f"gs://{get_bucket_name()}/{manifest_name}",
+            "manifest_uri": _frozen_manifest_uri(dataset_name),
             "source_count": total,
             "source_is_frozen_manifest": True,
         },
@@ -1373,5 +1456,6 @@ __all__ = [
     "start_crop_dataset_job", "step_crop_dataset_job", "validate_crop_split_summary",
     "get_release_gate_summary", "get_random_50_qa", "start_random_50_qa",
     "review_random_50_qa", "read_random_50_qa_media", "select_random_50_qa_rows",
-    "generate_quality_gate_analysis",
+    "generate_quality_gate_analysis", "get_quality_gate_analysis_summary",
+    "registered_manifest_counts",
 ]

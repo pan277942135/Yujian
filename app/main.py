@@ -3,6 +3,7 @@ import mimetypes
 import os
 from datetime import datetime, timezone
 from io import BytesIO
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -744,11 +745,101 @@ class LegacyReleaseQaReview(BaseModel):
     note: str = Field(default="", max_length=1000)
 
 
+LEGACY_DATASET_STATUS_LABELS = {
+    "CREATED": "已创建",
+    "PROCESSING": "处理中",
+    "READY_FOR_REVIEW": "待审核",
+    "RELEASE_PENDING": "待发布确认",
+    "READY_FOR_TRAINING": "可训练",
+    "TRAINING": "训练中",
+    "COMPLETED": "已完成",
+    "FAILED": "失败",
+    "FROZEN": "已冻结",
+}
+
+
+def _legacy_source_batches(metadata: dict) -> list[str]:
+    """Read explicit Dataset lineage without inferring a Batch relationship."""
+
+    values = metadata.get("source_batches")
+    if values in (None, "", []):
+        values = metadata.get("source_batch_ids")
+    if values in (None, "", []):
+        values = [metadata.get("source_batch_id"), metadata.get("source_batch")]
+    pending = list(values) if isinstance(values, (list, tuple, set)) else [values]
+    result: list[str] = []
+    while pending:
+        value = pending.pop(0)
+        if isinstance(value, (list, tuple, set)):
+            pending[0:0] = list(value)
+            continue
+        if isinstance(value, dict):
+            value = value.get("batch_id") or value.get("id") or value.get("source_batch_id")
+        if not isinstance(value, str):
+            continue
+        value = value.strip()
+        if value and value not in result:
+            result.append(value)
+    return result
+
+
+def _legacy_release_gate(db: Session, dataset: DatasetVersion) -> dict:
+    from app.platform.services.crop_dataset import get_release_gate_summary
+
+    pipeline_type = str(getattr(dataset, "pipeline_type", "") or "").upper()
+    raw = get_release_gate_summary(db, dataset.dataset_version) if pipeline_type == "CROP_CLASSIFIER_V1" else None
+    if not raw:
+        if pipeline_type != "CROP_CLASSIFIER_V1":
+            return {
+                "required": False,
+                "status": "NOT_REQUIRED",
+                "total": 0,
+                "checked": 0,
+                "passed": 0,
+                "failed": 0,
+                "training_allowed": True,
+                "final_release_gate": "PASS",
+            }
+        raw = {}
+    final_gate = str(raw.get("final_release_gate") or "PARTIAL_PASS").upper()
+    status = str(raw.get("status") or "PENDING").upper()
+    if status == "NOT_PERFORMED":
+        status = "PENDING"
+    return {
+        "required": True,
+        "status": status,
+        "total": int(raw.get("sample_size", raw.get("total", 50)) or 50),
+        "checked": int(raw.get("reviewed_count", raw.get("checked", 0)) or 0),
+        "passed": int(raw.get("pass_count", raw.get("passed", 0)) or 0),
+        "failed": int(raw.get("failed", raw.get("issue_count", 0)) or 0),
+        "training_allowed": final_gate == "PASS",
+        "final_release_gate": final_gate,
+        "source_manifest": "manifest.csv",
+        "sample_plan": raw.get("sample_plan") or {},
+        "sample_size": int(raw.get("sample_size", 50) or 50),
+        "reviewed_count": int(raw.get("reviewed_count", 0) or 0),
+        "pass_count": int(raw.get("pass_count", 0) or 0),
+        "issue_count": int(raw.get("issue_count", 0) or 0),
+        "critical_count": int(raw.get("critical_count", 0) or 0),
+        "qa_uri": raw.get("qa_uri"),
+        "qa_csv_uri": raw.get("qa_csv_uri"),
+    }
+
+
 @app.get("/datasets/{dataset_version}", response_class=HTMLResponse)
 def legacy_dataset_detail_page(request: Request, dataset_version: str):
     return templates.TemplateResponse(
         request=request,
         name="legacy_dataset_detail.html",
+        context={"dataset_version": dataset_version},
+    )
+
+
+@app.get("/datasets/{dataset_version}/quality-samples", response_class=HTMLResponse)
+def legacy_dataset_quality_samples_page(request: Request, dataset_version: str):
+    return templates.TemplateResponse(
+        request=request,
+        name="legacy_dataset_quality_samples.html",
         context={"dataset_version": dataset_version},
     )
 
@@ -763,20 +854,36 @@ def legacy_dataset_detail(dataset_version: str, db: Session = Depends(get_db)):
         metadata = json.loads(dataset.metadata_json or "{}")
     except (TypeError, ValueError, json.JSONDecodeError):
         metadata = {}
-    from app.platform.services.crop_dataset import get_release_gate_summary
+    from app.platform.services.crop_dataset import (
+        get_quality_gate_analysis_summary,
+        registered_manifest_counts,
+    )
 
+    counts = registered_manifest_counts(dataset)
+    pipeline_type = getattr(dataset, "pipeline_type", None) or "WHOLE_IMAGE_V1"
     return {
-        "dataset_version": dataset.dataset_version,
-        "type": getattr(dataset, "pipeline_type", "WHOLE_IMAGE_V1"),
+        # V1 public contract.
+        "id": dataset.dataset_version,
+        "name": dataset.dataset_version,
         "status": dataset.status,
+        "sample_count": int(counts["total"]),
+        "train_count": int(counts["train"]),
+        "val_count": int(counts["val"]),
+        "test_count": int(counts["test"]),
         "manifest_uri": dataset.manifest_uri,
+        "quality_analysis": get_quality_gate_analysis_summary(dataset_version),
+        "release_gate": _legacy_release_gate(db, dataset),
+        # Kept for existing Legacy consumers while they migrate to the V1
+        # names above.  These are the same frozen DatasetVersion values.
+        "dataset_version": dataset.dataset_version,
+        "type": pipeline_type,
+        "pipeline_type": pipeline_type,
         "class_map_uri": dataset.class_map_uri,
-        "train_count": dataset.train_count,
-        "val_count": dataset.val_count,
-        "test_count": dataset.test_count,
         "species_count": dataset.species_count,
+        "source_batches": _legacy_source_batches(metadata),
+        "parent_version": dataset.parent_version,
         "metadata": metadata,
-        "release_gate": get_release_gate_summary(db, dataset_version),
+        "counts_source": counts["source"],
     }
 
 
@@ -784,10 +891,26 @@ def legacy_dataset_detail(dataset_version: str, db: Session = Depends(get_db)):
 def legacy_quality_gate_analysis(dataset_version: str, db: Session = Depends(get_db)):
     if db.get(DatasetVersion, dataset_version) is None:
         raise HTTPException(status_code=404, detail="数据集不存在")
-    from app.platform.services.crop_dataset import generate_quality_gate_analysis
+    from app.platform.services import adapters
+    from app.platform.services.crop_dataset import generate_quality_gate_analysis, get_quality_gate_analysis_summary
 
     try:
-        return generate_quality_gate_analysis(dataset_version)
+        was_ready = get_quality_gate_analysis_summary(dataset_version).get("status") == "READY"
+        report = generate_quality_gate_analysis(dataset_version)
+        if not was_ready:
+            adapters.record_operation(
+                db,
+                "QUALITY_ANALYSIS_GENERATED",
+                "dataset_release",
+                dataset_version,
+                detail={
+                    "source_manifest": "manifest.csv",
+                    "source_count": report.get("source", {}).get("source_count"),
+                    "quality_sum_check": report.get("quality_sum_check"),
+                },
+            )
+            db.commit()
+        return report
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
@@ -803,10 +926,57 @@ def _legacy_qa_with_media(dataset_version: str, qa: dict) -> dict:
     for item in qa.get("items", []):
         current = dict(item)
         index = int(current.get("qa_index", 0))
-        encoded = dataset_version
-        current["media_url"] = f"/api/legacy/datasets/{encoded}/release-qa/media/{index}?kind=crop"
-        current["source_media_url"] = f"/api/legacy/datasets/{encoded}/release-qa/media/{index}?kind=source_bbox"
+        encoded = quote(dataset_version, safe="")
+        current["crop_media_url"] = f"/api/legacy/datasets/{encoded}/release-qa/media/{index}?kind=crop"
+        current["source_image_url"] = f"/api/legacy/datasets/{encoded}/release-qa/media/{index}?kind=source"
+        current["bbox_overlay_url"] = f"/api/legacy/datasets/{encoded}/release-qa/media/{index}?kind=source_bbox"
+        # Backward-compatible aliases used by the first Release QA template.
+        current["media_url"] = current["crop_media_url"]
+        current["source_media_url"] = current["bbox_overlay_url"]
         result["items"].append(current)
+    return result
+
+
+@app.get("/api/legacy/datasets/{dataset_version}/operations")
+def legacy_dataset_operations(
+    dataset_version: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    if db.get(DatasetVersion, dataset_version) is None:
+        raise HTTPException(status_code=404, detail="数据集不存在")
+    from app.platform.models import PlatformOperationLog
+
+    labels = {
+        "DATASET_CREATED": "创建Dataset",
+        "QUALITY_ANALYSIS_GENERATED": "生成质量分析",
+        "RANDOM_50_QA_START": "创建QA Snapshot",
+        "RANDOM_50_QA_REVIEW": "完成审核",
+        "TRAINING_CREATE": "开始训练",
+    }
+    rows = db.scalars(
+        select(PlatformOperationLog)
+        .where(PlatformOperationLog.resource_id == dataset_version)
+        .order_by(PlatformOperationLog.created_at.asc(), PlatformOperationLog.id.asc())
+        .limit(limit)
+    ).all()
+    result = []
+    for row in rows:
+        try:
+            detail = json.loads(row.detail_json or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            detail = {}
+        result.append(
+            {
+                "id": row.id,
+                "operation": row.operation_type,
+                "label": labels.get(row.operation_type, row.operation_type),
+                "status": row.status,
+                "message": row.message,
+                "detail": detail,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+        )
     return result
 
 
