@@ -268,4 +268,18 @@ def api_bulk_apply(payload: BulkReviewApply, db: Session = Depends(get_db)):
         )
         changed += 1
     db.commit()
-    return {"batch_id": payload.batch_id, "updated": changed}
+    result = {"batch_id": payload.batch_id, "updated": changed}
+    if any(item.review_status == "approved" for item in payload.items):
+        # Queue once per bulk submission.  The job is resumable and
+        # fingerprinted, so the same batch can be submitted again without
+        # regenerating existing Accepted Pool crops.
+        from app.accepted_pool import enqueue_accepted_pool_sync
+
+        pool_job = enqueue_accepted_pool_sync(db)
+        if pool_job:
+            result["accepted_pool_sync"] = {
+                "job_id": pool_job.get("job_id"),
+                "status": pool_job.get("status"),
+                "pending_count": pool_job.get("pending_count", 0),
+            }
+    return result

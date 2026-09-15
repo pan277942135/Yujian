@@ -99,6 +99,7 @@ def _item(
         "source_url": image.source_url,
         "claimed_species": image.claimed_species,
         "truth_species": image.truth_species,
+        "species": (review.species_name if review else None) or image.truth_species,
         "review_status": image.review_status,
         "candidate_bbox": candidate,
         "accepted_bbox": accepted,
@@ -222,6 +223,7 @@ def accepted_bbox_summary(db: Session = Depends(get_db)) -> dict[str, int]:
 def accepted_bbox_items(
     status: str = Query(default="MISSING"),
     q: str | None = Query(default=None),
+    species: str | None = Query(default=None),
     limit: int = Query(default=24, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -231,16 +233,21 @@ def accepted_bbox_items(
     if normalized not in {"MISSING", "ACCEPTED", "ALL"}:
         raise HTTPException(status_code=400, detail="status 必须是 MISSING、ACCEPTED 或 ALL")
     query = (q or "").strip().lower()
+    species_query = (species or "").strip().lower()
     selected = []
     for image in images:
         if query and query not in f"{image.image_id} {image.file_name} {image.batch_id} {image.source_url or ''}".lower():
             continue
-        confirmed = _reviewed(reviews.get(image.id))
+        review = reviews.get(image.id)
+        resolved_species = str((review.species_name if review else None) or image.truth_species or "").strip().lower()
+        if species_query and resolved_species != species_query:
+            continue
+        confirmed = _reviewed(review)
         if normalized == "MISSING" and confirmed:
             continue
         if normalized == "ACCEPTED" and not confirmed:
             continue
-        selected.append(_item(image, reviews.get(image.id), presences.get(image.id)))
+        selected.append(_item(image, review, presences.get(image.id)))
     return {"total": len(selected), "offset": offset, "limit": limit, "items": selected[offset : offset + limit]}
 
 
@@ -300,7 +307,18 @@ def update_accepted_bbox(
         db.commit()
         db.refresh(row)
         presence = db.scalar(select(FishPresenceResult).where(FishPresenceResult.image_asset_id == image.id))
-        return _item(image, row, presence)
+        result = _item(image, row, presence)
+        if row.status in ACCEPTED_STATUSES:
+            from app.accepted_pool import enqueue_accepted_pool_sync
+
+            pool_job = enqueue_accepted_pool_sync(db)
+            if pool_job:
+                result["accepted_pool_sync"] = {
+                    "job_id": pool_job.get("job_id"),
+                    "status": pool_job.get("status"),
+                    "pending_count": pool_job.get("pending_count", 0),
+                }
+        return result
     except HTTPException:
         db.rollback()
         raise
@@ -323,7 +341,18 @@ def bulk_accepted_bbox(payload: AcceptedBBoxBulk, db: Session = Depends(get_db))
                 notes=item.notes,
             )
         db.commit()
-        return {"updated": len(payload.items)}
+        result: dict[str, Any] = {"updated": len(payload.items)}
+        if any(item.decision.strip().upper() in ACCEPTED_STATUSES for item in payload.items):
+            from app.accepted_pool import enqueue_accepted_pool_sync
+
+            pool_job = enqueue_accepted_pool_sync(db)
+            if pool_job:
+                result["accepted_pool_sync"] = {
+                    "job_id": pool_job.get("job_id"),
+                    "status": pool_job.get("status"),
+                    "pending_count": pool_job.get("pending_count", 0),
+                }
+        return result
     except HTTPException:
         db.rollback()
         raise
