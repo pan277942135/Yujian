@@ -3,26 +3,274 @@
 <div class="page-heading">
   <div>
     <h1>导入采集数据</h1>
-    <p>上传新的真实鱼获采集图片。系统沿用现有 Batch 流程完成导入、Manifest 处理、数据清洗和审核准备，审核完成后再形成可训练数据集。</p>
+    <p>导入真实鱼获采集图片。系统将沿用现有数据批次流程完成上传、文件检查、Manifest 生成和后续 AI 数据处理。</p>
   </div>
-  <div class="page-actions"><a class="button primary" href="/batches/upload">开始导入采集数据</a></div>
 </div>
-<section class="panel import-panel">
-  <div class="panel-heading"><div><h2>数据生产流程</h2><p>本入口不创建空数据集，也不重写既有上传系统。</p></div><span class="status-tag status-neutral"><span class="status-dot"></span>复用 Batch</span></div>
+
+<section class="panel">
+  <div class="panel-heading">
+    <div><h2>创建数据批次</h2><p>这里只创建 Batch，不创建空 Dataset。</p></div>
+    <span class="status-tag status-neutral"><span class="status-dot"></span>复用旧版 Batch Upload</span>
+  </div>
+  <div class="form-grid">
+    <div class="field">
+      <label for="importBatchName">批次名称（可选）</label>
+      <input id="importBatchName" maxlength="128" placeholder="例如：2026 秋季真实鱼获采集-01">
+      <small>不填写时系统使用生成的 Batch ID 作为名称。</small>
+    </div>
+    <div class="field">
+      <label for="importSource">数据来源</label>
+      <select id="importSource">
+        <option value="real_collection">真实采集</option>
+        <option value="user_feedback">用户反馈</option>
+        <option value="internal_collection">内部采集</option>
+        <option value="historical_data">历史数据</option>
+        <option value="test_data">测试数据</option>
+        <option value="other">其他</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="notice warning" style="margin-top:16px">
+    文件夹上传会逐文件调用现有 Batch Upload 接口。当前真实限制为单文件及小型 ZIP 不超过 25 MiB；大批次请使用文件夹上传。
+  </div>
+
+  <div class="panel" style="margin-top:16px;padding:16px;background:#fbfdfc">
+    <div class="panel-heading"><div><h2>选择图片文件夹</h2><p>按现有规范选择包含 <span class="code">images/</span> 与 <span class="code">metadata/manifest.csv</span> 的采集目录。</p></div></div>
+    <div class="field">
+      <label for="importFolder">图片 / 采集目录</label>
+      <input id="importFolder" type="file" webkitdirectory directory multiple>
+      <small id="importSelection">尚未选择文件夹。</small>
+    </div>
+    <div class="page-actions" style="margin-top:16px">
+      <button class="button primary" id="importFolderButton" type="button">开始导入采集数据</button>
+    </div>
+  </div>
+
+  <details style="margin-top:16px">
+    <summary>高级导入：小型 ZIP</summary>
+    <div class="form-grid" style="margin-top:12px">
+      <div class="field"><label for="importZip">ZIP 文件</label><input id="importZip" type="file" accept=".zip,application/zip"><small>仅支持不超过 25 MiB 的 ZIP。</small></div>
+      <div class="field" style="justify-content:flex-end"><button class="button" id="importZipButton" type="button">上传小型 ZIP</button></div>
+    </div>
+  </details>
+
+  <div id="importStage" class="notice" style="margin-top:16px" aria-live="polite">准备上传</div>
+  <div id="importResult" style="margin-top:16px" hidden></div>
+</section>
+
+<section class="panel import-note">
+  <h2>数据进入平台后的流程</h2>
   <div class="import-flow" aria-label="采集数据到训练数据集流程">
     <div class="import-step"><span>1</span><strong>上传图片</strong><small>导入真实鱼获采集数据</small></div>
     <div class="import-arrow">→</div>
-    <div class="import-step"><span>2</span><strong>数据批次</strong><small>沿用现有 Batch 记录</small></div>
+    <div class="import-step"><span>2</span><strong>数据批次</strong><small>生成 BATCH 记录</small></div>
     <div class="import-arrow">→</div>
-    <div class="import-step"><span>3</span><strong>AI 自动清洗</strong><small>准备质量与审核信号</small></div>
+    <div class="import-step"><span>3</span><strong>AI 数据处理</strong><small>沿用现有 Audit / Manifest 流程</small></div>
     <div class="import-arrow">→</div>
-    <div class="import-step"><span>4</span><strong>人工确认</strong><small>在审核中心处理异常</small></div>
+    <div class="import-step"><span>4</span><strong>人工确认</strong><small>进入数据审核</small></div>
     <div class="import-arrow">→</div>
-    <div class="import-step"><span>5</span><strong>数据集</strong><small>形成可训练版本</small></div>
+    <div class="import-step"><span>5</span><strong>数据集</strong><small>后续形成训练版本</small></div>
   </div>
 </section>
-<section class="panel import-note">
-  <h2>下一步怎么做</h2>
-  <p>点击上方按钮进入成熟的 <a href="/batches/upload">数据导入</a> 页面。上传后可在 <a href="/platform/data/review">数据审核中心</a> 查看待处理样本，完成审核后再在 <a href="/platform/data/datasets">数据集管理</a> 查看 DatasetVersion。</p>
-</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const importStage = document.getElementById('importStage');
+const importResult = document.getElementById('importResult');
+let importFiles = [];
+let importBatchId = null;
+let importContext = null;
+
+function importStageText(text, kind='') {
+  importStage.className = `notice${kind === 'error' ? ' warning' : ''}`;
+  importStage.textContent = text;
+}
+
+function importError(error) {
+  return error instanceof Error ? error.message : String(error || '导入失败');
+}
+
+function importSourceName(value) {
+  return ({
+    real_collection: '真实采集',
+    user_feedback: '用户反馈',
+    internal_collection: '内部采集',
+    historical_data: '历史数据',
+    test_data: '测试数据',
+    other: '其他',
+  })[value] || value || '其他';
+}
+
+function importStatusName(value) {
+  return ({
+    READY_FOR_FILES: '准备上传',
+    RESUME: '继续上传',
+    UPLOADED: '已上传',
+    MANIFEST_READY: '数据已解析',
+    READY_FOR_AUDIT: '待准备审核',
+    INGESTED: '已入库',
+    REGISTERED: '已登记',
+    FAILED: '导入失败',
+    CONFLICT: '存在文件冲突',
+  })[String(value || '').toUpperCase()] || value || '未知';
+}
+
+function importPath(file) {
+  return (file.webkitRelativePath || file.name).replace(/\\/g, '/');
+}
+
+function importFileSummary() {
+  if (!importFiles.length) {
+    document.getElementById('importSelection').textContent = '尚未选择文件夹。';
+    return;
+  }
+  const images = importFiles.filter(file => /\.(jpe?g|png|webp)$/i.test(file.name)).length;
+  const totalBytes = importFiles.reduce((sum, file) => sum + file.size, 0);
+  document.getElementById('importSelection').textContent = `已选择 ${importFiles.length} 个文件，其中图片 ${images} 张，总大小 ${(totalBytes / 1024 / 1024).toFixed(1)} MiB。校验由现有 Batch Upload 后端执行。`;
+}
+
+document.getElementById('importFolder').addEventListener('change', event => {
+  importFiles = Array.from(event.target.files || []);
+  importFileSummary();
+});
+
+async function importStart() {
+  return platformFetch('/api/batches/upload-start', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      batch_id: null,
+      batch_name: document.getElementById('importBatchName').value.trim() || null,
+      source: document.getElementById('importSource').value,
+    }),
+  });
+}
+
+async function importFile(batchId, file) {
+  const form = new FormData();
+  form.append('batch_id', batchId);
+  form.append('relative_path', importPath(file));
+  form.append('file', file, file.name);
+  return platformFetch('/api/batches/upload-file', {method: 'POST', body: form});
+}
+
+async function importFinalize(batchId) {
+  return platformFetch('/api/batches/upload-finalize', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      batch_id: batchId,
+      batch_name: document.getElementById('importBatchName').value.trim() || null,
+      source: document.getElementById('importSource').value,
+    }),
+  });
+}
+
+function renderImportResult(data, uploadSummary={}) {
+  const status = String(data.status || 'UNKNOWN').toUpperCase();
+  const statusText = importStatusName(status);
+  const canReview = ['REGISTERED', 'READY_FOR_REVIEW'].includes(status);
+  const total = uploadSummary.total ?? data.uploaded_files ?? data.image_count ?? 0;
+  const failed = uploadSummary.failed ?? data.failed ?? 0;
+  importResult.hidden = false;
+  importResult.innerHTML = `<div class="notice ${status === 'READY_FOR_AUDIT' ? '' : 'warning'}">
+    <h2 style="margin:0 0 10px">已生成数据批次</h2>
+    <div class="stat-grid">
+      <div class="stat"><strong>${esc(data.batch_name || data.batch_id)}</strong><span>批次名称</span></div>
+      <div class="stat"><strong>${esc(data.batch_id || '—')}</strong><span>Batch ID</span></div>
+      <div class="stat"><strong>${esc(data.image_count ?? 0)}</strong><span>上传图片数</span></div>
+      <div class="stat"><strong>${esc(total)}</strong><span>成功文件数</span></div>
+      <div class="stat"><strong>${esc(failed)}</strong><span>失败文件数</span></div>
+      <div class="stat"><strong>${esc(statusText)}</strong><span>当前状态</span></div>
+    </div>
+    <p style="margin:14px 0 0">来源：${esc(importSourceName(data.source))} · 创建时间：${esc(data.created_at || '—')} · Manifest：${esc(data.manifest_rows ?? '—')} 行</p>
+    <div class="page-actions" style="margin-top:14px">
+      <a class="button primary" href="/batches?batch_id=${encodeURIComponent(data.batch_id || '')}">查看数据批次</a>
+      ${canReview ? `<a class="button" href="/review?batch=${encodeURIComponent(data.batch_id || '')}">进入数据审核</a>` : '<span class="muted" style="align-self:center">完成数据批次的准备审核后开放“进入数据审核”。</span>'}
+    </div>
+  </div>`;
+}
+
+async function runFolderImport() {
+  if (!importFiles.length) {
+    importStageText('请先选择采集数据文件夹。', 'error');
+    return;
+  }
+  if (importContext) {
+    importStageText('当前批次仍在处理中，请先完成或刷新页面。', 'error');
+    return;
+  }
+  importResult.hidden = true;
+  try {
+    importStageText('正在准备上传');
+    const started = await importStart();
+    importBatchId = started.batch_id;
+    importContext = {source: started.source, results: {}};
+    let completed = 0;
+    let cursor = 0;
+    const failures = [];
+    const worker = async () => {
+      while (cursor < importFiles.length) {
+        const file = importFiles[cursor++];
+        try {
+          const response = await importFile(importBatchId, file);
+          importContext.results[importPath(file)] = response;
+        } catch (error) {
+          failures.push(`${importPath(file)}：${importError(error)}`);
+        }
+        completed += 1;
+        importStageText(`上传中：${importBatchId} · 已处理 ${completed} / ${importFiles.length} 个文件`);
+      }
+    };
+    await Promise.all(Array.from({length: Math.min(4, importFiles.length)}, worker));
+    if (failures.length) {
+      importStageText(`导入失败：${failures.length} 个文件未上传\n${failures.join('\n')}`, 'error');
+      return;
+    }
+    importStageText(`文件处理完成，正在生成批次：${importBatchId}`);
+    const finalized = await importFinalize(importBatchId);
+    importStageText(`导入完成：${finalized.batch_id} · ${importStatusName(finalized.status)}`);
+    renderImportResult(finalized, {total: importFiles.length, failed: 0});
+  } catch (error) {
+    importStageText(`导入失败：${importError(error)}`, 'error');
+  } finally {
+    importContext = null;
+  }
+}
+
+async function runZipImport() {
+  const file = document.getElementById('importZip').files[0];
+  if (!file) {
+    importStageText('请先选择 ZIP 文件。', 'error');
+    return;
+  }
+  if (importContext) {
+    importStageText('当前批次仍在处理中，请先完成或刷新页面。', 'error');
+    return;
+  }
+  importResult.hidden = true;
+  const form = new FormData();
+  form.append('file', file, file.name);
+  form.append('source', document.getElementById('importSource').value);
+  form.append('batch_name', document.getElementById('importBatchName').value.trim());
+  try {
+    importStageText('正在上传 ZIP 并生成批次');
+    const data = await platformFetch('/api/batches/upload', {method: 'POST', body: form});
+    const summary = data.upload_summary || {};
+    if (String(data.status || '').toUpperCase() !== 'READY_FOR_AUDIT') {
+      importStageText(`导入失败：${data.status || '文件未完成'}${data.conflicts?.length ? `\n冲突文件：${data.conflicts.join(', ')}` : ''}`, 'error');
+      return;
+    }
+    importStageText(`导入完成：${data.batch_id} · ${importStatusName(data.status)}`);
+    renderImportResult(data, summary);
+  } catch (error) {
+    importStageText(`导入失败：${importError(error)}`, 'error');
+  }
+}
+
+document.getElementById('importFolderButton').addEventListener('click', runFolderImport);
+document.getElementById('importZipButton').addEventListener('click', runZipImport);
+</script>
 {% endblock %}
