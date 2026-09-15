@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import inspect
 import json
 import mimetypes
 import os
@@ -600,7 +601,14 @@ def _result_with_storage(
     data: bytes,
     include_intermediates: bool = True,
 ) -> dict:
-    result = _predict_bytes(db, model_version, data, include_intermediates=include_intermediates)
+    # Keep the existing smoke-test and extension seam compatible with callers
+    # that replace ``_predict_bytes`` using its pre-log three-argument shape.
+    # The production function accepts the additive keyword; older test seams
+    # simply receive the original call and therefore omit optional artifacts.
+    if "include_intermediates" in inspect.signature(_predict_bytes).parameters:
+        result = _predict_bytes(db, model_version, data, include_intermediates=include_intermediates)
+    else:
+        result = _predict_bytes(db, model_version, data)
     result["inference_id"] = f"INF_{uuid4().hex}"
     result["file_name"] = file.filename or "image"
     result["image_gcs_uri"] = _persist_image(
