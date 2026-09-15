@@ -1271,6 +1271,11 @@ def start_crop_dataset_job(*, source="accepted_bbox", dataset_name=CROP_DATASET_
                            expand_ratio=CROP_EXPAND_RATIO, size=CROP_OUTPUT_SIZE,
                            mode="FULL", limit=None):
     if str(source).strip().upper() == ACCEPTED_POOL_SOURCE:
+        if str(mode or "FULL").strip().upper() == "FULL":
+            raise ValueError(
+                "ACCEPTED_POOL_FULL_REQUIRES_LEGACY_DATASET_FREEZE: "
+                "请在旧版 /datasets 中选择 Accepted Pool 并点击创建 Dataset Freeze"
+            )
         return _start_accepted_pool_job(
             dataset_name=dataset_name,
             expand_ratio=expand_ratio,
@@ -1589,10 +1594,17 @@ def select_random_50_qa_rows(rows: list[dict[str, Any]], dataset_name: str) -> l
             raise ValueError(f"RANDOM_50_QA_INSUFFICIENT_{label}_AVAILABLE_{len(candidates)}")
         return [candidates[index] for index in sorted(rng.sample(range(len(candidates)), count))]
 
-    if str(dataset_name or "").strip() == ACCEPTED_POOL_DATASET_VERSION:
-        # V1.2 has already crossed the human Accepted Pool gate.  Quality
+    accepted_pool_rows = any(
+        str(row.get("bbox_source") or "").strip().lower() == "accepted_bbox"
+        or ACCEPTED_POOL_SOURCE.lower() in str(row.get("source_manifest_uri") or "").lower()
+        for row in rows
+    )
+    if str(dataset_name or "").strip() == ACCEPTED_POOL_DATASET_VERSION or accepted_pool_rows:
+        # Accepted Pool has already crossed the human bbox gate.  Quality
         # labels are risk signals only, so the fixed snapshot samples the
-        # actual manifest rows and never requires GOOD rows.
+        # actual manifest rows and never requires GOOD rows.  Detecting the
+        # source from row provenance also keeps this true when an operator
+        # chooses a different Dataset Freeze version name.
         for split, count in QA_SPLIT_PLAN:
             selected.extend(choose([row for row in rows if _qa_split(row) == split], count, split.upper()))
         if len({_qa_item_id(row) for row in selected}) != QA_SAMPLE_SIZE:
@@ -2119,7 +2131,6 @@ def generate_quality_gate_analysis(dataset_name: str) -> dict[str, Any]:
     existing = _analysis_read(dataset_name)
     if existing is not None:
         return existing
-    risk_only = str(dataset_name or "").strip() == ACCEPTED_POOL_DATASET_VERSION
     client, bucket = _storage()
     # Quality analysis is scoped to the registered frozen Dataset artifact.
     # Do not widen this to manifest_all.csv, bucket scans, or the accepted bbox
@@ -2131,6 +2142,11 @@ def generate_quality_gate_analysis(dataset_name: str) -> dict[str, Any]:
     manifest_reader = csv.DictReader(io.StringIO(manifest_blob.download_as_text(encoding="utf-8-sig")))
     field_available = "quality_status" in (manifest_reader.fieldnames or [])
     rows = list(manifest_reader)
+    risk_only = str(dataset_name or "").strip() == ACCEPTED_POOL_DATASET_VERSION or any(
+        str(row.get("bbox_source") or "").strip().lower() == "accepted_bbox"
+        or ACCEPTED_POOL_SOURCE.lower() in str(row.get("source_manifest_uri") or "").lower()
+        for row in rows
+    )
     total = len(rows)
     normalized_statuses = [
         _analysis_quality_status(row.get("quality_status"), field_available=field_available)

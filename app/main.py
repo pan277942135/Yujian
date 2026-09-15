@@ -97,6 +97,7 @@ class DatasetFreeze(BaseModel):
     parent_version: str | None = None
     git_commit: str | None = None
     preview_hash: str | None = None
+    source_mode: str = "ORIGINAL"
     seed: int = 20260826
     train: float = 0.70
     val: float = 0.15
@@ -574,7 +575,21 @@ def update_review(batch_id: str, image_id: str, payload: ReviewUpdate, db: Sessi
     )
     db.commit()
     db.refresh(image)
-    return image_dict(image)
+    result = image_dict(image)
+    if proposed_status == "approved":
+        # Accepted Pool materialisation is deliberately queued after the
+        # review transaction.  The review response stays fast and the
+        # resumable worker processes only new/changed accepted bboxes.
+        from app.accepted_pool import enqueue_accepted_pool_sync
+
+        pool_job = enqueue_accepted_pool_sync(db)
+        if pool_job:
+            result["accepted_pool_sync"] = {
+                "job_id": pool_job.get("job_id"),
+                "status": pool_job.get("status"),
+                "pending_count": pool_job.get("pending_count", 0),
+            }
+    return result
 
 
 @app.get("/media/{batch_id}/{image_id}")
@@ -666,6 +681,66 @@ def dataset_summary(db: Session = Depends(get_db)):
     return flywheel_summary(db)
 
 
+@app.get("/api/datasets/accepted-pool/summary")
+def accepted_pool_summary_api(db: Session = Depends(get_db)):
+    from app.accepted_pool import accepted_pool_summary
+
+    try:
+        return accepted_pool_summary(db)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Accepted Pool 状态读取失败：{exc}") from exc
+
+
+@app.post("/api/datasets/accepted-pool/sync")
+def accepted_pool_sync_start(db: Session = Depends(get_db)):
+    from app.accepted_pool import start_accepted_pool_sync
+
+    try:
+        return start_accepted_pool_sync(db)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/datasets/accepted-pool/preview")
+def accepted_pool_freeze_preview_api(payload: DatasetFreeze, db: Session = Depends(get_db)):
+    from app.accepted_pool import accepted_pool_freeze_preview
+
+    try:
+        return accepted_pool_freeze_preview(
+            db,
+            dataset_version=payload.dataset_version,
+            parent_version=payload.parent_version,
+            seed=payload.seed,
+            train=payload.train,
+            val=payload.val,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/datasets/accepted-pool/jobs/{job_id}")
+def accepted_pool_sync_job(job_id: str):
+    from app.accepted_pool import get_accepted_pool_job
+
+    job = get_accepted_pool_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Accepted Pool 同步任务不存在")
+    return job
+
+
+@app.post("/api/datasets/accepted-pool/jobs/{job_id}/step")
+def accepted_pool_sync_step(job_id: str):
+    from app.accepted_pool import get_accepted_pool_job, step_accepted_pool_job
+
+    if get_accepted_pool_job(job_id) is None:
+        raise HTTPException(status_code=404, detail="Accepted Pool 同步任务不存在")
+    try:
+        return step_accepted_pool_job(job_id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/api/datasets")
 def datasets(db: Session = Depends(get_db)):
     rows = db.scalars(select(DatasetVersion).order_by(DatasetVersion.created_at.desc())).all()
@@ -701,6 +776,36 @@ def dataset_crop_readiness(dataset_version: str, db: Session = Depends(get_db)):
 @app.post("/api/datasets/freeze")
 def dataset_freeze(payload: DatasetFreeze, db: Session = Depends(get_db)):
     try:
+        source_mode = str(payload.source_mode or "ORIGINAL").strip().upper()
+        if source_mode not in {"ORIGINAL", "ACCEPTED_POOL"}:
+            raise ValueError("训练数据来源必须是 ORIGINAL（原图）或 ACCEPTED_POOL（累计 Accepted Pool）")
+        if source_mode == "ACCEPTED_POOL":
+            from app.accepted_pool import accepted_pool_freeze_preview, freeze_accepted_pool_dataset
+
+            if not payload.preview_hash:
+                raise ValueError("请先同步并生成 Accepted Pool 冻结预览")
+            preview = accepted_pool_freeze_preview(
+                db,
+                dataset_version=payload.dataset_version,
+                parent_version=payload.parent_version,
+                seed=payload.seed,
+                train=payload.train,
+                val=payload.val,
+            )
+            if preview.get("selection_hash") != payload.preview_hash:
+                raise ValueError("Accepted Pool 冻结预览已失效，请重新生成预览")
+            deployed_git = (os.getenv("APP_GIT_COMMIT") or "unknown").strip() or "unknown"
+            return freeze_accepted_pool_dataset(
+                db,
+                dataset_version=payload.dataset_version,
+                preview_hash=payload.preview_hash,
+                parent_version=preview.get("parent_version"),
+                git_commit=deployed_git,
+                seed=payload.seed,
+                train=payload.train,
+                val=payload.val,
+            )
+
         from app.dataset_api import DatasetFreezePreviewRequest, build_preview
 
         if not payload.preview_hash:

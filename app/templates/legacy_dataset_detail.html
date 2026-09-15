@@ -105,9 +105,9 @@
     <div id="datasetCounts" class="metrics"></div>
     <div id="acceptedPoolFlow" class="flow-grid" hidden>
       <div class="flow-card"><span>数据来源</span><b>人工确认数据</b><small>Accepted Pool</small></div>
-      <div class="flow-card"><span>人工确认样本</span><b id="acceptedPoolCount">0</b><small>进入 BBox 生成</small></div>
-      <div class="flow-card"><span>BBox 生成</span><b id="bboxProgress">0 / 0</b><small id="bboxProgressNote">等待处理</small></div>
-      <div class="flow-card"><span>Crop 生成</span><b id="cropProgress">0 / 0</b><small id="cropProgressNote">等待处理</small></div>
+      <div class="flow-card"><span>accepted_bbox</span><b id="acceptedPoolCount">0</b><small>人工已确认的框</small></div>
+      <div class="flow-card"><span>BBox 池</span><b id="bboxProgress">0 / 0</b><small id="bboxProgressNote">等待同步</small></div>
+      <div class="flow-card"><span>Crop 池</span><b id="cropProgress">0 / 0</b><small id="cropProgressNote">等待物料化</small></div>
     </div>
     <div id="acceptedPoolQaProgress" class="quality-note" hidden></div>
     <div class="rule"><b>数据规则</b><br><span id="datasetRule">根据冻结 manifest 生成训练数据。</span><small id="datasetRuleNote"></small></div>
@@ -201,8 +201,8 @@ function renderDetail(d){
   document.getElementById('datasetCounts').innerHTML=[metric('总样本',d.sample_count||0),metric('Train',d.train_count||0),metric('Val',d.val_count||0),metric('Test',d.test_count||0)].join('');
   const crop=String(d.type||d.pipeline_type||'').toUpperCase()==='CROP_CLASSIFIER_V1';
   const accepted=String(d.source_mode||d.metadata?.source||d.metadata?.source_type||'').toUpperCase()==='ACCEPTED_POOL';
-  document.getElementById('datasetRule').textContent=accepted?'Accepted Pool → Detector BBox → Crop':'根据冻结 manifest 生成训练数据';
-  document.getElementById('datasetRuleNote').textContent=accepted?'人工确认数据进入 Detector 和 Crop；不以质量标签过滤':'使用当前 Dataset 的冻结样本';
+  document.getElementById('datasetRule').textContent=accepted?'Accepted Pool → 复用累计 Crop → Dataset Freeze':'根据冻结 manifest 生成训练数据';
+  document.getElementById('datasetRuleNote').textContent=accepted?'使用人工确认 accepted_bbox；Crop 已在池中增量物料化，不重新运行 Detector，也不以质量标签过滤':'使用当前 Dataset 的冻结样本';
   document.getElementById('manifestUri').textContent=d.manifest_uri||'-';
   const batches=Array.isArray(d.source_batches)?d.source_batches.filter(Boolean):[];
   document.getElementById('sourceBatches').innerHTML=batches.length?batches.map(x=>'<span class="pill" style="margin:0 6px 6px 0">'+esc(x)+'</span>').join(''):'<span class="muted">来源待补充</span>';
