@@ -16,6 +16,9 @@ from app.db import get_db
 from app.models import DatasetVersion, ImageAsset
 from app.platform.services import adapters
 from app.platform.services.crop_dataset import (
+    ACCEPTED_POOL_CROP_SCALE,
+    ACCEPTED_POOL_DATASET_VERSION,
+    ACCEPTED_POOL_SOURCE,
     CROP_DATASET_VERSION,
     CROP_EXPAND_RATIO,
     CROP_OUTPUT_SIZE,
@@ -74,10 +77,10 @@ class CropReleaseQaReview(BaseModel):
 class CropDatasetCreate(BaseModel):
     source: str = Field(default="accepted_bbox", max_length=64)
     dataset_name: str = Field(default=CROP_DATASET_VERSION, max_length=128)
-    expand_ratio: float = Field(default=CROP_EXPAND_RATIO, ge=1.25, le=1.25)
+    expand_ratio: float = Field(default=CROP_EXPAND_RATIO, ge=0.0, le=1.25)
     size: int = Field(default=CROP_OUTPUT_SIZE, ge=416, le=416)
     mode: str = Field(default="FULL", max_length=16)
-    limit: int | None = Field(default=None, ge=1, le=20)
+    limit: int | None = Field(default=None, ge=1, le=100000)
 
 
 def _image_ref(value: str, batch_id: str | None) -> tuple[str | None, str]:
@@ -148,13 +151,26 @@ def platform_accepted_fish_pool(db: Session = Depends(get_db)) -> dict[str, Any]
 
 @router.post("/datasets/crop/create")
 def platform_crop_dataset_create(payload: CropDatasetCreate) -> dict[str, Any]:
-    if payload.source.strip().lower() != "accepted_bbox":
+    source = payload.source.strip().upper()
+    if source not in {"ACCEPTED_BBOX", ACCEPTED_POOL_SOURCE}:
         raise HTTPException(status_code=400, detail={"error": "SOURCE_NOT_SUPPORTED", "source": payload.source})
+    dataset_name = payload.dataset_name.strip()
+    expand_ratio = payload.expand_ratio
+    if source == ACCEPTED_POOL_SOURCE:
+        # Keep the old V0.1 endpoint defaults compatible while making the new
+        # source mode unambiguous and impossible to point at V0.1 by accident.
+        if dataset_name == CROP_DATASET_VERSION:
+            dataset_name = ACCEPTED_POOL_DATASET_VERSION
+        if abs(float(expand_ratio) - ACCEPTED_POOL_CROP_SCALE) > 1e-9:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "V1_2_CROP_SCALE_INVALID", "required": ACCEPTED_POOL_CROP_SCALE},
+            )
     try:
         return start_crop_dataset_job(
-            source=payload.source,
-            dataset_name=payload.dataset_name.strip(),
-            expand_ratio=payload.expand_ratio,
+            source=source,
+            dataset_name=dataset_name,
+            expand_ratio=expand_ratio,
             size=payload.size,
             mode=payload.mode,
             limit=payload.limit,

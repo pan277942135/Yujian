@@ -1,4 +1,4 @@
-"""Resumable Accepted BBox crop dataset builder V0.1."""
+"""Resumable crop dataset jobs for historical V0.1 and Accepted Pool V1.2."""
 
 from __future__ import annotations
 
@@ -26,6 +26,10 @@ from app.models import BatchCropReview, DatasetVersion, ImageAsset
 from app.presence import FishPresenceResult
 
 CROP_DATASET_VERSION = "DS_CROP_M1_v0.1"
+ACCEPTED_POOL_DATASET_VERSION = "DS_CROP_M1_v0.2"
+ACCEPTED_POOL_SOURCE = "ACCEPTED_POOL"
+ACCEPTED_POOL_CROP_SCALE = 1.0
+ACCEPTED_POOL_DATASET_STATUS = "RELEASE_QA_PENDING"
 CROP_DATASET_TYPE = "CROP_IMAGE_V1"
 CROP_PIPELINE_TYPE = "CROP_CLASSIFIER_V1"
 CROP_EXPAND_RATIO = 1.25
@@ -62,6 +66,23 @@ MANIFEST_FIELDS = (
     "image_id", "batch_id", "crop_path", "species", "source_image", "bbox",
     "pixel_bbox", "source_size", "expand_ratio", "fish_bbox_ratio",
     "crop_clipped", "quality_status", "quality_reason", "split",
+)
+
+# V1.2 uses the existing production crop-manifest vocabulary consumed by the
+# classifier worker.  The historical V0.1 resumable job keeps using
+# ``MANIFEST_FIELDS`` above; this additive field set lets the new source mode
+# carry the same immutable provenance and class-map information as the
+# canonical trainer builder without changing the V0.1 contract.
+ACCEPTED_POOL_MANIFEST_FIELDS = (
+    "image_id", "image_path", "species", "file_name", "species_key", "species_name", "class_index",
+    "gcs_uri", "local_path", "crop_image_path", "crop_path", "input_type",
+    "pipeline_type", "source_image_id", "source_batch", "batch_id",
+    "source_dataset", "source_manifest_uri", "source_manifest_sha256",
+    "source_image", "source_image_path", "source_image_gcs_uri",
+    "source_image_exists", "detector_version", "split", "bbox", "detector_bbox", "pixel_bbox", "source_size", "accepted_bbox", "bbox_source",
+    "expand_ratio", "crop_width", "crop_height", "crop_left", "crop_top",
+    "crop_right", "crop_bottom", "fish_bbox_ratio", "crop_clipped",
+    "quality_status", "quality_reason", "review_status", "created_at",
 )
 
 _jobs: dict[str, dict[str, Any]] = {}
@@ -121,7 +142,37 @@ def _pool_rows(db):
     return list(db.execute(statement).all())
 
 
+def _accepted_pool_rows(db):
+    """Return the manually confirmed ImageAsset pool for Dataset V1.2.
+
+    This is intentionally a different source selector from the historical
+    accepted-bbox builder above.  ``ImageAsset.review_status=approved`` is the
+    human species-confirmation gate; Detector and Crop are generated after
+    that gate and are never used to shrink the source pool.
+    """
+    statement = (
+        select(ImageAsset, FishPresenceResult)
+        .outerjoin(FishPresenceResult, FishPresenceResult.image_asset_id == ImageAsset.id)
+        .where(ImageAsset.review_status == "approved")
+        .order_by(ImageAsset.batch_id, ImageAsset.id)
+    )
+    return list(db.execute(statement).all())
+
+
 def accepted_pool_count(db) -> int:
+    """Count manually confirmed images eligible for Dataset V1.2."""
+    return int(
+        db.scalar(
+            select(func.count())
+            .select_from(ImageAsset)
+            .where(ImageAsset.review_status == "approved")
+        )
+        or 0
+    )
+
+
+def accepted_bbox_pool_count(db) -> int:
+    """Count the historical explicit accepted-bbox pool used by V0.1."""
     return int(
         db.scalar(
             select(func.count())
@@ -140,17 +191,18 @@ def accepted_pool_snapshot(db) -> dict[str, Any]:
     return {
         "count": count,
         "ready": count > 0,
-        "source": "accepted_bbox_pool",
-        "accepted_statuses": sorted(ACCEPTED_STATUSES),
+        "source": ACCEPTED_POOL_SOURCE,
+        "accepted_statuses": ["approved"],
+        "accepted_bbox_pool_count": accepted_bbox_pool_count(db),
     }
 
 
-def _expanded_box(box: list[float], width: int, height: int):
+def _expanded_box(box: list[float], width: int, height: int, *, crop_scale: float = CROP_EXPAND_RATIO):
     x, y, box_width, box_height = box
     center_x = (x + box_width / 2.0) * width
     center_y = (y + box_height / 2.0) * height
-    crop_width = box_width * CROP_EXPAND_RATIO * width
-    crop_height = box_height * CROP_EXPAND_RATIO * height
+    crop_width = box_width * crop_scale * width
+    crop_height = box_height * crop_scale * height
     left = max(0, int(round(center_x - crop_width / 2.0)))
     top = max(0, int(round(center_y - crop_height / 2.0)))
     right = min(width, max(left + 1, int(round(center_x + crop_width / 2.0))))
@@ -159,10 +211,12 @@ def _expanded_box(box: list[float], width: int, height: int):
     return left, top, right, bottom, clipped
 
 
-def _letterbox(data: bytes, box: list[float]):
+def _letterbox(data: bytes, box: list[float], *, crop_scale: float = CROP_EXPAND_RATIO):
     with Image.open(io.BytesIO(data)) as source:
         image = ImageOps.exif_transpose(source).convert("RGB")
-        left, top, right, bottom, clipped = _expanded_box(box, image.width, image.height)
+        left, top, right, bottom, clipped = _expanded_box(
+            box, image.width, image.height, crop_scale=crop_scale
+        )
         crop = image.crop((left, top, right, bottom))
         crop_area = max(1, (right - left) * (bottom - top))
         bbox_area = box[2] * image.width * box[3] * image.height
@@ -268,6 +322,12 @@ def _public_job(job):
         "WARNING": int(result.get("warning_count", 0) or 0),
         "INVALID": int(result.get("invalid_count", 0) or 0),
     }
+    result.setdefault("bbox_generated", int(result.get("generated_count", 0) or 0))
+    result.setdefault("crop_generated", int(result.get("generated_count", 0) or 0))
+    result.setdefault("dataset_count", int(result.get("generated_count", 0) or 0))
+    result.setdefault("failure_count", len(result.get("failure_records") or []))
+    result.setdefault("manifest_created", False)
+    result.setdefault("quality_analysis_mode", "QUALITY_GATE")
     return result
 
 
@@ -331,6 +391,582 @@ def _chunk_rows(db, refs):
     if missing:
         raise ValueError(f"source snapshot rows missing: {missing[:5]}")
     return [by_id[review_id] for review_id in ids]
+
+
+def _accepted_pool_refs(rows):
+    return [
+        {
+            "image_asset_id": int(image.id),
+            "batch_id": str(image.batch_id),
+            "image_id": str(image.image_id),
+        }
+        for image, _presence in rows
+    ]
+
+
+def _accepted_pool_chunk(db, refs):
+    ids = [int(ref["image_asset_id"]) for ref in refs]
+    if not ids:
+        return []
+    statement = (
+        select(ImageAsset, FishPresenceResult)
+        .outerjoin(FishPresenceResult, FishPresenceResult.image_asset_id == ImageAsset.id)
+        .where(ImageAsset.id.in_(ids))
+    )
+    by_id = {int(image.id): (image, presence) for image, presence in db.execute(statement).all()}
+    missing = [image_id for image_id in ids if image_id not in by_id]
+    if missing:
+        raise ValueError(f"accepted pool snapshot rows missing: {missing[:5]}")
+    return [by_id[image_id] for image_id in ids]
+
+
+def _accepted_pool_species(db, rows):
+    """Resolve class keys from manually confirmed species only."""
+    names: dict[str, str] = {}
+    try:
+        from app.models import SpeciesCatalog
+
+        names = {
+            str(item.species_key).strip(): str(item.common_name_zh).strip()
+            for item in db.scalars(select(SpeciesCatalog)).all()
+            if str(item.species_key or "").strip() and str(item.common_name_zh or "").strip()
+        }
+    except Exception:
+        names = {}
+    reverse = {value: key for key, value in names.items()}
+    resolved: dict[int, tuple[str, str]] = {}
+    for image, _presence in rows:
+        raw = str(image.truth_species or "").strip()
+        if not raw:
+            continue
+        key = raw if raw in names else reverse.get(raw, raw)
+        resolved[int(image.id)] = (key, names.get(key, raw))
+    class_keys = sorted({key for key, _name in resolved.values()})
+    class_map = {}
+    for index, key in enumerate(class_keys):
+        display_name = next(
+            (name for resolved_key, name in resolved.values() if resolved_key == key),
+            names.get(key, key),
+        )
+        class_map[key] = {
+            "class_index": index,
+            "species_key": key,
+            "common_name_zh": names.get(key, display_name),
+        }
+    return resolved, class_map
+
+
+def _accepted_pool_detector_bbox(data: bytes) -> tuple[list[float], str, float]:
+    """Run the existing detector contract and return its primary box.
+
+    Detector runtime, model version and selection order are reused as-is.  The
+    Dataset V1.2 change is only the lifecycle boundary: the detector runs
+    after manual species confirmation and its box is materialised as the crop
+    input; no expansion or padding is introduced here.
+    """
+    from app.detector_runtime import detect, normalize_android_source
+    from app.recognition_pipeline import select_primary
+
+    with Image.open(io.BytesIO(data)) as source:
+        detector_image = normalize_android_source(source)
+    try:
+        run = detect(detector_image)
+    finally:
+        detector_image.close()
+    primary = select_primary(run.detections)
+    if primary is None:
+        raise ValueError("detector returned no fish bbox")
+    box = primary.box.normalized()
+    bbox = [round(value, 6) for value in (box.x1, box.y1, box.width, box.height)]
+    return bbox, str(run.model_version), float(run.latency_ms)
+
+
+def _make_accepted_pool_row(client, bucket, job, image, presence, class_map):
+    image_id = str(image.image_id)
+    batch_id = str(image.batch_id)
+    species_raw = str(image.truth_species or "").strip()
+    if not species_raw:
+        raise ValueError("manual confirmed species is missing")
+    species_key = species_raw
+    species_name = species_raw
+    for key, item in class_map.items():
+        if key == species_raw or item.get("common_name_zh") == species_raw:
+            species_key = key
+            species_name = str(item.get("common_name_zh") or species_raw)
+            break
+    source_uri = str(image.gcs_uri or "").strip()
+    if not source_uri:
+        raise ValueError("source image URI is missing")
+    data = _download(client, source_uri)
+    bbox, detector_version, detector_latency_ms = _accepted_pool_detector_bbox(data)
+    encoded, pixel_box, clipped, source_size, ratio = _letterbox(
+        data,
+        bbox,
+        crop_scale=ACCEPTED_POOL_CROP_SCALE,
+    )
+    detector_pixel_box = (
+        int(round(bbox[0] * source_size[0])),
+        int(round(bbox[1] * source_size[1])),
+        int(round((bbox[0] + bbox[2]) * source_size[0])),
+        int(round((bbox[1] + bbox[3]) * source_size[1])),
+    )
+    prefix = str(job["artifact_prefix"]).rstrip("/")
+    crop_path = f"images/{_slug(batch_id)}__{_slug(image_id)}_crop.jpg"
+    bucket.blob(f"{prefix}/{crop_path}").upload_from_string(encoded, content_type="image/jpeg")
+    presence_status = str(getattr(presence, "status", "") or "").strip().lower()
+    fish_count_value = getattr(presence, "fish_count", None)
+    fish_count = None if fish_count_value is None else int(fish_count_value)
+    quality_status, quality_reason = evaluate_quality(
+        box=bbox,
+        species=species_name,
+        presence_status=presence_status,
+        fish_count=fish_count,
+        clipped=clipped,
+        crop_ok=True,
+        bbox_area_ratio=ratio,
+    )
+    crop_uri = f"gs://{get_bucket_name()}/{prefix}/{crop_path}"
+    created_at = image.created_at.isoformat() if getattr(image, "created_at", None) else _now()
+    return {
+        "image_id": image_id,
+        "image_path": source_uri,
+        "species": species_name,
+        "file_name": f"{_slug(image_id)}_crop.jpg",
+        "species_key": species_key,
+        "species_name": species_name,
+        "class_index": int(class_map[species_key]["class_index"]),
+        "gcs_uri": crop_uri,
+        "local_path": crop_path,
+        # Keep the canonical crop reference remote so the unchanged training
+        # worker can verify it after materialisation; ``crop_path`` remains a
+        # dataset-relative path for Release QA/media readers.
+        "crop_image_path": crop_uri,
+        "crop_path": crop_path,
+        "input_type": "crop_image",
+        "pipeline_type": CROP_PIPELINE_TYPE,
+        "source_image_id": image_id,
+        "source_batch": batch_id,
+        "batch_id": batch_id,
+        "source_dataset": "",
+        "source_manifest_uri": "",
+        "source_manifest_sha256": "",
+        "source_image": source_uri,
+        "source_image_path": "",
+        "source_image_gcs_uri": source_uri,
+        "source_image_exists": "true",
+        "split": "",
+        "bbox": json.dumps(bbox, separators=(",", ":")),
+        "detector_bbox": json.dumps(bbox, separators=(",", ":")),
+        "pixel_bbox": json.dumps(detector_pixel_box, separators=(",", ":")),
+        "source_size": json.dumps(source_size, separators=(",", ":")),
+        # Keep the existing crop-manifest field so the unchanged classifier
+        # worker can consume this version.  The explicit bbox_source and
+        # Dataset metadata below make the V1.2 detector provenance unambiguous.
+        "accepted_bbox": json.dumps(bbox, separators=(",", ":")),
+        "bbox_source": "detector_generated",
+        "expand_ratio": ACCEPTED_POOL_CROP_SCALE,
+        "crop_width": CROP_OUTPUT_SIZE,
+        "crop_height": CROP_OUTPUT_SIZE,
+        "crop_left": pixel_box[0],
+        "crop_top": pixel_box[1],
+        "crop_right": pixel_box[2],
+        "crop_bottom": pixel_box[3],
+        "fish_bbox_ratio": f"{ratio:.6f}",
+        "crop_clipped": "true" if clipped else "false",
+        "quality_status": quality_status,
+        "quality_reason": quality_reason,
+        # The source is manually approved; this is not a new human bbox gate.
+        "review_status": "ACCEPTED",
+        "created_at": created_at,
+        "detector_version": detector_version,
+        "detector_latency_ms": round(detector_latency_ms, 1),
+    }
+
+
+def _write_accepted_pool_csv(bucket, name, rows):
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=ACCEPTED_POOL_MANIFEST_FIELDS, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({field: row.get(field, "") for field in ACCEPTED_POOL_MANIFEST_FIELDS})
+    bucket.blob(name).upload_from_string(output.getvalue().encode("utf-8"), content_type="text/csv")
+
+
+def _accepted_pool_split_report(rows, dataset_name):
+    selected = []
+    for row in rows:
+        species = str(row.get("species_key") or row.get("species") or "").strip()
+        if not species:
+            continue
+        selected.append(
+            {
+                "catalog": SimpleNamespace(species_key=species, common_name_zh=str(row.get("species_name") or species)),
+                "group_key": f"{row.get('source_batch') or row.get('batch_id') or ''}:{row.get('image_id') or ''}",
+                "row": row,
+            }
+        )
+    if selected:
+        split = _assign_stratified_group_splits(selected, seed=CROP_SPLIT_SEED, train=0.70, val=0.15)
+        for item in selected:
+            item["row"]["split"] = item["split"]
+    else:
+        split = {"strategy": SPLIT_STRATEGY, "targets": {}, "warnings": [], "blockers": [], "group_count": 0}
+    counts = {name: sum(1 for row in rows if row.get("split") == name) for name in ("train", "val", "test")}
+    quality = Counter(str(row.get("quality_status") or "").upper() for row in rows)
+    for key in ("GOOD", "WARNING", "INVALID"):
+        quality.setdefault(key, 0)
+    groups = defaultdict(set)
+    for row in rows:
+        if row.get("split"):
+            groups[f"{row.get('source_batch') or row.get('batch_id') or ''}:{row.get('image_id') or ''}"].add(row["split"])
+    leaks = sorted(key for key, values in groups.items() if len(values) > 1)
+    species_report = {}
+    for row in rows:
+        species = str(row.get("species_key") or row.get("species") or "").strip() or "__MISSING__"
+        item = species_report.setdefault(
+            species,
+            {"total": 0, "good": 0, "warning": 0, "invalid": 0, "train": 0, "val": 0, "test": 0},
+        )
+        item["total"] += 1
+        item[str(row.get("quality_status") or "").lower()] = item.get(str(row.get("quality_status") or "").lower(), 0) + 1
+        if row.get("split") in counts:
+            item[row["split"]] += 1
+    source_count = len(rows)
+    return {
+        "dataset_version": dataset_name,
+        "source_count": source_count,
+        "quality": {key: int(quality[key]) for key in ("GOOD", "WARNING", "INVALID")},
+        "split": counts,
+        "species": dict(sorted(species_report.items())),
+        "strategy": split.get("strategy", SPLIT_STRATEGY),
+        "seed": CROP_SPLIT_SEED,
+        "targets": split.get("targets", {}),
+        "split_warnings": split.get("warnings", []),
+        "split_blockers": split.get("blockers", []),
+        "group_count": split.get("group_count", 0),
+        "source_group_leak_groups": leaks,
+        "quality_sum_check": sum(quality[key] for key in ("GOOD", "WARNING", "INVALID")) == source_count,
+        "split_sum_check": sum(counts.values()) == source_count,
+        "source_group_leak_check": not leaks,
+        "quality_analysis_mode": "RISK_ONLY",
+        "input_filter": "NONE",
+    }
+
+
+def _finalize_accepted_pool_job(job, db):
+    _client, bucket = _storage()
+    prefix = str(job["artifact_prefix"]).rstrip("/")
+    rows = []
+    chunk_prefix = f"{prefix}/chunks/"
+    for blob in sorted(
+        [item for item in bucket.list_blobs(prefix=chunk_prefix) if item.name.endswith(".csv")],
+        key=lambda item: item.name,
+    ):
+        rows.extend(csv.DictReader(io.StringIO(blob.download_as_text(encoding="utf-8"))))
+    source_count = int(job.get("source_count", 0) or 0)
+    if len(rows) != source_count:
+        raise ValueError(f"accepted pool count mismatch: source={source_count}, dataset={len(rows)}")
+    report = _accepted_pool_split_report(rows, str(job["dataset_version"]))
+    if not report["quality_sum_check"] or not report["split_sum_check"] or not report["source_group_leak_check"]:
+        raise ValueError("accepted pool split/count validation failed")
+    all_name = f"{prefix}/manifest_all.csv"
+    train_name = f"{prefix}/training_manifest.csv"
+    manifest_name = f"{prefix}/manifest.csv"
+    _write_accepted_pool_csv(bucket, all_name, rows)
+    # V1.2 is risk-only: every successfully generated crop remains in the
+    # training manifest.  Quality labels are diagnostics, not an admission
+    # filter.
+    _write_accepted_pool_csv(bucket, train_name, rows)
+    _write_accepted_pool_csv(bucket, manifest_name, rows)
+    classes = list(job.get("classes") or [])
+    class_map = {
+        "dataset_version": job["dataset_version"],
+        "pipeline_type": CROP_PIPELINE_TYPE,
+        "classes": classes,
+    }
+    class_map_name = f"{prefix}/metadata/class_map.json"
+    metadata_name = f"{prefix}/metadata.json"
+    dataset_marker_name = f"{prefix}/dataset.json"
+    manifest_uri = f"gs://{get_bucket_name()}/{manifest_name}"
+    class_map_uri = f"gs://{get_bucket_name()}/{class_map_name}"
+    quality = report["quality"]
+    source_batches = sorted(
+        {
+            str(row.get("source_batch") or row.get("batch_id") or "").strip()
+            for row in rows
+            if str(row.get("source_batch") or row.get("batch_id") or "").strip()
+        }
+    )
+    detector_versions = sorted({str(row.get("detector_version") or "").strip() for row in rows if row.get("detector_version")})
+    metadata = {
+        "dataset_version": job["dataset_version"],
+        "type": CROP_DATASET_TYPE,
+        "pipeline_type": CROP_PIPELINE_TYPE,
+        "source": ACCEPTED_POOL_SOURCE,
+        "source_type": ACCEPTED_POOL_SOURCE,
+        "accepted_pool_count": source_count,
+        "bbox_generated": int(job.get("bbox_generated", 0) or 0),
+        "crop_generated": int(job.get("crop_generated", 0) or 0),
+        "dataset_count": len(rows),
+        "source_count": source_count,
+        "generated_count": len(rows),
+        "failure_count": 0,
+        "failures": [],
+        "quality_analysis_mode": "RISK_ONLY",
+        "quality_filter_applied": False,
+        "good_count": quality["GOOD"],
+        "warning_count": quality["WARNING"],
+        "invalid_count": quality["INVALID"],
+        "expand_ratio": ACCEPTED_POOL_CROP_SCALE,
+        "bbox_expansion": False,
+        "input_size": f"{CROP_OUTPUT_SIZE}x{CROP_OUTPUT_SIZE}",
+        "resize_mode": "crop_resize_letterbox",
+        "detector_versions": detector_versions,
+        "split_strategy": SPLIT_STRATEGY,
+        "split_seed": CROP_SPLIT_SEED,
+        "input_filter": "NONE",
+        "candidate_bbox_used": False,
+        "bbox_source": "detector_generated",
+        "auto_train": False,
+        "source_batches": source_batches,
+        "class_map": class_map,
+        "split_counts": report["split"],
+        "quality_sum_check": report["quality_sum_check"],
+        "split_sum_check": report["split_sum_check"],
+        "source_group_leak_check": report["source_group_leak_check"],
+        "processing_status": ACCEPTED_POOL_DATASET_STATUS,
+        "release_qa_status": "PENDING",
+        "training_gate_status": "BLOCKED_UNTIL_RELEASE_QA_PASS",
+        "manifest_uri": manifest_uri,
+        "class_map_uri": class_map_uri,
+        "created_by": "system",
+        "created_at": _now(),
+        "gcs_prefix": f"gs://{get_bucket_name()}/{prefix}/",
+    }
+    _write_json(bucket, class_map_name, class_map)
+    _write_json(bucket, metadata_name, metadata)
+    _write_json(bucket, dataset_marker_name, metadata)
+    dataset_name = str(job["dataset_version"])
+    if str(job.get("mode", "FULL")).upper() == "SMOKE":
+        return _persist_job(
+            job["job_id"],
+            status="SUCCESS",
+            finished_at=_now(),
+            cursor=source_count,
+            processed=source_count,
+            bbox_generated=source_count,
+            crop_generated=len(rows),
+            dataset_count=len(rows),
+            manifest_created=True,
+            quality_counts=quality,
+            good_count=quality["GOOD"],
+            warning_count=quality["WARNING"],
+            invalid_count=quality["INVALID"],
+            quality_sum_check=report["quality_sum_check"],
+            split_sum_check=report["split_sum_check"],
+            source_group_leak_check=report["source_group_leak_check"],
+            dataset_status="CROP_READY",
+            manifest_uri=manifest_uri,
+            class_map_uri=class_map_uri,
+        )
+    dataset = db.get(DatasetVersion, dataset_name)
+    if dataset is None:
+        dataset = DatasetVersion(
+            dataset_version=dataset_name,
+            manifest_uri=manifest_uri,
+            class_map_uri=class_map_uri,
+            train_count=int(report["split"].get("train", 0)),
+            val_count=int(report["split"].get("val", 0)),
+            test_count=int(report["split"].get("test", 0)),
+            species_count=len(classes),
+            git_commit=str(job.get("git_commit") or os.getenv("APP_GIT_COMMIT", "unknown")),
+            selection_mode="ACCEPTED_POOL_DETECTOR_CROP",
+            source_cutoff_at=datetime.now(timezone.utc),
+            status=ACCEPTED_POOL_DATASET_STATUS,
+            pipeline_type=CROP_PIPELINE_TYPE,
+            metadata_json=json.dumps(metadata, ensure_ascii=False),
+        )
+        db.add(dataset)
+    else:
+        dataset.manifest_uri = manifest_uri
+        dataset.class_map_uri = class_map_uri
+        dataset.train_count = int(report["split"].get("train", 0))
+        dataset.val_count = int(report["split"].get("val", 0))
+        dataset.test_count = int(report["split"].get("test", 0))
+        dataset.species_count = len(classes)
+        dataset.git_commit = str(job.get("git_commit") or dataset.git_commit or "unknown")
+        dataset.selection_mode = "ACCEPTED_POOL_DETECTOR_CROP"
+        dataset.source_cutoff_at = dataset.source_cutoff_at or datetime.now(timezone.utc)
+        dataset.status = ACCEPTED_POOL_DATASET_STATUS
+        dataset.pipeline_type = CROP_PIPELINE_TYPE
+        dataset.metadata_json = json.dumps(metadata, ensure_ascii=False)
+    db.commit()
+    return _persist_job(
+        job["job_id"],
+        status="SUCCESS",
+        finished_at=_now(),
+        cursor=source_count,
+        processed=source_count,
+        bbox_generated=source_count,
+        crop_generated=len(rows),
+        dataset_count=len(rows),
+        manifest_created=True,
+        quality_counts=quality,
+        good_count=quality["GOOD"],
+        warning_count=quality["WARNING"],
+        invalid_count=quality["INVALID"],
+        quality_sum_check=report["quality_sum_check"],
+        split_sum_check=report["split_sum_check"],
+        source_group_leak_check=report["source_group_leak_check"],
+        dataset_status=ACCEPTED_POOL_DATASET_STATUS,
+        release_qa_status="PENDING",
+        training_gate_status="BLOCKED_UNTIL_RELEASE_QA_PASS",
+        manifest_uri=manifest_uri,
+        class_map_uri=class_map_uri,
+    )
+
+
+def _update_accepted_pool_dataset_progress(db, job, *, status: str | None = None) -> None:
+    """Mirror resumable V1.2 progress into the existing DatasetVersion row."""
+    if str(job.get("mode") or "FULL").upper() != "FULL":
+        return
+    dataset = db.get(DatasetVersion, str(job.get("dataset_version") or ""))
+    if dataset is None:
+        return
+    metadata = _json(dataset.metadata_json) or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    dataset.status = str(status or job.get("dataset_status") or dataset.status or "CREATED").upper()
+    metadata.update(
+        {
+            "source": ACCEPTED_POOL_SOURCE,
+            "source_type": ACCEPTED_POOL_SOURCE,
+            "accepted_pool_count": int(job.get("source_count", 0) or 0),
+            "source_count": int(job.get("source_count", 0) or 0),
+            "bbox_generated": int(job.get("bbox_generated", 0) or 0),
+            "crop_generated": int(job.get("crop_generated", 0) or 0),
+            "dataset_count": int(job.get("dataset_count", 0) or 0),
+            "failure_count": int(job.get("failure_count", 0) or 0),
+            "failures": list(job.get("failure_records") or []),
+            "processing_status": dataset.status,
+            "quality_analysis_mode": "RISK_ONLY",
+            "quality_filter_applied": False,
+        }
+    )
+    dataset.metadata_json = json.dumps(metadata, ensure_ascii=False)
+    db.commit()
+
+
+def _step_accepted_pool_job(job_id):
+    with _job_lock(job_id):
+        job = _raw_job(job_id)
+        if job is None:
+            raise ValueError("crop dataset job not found")
+        if str(job.get("source") or "").upper() != ACCEPTED_POOL_SOURCE:
+            return None
+        if job.get("status") in {"SUCCESS", "FAILED"}:
+            return _public_job(job)
+        if not job.get("started_at"):
+            job = _persist_job(
+                job_id,
+                status="RUNNING",
+                started_at=_now(),
+                dataset_status="BBOX_PROCESSING",
+            )
+        db = SessionLocal()
+        try:
+            _update_accepted_pool_dataset_progress(db, job, status=job.get("dataset_status") or "BBOX_PROCESSING")
+            cursor = int(job.get("cursor", 0) or 0)
+            source_count = int(job.get("source_count", 0) or 0)
+            if cursor >= source_count:
+                return _public_job(_finalize_accepted_pool_job(job, db))
+            refs = list(job.get("source_refs") or [])
+            end = min(source_count, cursor + int(job.get("chunk_size", CROP_CHUNK_SIZE)))
+            records = _accepted_pool_chunk(db, refs[cursor:end])
+            client, bucket = _storage()
+            class_map = {
+                str(item.get("species_key")): item
+                for item in (job.get("classes") or [])
+                if str(item.get("species_key") or "").strip()
+            }
+            chunk = []
+            failures = list(job.get("failure_records") or [])
+            bbox_generated = int(job.get("bbox_generated", 0) or 0)
+            crop_generated = int(job.get("crop_generated", 0) or 0)
+            good_count = int(job.get("good_count", 0) or 0)
+            warning_count = int(job.get("warning_count", 0) or 0)
+            invalid_count = int(job.get("invalid_count", 0) or 0)
+            for image, presence in records:
+                try:
+                    row = _make_accepted_pool_row(client, bucket, job, image, presence, class_map)
+                    chunk.append(row)
+                    bbox_generated += 1
+                    crop_generated += 1
+                    quality_status = str(row.get("quality_status") or "").upper()
+                    if quality_status == "GOOD":
+                        good_count += 1
+                    elif quality_status == "WARNING":
+                        warning_count += 1
+                    elif quality_status == "INVALID":
+                        invalid_count += 1
+                except Exception as exc:
+                    failures.append(
+                        {
+                            "image_id": str(image.image_id),
+                            "batch_id": str(image.batch_id),
+                            "stage": "BBOX_OR_CROP",
+                            "error": str(exc)[:500],
+                        }
+                    )
+            prefix = str(job["artifact_prefix"]).rstrip("/")
+            _write_accepted_pool_csv(bucket, f"{prefix}/chunks/chunk_{cursor:08d}_{end:08d}.csv", chunk)
+            next_job = _persist_job(
+                job_id,
+                status="RUNNING",
+                cursor=end,
+                processed=end,
+                bbox_generated=bbox_generated,
+                crop_generated=crop_generated,
+                dataset_count=crop_generated,
+                good_count=good_count,
+                warning_count=warning_count,
+                invalid_count=invalid_count,
+                failure_records=failures,
+                failure_count=len(failures),
+                dataset_status="BBOX_PROCESSING" if end < source_count else "CROP_READY",
+            )
+            _update_accepted_pool_dataset_progress(db, next_job, status=next_job.get("dataset_status"))
+            if end < source_count:
+                return _public_job(next_job)
+            if failures:
+                failed = _persist_job(
+                    job_id,
+                    status="FAILED",
+                    finished_at=_now(),
+                    error_code="ACCEPTED_POOL_COUNT_MISMATCH",
+                    error=(
+                        f"Accepted Pool 处理失败 {len(failures)} 条，未生成可训练 Dataset；"
+                        f"首个失败 {failures[0].get('image_id')}: {failures[0].get('error')}"
+                    )[:1000],
+                    dataset_status="FAILED",
+                )
+                _update_accepted_pool_dataset_progress(db, failed, status="FAILED")
+                return _public_job(failed)
+            return _public_job(_finalize_accepted_pool_job(next_job, db))
+        except Exception as exc:
+            db.rollback()
+            failed = _persist_job(
+                job_id,
+                status="FAILED",
+                finished_at=_now(),
+                error_code="ACCEPTED_POOL_STEP_FAILED",
+                error=str(exc)[:1000],
+                dataset_status="FAILED",
+            )
+            _update_accepted_pool_dataset_progress(db, failed, status="FAILED")
+            return _public_job(failed)
+        finally:
+            db.close()
 
 
 def _make_row(client, bucket, job, review, image, presence):
@@ -579,6 +1215,9 @@ def _finalize(job, db):
 
 
 def step_crop_dataset_job(job_id):
+    existing = _raw_job(job_id)
+    if existing is not None and str(existing.get("source") or "").upper() == ACCEPTED_POOL_SOURCE:
+        return _step_accepted_pool_job(job_id)
     with _job_lock(job_id):
         job = _raw_job(job_id)
         if job is None:
@@ -631,6 +1270,14 @@ def step_crop_dataset_job(job_id):
 def start_crop_dataset_job(*, source="accepted_bbox", dataset_name=CROP_DATASET_VERSION,
                            expand_ratio=CROP_EXPAND_RATIO, size=CROP_OUTPUT_SIZE,
                            mode="FULL", limit=None):
+    if str(source).strip().upper() == ACCEPTED_POOL_SOURCE:
+        return _start_accepted_pool_job(
+            dataset_name=dataset_name,
+            expand_ratio=expand_ratio,
+            size=size,
+            mode=mode,
+            limit=limit,
+        )
     if str(source).strip().lower() != "accepted_bbox":
         raise ValueError("source must be accepted_bbox")
     mode = str(mode or "FULL").strip().upper()
@@ -669,6 +1316,134 @@ def start_crop_dataset_job(*, source="accepted_bbox", dataset_name=CROP_DATASET_
             "created_at": _now(), "started_at": None, "updated_at": _now(),
             "finished_at": None, "error_code": None, "error": None,
         }
+        _persist_job(job_id, **{key: value for key, value in job.items() if key != "job_id"})
+        return _public_job(job)
+    finally:
+        db.close()
+
+
+def _start_accepted_pool_job(*, dataset_name, expand_ratio, size, mode="FULL", limit=None):
+    """Create a resumable V1.2 Accepted Pool → Detector → Crop job."""
+    mode = str(mode or "FULL").strip().upper()
+    if mode not in {"SMOKE", "FULL"}:
+        raise ValueError("mode must be SMOKE or FULL")
+    if abs(float(expand_ratio) - ACCEPTED_POOL_CROP_SCALE) > 1e-9 or int(size) != CROP_OUTPUT_SIZE:
+        raise ValueError("V1.2 requires exact detector bbox crop scale=1.0 and size=416")
+    dataset_name = str(dataset_name or "").strip()
+    if mode == "FULL" and dataset_name in {"", CROP_DATASET_VERSION}:
+        dataset_name = ACCEPTED_POOL_DATASET_VERSION
+    if mode == "FULL" and dataset_name != ACCEPTED_POOL_DATASET_VERSION:
+        raise ValueError(f"FULL requires dataset_name={ACCEPTED_POOL_DATASET_VERSION}")
+    if mode == "SMOKE":
+        if dataset_name in {"", CROP_DATASET_VERSION}:
+            dataset_name = f"{ACCEPTED_POOL_DATASET_VERSION}_SMOKE"
+        limit = max(1, min(int(limit or 20), 20))
+    else:
+        limit = None
+    db = SessionLocal()
+    try:
+        rows = _accepted_pool_rows(db)
+        if not rows:
+            raise ValueError("accepted_pool is empty")
+        if mode == "FULL" and db.get(DatasetVersion, dataset_name) is not None:
+            raise ValueError(f"dataset already registered: {dataset_name}")
+        selected = rows[:limit] if limit else rows
+        resolved, class_map = _accepted_pool_species(db, selected)
+        job_id = "accepted_pool_crop_" + uuid.uuid4().hex[:16]
+        prefix = f"datasets/_crop_smoke/{job_id}" if mode == "SMOKE" else f"datasets/{dataset_name}"
+        classes = sorted(class_map.values(), key=lambda item: int(item["class_index"]))
+        job = {
+            "job_id": job_id,
+            "dataset_version": dataset_name,
+            "mode": mode,
+            "source": ACCEPTED_POOL_SOURCE,
+            "source_type": ACCEPTED_POOL_SOURCE,
+            "status": "PENDING",
+            "dataset_status": "CREATED",
+            "source_count": len(selected),
+            "cursor": 0,
+            "processed": 0,
+            "bbox_generated": 0,
+            "crop_generated": 0,
+            "dataset_count": 0,
+            "failure_count": 0,
+            "failure_records": [],
+            "manifest_created": False,
+            "chunk_size": CROP_CHUNK_SIZE,
+            "expand_ratio": float(expand_ratio),
+            "bbox_expansion": False,
+            "size": int(size),
+            "split_strategy": SPLIT_STRATEGY,
+            "split_seed": CROP_SPLIT_SEED,
+            "artifact_prefix": prefix,
+            "source_refs": _accepted_pool_refs(selected),
+            "classes": classes,
+            "git_commit": os.getenv("APP_GIT_COMMIT", "unknown").strip() or "unknown",
+            "quality_analysis_mode": "RISK_ONLY",
+            "input_filter": "NONE",
+            "created_at": _now(),
+            "started_at": None,
+            "updated_at": _now(),
+            "finished_at": None,
+            "error_code": None,
+            "error": None,
+        }
+        if mode == "FULL":
+            source_batches = sorted(
+                {
+                    str(image.batch_id or "").strip()
+                    for image, _presence in selected
+                    if str(image.batch_id or "").strip()
+                }
+            )
+            manifest_uri = f"gs://{get_bucket_name()}/datasets/{dataset_name}/manifest.csv"
+            class_map_uri = f"gs://{get_bucket_name()}/datasets/{dataset_name}/metadata/class_map.json"
+            placeholder_metadata = {
+                "dataset_version": dataset_name,
+                "type": CROP_DATASET_TYPE,
+                "pipeline_type": CROP_PIPELINE_TYPE,
+                "source": ACCEPTED_POOL_SOURCE,
+                "source_type": ACCEPTED_POOL_SOURCE,
+                "accepted_pool_count": len(selected),
+                "source_count": len(selected),
+                "bbox_generated": 0,
+                "crop_generated": 0,
+                "dataset_count": 0,
+                "failure_count": 0,
+                "failures": [],
+                "quality_analysis_mode": "RISK_ONLY",
+                "quality_filter_applied": False,
+                "expand_ratio": ACCEPTED_POOL_CROP_SCALE,
+                "bbox_expansion": False,
+                "input_size": f"{CROP_OUTPUT_SIZE}x{CROP_OUTPUT_SIZE}",
+                "bbox_source": "detector_generated",
+                "source_batches": source_batches,
+                "processing_status": "CREATED",
+                "release_qa_status": "PENDING",
+                "training_gate_status": "BLOCKED_UNTIL_RELEASE_QA_PASS",
+                "manifest_uri": manifest_uri,
+                "class_map_uri": class_map_uri,
+                "created_by": "system",
+                "created_at": _now(),
+            }
+            db.add(
+                DatasetVersion(
+                    dataset_version=dataset_name,
+                    manifest_uri=manifest_uri,
+                    class_map_uri=class_map_uri,
+                    train_count=0,
+                    val_count=0,
+                    test_count=0,
+                    species_count=len(classes),
+                    git_commit=str(job.get("git_commit") or "unknown"),
+                    selection_mode="ACCEPTED_POOL_DETECTOR_CROP",
+                    source_cutoff_at=datetime.now(timezone.utc),
+                    status="CREATED",
+                    pipeline_type=CROP_PIPELINE_TYPE,
+                    metadata_json=json.dumps(placeholder_metadata, ensure_ascii=False),
+                )
+            )
+            db.commit()
         _persist_job(job_id, **{key: value for key, value in job.items() if key != "job_id"})
         return _public_job(job)
     finally:
@@ -734,9 +1509,24 @@ def _qa_is_frozen_manifest(qa: dict[str, Any] | None) -> bool:
 
 
 
+def _qa_manifest_fields(dataset_name: str, items: list[dict[str, Any]] | None = None) -> tuple[str, ...]:
+    if str(dataset_name or "").strip() == ACCEPTED_POOL_DATASET_VERSION:
+        return ACCEPTED_POOL_MANIFEST_FIELDS
+    if items and any("species_key" in item or "input_type" in item for item in items):
+        return ACCEPTED_POOL_MANIFEST_FIELDS
+    return MANIFEST_FIELDS
+
+
 def _qa_write_csv(bucket, dataset_name: str, qa: dict[str, Any]) -> None:
     output = io.StringIO(newline="")
-    fields = ("qa_index", "item_id", *MANIFEST_FIELDS, "decision", "note", "reviewed_at")
+    fields = (
+        "qa_index",
+        "item_id",
+        *_qa_manifest_fields(dataset_name, list(qa.get("items") or [])),
+        "decision",
+        "note",
+        "reviewed_at",
+    )
     writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
     writer.writeheader()
     for item in qa.get("items", []):
@@ -791,6 +1581,7 @@ def select_random_50_qa_rows(rows: list[dict[str, Any]], dataset_name: str) -> l
     manifest shape remains supported for existing unit fixtures and callers.
     """
     rng = random.Random(_qa_seed(dataset_name))
+    selected: list[dict[str, Any]] = []
 
     def choose(pool: list[dict[str, Any]], count: int, label: str) -> list[dict[str, Any]]:
         candidates = _qa_unique_rows(pool)
@@ -798,9 +1589,18 @@ def select_random_50_qa_rows(rows: list[dict[str, Any]], dataset_name: str) -> l
             raise ValueError(f"RANDOM_50_QA_INSUFFICIENT_{label}_AVAILABLE_{len(candidates)}")
         return [candidates[index] for index in sorted(rng.sample(range(len(candidates)), count))]
 
+    if str(dataset_name or "").strip() == ACCEPTED_POOL_DATASET_VERSION:
+        # V1.2 has already crossed the human Accepted Pool gate.  Quality
+        # labels are risk signals only, so the fixed snapshot samples the
+        # actual manifest rows and never requires GOOD rows.
+        for split, count in QA_SPLIT_PLAN:
+            selected.extend(choose([row for row in rows if _qa_split(row) == split], count, split.upper()))
+        if len({_qa_item_id(row) for row in selected}) != QA_SAMPLE_SIZE:
+            raise ValueError("RANDOM_50_QA_DUPLICATE_SAMPLE")
+        return selected
+
     statuses = {str(row.get("quality_status") or "").upper() for row in rows}
     good = [row for row in rows if str(row.get("quality_status") or "GOOD").upper() == "GOOD"]
-    selected: list[dict[str, Any]] = []
     if statuses - {"", "GOOD"}:
         # Compatibility for legacy mixed-manifest unit fixtures. Production QA
         # never takes this branch because it reads the frozen manifest.csv.
@@ -820,8 +1620,9 @@ def select_random_50_qa_rows(rows: list[dict[str, Any]], dataset_name: str) -> l
 
 def _qa_payload(dataset_name: str, selected: list[dict[str, Any]]) -> dict[str, Any]:
     items = []
+    fields = _qa_manifest_fields(dataset_name, selected)
     for index, row in enumerate(selected):
-        item = {field: row.get(field, "") for field in MANIFEST_FIELDS}
+        item = {field: row.get(field, "") for field in fields}
         item.update({"qa_index": index, "item_id": _qa_item_id(row), "decision": None, "note": "", "reviewed_at": None})
         items.append(item)
     payload = {"schema_version": QA_SCHEMA_VERSION, "dataset_version": dataset_name, "source_manifest": QA_SOURCE_MANIFEST, "sample_plan": {split: count for split, count in QA_SPLIT_PLAN}, "seed": _qa_seed(dataset_name), "sample_size": len(items), "created_at": _now(), "items": items}
@@ -851,6 +1652,19 @@ def _update_release_gate_metadata(db, dataset_name: str, qa: dict[str, Any]) -> 
         },
         "final_release_gate": qa.get("final_release_gate", "PARTIAL_PASS"),
     }
+    # V1.2 is created in RELEASE_QA_PENDING.  A passing fixed snapshot is the
+    # only event that advances it to the training-ready state; risk-only
+    # quality analysis never changes this status.
+    if (
+        str(metadata.get("source") or "").upper() == ACCEPTED_POOL_SOURCE
+        and str(qa.get("final_release_gate") or "").upper() == "PASS"
+    ):
+        dataset.status = "READY_FOR_TRAINING"
+        metadata["processing_status"] = "READY_FOR_TRAINING"
+        metadata["release_qa_status"] = "PASS"
+        metadata["training_gate_status"] = "PASS"
+    elif str(metadata.get("source") or "").upper() == ACCEPTED_POOL_SOURCE:
+        metadata["release_qa_status"] = str(qa.get("status") or "PENDING").upper()
     dataset.metadata_json = json.dumps(metadata, ensure_ascii=False)
     db.commit()
 
@@ -1106,7 +1920,9 @@ def _analysis_row_key(row: dict[str, Any]) -> str:
     return ":".join(str(row.get(field) or "") for field in ("batch_id", "image_id", "crop_path"))
 
 
-def _analysis_train_candidate(status: str, reason: str) -> str:
+def _analysis_train_candidate(status: str, reason: str, *, risk_only: bool = False) -> str:
+    if risk_only:
+        return "NOT_A_FILTER"
     if status != "WARNING":
         return "NOT_APPLICABLE"
     return "PENDING_HUMAN_REVIEW"
@@ -1145,6 +1961,11 @@ def _analysis_read(dataset_name: str) -> dict[str, Any] | None:
             return None
         if str(value.get("schema_version") or "") != QUALITY_ANALYSIS_SCHEMA_VERSION:
             return None
+        if (
+            str(dataset_name or "").strip() == ACCEPTED_POOL_DATASET_VERSION
+            and str(value.get("mode") or "").upper() != "RISK_ONLY"
+        ):
+            return None
         return value
     except Exception:
         return None
@@ -1162,6 +1983,7 @@ def get_quality_gate_analysis_summary(dataset_name: str) -> dict[str, Any]:
     if report is None:
         return {
             "status": "NOT_GENERATED",
+            "mode": "RISK_ONLY" if str(dataset_name or "").strip() == ACCEPTED_POOL_DATASET_VERSION else "QUALITY_GATE_ANALYSIS",
             "source": {
                 "manifest_uri": _frozen_manifest_uri(dataset_name),
                 "source_count": None,
@@ -1173,6 +1995,7 @@ def get_quality_gate_analysis_summary(dataset_name: str) -> dict[str, Any]:
         }
     return {
         "status": "READY",
+        "mode": report.get("mode") or ("RISK_ONLY" if str(dataset_name or "").strip() == ACCEPTED_POOL_DATASET_VERSION else "QUALITY_GATE_ANALYSIS"),
         "source": report.get("source") or {
             "manifest_uri": _frozen_manifest_uri(dataset_name),
             "source_is_frozen_manifest": True,
@@ -1229,7 +2052,28 @@ def registered_manifest_counts(dataset: DatasetVersion) -> dict[str, int | str]:
     return fallback
 
 
-def _analysis_recommendation_markdown(dataset_name, totals, reason_rows, warning_coverage) -> str:
+def _analysis_recommendation_markdown(dataset_name, totals, reason_rows, warning_coverage, *, risk_only: bool = False) -> str:
+    if risk_only:
+        lines = [
+            f"# 数据质量分析：{dataset_name}",
+            "",
+            "> 本报告只读分析当前 Dataset manifest.csv 的数据风险，不修改人工确认结果，也不作为 Dataset 输入过滤条件。",
+            "",
+            "## 风险分布",
+            "",
+            f"- 总样本：{totals['TOTAL']}",
+            f"- 低风险（原 GOOD）：{totals['GOOD']}",
+            f"- 风险提示（原 WARNING）：{totals['WARNING']}",
+            f"- 高风险（原 INVALID）：{totals['INVALID']}",
+            "",
+            "## 处理原则",
+            "",
+            "Accepted Pool 已经完成人工确认；只要 Detector 和 Crop 生成成功，WARNING/INVALID 仅作为风险提示，不会从 Dataset 中删除。",
+            "",
+            "Release QA 负责确认原图、Detector BBox、Crop 和训练输入的一致性；训练入口只服从 FINAL_RELEASE_GATE。",
+            "",
+        ]
+        return "\n".join(lines)
     lines = [
         f"# Quality Gate V1.1 分布分析：{dataset_name}",
         "",
@@ -1275,6 +2119,7 @@ def generate_quality_gate_analysis(dataset_name: str) -> dict[str, Any]:
     existing = _analysis_read(dataset_name)
     if existing is not None:
         return existing
+    risk_only = str(dataset_name or "").strip() == ACCEPTED_POOL_DATASET_VERSION
     client, bucket = _storage()
     # Quality analysis is scoped to the registered frozen Dataset artifact.
     # Do not widen this to manifest_all.csv, bucket scans, or the accepted bbox
@@ -1348,7 +2193,7 @@ def generate_quality_gate_analysis(dataset_name: str) -> dict[str, Any]:
                 "count": count,
                 "ratio_within_status": count / max(1, totals_payload.get(status, count)),
                 "ratio_total": count / max(1, total),
-                "train_candidate": _analysis_train_candidate(status, reason),
+                "train_candidate": _analysis_train_candidate(status, reason, risk_only=risk_only),
                 "sample_size": min(QUALITY_ANALYSIS_SAMPLE_SIZE, count),
                 "example_uris": sorted({uri for row in group for uri in example_uri_by_key.get(_analysis_row_key(row), [])}),
             }
@@ -1373,14 +2218,21 @@ def generate_quality_gate_analysis(dataset_name: str) -> dict[str, Any]:
             **{field: row.get(field, "") for field in csv_fields},
             "quality_status": status,
             "quality_reason": reason,
-            "train_candidate": _analysis_train_candidate(status, reason),
+            "train_candidate": _analysis_train_candidate(status, reason, risk_only=risk_only),
             "example_uri": ";".join(example_uri_by_key.get(_analysis_row_key(row), [])),
         })
 
-    recommendation = _analysis_recommendation_markdown(dataset_name, totals_payload, reason_rows, warning_coverage)
+    recommendation = _analysis_recommendation_markdown(
+        dataset_name,
+        totals_payload,
+        reason_rows,
+        warning_coverage,
+        risk_only=risk_only,
+    )
     report = {
         "schema_version": QUALITY_ANALYSIS_SCHEMA_VERSION,
         "dataset_version": dataset_name,
+        "mode": "RISK_ONLY" if risk_only else "QUALITY_GATE_ANALYSIS",
         "generated_at": _now(),
         "source": {
             "manifest_uri": _frozen_manifest_uri(dataset_name),
@@ -1399,9 +2251,12 @@ def generate_quality_gate_analysis(dataset_name: str) -> dict[str, Any]:
         "warning_reason_coverage": warning_coverage,
         "reasons": reason_rows,
         "training_value": {
-            "warning_train_candidate": "PENDING_HUMAN_REVIEW",
+            "mode": "RISK_ONLY" if risk_only else "QUALITY_GATE_ANALYSIS",
+            "warning_train_candidate": "NOT_A_FILTER" if risk_only else "PENDING_HUMAN_REVIEW",
             "warning_count": totals_payload["WARNING"],
             "automatic_promotion": False,
+            "automatic_filtering": False if risk_only else None,
+            "input_rows_retained": total if risk_only else None,
         },
         "artifacts": {
             "analysis_json_uri": _analysis_uri(dataset_name, "quality_gate_analysis.json"),
@@ -1436,9 +2291,11 @@ def validate_crop_split_summary(rows):
 
 
 __all__ = [
-    "CROP_DATASET_VERSION", "CROP_DATASET_TYPE", "CROP_PIPELINE_TYPE",
+    "ACCEPTED_POOL_CROP_SCALE", "ACCEPTED_POOL_DATASET_VERSION", "ACCEPTED_POOL_MANIFEST_FIELDS",
+    "ACCEPTED_POOL_SOURCE", "CROP_DATASET_VERSION", "CROP_DATASET_TYPE", "CROP_PIPELINE_TYPE",
     "CROP_EXPAND_RATIO", "CROP_OUTPUT_SIZE", "CROP_SPLIT_SEED", "CROP_CHUNK_SIZE",
     "SPLIT_STRATEGY", "MANIFEST_FIELDS", "QA_SCHEMA_VERSION", "QA_SAMPLE_SIZE", "accepted_pool_count",
+    "accepted_bbox_pool_count",
     "accepted_pool_snapshot", "evaluate_quality", "get_crop_dataset_job",
     "start_crop_dataset_job", "step_crop_dataset_job", "validate_crop_split_summary",
     "get_release_gate_summary", "get_random_50_qa", "start_random_50_qa",

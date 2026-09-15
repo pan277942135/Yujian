@@ -26,6 +26,11 @@
     .meta-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:16px}
     .meta-card{padding:12px;background:#f9fafb;border-radius:10px;min-width:0}
     .meta-card b{display:block;margin-top:5px;word-break:break-word}
+    .flow-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:16px}
+    .flow-card{background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;padding:12px;min-width:0}
+    .flow-card span{display:block;color:#6b7280;font-size:12px}
+    .flow-card b{display:block;font-size:20px;margin-top:5px;word-break:break-word}
+    .flow-card small{display:block;color:#6b7280;margin-top:4px}
     .rule{border-left:4px solid #111827;padding:11px 13px;background:#f9fafb;border-radius:0 8px 8px 0;margin-top:16px}
     .rule small{display:block;color:#6b7280;margin-top:4px}
     details{margin-top:14px;border:1px solid #e5e7eb;border-radius:10px;padding:11px 13px}
@@ -73,11 +78,12 @@
     @media(max-width:850px){
       main{padding:20px 16px 42px}
       .metrics,.qa-summary{grid-template-columns:repeat(2,1fr)}
+      .flow-grid{grid-template-columns:repeat(2,1fr)}
       .meta-grid,.qa-facts{grid-template-columns:1fr 1fr}
       .qa-views{grid-template-columns:1fr}
       .image-box{height:260px}
     }
-    @media(max-width:520px){.metrics,.qa-summary,.meta-grid,.qa-facts{grid-template-columns:1fr}.section{padding:16px}h1{font-size:26px}}
+    @media(max-width:520px){.metrics,.qa-summary,.meta-grid,.flow-grid,.qa-facts{grid-template-columns:1fr}.section{padding:16px}h1{font-size:26px}}
   </style>
 </head>
 <body>
@@ -97,6 +103,13 @@
       <div class="meta-card"><span class="muted">数据规则</span><b id="overviewType">-</b></div>
     </div>
     <div id="datasetCounts" class="metrics"></div>
+    <div id="acceptedPoolFlow" class="flow-grid" hidden>
+      <div class="flow-card"><span>数据来源</span><b>人工确认数据</b><small>Accepted Pool</small></div>
+      <div class="flow-card"><span>人工确认样本</span><b id="acceptedPoolCount">0</b><small>进入 BBox 生成</small></div>
+      <div class="flow-card"><span>BBox 生成</span><b id="bboxProgress">0 / 0</b><small id="bboxProgressNote">等待处理</small></div>
+      <div class="flow-card"><span>Crop 生成</span><b id="cropProgress">0 / 0</b><small id="cropProgressNote">等待处理</small></div>
+    </div>
+    <div id="acceptedPoolQaProgress" class="quality-note" hidden></div>
     <div class="rule"><b>数据规则</b><br><span id="datasetRule">根据冻结 manifest 生成训练数据。</span><small id="datasetRuleNote"></small></div>
     <details>
       <summary>数据来源</summary>
@@ -106,7 +119,7 @@
   </section>
 
   <section class="section" id="qualitySection">
-    <div class="section-heading"><div><h2>B 冻结数据质量分析</h2><p>分析当前冻结Dataset质量，不会修改数据内容。</p></div><div class="actions" style="margin-top:0"><button id="qualityButton" class="primary" onclick="loadQualityAnalysis()">查看冻结数据质量分析</button><a class="link-button" href="/datasets/{{ dataset_version|urlencode }}/quality-samples">查看质量样例</a></div></div>
+    <div class="section-heading"><div><h2>B 数据质量分析</h2><!-- B 冻结数据质量分析：兼容旧页面定位 --><p id="qualityDescription">分析当前 Dataset 风险，不会修改数据内容。</p></div><div class="actions" style="margin-top:0"><button id="qualityButton" class="primary" onclick="loadQualityAnalysis()">查看数据质量分析</button><a class="link-button" href="/datasets/{{ dataset_version|urlencode }}/quality-samples">查看质量样例</a></div></div>
     <div id="qualitySummary" class="metrics"><div class="empty" style="grid-column:1/-1">正在读取质量分析…</div></div>
     <div id="qualitySource" class="quality-note">数据来源：当前 Dataset manifest.csv（只读）。</div>
     <div id="qualityReasons" class="table-wrap"></div>
@@ -149,15 +162,35 @@
 </main>
 <script>
 const datasetVersion={{ dataset_version|tojson }};
-const statusLabels={CREATED:'已创建',PROCESSING:'处理中',READY_FOR_REVIEW:'待审核',RELEASE_PENDING:'待发布确认',READY_FOR_TRAINING:'可训练',TRAINING:'训练中',COMPLETED:'已完成',FAILED:'失败',FROZEN:'已冻结'};
+const statusLabels={CREATED:'已创建',PROCESSING:'处理中',BBOX_PROCESSING:'生成检测框',CROP_READY:'训练图片已生成',READY_FOR_REVIEW:'待审核',RELEASE_PENDING:'待发布确认',RELEASE_QA_PENDING:'等待发布确认',READY_FOR_TRAINING:'可训练',TRAINING:'训练中',COMPLETED:'已完成',FAILED:'失败',FROZEN:'已冻结'};
 const operationLabels={DATASET_CREATED:'创建Dataset',QUALITY_ANALYSIS_GENERATED:'生成质量分析',RANDOM_50_QA_START:'创建QA Snapshot',RANDOM_50_QA_REVIEW:'完成审核',TRAINING_CREATE:'开始训练'};const operationStatusLabels={SUCCESS:'成功',FAILED:'失败',WARNING:'警告'};
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function msg(text,error=false){const node=document.getElementById('banner');node.style.display='block';node.style.background=error?'#fff1f2':'#eef2ff';node.textContent=text}
 async function api(url,opts){const r=await fetch(url,opts);const text=await r.text();let d;try{d=JSON.parse(text)}catch{d=text}if(!r.ok){const detail=typeof d?.detail==='object'?d.detail.message||JSON.stringify(d.detail):d?.detail||text;throw new Error(detail)}return d}
 function metric(label,value){return '<div class="metric"><span>'+esc(label)+'</span><b>'+esc(value)+'</b></div>'}
 function datasetStatus(status){const key=String(status||'').toUpperCase();return statusLabels[key]||'状态待确认'}
-function statusClass(status){const key=String(status||'').toUpperCase();return key==='FAILED'?'bad':(['READY_FOR_TRAINING','COMPLETED','FROZEN'].includes(key)?'good':(['PROCESSING','READY_FOR_REVIEW','RELEASE_PENDING','TRAINING'].includes(key)?'warn':''))}
+function statusClass(status){const key=String(status||'').toUpperCase();return key==='FAILED'?'bad':(['READY_FOR_TRAINING','COMPLETED','FROZEN','CROP_READY'].includes(key)?'good':(['PROCESSING','BBOX_PROCESSING','READY_FOR_REVIEW','RELEASE_PENDING','RELEASE_QA_PENDING','TRAINING'].includes(key)?'warn':''))}
 function typeLabel(type){const key=String(type||'').toUpperCase();return key==='CROP_CLASSIFIER_V1'||key==='CROP_IMAGE_V1'?'Crop Classifier训练数据':(key==='WHOLE_IMAGE_V1'?'Whole Image分类训练数据':'训练数据')}
+function renderAcceptedPoolFlow(d, gate){
+  const accepted=String(d.source_mode||d.metadata?.source||d.metadata?.source_type||'').toUpperCase()==='ACCEPTED_POOL';
+  const flow=document.getElementById('acceptedPoolFlow');
+  const qa=document.getElementById('acceptedPoolQaProgress');
+  if(!accepted){flow.hidden=true;qa.hidden=true;return}
+  flow.hidden=false;
+  const processing=d.processing||{};
+  const source=Number(d.accepted_pool?.accepted_count ?? processing.accepted_pool_count ?? d.sample_count ?? 0);
+  const sourceCount=Number(d.accepted_pool?.source_count ?? processing.source_count ?? source);
+  const bbox=Number(processing.bbox_generated ?? d.metadata?.bbox_generated ?? 0);
+  const crop=Number(processing.crop_generated ?? d.metadata?.crop_generated ?? 0);
+  document.getElementById('acceptedPoolCount').textContent=source;
+  document.getElementById('bboxProgress').textContent=bbox+' / '+sourceCount;
+  document.getElementById('cropProgress').textContent=crop+' / '+sourceCount;
+  document.getElementById('bboxProgressNote').textContent=bbox>=sourceCount&&sourceCount>0?'已完成':'处理中';
+  document.getElementById('cropProgressNote').textContent=crop>=sourceCount&&sourceCount>0?'已完成':'处理中';
+  const checked=Number(gate.checked||0);const total=Number(gate.total||50);
+  qa.hidden=false;
+  qa.textContent='Release QA：'+checked+' / '+total+' · '+(String(gate.final_release_gate||'').toUpperCase()==='PASS'?'已通过':'等待发布确认');
+}
 function renderDetail(d){
   const status=String(d.status||'').toUpperCase();
   document.getElementById('datasetId').textContent=d.id||datasetVersion;
@@ -167,32 +200,37 @@ function renderDetail(d){
   document.getElementById('overviewType').textContent=typeLabel(d.type||d.pipeline_type);
   document.getElementById('datasetCounts').innerHTML=[metric('总样本',d.sample_count||0),metric('Train',d.train_count||0),metric('Val',d.val_count||0),metric('Test',d.test_count||0)].join('');
   const crop=String(d.type||d.pipeline_type||'').toUpperCase()==='CROP_CLASSIFIER_V1';
-  document.getElementById('datasetRule').textContent=crop?'Accepted BBox Crop':'根据冻结 manifest 生成训练数据';
-  document.getElementById('datasetRuleNote').textContent=crop?'根据鱼体检测框生成训练Crop':'使用当前 Dataset 的冻结样本';
+  const accepted=String(d.source_mode||d.metadata?.source||d.metadata?.source_type||'').toUpperCase()==='ACCEPTED_POOL';
+  document.getElementById('datasetRule').textContent=accepted?'Accepted Pool → Detector BBox → Crop':'根据冻结 manifest 生成训练数据';
+  document.getElementById('datasetRuleNote').textContent=accepted?'人工确认数据进入 Detector 和 Crop；不以质量标签过滤':'使用当前 Dataset 的冻结样本';
   document.getElementById('manifestUri').textContent=d.manifest_uri||'-';
   const batches=Array.isArray(d.source_batches)?d.source_batches.filter(Boolean):[];
   document.getElementById('sourceBatches').innerHTML=batches.length?batches.map(x=>'<span class="pill" style="margin:0 6px 6px 0">'+esc(x)+'</span>').join(''):'<span class="muted">来源待补充</span>';
+  renderAcceptedPoolFlow(d,d.release_gate||{});
   renderTrainingGate(d.release_gate||{});
 }
-function qualityStatusLabel(status){return String(status||'').toUpperCase()==='UNAVAILABLE'?'质量字段不可用':(status||'质量字段不可用')}
+function qualityStatusLabel(status,riskOnly=false){const key=String(status||'').toUpperCase();if(key==='UNAVAILABLE')return '质量字段不可用';if(riskOnly)return ({GOOD:'低风险',WARNING:'风险提示',INVALID:'高风险'}[key]||'风险状态');return status||'质量字段不可用'}
 function renderQuality(d){
+  const riskOnly=String(d.mode||'').toUpperCase()==='RISK_ONLY';
+  document.getElementById('qualityDescription').textContent=riskOnly?'分析当前数据风险，不影响人工确认数据进入训练。':'分析当前冻结Dataset质量，不会修改数据内容。';
+  document.getElementById('qualityButton').textContent=riskOnly?'查看数据质量分析':'查看冻结数据质量分析';
   const t=d.totals||{};const unavailable=Number(t.UNAVAILABLE||0);const available=d.quality_field_available!==false&&unavailable===0;
-  document.getElementById('qualitySummary').innerHTML=[metric('总样本',t.TOTAL||0),metric('GOOD',t.GOOD||0),metric('WARNING',t.WARNING||0),metric('INVALID',t.INVALID||0)].join('');
-  const source=d.source||{};let sourceText='数据来源：当前 Dataset manifest.csv（只读）';if(source.source_count!=null)sourceText+=' · '+esc(source.source_count)+' 条';
+  document.getElementById('qualitySummary').innerHTML=[metric('总样本',t.TOTAL||0),metric(riskOnly?'低风险':'GOOD',t.GOOD||0),metric(riskOnly?'风险提示':'WARNING',t.WARNING||0),metric(riskOnly?'高风险':'INVALID',t.INVALID||0)].join('');
+  const source=d.source||{};let sourceText=riskOnly?'数据来源：当前 Dataset manifest.csv · 风险分析，不影响人工确认数据进入训练。':'数据来源：当前 Dataset manifest.csv（只读）';if(source.source_count!=null)sourceText+=' · '+esc(source.source_count)+' 条';
   document.getElementById('qualitySource').textContent=sourceText;
   if(!available){document.getElementById('qualitySource').className='quality-note warn';document.getElementById('qualitySource').textContent='质量字段不可用：当前 manifest.csv 没有可用的 quality_status。'}
   else if(d.quality_sum_check===false){document.getElementById('qualitySource').className='quality-note warn';document.getElementById('qualitySource').textContent='质量统计未完成总数校验，请检查当前 manifest.csv 的质量字段。'}
   else{document.getElementById('qualitySource').className='quality-note'}
   const rows=Array.isArray(d.reasons)?d.reasons:[];
-  document.getElementById('qualityReasons').innerHTML=rows.length?'<table><thead><tr><th>状态</th><th>原因</th><th>数量</th><th>占状态</th><th>质量样例</th></tr></thead><tbody>'+rows.map(x=>'<tr><td>'+esc(qualityStatusLabel(x.status))+'</td><td>'+esc(x.reason||'质量字段不可用')+'</td><td>'+esc(x.count||0)+'</td><td>'+((Number(x.ratio_within_status||0)*100).toFixed(1))+'%</td><td>'+esc(x.sample_size||0)+' 条</td></tr>').join('')+'</tbody></table>':'<div class="empty">尚未生成质量分析，点击上方按钮读取当前 manifest.csv。</div>';
+  document.getElementById('qualityReasons').innerHTML=rows.length?'<table><thead><tr><th>'+ (riskOnly?'风险级别':'状态') +'</th><th>原因</th><th>数量</th><th>占状态</th><th>质量样例</th></tr></thead><tbody>'+rows.map(x=>'<tr><td>'+esc(qualityStatusLabel(x.status,riskOnly))+'</td><td>'+esc(x.reason||'质量字段不可用')+'</td><td>'+esc(x.count||0)+'</td><td>'+((Number(x.ratio_within_status||0)*100).toFixed(1))+'%</td><td>'+esc(x.sample_size||0)+' 条</td></tr>').join('')+'</tbody></table>':'<div class="empty">尚未生成质量分析，点击上方按钮读取当前 manifest.csv。</div>';
   const recommendation=document.getElementById('qualityRecommendation');const coverage=d.warning_reason_coverage||{};
-  if(rows.length){recommendation.hidden=false;recommendation.textContent='WARNING 原因覆盖：'+(coverage.rows_with_reason||0)+' / '+(coverage.warning_count||0)+'。质量分析只读，不自动修改当前 Dataset。'}
+  if(rows.length){recommendation.hidden=false;recommendation.textContent=riskOnly?'风险分析只读；WARNING/INVALID 不会从 Accepted Pool 生成的 Dataset 中删除。':'WARNING 原因覆盖：'+(coverage.rows_with_reason||0)+' / '+(coverage.warning_count||0)+'。质量分析只读，不自动修改当前 Dataset。'}
 }
 async function loadQualityAnalysis(){
   const button=document.getElementById('qualityButton');button.disabled=true;button.textContent='正在读取质量分析…';
   try{renderQuality(await api('/api/legacy/datasets/'+encodeURIComponent(datasetVersion)+'/quality-gate-analysis'));}
   catch(e){msg(e.message,true)}
-  finally{button.disabled=false;button.textContent='查看冻结数据质量分析'}
+  finally{button.disabled=false;button.textContent='查看数据质量分析'}
 }
 function gateStatus(qa){return String(qa?.status||'PENDING').toUpperCase()}
 function renderTrainingGate(gate){

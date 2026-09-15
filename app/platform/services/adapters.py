@@ -78,6 +78,13 @@ def _number(value: Any) -> float | None:
     return result if math.isfinite(result) else None
 
 
+def _int_value(value: Any, default: int = 0) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return default
+
+
 def _iso(value: Any) -> str | None:
     return value.isoformat() if value else None
 
@@ -625,6 +632,8 @@ def dataset_detail(db: Session, dataset_id: str) -> dict[str, Any] | None:
     counts = _dataset_version_counts(row)
     lineage_counts = _dataset_counts(db, row)
     metadata = _json(getattr(row, "metadata_json", None), {}) or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
     status = _status(row.status)
     pipeline_type = getattr(row, "pipeline_type", None) or "WHOLE_IMAGE_V1"
     report = _dataset_clean_report(
@@ -634,8 +643,18 @@ def dataset_detail(db: Session, dataset_id: str) -> dict[str, Any] | None:
         stored=metadata.get("clean_report", metadata.get("cleaning", {})) if isinstance(metadata, dict) else {},
         fallback_valid=min(lineage_counts["valid"], counts["total"]),
     )
+    source = str(metadata.get("source") or metadata.get("source_type") or "").strip().upper()
+    accepted_pool_count = _int_value(metadata.get("accepted_pool_count"))
+    source_count = _int_value(metadata.get("source_count"), counts["total"])
+    bbox_generated = _int_value(metadata.get("bbox_generated"))
+    crop_generated = _int_value(metadata.get("crop_generated"))
+    release_gate = metadata.get("release_gate") if isinstance(metadata.get("release_gate"), dict) else {}
+    stored_qa = release_gate.get("random_50_qa") if isinstance(release_gate, dict) else {}
+    qa_status = stored_qa.get("status") if isinstance(stored_qa, dict) else None
+    qa_status = qa_status or metadata.get("release_qa_status") or "PENDING"
     return {
         "id": dataset_id,
+        "name": dataset_id,
         "type": pipeline_type,
         "status": status,
         "counts": {
@@ -648,6 +667,22 @@ def dataset_detail(db: Session, dataset_id: str) -> dict[str, Any] | None:
         "parent_version": row.parent_version,
         "version_chain": _dataset_version_chain(db, row),
         "created_at": _iso(row.created_at),
+        "manifest_uri": row.manifest_uri,
+        "class_map_uri": row.class_map_uri,
+        "source": source or None,
+        "quality_analysis_mode": str(metadata.get("quality_analysis_mode") or "QUALITY_GATE_ANALYSIS").upper(),
+        "processing": {
+            "source": "人工确认数据" if source == "ACCEPTED_POOL" else "DatasetVersion",
+            "accepted_pool_count": accepted_pool_count,
+            "source_count": source_count,
+            "bbox_generated": bbox_generated,
+            "crop_generated": crop_generated,
+            "dataset_count": counts["total"],
+            "bbox_status": "COMPLETED" if bbox_generated >= source_count > 0 else "PENDING",
+            "crop_status": "COMPLETED" if crop_generated >= source_count > 0 else "PENDING",
+            "processing_status": str(metadata.get("processing_status") or status).upper(),
+            "release_qa_status": str(qa_status).upper(),
+        },
         "clean_report": {key: int(value or 0) for key, value in report["invalid"].items()},
     }
 

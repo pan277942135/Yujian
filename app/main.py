@@ -748,8 +748,11 @@ class LegacyReleaseQaReview(BaseModel):
 LEGACY_DATASET_STATUS_LABELS = {
     "CREATED": "已创建",
     "PROCESSING": "处理中",
+    "BBOX_PROCESSING": "生成检测框",
+    "CROP_READY": "训练图片已生成",
     "READY_FOR_REVIEW": "待审核",
     "RELEASE_PENDING": "待发布确认",
+    "RELEASE_QA_PENDING": "等待发布确认",
     "READY_FOR_TRAINING": "可训练",
     "TRAINING": "训练中",
     "COMPLETED": "已完成",
@@ -861,6 +864,15 @@ def legacy_dataset_detail(dataset_version: str, db: Session = Depends(get_db)):
 
     counts = registered_manifest_counts(dataset)
     pipeline_type = getattr(dataset, "pipeline_type", None) or "WHOLE_IMAGE_V1"
+    quality_analysis = get_quality_gate_analysis_summary(dataset_version)
+    release_gate = _legacy_release_gate(db, dataset)
+    source_mode = str(metadata.get("source") or metadata.get("source_type") or "").strip().upper()
+    is_accepted_pool = source_mode == "ACCEPTED_POOL"
+    accepted_pool_count = int(metadata.get("accepted_pool_count", counts["total"]) or 0)
+    source_count = int(metadata.get("source_count", accepted_pool_count or counts["total"]) or 0)
+    bbox_generated = int(metadata.get("bbox_generated", 0) or 0)
+    crop_generated = int(metadata.get("crop_generated", 0) or 0)
+    processing_status = str(metadata.get("processing_status") or dataset.status or "CREATED").upper()
     return {
         # V1 public contract.
         "id": dataset.dataset_version,
@@ -871,8 +883,8 @@ def legacy_dataset_detail(dataset_version: str, db: Session = Depends(get_db)):
         "val_count": int(counts["val"]),
         "test_count": int(counts["test"]),
         "manifest_uri": dataset.manifest_uri,
-        "quality_analysis": get_quality_gate_analysis_summary(dataset_version),
-        "release_gate": _legacy_release_gate(db, dataset),
+        "quality_analysis": quality_analysis,
+        "release_gate": release_gate,
         # Kept for existing Legacy consumers while they migrate to the V1
         # names above.  These are the same frozen DatasetVersion values.
         "dataset_version": dataset.dataset_version,
@@ -884,6 +896,21 @@ def legacy_dataset_detail(dataset_version: str, db: Session = Depends(get_db)):
         "parent_version": dataset.parent_version,
         "metadata": metadata,
         "counts_source": counts["source"],
+        "source_mode": source_mode or None,
+        "accepted_pool": {
+            "source": "人工确认数据" if is_accepted_pool else "DatasetVersion",
+            "accepted_count": accepted_pool_count if is_accepted_pool else None,
+            "source_count": source_count if is_accepted_pool else None,
+        },
+        "processing": {
+            "status": processing_status,
+            "bbox_generated": bbox_generated if is_accepted_pool else None,
+            "bbox_total": source_count if is_accepted_pool else None,
+            "crop_generated": crop_generated if is_accepted_pool else None,
+            "crop_total": source_count if is_accepted_pool else None,
+            "release_qa_checked": int(release_gate.get("checked", 0) or 0),
+            "release_qa_total": int(release_gate.get("total", 50) or 50),
+        },
     }
 
 

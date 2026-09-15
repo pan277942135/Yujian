@@ -24,6 +24,8 @@ CROP_PIPELINE_TYPE = "CROP_CLASSIFIER_V1"
 CROP_INPUT_TYPES = {"crop", "crop_image"}
 REVIEWED_STATUSES = {"ACCEPTED", "TRAINING_READY"}
 PRODUCTION_EXPAND_RATIO = 0.15
+ACCEPTED_POOL_BBOX_SOURCE = "detector_generated"
+ACCEPTED_POOL_CROP_SCALE = 1.0
 
 
 class CropDatasetValidationError(ValueError):
@@ -307,8 +309,13 @@ def validate_crop_rows(
             except (TypeError, ValueError):
                 add(index, image_id, "INVALID_EXPAND_RATIO", "expand_ratio must be between 0 and 1")
             else:
-                if abs(ratio - PRODUCTION_EXPAND_RATIO) > 1e-6:
-                    add(index, image_id, "EXPAND_RATIO_MISMATCH", f"production crop manifests require expand_ratio={PRODUCTION_EXPAND_RATIO}")
+                expected_ratio = (
+                    ACCEPTED_POOL_CROP_SCALE
+                    if _text(row.get("bbox_source")).lower() == ACCEPTED_POOL_BBOX_SOURCE
+                    else PRODUCTION_EXPAND_RATIO
+                )
+                if abs(ratio - expected_ratio) > 1e-6:
+                    add(index, image_id, "EXPAND_RATIO_MISMATCH", f"crop manifests require expand_ratio={expected_ratio}")
             for dimension in ("crop_width", "crop_height"):
                 try:
                     if int(row.get(dimension)) <= 0:
@@ -496,6 +503,8 @@ __all__ = [
     "CROP_PIPELINE_TYPE",
     "CROP_INPUT_TYPES",
     "CROP_VALIDATOR_VERSION",
+    "ACCEPTED_POOL_BBOX_SOURCE",
+    "ACCEPTED_POOL_CROP_SCALE",
     "CropDatasetValidationError",
     "CropDatasetValidator",
     "REVIEWED_STATUSES",

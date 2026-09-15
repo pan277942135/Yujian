@@ -18,16 +18,16 @@
 <section class="panel" style="margin-top:16px" id="cropDatasetPanel">
   <div class="panel-heading">
     <div>
-      <h2>鱼体裁剪数据集</h2>
-      <p>先运行 20 张真实测试，确认裁剪、质量和 split 逻辑，再生成完整训练数据集。</p>
+      <h2>Accepted Pool → Crop 数据集 V1.2</h2>
+      <p>从人工确认数据开始，复用现有 Detector 生成 BBox 和训练 Crop；质量分析只提示风险，不会过滤 Accepted Pool。</p>
     </div>
     <span class="code">CROP_IMAGE_V1</span>
   </div>
-  <div id="cropPoolState" class="loading">加载 Accepted Fish Pool…</div>
+  <div id="cropPoolState" class="loading">加载人工确认 Accepted Pool…</div>
   <div class="stat-grid" style="margin-top:14px">
-    <div class="stat"><strong>1.25×</strong><span>鱼体框扩展</span></div>
+    <div class="stat"><strong>1.0×</strong><span>Detector BBox 原尺寸</span></div>
     <div class="stat"><strong>416 × 416</strong><span>Crop 输出</span></div>
-    <div class="stat"><strong>Accepted BBox</strong><span>唯一来源，不使用候选框</span></div>
+    <div class="stat"><strong>RISK_ONLY</strong><span>质量分析不作输入过滤</span></div>
   </div>
   <div class="page-actions" style="margin-top:14px">
     <button class="button" type="button" id="startCropSmoke">先运行20张测试</button>
@@ -79,6 +79,10 @@ function datasetStatus(status) {
     AI_CLEANING: 'AI 清洗中',
     REVIEW: '待审核',
     DRAFT: '草稿',
+    CREATED: '已创建',
+    BBOX_PROCESSING: '生成检测框',
+    CROP_READY: '训练图片已生成',
+    RELEASE_QA_PENDING: '等待发布确认',
   };
   return `<span class="status-tag status-${normalized.toLowerCase()}"><span class="status-dot"></span>${esc(labels[normalized] || normalized || '未知')}</span>`;
 }
@@ -184,14 +188,14 @@ let cropJobId = null;
 let cropSmokePassed = false;
 
 function cropJobKey(mode) {
-  return mode === 'SMOKE' ? 'yujian.crop.smoke.job' : 'yujian.crop.full.job';
+  return mode === 'SMOKE' ? 'yujian.accepted-pool.v1.2.smoke.job' : 'yujian.accepted-pool.v1.2.full.job';
 }
 
 function renderCropPool(pool) {
   const count = Number(pool.count || 0);
   document.getElementById('cropPoolState').innerHTML = count
-    ? '<strong>Accepted Fish Pool：' + esc(count) + '</strong><span class="muted"> 条已确认鱼体框。候选框不会进入生成。</span>'
-    : '<span class="muted">当前没有可用的 Accepted BBox。</span>';
+    ? '<strong>Accepted Pool：' + esc(count) + '</strong><span class="muted"> 条人工确认样本，将全部进入 Detector → Crop。</span>'
+    : '<span class="muted">当前没有人工确认数据。请先导入采集数据并完成审核。</span>';
   document.getElementById('startCropSmoke').disabled = !count;
 }
 
@@ -210,19 +214,20 @@ function renderCropJob(job) {
   const status = String(job.status || 'PENDING').toUpperCase();
   const processed = Number(job.processed || job.cursor || 0);
   const source = Number(job.source_count || 0);
-  const counts = 'GOOD ' + Number(job.good_count || 0) + ' · WARNING ' +
-    Number(job.warning_count || 0) + ' · INVALID ' + Number(job.invalid_count || 0);
+  const counts = 'BBox ' + Number(job.bbox_generated || 0) + ' · Crop ' +
+    Number(job.crop_generated || 0) + ' · 风险标签 ' +
+    (Number(job.warning_count || 0) + Number(job.invalid_count || 0));
   progress.textContent = source
     ? '已处理 ' + processed + ' / ' + source + '　' + counts
     : counts;
   if (status === 'SUCCESS') {
     target.innerHTML = '<span class="status-tag status-ready"><span class="status-dot"></span>' +
-      (job.mode === 'SMOKE' ? '20张测试通过' : '完整数据集已生成') + '</span>';
+      (job.mode === 'SMOKE' ? '20张 Accepted Pool 测试通过' : 'DS_CROP_M1_v0.2 已生成，等待 Release QA') + '</span>';
     continueButton.hidden = true;
     if (job.mode === 'SMOKE') {
       cropSmokePassed = true;
       full.disabled = false;
-      localStorage.setItem('yujian.crop.smoke.passed', '1');
+      localStorage.setItem('yujian.accepted-pool.v1.2.smoke.passed', '1');
     }
     if (job.mode === 'FULL') full.disabled = true;
   } else if (status === 'FAILED') {
@@ -272,9 +277,9 @@ async function createCropJob(mode) {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        source:'accepted_bbox',
-        dataset_name: mode === 'SMOKE' ? 'DS_CROP_M1_v0.1_SMOKE' : 'DS_CROP_M1_v0.1',
-        expand_ratio:1.25,
+        source:'accepted_pool',
+        dataset_name: mode === 'SMOKE' ? 'DS_CROP_M1_v0.2_SMOKE' : 'DS_CROP_M1_v0.2',
+        expand_ratio:1.0,
         size:416,
         mode:mode,
         limit: mode === 'SMOKE' ? 20 : null,
@@ -304,7 +309,7 @@ platformFetch('/api/platform/fish-pool/accepted').then(renderCropPool).catch(err
   document.getElementById('cropPoolState').textContent = platformError(error);
 });
 
-if (localStorage.getItem('yujian.crop.smoke.passed') === '1') cropSmokePassed = true;
+if (localStorage.getItem('yujian.accepted-pool.v1.2.smoke.passed') === '1') cropSmokePassed = true;
 for (const mode of ['SMOKE', 'FULL']) {
   const savedJob = localStorage.getItem(cropJobKey(mode));
   if (savedJob) {
