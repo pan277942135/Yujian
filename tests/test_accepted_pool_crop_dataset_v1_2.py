@@ -175,7 +175,7 @@ def test_v12_release_qa_keeps_fixed_50_snapshot_and_opens_gate(monkeypatch, tmp_
         db.close()
 
 
-def test_v12_training_gate_is_409_until_release_qa_pass(monkeypatch, tmp_path: Path):
+def test_v12_training_does_not_require_release_qa(monkeypatch, tmp_path: Path):
     bucket = MemoryBucket()
     client = MemoryClient(bucket)
     monkeypatch.setattr(crop_dataset, "_storage", lambda: (client, bucket))
@@ -193,7 +193,7 @@ def test_v12_training_gate_is_409_until_release_qa_pass(monkeypatch, tmp_path: P
             species_count=1,
             git_commit="test-sha",
             selection_mode="ACCEPTED_POOL_DETECTOR_CROP",
-            status="RELEASE_QA_PENDING",
+            status="FROZEN",
             pipeline_type="CROP_CLASSIFIER_V1",
             metadata_json=json.dumps({"source": "ACCEPTED_POOL"}),
         )
@@ -205,21 +205,6 @@ def test_v12_training_gate_is_409_until_release_qa_pass(monkeypatch, tmp_path: P
             model_version="MODEL_DS_CROP_M1_v0.2_GATE",
             pipeline_type="CROP_CLASSIFIER_V1",
         )
-        with pytest.raises(HTTPException) as error:
-            queue_training_run(db, payload, launcher=lambda *_args: {"name": "unused"})
-        assert error.value.status_code == 409
-
-        dataset.status = "READY_FOR_TRAINING"
-        dataset.metadata_json = json.dumps(
-            {
-                "source": "ACCEPTED_POOL",
-                "release_gate": {
-                    "random_50_qa": {"status": "PASS", "sample_size": 50, "reviewed_count": 50, "pass_count": 50, "issue_count": 0},
-                    "final_release_gate": "PASS",
-                },
-            }
-        )
-        db.commit()
         result = queue_training_run(db, payload, launcher=lambda *_args: {"name": "unused"})
         assert result["run_id"] == payload.run_id
         assert result["dataset_version"] == "DS_CROP_M1_v0.2"

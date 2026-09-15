@@ -27,7 +27,7 @@
       <h2>累计 Accepted Pool 池</h2>
       <div id="acceptedPoolSummary"><span class="muted">正在读取 Accepted Pool…</span></div>
       <div class="rule"><b>可复用训练 Crop</b><br><span class="muted">Accepted Pool 使用人工确认的 accepted_bbox 生成并累计保存 Crop；后续同步只处理新增或发生变化的图片，历史 Crop 不重复生成。这里不会自动创建 Dataset Freeze。</span></div>
-      <div class="actions"><button class="linkBtn primary" onclick="syncAcceptedPoolFromCard()">同步 Accepted Pool</button><a class="linkBtn" href="/datasets/accepted-bbox?status=ACCEPTED">查看 accepted_bbox 详情</a></div>
+      <div class="actions"><button class="linkBtn primary" onclick="syncAcceptedPoolFromCard()">同步 Accepted Pool</button><a class="linkBtn" href="/inspect?review_status=approved">进入数据检查</a></div>
       <div id="acceptedPoolJob" class="muted" style="margin-top:9px"></div>
     </div>
   </div>
@@ -71,7 +71,7 @@ function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&l
 function msg(t,err=false){const b=document.getElementById('banner');b.style.display='block';b.style.background=err?'#fff1f2':'#eef2ff';b.textContent=t}
 async function api(url,opts){const r=await fetch(url,opts);const text=await r.text();let d;try{d=JSON.parse(text)}catch{d=text}if(!r.ok)throw new Error(d.detail||text);return d}
 function modeName(v){return ({ALL_APPROVED:'全部已通过数据',ALL_APPROVED_VERIFIED_TRUTH:'已通过 + 已确认 Ground Truth'})[v]||v||'-'}
-function datasetStatus(v){return ({FROZEN:'已冻结',RELEASE_QA_PENDING:'等待发布确认',READY_FOR_TRAINING:'可训练',BBOX_PROCESSING:'生成检测框',CROP_READY:'训练图片已生成',CREATED:'已创建',FAILED:'失败'})[v]||v||'-'}
+function datasetStatus(v){return ({FROZEN:'已冻结',RELEASE_QA_PENDING:'已生成',READY_FOR_TRAINING:'可训练',BBOX_PROCESSING:'生成检测框',CROP_READY:'训练图片已生成',CREATED:'已创建',FAILED:'失败'})[v]||v||'-'}
 function openInspect(params={}){const p=new URLSearchParams(params);window.open('/inspect?'+p.toString(),'yujian-data-inspect')}
 function openSpecies(status){window.open('/species?status='+encodeURIComponent(status),'yujian-species')}
 function jumpLatest(){document.getElementById('frozen').scrollIntoView({behavior:'smooth'})}
@@ -100,7 +100,7 @@ function renderAcceptedPool(pool){
   const materialized=Number(pool.materialized_count||pool.pool_count||0);
   const pending=Number(pool.pending_count||0);
   const species=Array.isArray(pool.species)?pool.species:[];
-  target.innerHTML='<div class="metrics"><div class="metric"><span class="muted">人工确认 accepted_bbox</span><b>'+source+'</b></div><div class="metric"><span class="muted">已物料化 Crop</span><b>'+materialized+'</b></div><div class="metric"><span class="muted">待增量处理</span><b>'+pending+'</b></div></div><div class="species">'+(species.map(x=>'<a class="pill pillBtn '+(pending?'warn':'good')+'" href="/datasets/accepted-bbox?status=ACCEPTED&species='+encodeURIComponent(x.species||'')+'">'+esc(x.species||'未标注')+' '+Number(x.count||0)+'</a>').join('')||'<span class="muted">暂无已确认鱼种</span>')+'</div>';
+  target.innerHTML='<div class="metrics"><div class="metric"><span class="muted">人工确认 accepted_bbox</span><b>'+source+'</b></div><div class="metric"><span class="muted">已物料化 Crop</span><b>'+materialized+'</b></div><div class="metric"><span class="muted">待增量处理</span><b>'+pending+'</b></div></div><div class="species">'+(species.map(x=>'<a class="pill pillBtn '+(pending?'warn':'good')+'" href="/inspect?review_status=approved&species='+encodeURIComponent(x.species||'')+'">'+esc(x.species||'未标注')+' '+Number(x.count||0)+'</a>').join('')||'<span class="muted">暂无已确认鱼种</span>')+'</div>';
   const job=pool.job;if(job)renderAcceptedPoolJob(job);
 }
 function renderAcceptedPoolJob(job){
@@ -130,12 +130,13 @@ function renderAcceptedPoolPreview(job){
   document.getElementById('pvTotal').textContent=job.image_count||job.dataset_count||job.accepted_pool_count||0;
   document.getElementById('pvSpecies').textContent=job.species_count||((job.classes||[]).length);
   const splits=job.split_counts||{};document.getElementById('pvTrain').textContent=splits.train||0;document.getElementById('pvVal').textContent=splits.val||0;document.getElementById('pvTest').textContent=splits.test||0;
-  document.getElementById('pvStrategy').textContent='Accepted Pool 增量物料化 · accepted_bbox 原框 · 旧 Crop 复用';
+  const excluded=Number(job.candidate_excluded_count||0),excludedSpecies=Object.entries(job.candidate_excluded_species||{}).map(([name,count])=>name+' '+count).join('、');
+  document.getElementById('pvStrategy').textContent='Accepted Pool 增量物料化 · accepted_bbox 原框 · 旧 Crop 复用 · 候选鱼种不进入本次训练';
   const ready=Boolean(job.freeze_ready);
   document.getElementById('pvGatePill').className='pill '+(ready?'good':'bad');document.getElementById('pvGatePill').textContent=ready?'Accepted Pool 可冻结':'Accepted Pool 暂不可冻结';
   document.getElementById('pvGate').className='gate '+(ready?'good':'bad');document.getElementById('pvGate').innerHTML=ready?'<b>✓ Accepted Pool 预览完成</b><div class="muted">累计 '+Number(job.image_count||job.dataset_count||0)+' 条 Crop 将用于本次 Dataset Freeze；当前只写入正式版本，不会自动创建 DatasetVersion。</div>':'<b>✕ Accepted Pool 暂不可冻结</b><div class="muted">'+esc((job.split_blockers||[]).map(x=>x.message).join('；')||'请先完成 Accepted Pool 同步')+'</div>';
   document.getElementById('pvSplitRows').innerHTML='<tr><td colspan="7" class="muted">Accepted Pool 使用稳定 pool key 划分；详细数据见 Dataset 详情。</td></tr>';
-  document.getElementById('pvAlerts').innerHTML='';document.getElementById('pvExcluded').textContent='风险分析为 RISK_ONLY：不会因 GOOD/WARNING/INVALID 删除人工确认数据。';
+  document.getElementById('pvAlerts').innerHTML='';document.getElementById('pvExcluded').textContent='风险分析为 RISK_ONLY：不会因 GOOD/WARNING/INVALID 删除人工确认数据。'+(excluded?' 本次 Freeze 排除候选鱼种 '+excluded+' 条'+(excludedSpecies?'（'+excludedSpecies+'）':'')+'；Accepted Pool 原池仍保留。':'');
 }
 
 async function load(){
@@ -144,7 +145,7 @@ async function load(){
     document.getElementById('summary').innerHTML=`<div class="species"><span class="pill good">accepted_bbox 可用 ${s.accepted_bbox_pool||0}</span><span class="pill warn">历史待补 ${s.accepted_bbox_missing||0}</span><button class="bigBtn" onclick="openInspect({review_status:'approved'})">${s.approved_master_pool}</button><span class="muted">人工已通过总数 · 点击检查</span></div><div class="actions"><a class="linkBtn primary" href="/datasets/accepted-bbox">进入历史 accepted_bbox 补确认</a></div><div class="species"><button class="pill pillBtn good" onclick="openInspect({review_status:'approved',new_since_latest:'true'})">本轮新增通过 ${s.new_approved_since_latest_dataset}</button><button class="pill pillBtn" onclick="openSpecies('active')">已启用鱼种 ${s.active_species}</button><button class="pill pillBtn warn" onclick="openSpecies('candidate')">候选鱼种 ${s.candidate_species}</button><button class="pill pillBtn" onclick="jumpLatest()">最新版本 ${esc(s.latest_dataset||'暂无')}</button></div><div class="species" style="margin-top:14px">${(s.approved_species||[]).map(x=>`<button class="pill pillBtn" onclick='openInspect({review_status:"approved",species:${JSON.stringify(x.species)}})'>${esc(x.species)} ${x.count}</button>`).join('')}</div>`;
     renderAcceptedPool(s.accepted_pool||{});
     if(!document.getElementById('parent').value&&s.latest_dataset)document.getElementById('parent').placeholder=`自动继承：${s.latest_dataset}`;
-    document.getElementById('datasets').innerHTML=d.map(x=>`<tr><td><b>${esc(x.dataset_version)}</b><div class="uri">${esc(x.manifest_uri||'')}</div></td><td>${x.train_count+x.val_count+x.test_count}</td><td>${x.species_count}</td><td>${x.train_count}</td><td>${x.val_count}</td><td>${x.test_count}</td><td><span class="pill">${esc(modeName(x.selection_mode))}</span></td><td><span class="pill good">${esc(datasetStatus(x.status))}</span> <a class="linkBtn mini" href="/datasets/${encodeURIComponent(x.dataset_version)}">详情 / QA</a> <button class="mini" onclick="finalizeVersion('${esc(x.dataset_version)}')">校验追溯</button> <button class="mini" onclick="auditVersion('${esc(x.dataset_version)}')">Audit</button> <button class="mini primary" onclick="goTraining('${esc(x.dataset_version)}')">去训练</button></td></tr>`).join('')||'<tr><td colspan="8" class="muted">还没有冻结任何数据集版本</td></tr>';
+    document.getElementById('datasets').innerHTML=d.map(x=>`<tr><td><b>${esc(x.dataset_version)}</b><div class="uri">${esc(x.manifest_uri||'')}</div></td><td>${x.train_count+x.val_count+x.test_count}</td><td>${x.species_count}</td><td>${x.train_count}</td><td>${x.val_count}</td><td>${x.test_count}</td><td><span class="pill">${esc(modeName(x.selection_mode))}</span></td><td><span class="pill good">${esc(datasetStatus(x.status))}</span> <a class="linkBtn mini" href="/datasets/${encodeURIComponent(x.dataset_version)}">查看详情</a> <button class="mini" onclick="finalizeVersion('${esc(x.dataset_version)}')">校验追溯</button> <button class="mini" onclick="auditVersion('${esc(x.dataset_version)}')">Audit</button> <button class="mini primary" onclick="goTraining('${esc(x.dataset_version)}')">去训练</button></td></tr>`).join('')||'<tr><td colspan="8" class="muted">还没有冻结任何数据集版本</td></tr>';
   }catch(e){msg(e.message,true)}
 }
 
@@ -198,7 +199,7 @@ async function freeze(){
       const d=await api('/api/datasets/freeze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});
       let f=null;
       try{f=await api('/api/dataset-freeze/'+encodeURIComponent(p.dataset_version)+'/finalize',{method:'POST'})}catch(e){msg(`数据集已冻结，但追溯登记需要重试：${e.message}`,true);await load();return}
-      msg(`Accepted Pool 数据集已冻结：${d.dataset_version}\n图片：${d.image_count}\n鱼种：${d.species_count}\nTrain / Val / Test：${d.split_counts?.train||0} / ${d.split_counts?.val||0} / ${d.split_counts?.test||0}\n追溯记录：${f.item_count}\n下一步：完成 Release QA 后再进入模型训练。`);invalidate();await load();
+      msg(`Accepted Pool 数据集已冻结：${d.dataset_version}\n图片：${d.image_count}\n鱼种：${d.species_count}\nTrain / Val / Test：${d.split_counts?.train||0} / ${d.split_counts?.val||0} / ${d.split_counts?.test||0}\n追溯记录：${f.item_count}\n下一步：进入模型训练。`);invalidate();await load();
     }catch(e){msg(e.message,true)}finally{document.body.classList.remove('spinner')}
     return;
   }

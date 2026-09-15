@@ -242,10 +242,8 @@ def run_dict(row: TrainingRun) -> dict:
 
 
 def release_gate_training_allowed(pipeline_type: str, release_gate: dict | None) -> bool:
-    """Return whether a frozen crop Dataset has passed the Legacy release gate."""
-    if str(pipeline_type or "").upper() != CROP_CLASSIFIER_V1:
-        return True
-    return str((release_gate or {}).get("final_release_gate") or "PARTIAL_PASS").upper() == "PASS"
+    """Compatibility helper; Legacy Release QA no longer gates training."""
+    return True
 
 def queue_training_run(
     db: Session,
@@ -259,15 +257,6 @@ def queue_training_run(
     dataset_pipeline = getattr(dataset, "pipeline_type", WHOLE_IMAGE_V1)
     if pipeline_type == CROP_CLASSIFIER_V1 and dataset_pipeline != CROP_CLASSIFIER_V1:
         raise ValueError("CROP_CLASSIFIER_V1 只能使用 CROP_CLASSIFIER_V1 数据集")
-    if pipeline_type == CROP_CLASSIFIER_V1:
-        from app.platform.services.crop_dataset import get_release_gate_summary
-
-        release_gate = get_release_gate_summary(db, payload.dataset_version)
-        if not release_gate_training_allowed(pipeline_type, release_gate):
-            raise HTTPException(
-                status_code=409,
-                detail="数据集尚未完成发布前质量确认，禁止训练。",
-            )
     allowed_statuses = CROP_TRAINING_READY_STATUSES if pipeline_type == CROP_CLASSIFIER_V1 else {"FROZEN"}
     if dataset.status not in allowed_statuses:
         raise ValueError(f"数据集尚未准备训练：{dataset.status}")
