@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
 from app.models import Batch, DatasetVersion, ImageAsset
+from app.platform.routes.api import CropDatasetCreate, platform_crop_dataset_create
 from app.platform.services import crop_dataset
 from app.training_api import TrainingCreate, queue_training_run
 from trainer.crop_dataset_validator import validate_crop_rows
@@ -74,110 +75,19 @@ def _db(tmp_path: Path):
     return sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
-def test_accepted_pool_job_generates_v02_without_quality_filter(monkeypatch, tmp_path: Path):
-    bucket = MemoryBucket()
-    client = MemoryClient(bucket)
-    Session = _db(tmp_path)
-    monkeypatch.setattr(crop_dataset, "SessionLocal", Session)
-    monkeypatch.setattr(crop_dataset, "_storage", lambda: (client, bucket))
-    monkeypatch.setattr(crop_dataset, "get_bucket_name", lambda: "pool-bucket")
-    monkeypatch.setattr(
-        crop_dataset,
-        "_accepted_pool_detector_bbox",
-        lambda _data: ([0.15, 0.10, 0.50, 0.60], "DET_FISH_v0.1", 2.5),
-    )
-    # Deliberately label every generated row WARNING.  V1.2 must retain all
-    # successfully generated rows because quality analysis is risk-only.
-    monkeypatch.setattr(crop_dataset, "evaluate_quality", lambda **_kwargs: ("WARNING", "risk-only-test"))
-
-    db = Session()
-    try:
-        db.add(Batch(batch_id="BATCH_ACCEPTED_001", source="upload", manifest_uri="/tmp/m", raw_uri="/tmp/r", image_count=8, status="READY"))
-        for index in range(6):
-            image_id = f"accepted-{index:03d}"
-            image = ImageAsset(
-                batch_id="BATCH_ACCEPTED_001",
-                image_id=image_id,
-                file_name=f"{image_id}.jpg",
-                object_name=f"source/{image_id}.jpg",
-                gcs_uri=f"gs://pool-bucket/source/{image_id}.jpg",
-                truth_species="草鱼",
-                review_status="approved",
-            )
-            db.add(image)
-            bucket.blob(f"source/{image_id}.jpg").data = _image_bytes()
-        db.add(
-            ImageAsset(
-                batch_id="BATCH_ACCEPTED_001",
-                image_id="pending-001",
-                file_name="pending-001.jpg",
-                object_name="source/pending-001.jpg",
-                gcs_uri="gs://pool-bucket/source/pending-001.jpg",
-                truth_species="草鱼",
-                review_status="pending",
-            )
+def test_platform_accepted_pool_full_requires_explicit_legacy_freeze():
+    with pytest.raises(ValueError, match="ACCEPTED_POOL_FULL_REQUIRES_LEGACY_DATASET_FREEZE"):
+        crop_dataset.start_crop_dataset_job(
+            source="ACCEPTED_POOL",
+            dataset_name="DS_CROP_M1_v0.2",
+            expand_ratio=1.0,
+            size=416,
+            mode="FULL",
         )
-        db.commit()
-    finally:
-        db.close()
-
-    job = crop_dataset.start_crop_dataset_job(
-        source="ACCEPTED_POOL",
-        dataset_name="DS_CROP_M1_v0.2",
-        expand_ratio=1.0,
-        size=416,
-        mode="FULL",
-    )
-    assert job["source"] == "ACCEPTED_POOL"
-    assert job["source_count"] == 6
-    assert job["quality_analysis_mode"] == "RISK_ONLY"
-    registry = Session()
-    try:
-        assert registry.get(DatasetVersion, "DS_CROP_M1_v0.2").status == "CREATED"
-    finally:
-        registry.close()
-
-    for _ in range(20):
-        if job["status"] in {"SUCCESS", "FAILED"}:
-            break
-        job = crop_dataset.step_crop_dataset_job(job["job_id"])
-
-    assert job["status"] == "SUCCESS", job
-    assert job["bbox_generated"] == 6
-    assert job["crop_generated"] == 6
-    assert job["dataset_count"] == 6
-    assert job["manifest_created"] is True
-    assert job["failure_count"] == 0
-    assert job["quality_counts"] == {"GOOD": 0, "WARNING": 6, "INVALID": 0}
-
-    manifest = list(
-        csv.DictReader(
-            io.StringIO(bucket.blob("datasets/DS_CROP_M1_v0.2/manifest.csv").download_as_text())
-        )
-    )
-    assert len(manifest) == 6
-    assert all(row["quality_status"] == "WARNING" for row in manifest)
-    assert all(row["bbox_source"] == "detector_generated" for row in manifest)
-    assert all(float(row["expand_ratio"]) == 1.0 for row in manifest)
-    assert all(row["image_path"].startswith("gs://pool-bucket/source/") for row in manifest)
-    assert all(row["crop_path"] for row in manifest)
-    validation = validate_crop_rows(manifest, require_metadata=True, allow_remote=True)
-    assert validation["valid"] is True, validation
-
-    registry = Session()
-    try:
-        dataset = registry.get(DatasetVersion, "DS_CROP_M1_v0.2")
-        assert dataset is not None
-        assert dataset.status == "RELEASE_QA_PENDING"
-        assert dataset.train_count + dataset.val_count + dataset.test_count == 6
-        metadata = json.loads(dataset.metadata_json)
-        assert metadata["source"] == "ACCEPTED_POOL"
-        assert metadata["accepted_pool_count"] == 6
-        assert metadata["dataset_count"] == 6
-        assert metadata["quality_filter_applied"] is False
-        assert metadata["quality_analysis_mode"] == "RISK_ONLY"
-    finally:
-        registry.close()
+    with pytest.raises(HTTPException) as error:
+        platform_crop_dataset_create(CropDatasetCreate(source="accepted_pool", mode="FULL"))
+    assert error.value.status_code == 409
+    assert error.value.detail["error"] == "EXPLICIT_DATASET_FREEZE_REQUIRED"
 
 
 def test_v12_qa_selects_risk_rows_without_good_filter():
