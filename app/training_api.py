@@ -256,9 +256,6 @@ def queue_training_run(
     if not dataset:
         raise ValueError("数据集不存在，请先完成 Dataset Freeze")
     pipeline_type = validate_pipeline_type(payload.pipeline_type)
-    allowed_statuses = CROP_TRAINING_READY_STATUSES if pipeline_type == CROP_CLASSIFIER_V1 else {"FROZEN"}
-    if dataset.status not in allowed_statuses:
-        raise ValueError(f"数据集尚未准备训练：{dataset.status}")
     dataset_pipeline = getattr(dataset, "pipeline_type", WHOLE_IMAGE_V1)
     if pipeline_type == CROP_CLASSIFIER_V1 and dataset_pipeline != CROP_CLASSIFIER_V1:
         raise ValueError("CROP_CLASSIFIER_V1 只能使用 CROP_CLASSIFIER_V1 数据集")
@@ -271,6 +268,9 @@ def queue_training_run(
                 status_code=409,
                 detail="数据集尚未完成发布前质量确认，禁止训练。",
             )
+    allowed_statuses = CROP_TRAINING_READY_STATUSES if pipeline_type == CROP_CLASSIFIER_V1 else {"FROZEN"}
+    if dataset.status not in allowed_statuses:
+        raise ValueError(f"数据集尚未准备训练：{dataset.status}")
     if dataset.train_count <= 0:
         raise ValueError("训练集为空，不能启动训练")
     if payload.model_family != "mobilenet_v3_small":
