@@ -795,3 +795,109 @@ def legacy_quality_gate_analysis(dataset_version: str, db: Session = Depends(get
             status_code=500,
             detail={"error": "QUALITY_GATE_ANALYSIS_FAILED", "message": str(exc)[:500]},
         ) from exc
+
+
+def _legacy_qa_with_media(dataset_version: str, qa: dict) -> dict:
+    result = dict(qa)
+    result["items"] = []
+    for item in qa.get("items", []):
+        current = dict(item)
+        index = int(current.get("qa_index", 0))
+        encoded = dataset_version
+        current["media_url"] = f"/api/legacy/datasets/{encoded}/release-qa/media/{index}?kind=crop"
+        current["source_media_url"] = f"/api/legacy/datasets/{encoded}/release-qa/media/{index}?kind=source_bbox"
+        result["items"].append(current)
+    return result
+
+
+@app.get("/api/legacy/datasets/{dataset_version}/release-qa")
+def legacy_release_qa(dataset_version: str, db: Session = Depends(get_db)):
+    from app.platform.services.crop_dataset import get_random_50_qa
+
+    if db.get(DatasetVersion, dataset_version) is None:
+        raise HTTPException(status_code=404, detail="数据集不存在")
+    return _legacy_qa_with_media(dataset_version, get_random_50_qa(dataset_version))
+
+
+@app.post("/api/legacy/datasets/{dataset_version}/release-qa/start")
+def legacy_release_qa_start(dataset_version: str, db: Session = Depends(get_db)):
+    from app.platform.services import adapters
+    from app.platform.services.crop_dataset import start_random_50_qa
+
+    try:
+        qa = start_random_50_qa(dataset_version, db)
+        adapters.record_operation(
+            db,
+            "RANDOM_50_QA_START",
+            "dataset_release",
+            dataset_version,
+            detail={"sample_size": qa.get("sample_size", 0), "status": qa.get("status")},
+        )
+        db.commit()
+        return _legacy_qa_with_media(dataset_version, qa)
+    except FileNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "RANDOM_50_QA_START_FAILED", "message": str(exc)[:500]},
+        ) from exc
+
+
+@app.post("/api/legacy/datasets/{dataset_version}/release-qa/review")
+def legacy_release_qa_review(
+    dataset_version: str,
+    payload: LegacyReleaseQaReview,
+    db: Session = Depends(get_db),
+):
+    from app.platform.services import adapters
+    from app.platform.services.crop_dataset import review_random_50_qa
+
+    try:
+        qa = review_random_50_qa(
+            dataset_version,
+            payload.qa_index,
+            payload.decision,
+            payload.note,
+            db,
+        )
+        adapters.record_operation(
+            db,
+            "RANDOM_50_QA_REVIEW",
+            "dataset_release",
+            dataset_version,
+            detail={
+                "qa_index": payload.qa_index,
+                "decision": payload.decision.upper(),
+                "final_release_gate": qa.get("final_release_gate"),
+            },
+        )
+        db.commit()
+        return _legacy_qa_with_media(dataset_version, qa)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "RANDOM_50_QA_REVIEW_FAILED", "message": str(exc)[:500]},
+        ) from exc
+
+
+@app.get("/api/legacy/datasets/{dataset_version}/release-qa/media/{qa_index}")
+def legacy_release_qa_media(
+    dataset_version: str,
+    qa_index: int,
+    kind: str = Query(default="crop", max_length=16),
+) -> Response:
+    from app.platform.services.crop_dataset import read_random_50_qa_media
+
+    try:
+        content = read_random_50_qa_media(dataset_version, qa_index, kind=kind)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(
+        content=content,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"},
+    )

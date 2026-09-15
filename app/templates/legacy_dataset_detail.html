@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Dataset详情 · Legacy Workbench</title>
   <style>
-    *{box-sizing:border-box}body{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f6f7f8;color:#171717}header{background:#fff;border-bottom:1px solid #e5e7eb;padding:14px 24px;display:flex;gap:22px;align-items:center;position:sticky;top:0;z-index:3;overflow:auto;white-space:nowrap}header a{text-decoration:none;color:#111827;font-weight:650}header a.active{color:#2563eb}main{max-width:1220px;margin:0 auto;padding:24px}.muted{color:#6b7280}.section{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin-top:18px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.metric{background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:12px}.metric b{display:block;font-size:24px;margin-top:4px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}button{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:9px;background:#fff;cursor:pointer;font-weight:650}.primary{background:#111827;color:#fff;border-color:#111827}.banner{display:none;white-space:pre-wrap;padding:12px;border-radius:10px;background:#eef2ff;margin-top:12px}.pill{display:inline-block;padding:3px 8px;border-radius:999px;background:#f3f4f6;font-size:12px}.good{background:#ecfdf5}.warn{background:#fff7ed}.bad{background:#fff1f2}.table-wrap{overflow:auto;margin-top:12px;border:1px solid #e5e7eb;border-radius:10px}table{width:100%;border-collapse:collapse;min-width:720px}th,td{text-align:left;padding:9px 8px;border-bottom:1px solid #eee;font-size:13px;vertical-align:top}th{color:#6b7280}.uri{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;word-break:break-all}.empty{padding:18px;color:#6b7280;text-align:center}.note{font-size:12px;color:#6b7280;margin-top:8px}@media(max-width:850px){main{padding:16px}.grid{grid-template-columns:1fr 1fr}.section{overflow:auto}}
+    *{box-sizing:border-box}body{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f6f7f8;color:#171717}header{background:#fff;border-bottom:1px solid #e5e7eb;padding:14px 24px;display:flex;gap:22px;align-items:center;position:sticky;top:0;z-index:3;overflow:auto;white-space:nowrap}header a{text-decoration:none;color:#111827;font-weight:650}header a.active{color:#2563eb}main{max-width:1220px;margin:0 auto;padding:24px}.muted{color:#6b7280}.section{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin-top:18px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.metric{background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:12px}.metric b{display:block;font-size:24px;margin-top:4px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}button{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:9px;background:#fff;cursor:pointer;font-weight:650}.primary{background:#111827;color:#fff;border-color:#111827}.banner{display:none;white-space:pre-wrap;padding:12px;border-radius:10px;background:#eef2ff;margin-top:12px}.pill{display:inline-block;padding:3px 8px;border-radius:999px;background:#f3f4f6;font-size:12px}.good{background:#ecfdf5}.warn{background:#fff7ed}.bad{background:#fff1f2}.table-wrap{overflow:auto;margin-top:12px;border:1px solid #e5e7eb;border-radius:10px}table{width:100%;border-collapse:collapse;min-width:720px}th,td{text-align:left;padding:9px 8px;border-bottom:1px solid #eee;font-size:13px;vertical-align:top}th{color:#6b7280}.uri{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;word-break:break-all}.empty{padding:18px;color:#6b7280;text-align:center}.note{font-size:12px;color:#6b7280;margin-top:8px}.qa-toolbar{display:flex;align-items:center;gap:12px;margin-top:16px}.qa-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:12px}.qa-grid figure{margin:0}.qa-grid figcaption{font-size:13px;color:#4b5563;margin-bottom:6px}.image-box{min-height:260px;display:grid;place-items:center;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden}.image-box.square{min-height:260px}.image-box img{display:block;width:100%;height:360px;object-fit:contain}.image-box.square img{height:360px}.qa-meta,.qa-facts{margin-top:10px;font-size:13px;color:#4b5563}.qa-facts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.qa-facts div{padding:8px;background:#f9fafb;border-radius:8px}.qa-review{margin-top:14px;padding:12px;background:#f9fafb;border-radius:10px}.qa-review select,.qa-review input{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:9px;margin-right:6px}@media(max-width:850px){.qa-grid{grid-template-columns:1fr}.qa-facts{grid-template-columns:1fr 1fr}}@media(max-width:850px){main{padding:16px}.grid{grid-template-columns:1fr 1fr}.section{overflow:auto}}
   </style>
 </head>
 <body>
@@ -33,10 +33,30 @@
     <div id="qualityRecommendation" class="note"></div>
   </section>
 
-  <section class="section">
+  <section class="section" id="releaseQaSection">
     <h2 style="margin-top:0">发布前人工抽查</h2>
-    <p class="muted">Release QA 将从冻结 Dataset 的 manifest.csv 固定抽取样本。完成前，训练入口不会开放。</p>
-    <div class="pill warn">下一步：Release QA 页面将在此处加载</div>
+    <p class="muted">审核对象是冻结 Dataset 的 <code>manifest.csv</code>，不是实时 Accepted BBox 池。第一次开始后，50 张样本顺序固定保存，刷新不会重新抽样。</p>
+    <div id="qaSummary" class="grid"></div>
+    <div id="qaActions" class="actions"></div>
+    <div id="qaState" class="note">正在读取 Release QA 状态…</div>
+    <div id="qaViewer" hidden>
+      <div class="qa-toolbar">
+        <button id="qaPrev" onclick="moveQa(-1)">上一张</button>
+        <strong id="qaPosition"></strong>
+        <button id="qaNext" onclick="moveQa(1)">下一张</button>
+      </div>
+      <div id="qaItemMeta" class="qa-meta"></div>
+      <div class="qa-grid">
+        <figure><figcaption>原始鱼获照片 + Accepted BBox</figcaption><div class="image-box"><img id="qaSource" alt="原图与 Accepted BBox"><div id="qaSourceEmpty" class="empty" hidden>原图预览不可用</div></div></figure>
+        <figure><figcaption>真正进入训练的冻结 Crop</figcaption><div class="image-box square"><img id="qaCrop" alt="冻结 Crop"><div id="qaCropEmpty" class="empty" hidden>Crop预览不可用</div></div></figure>
+      </div>
+      <div id="qaFacts" class="qa-facts"></div>
+      <div class="qa-review">
+        <select id="qaIssueType"><option value="">问题类型（发现问题时选择）</option><option value="鱼种错误">鱼种错误</option><option value="BBox错误">BBox错误</option><option value="Crop裁剪错误">Crop裁剪错误</option><option value="鱼体不完整">鱼体不完整</option><option value="其他">其他</option></select>
+        <input id="qaNote" maxlength="1000" placeholder="可选：补充说明">
+        <div class="actions"><button class="primary" onclick="submitQa('PASS')">通过并下一张</button><button onclick="submitQa('ISSUE')">发现问题</button><button onclick="submitQa('CRITICAL')">严重问题</button></div>
+      </div>
+    </div>
   </section>
 </main>
 <script>
@@ -48,7 +68,46 @@ function metric(label,value){return '<div class="metric"><span class="muted">'+e
 function renderDetail(d){document.getElementById('datasetMeta').textContent=(d.type||'WHOLE_IMAGE_V1')+' · '+(d.status||'-')+' · Manifest: '+(d.manifest_uri||'-');document.getElementById('datasetCounts').innerHTML=[metric('总样本',Number(d.train_count||0)+Number(d.val_count||0)+Number(d.test_count||0)),metric('Train',d.train_count||0),metric('Val',d.val_count||0),metric('Test',d.test_count||0)].join('')}
 function renderQuality(d){const t=d.totals||{};document.getElementById('qualitySummary').innerHTML=[metric('总样本',t.TOTAL||0),metric('GOOD',t.GOOD||0),metric('WARNING',t.WARNING||0),metric('INVALID',t.INVALID||0)].join('');const c=d.warning_reason_coverage||{};document.getElementById('qualityCoverage').textContent='WARNING 原因覆盖：'+(c.rows_with_reason||0)+' / '+(c.warning_count||0)+'（'+((Number(c.coverage_ratio||0)*100).toFixed(1))+'%）。报告只读。';const rows=Array.isArray(d.reasons)?d.reasons:[];document.getElementById('qualityReasons').innerHTML=rows.length?'<table><thead><tr><th>状态</th><th>原因</th><th>数量</th><th>占状态</th><th>训练候选</th><th>样例</th></tr></thead><tbody>'+rows.map(x=>'<tr><td>'+esc(x.status)+'</td><td><code>'+esc(x.reason)+'</code></td><td>'+esc(x.count)+'</td><td>'+((Number(x.ratio_within_status||0)*100).toFixed(1))+'%</td><td>'+esc(x.train_candidate)+'</td><td>'+esc(x.sample_size||0)+'</td></tr>').join('')+'</tbody></table>':'<div class="empty">暂无分析结果</div>';const v=d.training_value||{};document.getElementById('qualityRecommendation').textContent='建议：'+esc(v.warning_train_candidate||'PENDING_HUMAN_REVIEW')+'。请结合 reports/quality_examples/ 人工制定下一版规则，不自动修改当前 Dataset。'}
 async function loadQualityAnalysis(){const button=document.getElementById('qualityButton');button.disabled=true;button.textContent='正在生成 / 读取…';try{renderQuality(await api('/api/legacy/datasets/'+encodeURIComponent(datasetVersion)+'/quality-gate-analysis'));msg('Quality Gate Analysis 已加载')}catch(e){msg(e.message,true)}finally{button.disabled=false;button.textContent='生成 / 查看 Quality Gate Analysis'}}
-(async()=>{try{renderDetail(await api('/api/legacy/datasets/'+encodeURIComponent(datasetVersion)));}catch(e){msg(e.message,true)}})()
+
+let qaState=null;
+let qaIndex=0;
+function releaseLabel(status){return ({NOT_PERFORMED:'未开始',PENDING:'待人工确认',IN_PROGRESS:'进行中',PASS:'通过',FAIL:'未通过'})[status]||status||'待人工确认'}
+function configureTrainingGate(detailOrQa){
+  const link=document.getElementById('trainingLink');
+  const type=String((detailOrQa.type||'')||'').toUpperCase();
+  const gate=detailOrQa.release_gate||detailOrQa;
+  const required=type==='CROP_CLASSIFIER_V1'||Boolean(gate.required);
+  const passed=!required||String(gate.final_release_gate||'PARTIAL_PASS').toUpperCase()==='PASS';
+  link.style.pointerEvents=passed?'':'none';link.style.opacity=passed?'':'0.55';link.setAttribute('aria-disabled',passed?'false':'true');
+  if(passed){link.textContent='进入训练';link.href='/training?dataset='+encodeURIComponent(datasetVersion)}
+  else{link.textContent='🔒 等待发布确认';link.removeAttribute('href')}
+}
+function setImage(id,emptyId,url){const image=document.getElementById(id),empty=document.getElementById(emptyId);image.hidden=!url;empty.hidden=Boolean(url);image.onerror=()=>{image.hidden=true;empty.hidden=false};if(url)image.src=url}
+function renderQa(qa){
+  qaState=qa||{};const status=String(qa.status||'NOT_PERFORMED').toUpperCase();const items=Array.isArray(qa.items)?qa.items:[];
+  document.getElementById('qaSummary').innerHTML=[metric('随机抽查',qa.sample_size||50),metric('已检查',(qa.reviewed_count||0)+' / '+(qa.sample_size||50)),metric('通过',qa.pass_count||0),metric('问题',qa.issue_count||0)].join('');
+  const actions=document.getElementById('qaActions');
+  if(status==='NOT_PERFORMED'){actions.innerHTML='<button class="primary" onclick="startQa()">开始 50 张随机抽查</button>';document.getElementById('qaViewer').hidden=true;document.getElementById('qaState').textContent='完整数据集已完成机器校验，请先创建固定样本快照。';return}
+  if(status==='PASS'){actions.innerHTML='<span class="pill good">FINAL_RELEASE_GATE = PASS · 可以进入训练</span>'}
+  else if(status==='FAIL'){actions.innerHTML='<span class="pill bad">FINAL_RELEASE_GATE = FAIL · 禁止训练</span>'}
+  else{actions.innerHTML='<span class="pill warn">当前状态：'+esc(releaseLabel(status))+' · 请逐张检查</span>'}
+  if(!items.length){document.getElementById('qaViewer').hidden=true;document.getElementById('qaState').textContent='快照中没有样本。';return}
+  const firstPending=items.findIndex(x=>!x.decision);if(qaIndex>=items.length||(!items[qaIndex]?.decision&&firstPending>=0))qaIndex=firstPending>=0?firstPending:Math.min(qaIndex,items.length-1);
+  const item=items[qaIndex];document.getElementById('qaViewer').hidden=false;document.getElementById('qaPosition').textContent='第 '+(qaIndex+1)+' / '+items.length;document.getElementById('qaPrev').disabled=qaIndex<=0;document.getElementById('qaNext').disabled=qaIndex>=items.length-1;
+  setImage('qaSource','qaSourceEmpty',item.source_media_url);setImage('qaCrop','qaCropEmpty',item.media_url);
+  document.getElementById('qaItemMeta').textContent='审核状态：'+(item.decision||'未检查')+' · '+(item.species||'-')+' · split='+(item.split||'-');
+  document.getElementById('qaFacts').innerHTML=[['image_id',item.image_id],['Accepted BBox',item.pixel_bbox||item.bbox||'-'],['quality',item.quality_status||'-'],['reason',item.quality_reason||'-'],['crop_path',item.crop_path||'-'],['source',item.source_image||'-']].map(x=>'<div><b>'+esc(x[0])+'</b><br>'+esc(x[1])+'</div>').join('');
+  document.getElementById('qaNote').value=item.note||'';document.getElementById('qaIssueType').value='';
+  document.getElementById('qaState').textContent='请比较左侧原图+BBox与右侧冻结 Crop，确认鱼种、BBox、裁剪和完整性。';
+  configureTrainingGate(qa);
+}
+function moveQa(delta){if(!qaState?.items?.length)return;qaIndex=Math.max(0,Math.min(qaState.items.length-1,qaIndex+delta));renderQa(qaState)}
+async function startQa(){try{const qa=await api('/api/legacy/datasets/'+encodeURIComponent(datasetVersion)+'/release-qa/start',{method:'POST'});qaIndex=0;renderQa(qa);msg('已创建固定 50 张 Release QA 快照')}catch(e){msg(e.message,true)}}
+async function submitQa(decision){const item=qaState?.items?.[qaIndex];if(!item)return;let note=document.getElementById('qaNote').value.trim();const issue=document.getElementById('qaIssueType').value;if(decision!=='PASS'&&issue)note=(issue+(note?'：'+note:''));if(decision!=='PASS'&&!issue&&!note){msg('发现问题时请选择问题类型或填写说明',true);return}try{const qa=await api('/api/legacy/datasets/'+encodeURIComponent(datasetVersion)+'/release-qa/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qa_index:qaIndex,decision,note})});qaIndex=Math.min(qaIndex+1,(qa.items||[]).length-1);renderQa(qa)}catch(e){msg(e.message,true)}}
+(async()=>{try{renderDetail(await api('/api/legacy/datasets/'+encodeURIComponent(datasetVersion)));}catch(e){msg(e.message,true)}})();
+loadQualityAnalysis();
+(async()=>{try{const qa=await api('/api/legacy/datasets/'+encodeURIComponent(datasetVersion)+'/release-qa');renderQa(qa)}catch(e){msg(e.message,true)}})()
+
 </script>
 </body>
 </html>
