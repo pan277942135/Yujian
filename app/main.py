@@ -729,3 +729,69 @@ def dataset_freeze(payload: DatasetFreeze, db: Session = Depends(get_db)):
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# Legacy Workbench frozen Dataset release workflow.
+# The production entry point is intentionally separate from /platform.
+# The underlying services/artifacts remain shared so Dataset semantics do not
+# fork between the two workspaces.
+# ---------------------------------------------------------------------------
+
+class LegacyReleaseQaReview(BaseModel):
+    qa_index: int = Field(ge=0, le=49)
+    decision: str = Field(min_length=1, max_length=16)
+    note: str = Field(default="", max_length=1000)
+
+
+@app.get("/datasets/{dataset_version}", response_class=HTMLResponse)
+def legacy_dataset_detail_page(request: Request, dataset_version: str):
+    return templates.TemplateResponse(
+        request=request,
+        name="legacy_dataset_detail.html",
+        context={"dataset_version": dataset_version},
+    )
+
+
+@app.get("/api/legacy/datasets/{dataset_version}")
+def legacy_dataset_detail(dataset_version: str, db: Session = Depends(get_db)):
+    dataset = db.get(DatasetVersion, dataset_version)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="数据集不存在")
+    metadata = {}
+    try:
+        metadata = json.loads(dataset.metadata_json or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        metadata = {}
+    from app.platform.services.crop_dataset import get_release_gate_summary
+
+    return {
+        "dataset_version": dataset.dataset_version,
+        "type": getattr(dataset, "pipeline_type", "WHOLE_IMAGE_V1"),
+        "status": dataset.status,
+        "manifest_uri": dataset.manifest_uri,
+        "class_map_uri": dataset.class_map_uri,
+        "train_count": dataset.train_count,
+        "val_count": dataset.val_count,
+        "test_count": dataset.test_count,
+        "species_count": dataset.species_count,
+        "metadata": metadata,
+        "release_gate": get_release_gate_summary(db, dataset_version),
+    }
+
+
+@app.get("/api/legacy/datasets/{dataset_version}/quality-gate-analysis")
+def legacy_quality_gate_analysis(dataset_version: str, db: Session = Depends(get_db)):
+    if db.get(DatasetVersion, dataset_version) is None:
+        raise HTTPException(status_code=404, detail="数据集不存在")
+    from app.platform.services.crop_dataset import generate_quality_gate_analysis
+
+    try:
+        return generate_quality_gate_analysis(dataset_version)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "QUALITY_GATE_ANALYSIS_FAILED", "message": str(exc)[:500]},
+        ) from exc
