@@ -154,6 +154,14 @@ def platform_crop_dataset_create(payload: CropDatasetCreate) -> dict[str, Any]:
     source = payload.source.strip().upper()
     if source not in {"ACCEPTED_BBOX", ACCEPTED_POOL_SOURCE}:
         raise HTTPException(status_code=400, detail={"error": "SOURCE_NOT_SUPPORTED", "source": payload.source})
+    if source == ACCEPTED_POOL_SOURCE and payload.mode.strip().upper() == "FULL":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "EXPLICIT_DATASET_FREEZE_REQUIRED",
+                "message": "Accepted Pool 只在旧版 /datasets 的创建 Dataset Freeze 中生成正式版本",
+            },
+        )
     dataset_name = payload.dataset_name.strip()
     expand_ratio = payload.expand_ratio
     if source == ACCEPTED_POOL_SOURCE:
