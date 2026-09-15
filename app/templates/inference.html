@@ -35,7 +35,7 @@
         <div class="actions"><button id="singleRun" class="primary" onclick="runSingle()">开始识别</button></div>
       </div>
       <div class="section">
-        <h2>识别结果</h2>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><h2 style="margin:0">识别结果</h2><button id="downloadSingleLog" class="ghost" type="button" data-log-format="recognition-log-v1" data-log-artifacts="detector_overlay classifier_crop" hidden onclick="downloadSingleRecognitionLog()">下载识别日志</button></div>
         <div id="singleEmpty" class="muted">上传图片后显示 Top-1 / Top-3、置信度与推理耗时。</div>
         <div id="singleResult" class="result">
           <div class="heroPrediction"><span class="muted">Top-1</span><div><b id="singleTop1">-</b><span id="singleConfidence" class="confidence">-</span></div><div id="singleLatency" class="muted"></div></div>
@@ -119,10 +119,24 @@ function singleSelected(){
   const file=document.getElementById('singleFile').files[0];
   if(singlePreviewUrl)URL.revokeObjectURL(singlePreviewUrl);
   const box=document.getElementById('singlePreview');
-  singleResult=null;document.getElementById('singleResult').classList.remove('show');document.getElementById('singleEmpty').style.display='block';
+  singleResult=null;document.getElementById('downloadSingleLog').hidden=true;document.getElementById('singleResult').classList.remove('show');document.getElementById('singleEmpty').style.display='block';
   if(!file){box.innerHTML='<span class="muted">选择一张训练集之外的真实照片</span>';return}
   singlePreviewUrl=URL.createObjectURL(file);box.innerHTML=`<img src="${singlePreviewUrl}" alt="preview">`;
 }
+function fileDataUrl(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result||''));reader.onerror=()=>reject(reader.error||new Error('原图读取失败'));reader.readAsDataURL(file)})}
+function safeDownloadName(value){return String(value||'recognition').replace(/[^A-Za-z0-9_.-]+/g,'_').slice(0,96)||'recognition'}
+async function downloadRecognitionLog(result,file){
+  if(!result)return;
+  const log=JSON.parse(JSON.stringify(result.recognition_log||result));
+  log.downloaded_at=new Date().toISOString();
+  if(file){
+    log.artifacts=log.artifacts||{};
+    log.artifacts.original={...(log.artifacts.original||{}),file_name:file.name,media_type:file.type||'application/octet-stream',data_url:await fileDataUrl(file),source:'browser_upload'};
+  }
+  const blob=new Blob([JSON.stringify(log,null,2)],{type:'application/json;charset=utf-8'});
+  const url=URL.createObjectURL(blob);const anchor=document.createElement('a');anchor.href=url;anchor.download=`${safeDownloadName(result.inference_id||file?.name||'recognition')}-log.json`;document.body.appendChild(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+async function downloadSingleRecognitionLog(){try{await downloadRecognitionLog(singleResult,document.getElementById('singleFile').files[0])}catch(e){showBanner(e.message||'识别日志下载失败',true)}}
 async function uploadOne(file){
   const fd=new FormData();fd.append('model_version',selectedModel());fd.append('file',file,file.name);
   return jsonApi('/api/inference/predict',{method:'POST',body:fd});
@@ -136,6 +150,7 @@ async function runSingle(){
 }
 function renderSingle(r){
   document.getElementById('singleEmpty').style.display='none';document.getElementById('singleResult').classList.add('show');
+  document.getElementById('downloadSingleLog').hidden=!r?.recognition_log;
   const ready=r.ready!==false&&(r.status===undefined||r.status==='READY');
   document.getElementById('singleFeedbackActions').style.display=ready?'flex':'none';
   document.getElementById('singleCorrection').style.display='none';document.getElementById('singleFeedbackState').textContent='';document.getElementById('singleTruth').value='';
