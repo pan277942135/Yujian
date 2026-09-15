@@ -18,7 +18,7 @@ from app.detector_runtime import (
     detect,
     normalize_android_source,
 )
-from app.recognition_pipeline import assess_detections, load_contract
+from app.recognition_pipeline import assess_detections, boundary_debug_payload, crop_box_pixels, load_contract
 
 
 MAX_DEBUG_IMAGE_BYTES = 25 * 1024 * 1024
@@ -71,6 +71,21 @@ def _overlay(source: Image.Image, detections: tuple[Any, ...], primary: Any | No
     return "data:image/png;base64," + base64.b64encode(output.getvalue()).decode("ascii")
 
 
+def _crop_preview(source: Image.Image, assessment: Any) -> tuple[str | None, list[int] | None]:
+    if assessment.crop_box is None:
+        return None, None
+    try:
+        pixels = crop_box_pixels(assessment.crop_box, source.width, source.height)
+        crop = source.crop(pixels).convert("RGB")
+        if crop.width <= 0 or crop.height <= 0:
+            return None, None
+        output = io.BytesIO()
+        crop.save(output, format="PNG", optimize=True)
+        return "data:image/png;base64," + base64.b64encode(output.getvalue()).decode("ascii"), list(pixels)
+    except (OSError, ValueError):
+        return None, None
+
+
 @router.get("/debug/detector-parity", response_class=HTMLResponse)
 def detector_parity_page(request: Request):
     return templates.TemplateResponse(request=request, name="detector_parity.html", context={})
@@ -108,6 +123,8 @@ async def detector_parity(file: UploadFile = File(..., alias="image")) -> dict[s
                     "bbox_normalized": _normalized_xywh(primary.box),
                     "bbox_area_ratio": round(float(primary.area_ratio), 6),
                 }
+            boundary = boundary_debug_payload(assessment, source.width, source.height, contract)
+            crop_data_url, crop_pixels = _crop_preview(source, assessment)
             return {
                 "model_version": detector_run.model_version,
                 "image": {
@@ -126,6 +143,13 @@ async def detector_parity(file: UploadFile = File(..., alias="image")) -> dict[s
                     "assessment": assessment.status.value,
                     "reason": assessment.reason,
                     "latency_ms": detector_run.latency_ms,
+                },
+                "boundary_check": boundary,
+                "classifier_crop": {
+                    "media_type": "image/png",
+                    "data_url": crop_data_url,
+                    "pixels": crop_pixels,
+                    "source": "detector_expanded_bbox",
                 },
                 "preprocess": {
                     "exif_transpose": True,

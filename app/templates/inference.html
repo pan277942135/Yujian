@@ -148,7 +148,9 @@ function renderSingle(r){
   }
   document.getElementById('singleTop1').textContent=r.top1.species;document.getElementById('singleConfidence').textContent=pct(r.top1.confidence);document.getElementById('singleLatency').textContent=`推理 ${r.latency_ms} ms · 输入 ${r.input.width}×${r.input.height} · 模型输入 ${r.image_size}×${r.image_size}`;
   document.getElementById('singleTop3').innerHTML=r.top3.map(p=>`<div class="topRow"><b>${esc(p.species)}</b><div class="bar"><span style="width:${Math.max(1,p.confidence*100)}%"></span></div><span>${pct(p.confidence)}</span></div>`).join('');
-  document.getElementById('singleConfidenceFlag').innerHTML=r.low_confidence?`<div class="warnBox">低置信度：Top-1 低于 ${pct(r.low_confidence_threshold)}，建议重点复核。</div>`:`<div class="goodBox">Top-1 置信度高于当前低置信度阈值 ${pct(r.low_confidence_threshold)}。</div>`;
+  const boundary=r.boundary_check||{};
+  const boundaryWarning=boundary.source_edge_near||boundary.crop_edge_near;
+  document.getElementById('singleConfidenceFlag').innerHTML=boundaryWarning?`<div class="warnBox"><b>鱼体靠近画面边缘</b><br>已继续识别，边缘区域可能影响识别置信度。</div>`:r.low_confidence?`<div class="warnBox">低置信度：Top-1 低于 ${pct(r.low_confidence_threshold)}，建议重点复核。</div>`:`<div class="goodBox">Top-1 置信度高于当前低置信度阈值 ${pct(r.low_confidence_threshold)}。</div>`;
 }
 function feedbackPayload(result,type,truth=null){return {source_event_id:result.inference_id,feedback_type:type,source:'console_inference_test',image_gcs_uri:result.image_gcs_uri,model_version:result.model_version,predicted_species:result.top1.species,confidence:result.top1.confidence,corrected_species:truth,user_note:`recognition_pipeline_v1 top3=${result.top3.map(x=>x.species+':'+x.confidence).join('|')}`}}
 async function saveFeedback(result,type,truth=null){return jsonApi('/api/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(feedbackPayload(result,type,truth))})}

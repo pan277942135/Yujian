@@ -1,4 +1,12 @@
-from app.recognition_pipeline import BBox, Detection, PipelineStatus, assess_detections, crop_box_pixels
+from app.recognition_pipeline import (
+    BBox,
+    CROP_EDGE_NEAR,
+    Detection,
+    PipelineStatus,
+    SOURCE_EDGE_NEAR,
+    assess_detections,
+    crop_box_pixels,
+)
 
 
 def det(conf: float, x1: float, y1: float, x2: float, y2: float) -> Detection:
@@ -27,10 +35,39 @@ def test_single_complete_fish_is_ready_and_expanded():
     assert result.crop_box.y2 > 0.75
 
 
-def test_touching_image_edge_is_incomplete():
+def test_touching_image_edge_is_non_blocking_boundary_warning():
     result = assess_detections([det(0.93, 0.0, 0.2, 0.75, 0.8)])
-    assert result.status == PipelineStatus.INCOMPLETE_FISH
+    assert result.status == PipelineStatus.READY
+    assert result.crop_box is not None
+    assert result.boundary.source_edge_near is True
+    assert result.boundary.crop_edge_near is True
+    assert result.boundary.reason == SOURCE_EDGE_NEAR
+    assert result.boundary.hard_block is False
+
+
+def test_crop_edge_warning_is_distinct_from_source_edge_warning():
+    # The detector box is just inside the source margin, while the expanded
+    # classifier crop reaches the source raster edge.
+    result = assess_detections([det(0.93, 0.03, 0.2, 0.75, 0.8)])
+    assert result.status == PipelineStatus.READY
+    assert result.boundary.source_edge_near is False
+    assert result.boundary.crop_edge_near is True
+    assert result.boundary.reason == CROP_EDGE_NEAR
+
+
+def test_normal_bbox_is_good_and_classifier_allowed():
+    result = assess_detections([det(0.93, 0.2, 0.25, 0.8, 0.75)])
+    assert result.status == PipelineStatus.READY
+    assert result.boundary.source_edge_near is False
+    assert result.boundary.crop_edge_near is False
+    assert result.boundary.reason is None
+
+
+def test_invalid_bbox_geometry_is_a_hard_failure():
+    result = assess_detections([det(0.93, 0.7, 0.2, 0.7, 0.8)])
+    assert result.status == PipelineStatus.INVALID_BBOX
     assert result.crop_box is None
+    assert result.boundary.hard_block is False
 
 
 def test_small_fish_is_rejected_before_classifier():

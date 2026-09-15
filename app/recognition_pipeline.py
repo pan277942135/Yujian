@@ -12,10 +12,28 @@ from typing import Iterable
 class PipelineStatus(str, Enum):
     READY = "ready"
     NO_FISH = "no_fish"
+    INVALID_BBOX = "invalid_bbox"
+    EMPTY_CROP = "empty_crop"
     UNCERTAIN = "uncertain"
     MULTIPLE_FISH = "multiple_fish"
+    # Kept for wire/backward compatibility with older reports.  Source-edge
+    # proximity is no longer emitted as this hard-blocking status.
     INCOMPLETE_FISH = "incomplete_fish"
     FISH_TOO_SMALL = "fish_too_small"
+
+
+SOURCE_EDGE_NEAR = "SOURCE_EDGE_NEAR"
+CROP_EDGE_NEAR = "CROP_EDGE_NEAR"
+
+
+@dataclass(frozen=True)
+class BoundaryCheck:
+    """Non-blocking source/crop boundary diagnostics for one primary fish."""
+
+    source_edge_near: bool = False
+    crop_edge_near: bool = False
+    reason: str | None = None
+    hard_block: bool = False
 
 
 @dataclass(frozen=True)
@@ -83,6 +101,7 @@ class PipelineAssessment:
     strong_detections: tuple[Detection, ...]
     weak_detections: tuple[Detection, ...]
     reason: str
+    boundary: BoundaryCheck = BoundaryCheck()
 
 
 @lru_cache(maxsize=1)
@@ -103,6 +122,87 @@ def select_primary(detections: Iterable[Detection]) -> Detection | None:
     return max(items, key=_rank_score)
 
 
+def _has_positive_geometry(box: BBox) -> bool:
+    """Reject an actually inverted/empty detector box before normalization.
+
+    ``BBox.normalized`` intentionally sorts coordinates for display and crop
+    compatibility.  A detector result with x2 <= x1 or y2 <= y1 is different:
+    it has no valid image region and must remain a hard gate failure.
+    """
+
+    return (
+        all(math.isfinite(float(value)) for value in (box.x1, box.y1, box.x2, box.y2))
+        and box.x2 > box.x1
+        and box.y2 > box.y1
+    )
+
+
+def _boundary_check(box: BBox, edge_margin: float, expand_ratio: float) -> BoundaryCheck:
+    source = box.normalized()
+    crop = box.expand(expand_ratio)
+    source_edge_near = source.touches_edge(edge_margin)
+    crop_edge_near = crop.touches_edge(0.0)
+    reason = SOURCE_EDGE_NEAR if source_edge_near else (CROP_EDGE_NEAR if crop_edge_near else None)
+    return BoundaryCheck(
+        source_edge_near=source_edge_near,
+        crop_edge_near=crop_edge_near,
+        reason=reason,
+        hard_block=False,
+    )
+
+
+def boundary_debug_payload(
+    assessment: PipelineAssessment,
+    width: int,
+    height: int,
+    contract: dict | None = None,
+) -> dict:
+    """Serialize additive boundary diagnostics for Debug/API responses.
+
+    Distances are measured from the detector bbox to the original source
+    image edges.  ``crop_edge_near`` describes the expanded crop touching the
+    source raster edge; neither signal is a classifier hard blocker.
+    """
+
+    if width <= 0 or height <= 0 or assessment.primary is None:
+        return {
+            "source_edge_near": False,
+            "crop_edge_near": False,
+            "crop_touch_source_edge": False,
+            "hard_block": False,
+            "reason": None,
+            "distances_px": {"top": None, "bottom": None, "left": None, "right": None},
+        }
+
+    contract = contract or load_contract()
+    detector_cfg = contract["quality_gate"]
+    crop_cfg = contract["crop"]
+    boundary = assessment.boundary
+    source = assessment.primary.box.normalized()
+    crop = assessment.crop_box or source.expand(float(crop_cfg["expand_ratio"]))
+    distances = {
+        "top": int(round(source.y1 * height)),
+        "bottom": int(round((1.0 - source.y2) * height)),
+        "left": int(round(source.x1 * width)),
+        "right": int(round((1.0 - source.x2) * width)),
+    }
+    # Recompute from the serialized source geometry as a defensive check for
+    # callers constructing an assessment manually in tests.
+    source_edge_near = source.touches_edge(float(detector_cfg["incomplete_edge_margin_ratio"]))
+    crop_edge_near = crop.touches_edge(0.0)
+    reason = boundary.reason or (
+        SOURCE_EDGE_NEAR if source_edge_near else (CROP_EDGE_NEAR if crop_edge_near else None)
+    )
+    return {
+        "source_edge_near": source_edge_near,
+        "crop_edge_near": crop_edge_near,
+        "crop_touch_source_edge": crop_edge_near,
+        "hard_block": False,
+        "reason": reason,
+        "distances_px": distances,
+    }
+
+
 def assess_detections(detections: Iterable[Detection], contract: dict | None = None) -> PipelineAssessment:
     contract = contract or load_contract()
     detector_cfg = contract["detector"]
@@ -116,11 +216,19 @@ def assess_detections(detections: Iterable[Detection], contract: dict | None = N
     expand_ratio = float(crop_cfg["expand_ratio"])
     fish_class = str(detector_cfg.get("class_name") or "fish").lower()
 
-    fish = [
-        Detection(float(d.confidence), d.box.normalized(), d.class_name)
-        for d in detections
-        if str(d.class_name).lower() == fish_class and d.box.area_ratio > 0.0
-    ]
+    fish: list[Detection] = []
+    invalid_bbox_found = False
+    for detection in detections:
+        if str(detection.class_name).lower() != fish_class:
+            continue
+        if not _has_positive_geometry(detection.box):
+            invalid_bbox_found = True
+            continue
+        normalized = detection.box.normalized()
+        if normalized.area_ratio <= 0.0:
+            invalid_bbox_found = True
+            continue
+        fish.append(Detection(float(detection.confidence), normalized, detection.class_name))
     strong = tuple(sorted((d for d in fish if d.confidence >= strong_threshold), key=_rank_score, reverse=True))
     weak = tuple(sorted((d for d in fish if weak_threshold <= d.confidence < strong_threshold), key=_rank_score, reverse=True))
 
@@ -133,6 +241,15 @@ def assess_detections(detections: Iterable[Detection], contract: dict | None = N
                 strong_detections=strong,
                 weak_detections=weak,
                 reason="weak_fish_detection_only",
+            )
+        if invalid_bbox_found:
+            return PipelineAssessment(
+                status=PipelineStatus.INVALID_BBOX,
+                primary=None,
+                crop_box=None,
+                strong_detections=strong,
+                weak_detections=weak,
+                reason="invalid_bbox_geometry",
             )
         return PipelineAssessment(
             status=PipelineStatus.NO_FISH,
@@ -156,15 +273,7 @@ def assess_detections(detections: Iterable[Detection], contract: dict | None = N
             reason="multiple_strong_fish_detections",
         )
 
-    if primary.box.touches_edge(edge_margin):
-        return PipelineAssessment(
-            status=PipelineStatus.INCOMPLETE_FISH,
-            primary=primary,
-            crop_box=None,
-            strong_detections=strong,
-            weak_detections=weak,
-            reason="primary_fish_bbox_touches_image_edge",
-        )
+    boundary = _boundary_check(primary.box, edge_margin, expand_ratio)
 
     if primary.area_ratio < min_area:
         return PipelineAssessment(
@@ -182,7 +291,8 @@ def assess_detections(detections: Iterable[Detection], contract: dict | None = N
         crop_box=primary.box.expand(expand_ratio),
         strong_detections=strong,
         weak_detections=weak,
-        reason="single_complete_fish_ready_for_classifier",
+        reason=boundary.reason or "single_complete_fish_ready_for_classifier",
+        boundary=boundary,
     )
 
 
