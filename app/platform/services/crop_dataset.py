@@ -680,8 +680,15 @@ def _qa_artifact_prefix(dataset_name: str) -> str:
     return f"datasets/{dataset_name}/qa"
 
 
+def _configured_bucket_name() -> str:
+    try:
+        return get_bucket_name()
+    except RuntimeError:
+        return "unconfigured"
+
+
 def _qa_uri(dataset_name: str, filename: str) -> str:
-    return f"gs://{get_bucket_name()}/{_qa_artifact_prefix(dataset_name)}/{filename}"
+    return f"gs://{_configured_bucket_name()}/{_qa_artifact_prefix(dataset_name)}/{filename}"
 
 
 def _qa_blob_name(dataset_name: str, filename: str) -> str:
@@ -978,7 +985,7 @@ def start_random_50_qa(dataset_name: str, db) -> dict[str, Any]:
     manifest_blob = bucket.blob(f"datasets/{dataset_name}/{QA_SOURCE_MANIFEST}")
     if not manifest_blob.exists(client):
         raise FileNotFoundError(f"{QA_SOURCE_MANIFEST} not found")
-    rows = list(csv.DictReader(manifest_blob.download_as_text(encoding="utf-8")))
+    rows = list(csv.DictReader(io.StringIO(manifest_blob.download_as_text(encoding="utf-8-sig"))))
     rows = _qa_reconstruct_frozen_splits(rows)
     selected = select_random_50_qa_rows(rows, dataset_name)
     return _persist_qa(dataset_name, _qa_payload(dataset_name, selected), db)
@@ -1114,7 +1121,9 @@ def _analysis_blob(dataset_name: str, filename: str) -> str:
 
 
 def _frozen_manifest_uri(dataset_name: str) -> str:
-    return f"gs://{get_bucket_name()}/datasets/{dataset_name}/{QA_SOURCE_MANIFEST}"
+    # Keep local/dev detail pages readable when GCS is intentionally not
+    # configured.  A real deployment always returns the gs:// URI.
+    return f"gs://{_configured_bucket_name()}/datasets/{dataset_name}/{QA_SOURCE_MANIFEST}"
 
 
 def _analysis_read(dataset_name: str) -> dict[str, Any] | None:
@@ -1274,7 +1283,7 @@ def generate_quality_gate_analysis(dataset_name: str) -> dict[str, Any]:
     manifest_blob = bucket.blob(manifest_name)
     if not manifest_blob.exists(client):
         raise FileNotFoundError("manifest.csv not found")
-    manifest_reader = csv.DictReader(manifest_blob.download_as_text(encoding="utf-8-sig"))
+    manifest_reader = csv.DictReader(io.StringIO(manifest_blob.download_as_text(encoding="utf-8-sig")))
     field_available = "quality_status" in (manifest_reader.fieldnames or [])
     rows = list(manifest_reader)
     total = len(rows)

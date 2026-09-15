@@ -127,7 +127,7 @@
         <figure><figcaption>Crop图片（实际训练输入）</figcaption><div class="image-box"><img id="qaCrop" alt="Crop图片" hidden><div id="qaCropEmpty" class="empty">Crop预览不可用</div></div></figure>
       </div>
       <div id="qaFacts" class="qa-facts"></div>
-      <div class="qa-review">
+      <div id="qaReviewPanel" class="qa-review">
         <label for="qaIssueType" class="muted">标记问题类型</label>
         <select id="qaIssueType"><option value="">请选择问题类型</option><option value="鱼种错误">鱼种错误</option><option value="检测框错误">检测框错误</option><option value="Crop裁剪错误">Crop裁剪错误</option><option value="图片不可用">图片不可用</option><option value="其他">其他</option></select>
         <input id="qaNote" maxlength="1000" placeholder="可选：补充说明">
@@ -150,7 +150,7 @@
 <script>
 const datasetVersion={{ dataset_version|tojson }};
 const statusLabels={CREATED:'已创建',PROCESSING:'处理中',READY_FOR_REVIEW:'待审核',RELEASE_PENDING:'待发布确认',READY_FOR_TRAINING:'可训练',TRAINING:'训练中',COMPLETED:'已完成',FAILED:'失败',FROZEN:'已冻结'};
-const operationLabels={DATASET_CREATED:'创建Dataset',QUALITY_ANALYSIS_GENERATED:'生成质量分析',RANDOM_50_QA_START:'创建QA Snapshot',RANDOM_50_QA_REVIEW:'完成审核',TRAINING_CREATE:'开始训练'};
+const operationLabels={DATASET_CREATED:'创建Dataset',QUALITY_ANALYSIS_GENERATED:'生成质量分析',RANDOM_50_QA_START:'创建QA Snapshot',RANDOM_50_QA_REVIEW:'完成审核',TRAINING_CREATE:'开始训练'};const operationStatusLabels={SUCCESS:'成功',FAILED:'失败',WARNING:'警告'};
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function msg(text,error=false){const node=document.getElementById('banner');node.style.display='block';node.style.background=error?'#fff1f2':'#eef2ff';node.textContent=text}
 async function api(url,opts){const r=await fetch(url,opts);const text=await r.text();let d;try{d=JSON.parse(text)}catch{d=text}if(!r.ok){const detail=typeof d?.detail==='object'?d.detail.message||JSON.stringify(d.detail):d?.detail||text;throw new Error(detail)}return d}
@@ -209,9 +209,10 @@ function qaMetric(label,value){return '<div class="metric"><span>'+esc(label)+'<
 function showQaViewer(){const viewer=document.getElementById('qaViewer');if(qaState?.items?.length){viewer.hidden=false;renderQa(qaState)}}
 function renderQa(qa){
   qaState=qa||{};const status=gateStatus(qa);const items=Array.isArray(qa.items)?qa.items:[];const total=Number(qa.sample_size||50);const checked=Number(qa.reviewed_count||0);const complete=['PASS','FAIL'].includes(status);
+  renderTrainingGate({training_allowed:qa.training_allowed===true,final_release_gate:qa.final_release_gate});
   document.getElementById('qaSummary').innerHTML=[qaMetric('随机抽查',total),qaMetric('已检查',checked+' / '+total),qaMetric('通过',qa.pass_count||0),qaMetric('问题',qa.issue_count||0)].join('');
   document.getElementById('qaGatePill').textContent='FINAL_RELEASE_GATE：'+(String(qa.final_release_gate||'PARTIAL_PASS').toUpperCase()==='PASS'?'PASS':'待确认');document.getElementById('qaGatePill').className='pill '+(String(qa.final_release_gate||'').toUpperCase()==='PASS'?'good':(complete?'bad':'warn'));
-  document.getElementById('qaStatusText').textContent=complete?'已完成':(status==='NOT_PERFORMED'?'尚未开始':'进行中');document.getElementById('qaProgressText').textContent=complete?total+' / '+total+' 已完成':checked+' / '+total;
+  document.getElementById('qaStatusText').textContent=complete?'已完成':(status==='NOT_PERFORMED'?'尚未开始':'进行中');document.getElementById('qaProgressText').textContent=complete?total+' / '+total+' 已完成':checked+' / '+total;document.getElementById('qaReviewPanel').hidden=complete;
   const actions=document.getElementById('qaActions');
   if(status==='NOT_PERFORMED'){actions.innerHTML='<button class="primary" onclick="startQa()">开始检查</button>';document.getElementById('qaViewer').hidden=true;return}
   if(!complete)actions.innerHTML='<button class="primary" onclick="showQaViewer()">继续检查</button>';
@@ -220,7 +221,7 @@ function renderQa(qa){
   const firstPending=items.findIndex(x=>!x.decision);if(qaIndex>=items.length)qaIndex=items.length-1;if(firstPending>=0&&!items[qaIndex]?.decision)qaIndex=firstPending;
   const item=items[qaIndex];document.getElementById('qaViewer').hidden=false;document.getElementById('qaPosition').textContent='第 '+(qaIndex+1)+' / '+items.length;document.getElementById('qaPrev').disabled=qaIndex<=0;document.getElementById('qaNext').disabled=qaIndex>=items.length-1;
   setImage('qaSource','qaSourceEmpty',item.source_image_url||item.source_media_url);setImage('qaOverlay','qaOverlayEmpty',item.bbox_overlay_url||item.source_media_url);setImage('qaCrop','qaCropEmpty',item.crop_media_url||item.media_url);
-  document.getElementById('qaItemMeta').textContent=(item.decision?'已审核：'+item.decision:'待审核')+' · '+(item.species||'-')+' · split='+(item.split||'-');
+  const decisionLabel={PASS:'通过',ISSUE:'已标记问题'};document.getElementById('qaItemMeta').textContent=(item.decision?'已审核：'+(decisionLabel[item.decision]||'已处理'):'待审核')+' · '+(item.species||'-')+' · split='+(item.split||'-');
   document.getElementById('qaFacts').innerHTML=[['鱼种',item.species||'-'],['Species ID',item.species_id||item.species_key||'未提供'],['Split',item.split||'-'],['Image ID',item.image_id||'-'],['Quality',item.quality_status||'质量字段不可用'],['BBox',bboxText(item.bbox)],['Crop路径',item.crop_path||'未提供'],['原图',item.source_image||'未提供']].map(x=>'<div><b>'+esc(x[0])+'</b>'+esc(x[1])+'</div>').join('');
   document.getElementById('qaNote').value=item.note||'';document.getElementById('qaIssueType').value='';
 }
@@ -228,7 +229,7 @@ function moveQa(delta){if(!qaState?.items?.length)return;qaIndex=Math.max(0,Math
 async function startQa(){try{const qa=await api('/api/legacy/datasets/'+encodeURIComponent(datasetVersion)+'/release-qa/start',{method:'POST'});qaIndex=0;renderQa(qa);msg('已创建固定 50 张 QA Snapshot')}catch(e){msg(e.message,true)}}
 async function submitQa(decision){const item=qaState?.items?.[qaIndex];if(!item)return;let note=document.getElementById('qaNote').value.trim();const issue=document.getElementById('qaIssueType').value;if(decision!=='PASS'&&!issue){msg('标记问题时请选择问题类型',true);return}if(decision!=='PASS')note=issue+(note?'：'+note:'');try{const qa=await api('/api/legacy/datasets/'+encodeURIComponent(datasetVersion)+'/release-qa/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qa_index:qaIndex,decision,note})});qaIndex=Math.min(qaIndex+1,Math.max(0,(qa.items||[]).length-1));renderQa(qa)}catch(e){msg(e.message,true)}}
 function formatTime(value){if(!value)return '';try{return new Date(value).toLocaleString('zh-CN',{hour12:false})}catch{return value}}
-async function loadOperations(){try{const rows=await api('/api/legacy/datasets/'+encodeURIComponent(datasetVersion)+'/operations');document.getElementById('operations').innerHTML=rows.length?rows.map(row=>'<li><strong>'+esc(row.label||operationLabels[row.operation]||row.operation)+'</strong><time>'+esc(formatTime(row.created_at))+(row.status?' · '+esc(row.status):'')+'</time>'+(row.message?'<div class="muted">'+esc(row.message)+'</div>':'')+'</li>').join(''):'<li class="muted">暂无操作记录</li>'}catch(e){document.getElementById('operations').innerHTML='<li class="muted">操作记录暂不可用</li>'}}
+async function loadOperations(){try{const rows=await api('/api/legacy/datasets/'+encodeURIComponent(datasetVersion)+'/operations');document.getElementById('operations').innerHTML=rows.length?rows.map(row=>'<li><strong>'+esc(row.label||operationLabels[row.operation]||row.operation)+'</strong><time>'+esc(formatTime(row.created_at))+(row.status?' · '+esc(operationStatusLabels[row.status]||'已记录'):'')+'</time>'+(row.message?'<div class="muted">'+esc(row.message)+'</div>':'')+'</li>').join(''):'<li class="muted">暂无操作记录</li>'}catch(e){document.getElementById('operations').innerHTML='<li class="muted">操作记录暂不可用</li>'}}
 (async()=>{try{const detail=await api('/api/legacy/datasets/'+encodeURIComponent(datasetVersion));renderDetail(detail);renderQuality(detail.quality_analysis||{});renderQa(await api('/api/legacy/datasets/'+encodeURIComponent(datasetVersion)+'/release-qa'));await loadOperations()}catch(e){msg(e.message,true)}})();
 </script>
 </body>
