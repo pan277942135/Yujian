@@ -53,7 +53,23 @@ def test_sample_level_evaluation_and_priority_score_are_supported(tmp_path):
     assert pair["error_count"] == 2
     assert pair["error_rate"] == round(2 / 3, 6)
     assert pair["priority"] == "P0"
-    assert pair["priority_score"] == round(2 * (2 / 3) * 2, 6)
+    assert pair["test_support"] == 3
+    assert pair["priority_score"] == round(2 * (2 / 3) * 2 * (3**0.5), 6)
+
+
+def test_tiny_test_support_is_not_promoted_to_p0():
+    report = build_confusion_report(
+        {
+            "model_version": "MODEL_M1_v0.3",
+            "classes": ["silver_carp", "bighead_carp"],
+            "test": {"confusion_matrix": [[0, 2], [0, 0]]},
+        }
+    )
+
+    pair = report["top_confusions"][0]
+    assert pair["test_support"] == 2
+    assert pair["error_rate"] == 1.0
+    assert pair["priority"] == "P2"
 
 
 def test_write_confusion_report_creates_json(tmp_path):

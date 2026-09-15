@@ -15,6 +15,10 @@ class ConfusionPair:
     priority: str
     priority_score: float = 0.0
     species_importance: float = 1.0
+    # Number of Test samples for the true class.  This keeps a 100% error
+    # rate on two samples from outranking a stable confusion backed by a real
+    # evaluation population.
+    test_support: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

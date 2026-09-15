@@ -168,7 +168,16 @@ def _normalise_matrix(matrix: list[list[int]]) -> list[list[int]]:
     return result
 
 
-def _priority(error_count: int, error_rate: float) -> str:
+def _priority(error_count: int, error_rate: float, test_support: int) -> str:
+    """Classify a confusion only after considering its Test support.
+
+    A tiny evaluation slice must not become a P0 merely because one or two
+    samples were misclassified.  Support is deliberately a conservative
+    guardrail; it changes prioritisation only, never the underlying metrics.
+    """
+
+    if test_support <= 2:
+        return "P2"
     if error_count >= 3 or error_rate >= 0.25:
         return "P0"
     if error_count >= 2:
@@ -205,7 +214,8 @@ def build_confusion_report(
     The classifier trainer's ``test.confusion_matrix`` format is the primary
     input.  Sample-level ``true/pred`` rows are also accepted, which lets the
     hard-case miner use the same evaluation artifact without introducing a new
-    evaluation contract.
+    evaluation contract.  Priority score is
+    ``error_count × error_rate × species_importance × sqrt(test_support)``.
     """
 
     document, source_path = _load_document(evaluation)
@@ -251,9 +261,10 @@ def build_confusion_report(
                 pred_species=pred,
                 error_count=count,
                 error_rate=round(rate, 6),
-                priority=_priority(count, rate),
-                priority_score=round(score, 6),
+                priority=_priority(count, rate, denominator),
+                priority_score=round(score * (max(0, denominator) ** 0.5), 6),
                 species_importance=round(weight, 6),
+                test_support=denominator,
             )
         )
 
