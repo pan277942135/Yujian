@@ -1015,7 +1015,6 @@ async def run(request: Request, db=Depends(get_db)):
                     if not generated:
                         raise RuntimeError("SHAPE_GUIDED_WORKER_EMPTY_OUTPUT")
                     suffix = f"{degree:g}"
-                    worker_output_uri = _persist(test_id, f"powerpaint_worker_output_{degree:g}.png", generated, "image/png")
                     subject_mask = _fish_subject_mask(visible, completion)
                     with Image.open(io.BytesIO(generated)) as generated_image:
                         hard_bytes = _fish_subject_png(generated_image, subject_mask)
@@ -1030,15 +1029,13 @@ async def run(request: Request, db=Depends(get_db)):
                     feather3_uri = _persist(test_id, feather3_name, feather3_bytes, "image/png")
                     feather5_uri = _persist(test_id, feather5_name, feather5_bytes, "image/png")
                     latency_ms = round((time.perf_counter() - result_started) * 1000, 2)
-                    item_result.update({"status": "SUCCESS", "result_uri": worker.get("result_uri"), "worker_output_asset": worker_output_uri, "output_asset": output_uri, "final_asset": hard_uri, "hard_compose_asset": hard_uri, "feather_3px_asset": feather3_uri, "feather_5px_asset": feather5_uri, "output_mode": FISH_SUBJECT_OUTPUT_TYPE, "fish_subject_mask_pixels": int(subject_mask.sum()), "worker_ms": latency_ms, "inference_time_ms": worker.get("inference_time_ms"), "model_version": worker.get("model_version"), "raw_output_preview": _data_url(hard_bytes, "image/png"), "visible_pixel_change_ratio": visible_change, "fish_identity_check": "PENDING", "background_change": "REMOVED", "result_preview": _data_url(hard_bytes, "image/png"), "hard_compose_preview": _data_url(hard_bytes, "image/png"), "feather_3px_preview": _data_url(feather3_bytes, "image/png"), "feather_5px_preview": _data_url(feather5_bytes, "image/png")})
-                    response_log.append({"fitting_degree": degree, "worker_called": True, "http_status": worker.get("http_status"), "result_uri": worker.get("result_uri"), "inference_time_ms": worker.get("inference_time_ms"), "model_version": worker.get("model_version"), "latency_ms": latency_ms, "worker_output_asset": worker_output_uri, "hard_compose_asset": hard_uri, "feather_3px_asset": feather3_uri, "feather_5px_asset": feather5_uri, "output_mode": FISH_SUBJECT_OUTPUT_TYPE, "error": None})
-                    report["assets"][f"powerpaint_worker_output_{suffix}"] = worker_output_uri
+                    item_result.update({"status": "SUCCESS", "result_uri": worker.get("result_uri"), "output_asset": output_uri, "final_asset": hard_uri, "hard_compose_asset": hard_uri, "feather_3px_asset": feather3_uri, "feather_5px_asset": feather5_uri, "output_mode": FISH_SUBJECT_OUTPUT_TYPE, "fish_subject_mask_pixels": int(subject_mask.sum()), "worker_ms": latency_ms, "inference_time_ms": worker.get("inference_time_ms"), "model_version": worker.get("model_version"), "raw_output_preview": _data_url(hard_bytes, "image/png"), "visible_pixel_change_ratio": visible_change, "fish_identity_check": "PENDING", "background_change": "REMOVED", "result_preview": _data_url(hard_bytes, "image/png"), "hard_compose_preview": _data_url(hard_bytes, "image/png"), "feather_3px_preview": _data_url(feather3_bytes, "image/png"), "feather_5px_preview": _data_url(feather5_bytes, "image/png")})
+                    response_log.append({"fitting_degree": degree, "worker_called": True, "http_status": worker.get("http_status"), "result_uri": worker.get("result_uri"), "inference_time_ms": worker.get("inference_time_ms"), "model_version": worker.get("model_version"), "latency_ms": latency_ms, "hard_compose_asset": hard_uri, "feather_3px_asset": feather3_uri, "feather_5px_asset": feather5_uri, "output_mode": FISH_SUBJECT_OUTPUT_TYPE, "error": None})
                     report["assets"][f"powerpaint_output_{suffix}"] = output_uri
                     report["assets"][f"final_hard_compose_{suffix}"] = hard_uri
                     report["assets"][f"final_feather_3px_{suffix}"] = feather3_uri
                     report["assets"][f"final_feather_5px_{suffix}"] = feather5_uri
                     if degree == P2_DEFAULT_FITTING_DEGREE:
-                        report["assets"]["powerpaint_worker_output"] = worker_output_uri
                         report["assets"]["final_hard_compose"] = hard_uri
                         report["assets"]["final_feather_3px"] = feather3_uri
                         report["assets"]["final_feather_5px"] = feather5_uri
@@ -1056,7 +1053,6 @@ async def run(request: Request, db=Depends(get_db)):
             successful = [x for x in report["results"] if x["status"] == "SUCCESS"]
             if successful:
                 best = successful[-1]
-                report["assets"]["powerpaint_worker_output"] = best.get("worker_output_asset")
                 report["assets"]["powerpaint_output"] = _persist(test_id, "powerpaint_output.png", _read_uri(best["output_asset"]), "image/png")
                 report["assets"]["final_result"] = _persist(test_id, "final_result.png", _read_uri(best["hard_compose_asset"]), "image/png")
                 report["assets"]["final_hard_compose"] = best.get("hard_compose_asset")
