@@ -30,6 +30,17 @@ def test_refined_visible_input_is_rgb_canvas():
         assert image.getpixel((1, 1)) == (20, 40, 60)
 
 
+def test_fish_subject_output_is_rgba_and_transparent():
+    crop = Image.new("RGB", (4, 3), (20, 40, 60))
+    subject = np.zeros((3, 4), dtype=bool)
+    subject[1, 1:3] = True
+    data = lab._fish_subject_png(crop, subject)
+    with Image.open(io.BytesIO(data)) as image:
+        assert image.mode == "RGBA"
+        assert image.getpixel((0, 0))[3] == 0
+        assert image.getpixel((1, 1)) == (20, 40, 60, 255)
+
+
 def test_completion_mask_is_disjoint_and_capped():
     visible = np.zeros((40, 80), dtype=bool)
     visible[10:30, 10:70] = True
@@ -69,6 +80,9 @@ def test_powerpaint_request_uses_refined_visible_input():
     assert '"image_uri": report["assets"]["refined_visible_fish_input"]' in source
     assert 'image_uri=report["assets"]["refined_visible_fish_input"]' in source
     assert '"mask_uri": report["assets"]["completion_mask"]' in source
+    assert '_fish_subject_png(generated_image, subject_mask)' in source
+    assert 'FISH_SUBJECT_OUTPUT_TYPE' in source
+    assert '_compose(crop, generated_image, completion)' not in source
 
 
 def test_shape_guided_module_is_independent():
