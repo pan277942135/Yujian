@@ -479,6 +479,26 @@ def platform_model_evaluation(model_id: str, db: Session = Depends(get_db)) -> d
     result = adapters.evaluation(db, model_id)
     if result is None:
         raise HTTPException(status_code=404, detail="模型不存在")
+    # Reuse the existing evaluation-artifact intelligence service.  The
+    # Platform endpoint only exposes its additive, presentation-ready fields;
+    # it does not create a second evaluation pipeline or mutate model data.
+    try:
+        from app.intelligence_api import build_intelligence_payload
+
+        insight = build_intelligence_payload(db, model_version=model_id)
+        result.update(
+            {
+                "confusion_report": insight.get("confusion_report", {}),
+                "data_gaps": insight.get("data_gaps", {}),
+                "scene_gaps": insight.get("scene_gaps", []),
+                "production_tasks": insight.get("production_tasks", []),
+                "training_recommendations": insight.get("training_recommendations", []),
+            }
+        )
+    except Exception:
+        # A missing or temporarily unavailable evaluation artifact must not
+        # break the existing metrics/matrix/error-case page.
+        result.update({"confusion_report": {}, "data_gaps": {}, "scene_gaps": [], "production_tasks": [], "training_recommendations": []})
     return result
 
 

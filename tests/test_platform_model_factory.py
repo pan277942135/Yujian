@@ -13,7 +13,7 @@ def test_model_factory_pages_expose_simple_and_advanced_workflows():
     for path, markers in {
         "/platform/model/training": ("开始训练", "高级参数", "Epoch", "Batch Size"),
         "/platform/model/registry": ("模型版本", "发布状态", "不展示内部存储路径"),
-        "/platform/model/evaluation": ("Accuracy", "混淆矩阵", "错误案例"),
+        "/platform/model/evaluation": ("Accuracy", "混淆矩阵", "错误案例", "模型智能分析", "Hard Case", "生成采集Batch"),
     }.items():
         page = pages[path]
         rendered = templates.env.get_template(page.template).render(

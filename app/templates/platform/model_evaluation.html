@@ -4,6 +4,14 @@
 <div id="evaluationMetrics" class="metric-grid"><div class="metric-card"><div class="loading">请选择模型</div></div></div>
 <section class="panel" style="margin-top:16px"><div class="panel-heading"><div><h2>混淆矩阵</h2><p id="evaluationTitle">选择模型后加载评估结果</p></div><span class="code">/api/platform/models/{id}/evaluation</span></div><div id="matrixState" class="empty">暂无评估数据</div></section>
 <section class="panel" style="margin-top:16px"><div class="panel-heading"><div><h2>错误案例</h2><p>真实类别与预测类别不一致的样本。</p></div></div><div id="errorState" class="empty">暂无错误案例</div></section>
+<section class="panel" style="margin-top:16px"><div class="panel-heading"><div><h2>模型智能分析</h2><p>模型负责发现问题，系统只生成采集建议；不会自动修改 Dataset 或触发训练。</p></div><span class="code">Error-driven Data Production</span></div>
+  <div id="insightNotice" class="notice">等待评估分析结果</div>
+  <div style="overflow:auto;margin-top:14px"><table class="data-table"><thead><tr><th>真实鱼种</th><th>误判为</th><th>错误数</th><th>错误率</th><th>Test 支持</th><th>优先级</th></tr></thead><tbody id="insightConfusions"></tbody></table></div>
+  <div class="inline" style="margin-top:16px"><strong>采集任务</strong><button class="button" data-task-filter="ALL" onclick="setTaskFilter('ALL')">全部</button><button class="button" data-task-filter="HARD_CASE_COLLECTION" onclick="setTaskFilter('HARD_CASE_COLLECTION')">Hard Case</button><button class="button" data-task-filter="DATA_BALANCE_COLLECTION" onclick="setTaskFilter('DATA_BALANCE_COLLECTION')">Data Balance</button><button class="button" data-task-filter="SCENE_GAP_COLLECTION" onclick="setTaskFilter('SCENE_GAP_COLLECTION')">Scene Gap</button></div>
+  <div id="insightTasks" style="margin-top:10px"></div>
+  <div class="grid" style="margin-top:16px"><div><h3>数量缺口</h3><div id="quantityGaps" class="table-wrap"></div></div><div><h3>场景缺口</h3><div id="sceneGaps" class="table-wrap"></div></div></div>
+  <div style="margin-top:16px"><h3>下一轮训练建议</h3><div id="trainingRecommendations"></div></div>
+</section>
 {% endblock %}
 {% block scripts %}
 <script>
@@ -19,11 +27,35 @@ function renderEvaluation(data){
   document.getElementById('evaluationMetrics').innerHTML=[['Accuracy',m.accuracy],['Precision',m.precision],['Recall',m.recall],['F1',m.f1]].map(([label,value])=>`<div class="metric-card"><div class="metric-label">${label}</div><div class="metric-value">${esc(valuePct(value))}</div><div class="metric-detail">${data.available?'已读取评估结果':'等待评估结果'}</div></div>`).join('');
   document.getElementById('evaluationTitle').textContent=data.model_version||'';document.getElementById('matrixState').className='';document.getElementById('matrixState').innerHTML=matrixHtml(data.confusion_matrix);
   const errors=data.errors||[];document.getElementById('errorState').className=errors.length?'':'empty';document.getElementById('errorState').innerHTML=errors.length?`<div class="table-wrap"><table class="data-table"><thead><tr><th>图片</th><th>真实</th><th>预测</th><th>置信度</th></tr></thead><tbody>${errors.map(row=>`<tr><td>${esc(row.image_id||'—')}</td><td>${esc(row.truth||row.truth_species||'—')}</td><td>${esc(row.prediction||row.predicted_species||'—')}</td><td>${row.confidence==null?'—':esc(valuePct(row.confidence))}</td></tr>`).join('')}</tbody></table></div>`:'暂无错误案例'
+  renderInsight(data);
 }
+let insightTasks=[];let activeTaskFilter='ALL';let currentEvaluationModel='';
+function insightPriority(value){const p=(value||'P2').toUpperCase();return `<span class="status-tag ${p==='P0'?'status-failed':p==='P1'?'status-running':'status-neutral'}">${esc(p)}</span>`}
+function taskTypeLabel(value){return ({HARD_CASE_COLLECTION:'Hard Case 采集',DATA_BALANCE_COLLECTION:'数量补齐',SCENE_GAP_COLLECTION:'场景补齐'})[value]||value||'采集建议'}
+function renderInsight(data){
+  currentEvaluationModel=data.model_version||currentEvaluationModel;
+  const confusion=data.confusion_report?.top_confusions||[];
+  document.getElementById('insightConfusions').innerHTML=confusion.length?confusion.map(row=>`<tr><td><strong>${esc(row.true_species)}</strong></td><td>${esc(row.pred_species)}</td><td>${esc(row.error_count??0)}</td><td>${esc(valuePct(row.error_rate))}</td><td>${esc(row.test_support??0)}</td><td>${insightPriority(row.priority)}</td></tr>`).join(''):'<tr><td colspan="6" class="empty">暂无评估错误组合</td></tr>';
+  const quantity=(data.data_gaps?.quantity_gaps||data.data_gaps?.species_gaps||[]).filter(row=>Number(row.gap||0)>0);
+  document.getElementById('quantityGaps').innerHTML=quantity.length?`<table class="data-table"><thead><tr><th>鱼种</th><th>当前</th><th>目标</th><th>缺口</th></tr></thead><tbody>${quantity.map(row=>`<tr><td>${esc(row.species)}</td><td>${esc(row.current??0)}</td><td>${esc(row.target??0)}</td><td>${esc(row.gap??0)}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">没有数量缺口</div>';
+  const scenes=(data.scene_gaps||data.data_gaps?.scene_gaps||[]).filter(row=>(row.missing_scenes||row.missing||[]).length);
+  document.getElementById('sceneGaps').innerHTML=scenes.length?`<table class="data-table"><thead><tr><th>鱼种</th><th>缺少场景</th></tr></thead><tbody>${scenes.map(row=>`<tr><td>${esc(row.species)}</td><td>${esc((row.missing_scenes||row.missing||[]).join('、'))}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">没有配置的场景缺口</div>';
+  insightTasks=data.production_tasks||[];
+  if(activeTaskFilter==='ALL'&&insightTasks.some(row=>row.task_type==='HARD_CASE_COLLECTION'))activeTaskFilter='HARD_CASE_COLLECTION';
+  if(activeTaskFilter!=='ALL'&&!insightTasks.some(row=>row.task_type===activeTaskFilter))activeTaskFilter=insightTasks.length?'ALL':'HARD_CASE_COLLECTION';
+  document.getElementById('insightNotice').textContent=insightTasks.some(row=>row.task_type==='HARD_CASE_COLLECTION')?'已按高价值模型错误生成 Hard Case 采集建议；P2 或小样本错误不会自动生成任务。':'当前没有可自动生成的 Hard Case 任务，可查看数量/场景缺口。';
+  renderInsightTasks();
+  const recommendations=data.training_recommendations||[];document.getElementById('trainingRecommendations').innerHTML=recommendations.length?recommendations.map(row=>`<div class="recommendation"><strong>${esc(row.title)} · ${esc(row.count??0)} 张</strong><span>重点场景：${esc((row.focus_scenes||[]).join('、')||'按实际采集情况补充')}；原因：${esc(row.reason||'模型错误驱动')}</span></div>`).join(''):'<div class="empty">暂无错误驱动训练建议</div>';
+  document.querySelectorAll('[data-task-filter]').forEach(button=>button.classList.toggle('primary',button.dataset.taskFilter===activeTaskFilter));
+}
+function taskReason(task){const reason=task.reason||[];if(task.task_type==='HARD_CASE_COLLECTION'&&reason[0])return `${reason[0].true||'-'} 被误判为 ${reason[0].pred||'-'} · 错误 ${reason[0].errors??0} · 错误率 ${valuePct(reason[0].error_rate)}`;if(task.task_type==='DATA_BALANCE_COLLECTION'&&reason[0])return `数量缺口：当前 ${reason[0].current??0}，目标 ${reason[0].target??0}，缺口 ${reason[0].gap??0}`;if(task.task_type==='SCENE_GAP_COLLECTION'&&reason[0])return `缺少场景：${(reason[0].missing_scenes||[]).join('、')}`;return '评估结果建议';}
+function renderInsightTasks(){const rows=activeTaskFilter==='ALL'?insightTasks:insightTasks.filter(row=>row.task_type===activeTaskFilter);const host=document.getElementById('insightTasks');host.innerHTML=rows.length?rows.map(task=>{const species=(task.requirements?.species||[]).filter(row=>Number(row.count||0)>0).map(row=>`${esc(row.name)} +${esc(row.count)}`).join('、')||'按场景采集';const scenes=(task.requirements?.scenes||[]).map(esc).join('、')||'—';return `<article class="recommendation"><strong>${esc(task.task_id)} · ${esc(taskTypeLabel(task.task_type))} ${insightPriority(task.priority)}</strong><span>来源：${esc(task.model_version||'-')} · ${esc(taskReason(task))}</span><span>建议采集：${species}；重点场景：${scenes}</span><div class="actions"><button class="button primary" onclick="proposeInsightTask('${esc(task.task_id)}')">生成采集Batch</button></div></article>`}).join(''):'<div class="empty">当前筛选下暂无采集任务</div>'}
+function setTaskFilter(filter){activeTaskFilter=filter;renderInsightTasks();document.querySelectorAll('[data-task-filter]').forEach(button=>button.classList.toggle('primary',button.dataset.taskFilter===activeTaskFilter))}
+async function proposeInsightTask(taskId){try{const data=await platformFetch(`/api/intelligence/tasks/${encodeURIComponent(taskId)}/batch?model_version=${encodeURIComponent(currentEvaluationModel)}`,{method:'POST'});const metadata=data.batch?.metadata||data.task?.batch_suggestion?.metadata||{};document.getElementById('insightNotice').textContent=`已生成 Hard Case 批次采集方案 ${data.batch?.batch_id||'-'}；实际图片导入请进入导入采集数据，审核后再冻结 Dataset。${metadata.target_species?` 目标鱼种：${metadata.target_species.join('、')}`:''}`;}catch(error){document.getElementById('insightNotice').textContent=platformError(error)}}
 async function loadModels(){
   try{const rows=await platformFetch('/api/platform/models');modelSelect.innerHTML='<option value="">选择模型版本</option>'+rows.map(row=>`<option value="${esc(row.id)}">${esc(row.version)} · ${esc(row.status_label||row.status)}</option>`).join('');const requested=new URLSearchParams(location.search).get('model');if(requested&&rows.some(row=>row.id===requested)){modelSelect.value=requested;loadEvaluation(requested)}}catch{modelSelect.innerHTML='<option value="">模型加载失败</option>'}
 }
-async function loadEvaluation(id){if(!id)return;const target=document.getElementById('matrixState');renderState(target,'loading');try{renderEvaluation(await platformFetch(`/api/platform/models/${encodeURIComponent(id)}/evaluation`))}catch(error){renderState(target,'error',platformError(error))}}
+async function loadEvaluation(id){if(!id)return;currentEvaluationModel=id;const target=document.getElementById('matrixState');renderState(target,'loading');try{renderEvaluation(await platformFetch(`/api/platform/models/${encodeURIComponent(id)}/evaluation`))}catch(error){renderState(target,'error',platformError(error))}}
 modelSelect.addEventListener('change',()=>loadEvaluation(modelSelect.value));loadModels();
 </script>
 {% endblock %}

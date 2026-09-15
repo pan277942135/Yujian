@@ -10,6 +10,7 @@ from app.entry import app
 from app.models import Batch, BatchCropReview, ImageAsset, SpeciesCatalog
 from app.platform.models import FishAsset, PipelineRun, PlatformOperationLog
 from app.platform.routes.api import ReviewSelection, platform_batch_confirm, platform_bbox_update, ReviewBBoxSelection
+from app.platform.routes import api as platform_api
 from app.platform.services import adapters
 
 
@@ -137,3 +138,34 @@ def test_platform_pipeline_and_asset_payloads_hide_internal_uris(tmp_path):
         assert asset["transparent_url"].endswith("/media/transparent")
     finally:
         db.close()
+
+
+def test_platform_evaluation_adds_error_driven_fields_without_replacing_legacy_payload(monkeypatch):
+    monkeypatch.setattr(
+        adapters,
+        "evaluation",
+        lambda _db, _model_id: {
+            "model_id": "MODEL_CROP_M1_v0.1",
+            "model_version": "MODEL_CROP_M1_v0.1",
+            "metrics": {"f1": 0.69},
+            "confusion_matrix": [[5, 1]],
+            "errors": [],
+        },
+    )
+    monkeypatch.setattr(
+        "app.intelligence_api.build_intelligence_payload",
+        lambda _db, model_version: {
+            "confusion_report": {"top_confusions": []},
+            "data_gaps": {"quantity_gaps": [], "scene_gaps": []},
+            "scene_gaps": [],
+            "production_tasks": [],
+            "training_recommendations": [],
+        },
+    )
+
+    result = platform_api.platform_model_evaluation("MODEL_CROP_M1_v0.1", object())
+
+    assert result["metrics"]["f1"] == 0.69
+    assert result["confusion_matrix"] == [[5, 1]]
+    assert result["production_tasks"] == []
+    assert result["training_recommendations"] == []

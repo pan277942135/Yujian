@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from app import intelligence_api
 from app.intelligence_api import analyze_and_write_artifacts, build_intelligence_payload
 
 
@@ -38,6 +39,10 @@ def test_intelligence_payload_keeps_analysis_and_task_proposal_separate():
     assert payload["model"]["model_version"] == "MODEL_M1_v0.3"
     assert payload["confusion_report"]["top_confusions"][0]["priority"] == "P0"
     assert payload["production_tasks"][0]["batch_suggestion"]["source"] == "MODEL_ERROR_DRIVEN"
+    assert payload["production_tasks"][0]["batch_suggestion"]["batch_type"] == "HARD_CASE_COLLECTION"
+    assert payload["production_tasks"][0]["requirements"]["species"][0]["count"] == 100
+    assert payload["scene_gaps"] == payload["data_gaps"]["scene_gaps"]
+    assert payload["training_recommendations"][0]["type"] == "HARD_CASE"
     assert payload["production_tasks"][0]["safety"]["creates_batch"] is False
 
 
@@ -49,3 +54,21 @@ def test_analyze_and_write_artifacts_writes_three_reviewable_outputs(tmp_path):
     assert (tmp_path / "out" / "MODEL_M1_v0.3" / "data_gap_report.json").exists()
     assert (tmp_path / "out" / "MODEL_M1_v0.3" / "DATA_PRODUCTION_TASK.json").exists()
     assert result["task"]["task_type"] == "HARD_CASE_COLLECTION"
+
+
+def test_batch_proposal_returns_the_selected_task_metadata(monkeypatch):
+    selected = {
+        "task_id": "TASK_20260915_HARDCASE_002",
+        "task_type": "HARD_CASE_COLLECTION",
+        "batch_suggestion": {"batch_type": "HARD_CASE_COLLECTION", "metadata": {"target_species": ["silver_carp"]}},
+    }
+    monkeypatch.setattr(
+        intelligence_api,
+        "intelligence_dashboard",
+        lambda **_kwargs: {"production_tasks": [selected]},
+    )
+
+    result = intelligence_api.propose_intelligence_batch(selected["task_id"], db=object())
+
+    assert result["task"]["task_id"] == selected["task_id"]
+    assert result["batch"]["metadata"]["target_species"] == ["silver_carp"]
