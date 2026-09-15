@@ -37,8 +37,24 @@ QA_SAMPLE_SIZE = 50
 QA_SOURCE_MANIFEST = "manifest.csv"
 QA_SPLIT_PLAN = (("train", 35), ("val", 8), ("test", 7))
 QA_DECISIONS = {"PASS", "ISSUE", "CRITICAL"}
-QUALITY_ANALYSIS_SCHEMA_VERSION = "QUALITY_GATE_ANALYSIS_V1"
+QUALITY_ANALYSIS_SCHEMA_VERSION = "QUALITY_GATE_ANALYSIS_V1_1"
 QUALITY_ANALYSIS_SAMPLE_SIZE = 10
+QUALITY_STATUSES = {"GOOD", "WARNING", "INVALID"}
+QUALITY_STATUS_ALIASES = {
+    "GOOD": "GOOD",
+    "OK": "GOOD",
+    "CLEAR": "GOOD",
+    "PASS": "GOOD",
+    "VALID": "GOOD",
+    "WARNING": "WARNING",
+    "WARN": "WARNING",
+    "INVALID": "INVALID",
+    "BAD": "INVALID",
+    "ERROR": "INVALID",
+}
+QUALITY_FIELD_UNAVAILABLE = "质量字段不可用"
+QUALITY_REASON_UNAVAILABLE = "质量字段不可用"
+QUALITY_REASON_MISSING = "原因未提供"
 ACCEPTED_STATUSES = {"ACCEPTED", "TRAINING_READY"}
 JOB_STATES = {"PENDING", "RUNNING", "SUCCESS", "FAILED"}
 
@@ -664,8 +680,15 @@ def _qa_artifact_prefix(dataset_name: str) -> str:
     return f"datasets/{dataset_name}/qa"
 
 
+def _configured_bucket_name() -> str:
+    try:
+        return get_bucket_name()
+    except RuntimeError:
+        return "unconfigured"
+
+
 def _qa_uri(dataset_name: str, filename: str) -> str:
-    return f"gs://{get_bucket_name()}/{_qa_artifact_prefix(dataset_name)}/{filename}"
+    return f"gs://{_configured_bucket_name()}/{_qa_artifact_prefix(dataset_name)}/{filename}"
 
 
 def _qa_blob_name(dataset_name: str, filename: str) -> str:
@@ -700,7 +723,14 @@ def _qa_read(dataset_name: str) -> dict[str, Any] | None:
 
 
 def _qa_is_frozen_manifest(qa: dict[str, Any] | None) -> bool:
-    return isinstance(qa, dict) and str(qa.get("source_manifest") or "") == QA_SOURCE_MANIFEST
+    if not isinstance(qa, dict) or str(qa.get("source_manifest") or "") != QA_SOURCE_MANIFEST:
+        return False
+    items = qa.get("items") or []
+    try:
+        sample_size = int(qa.get("sample_size") or 0)
+    except (TypeError, ValueError):
+        return False
+    return sample_size == QA_SAMPLE_SIZE and len(items) == QA_SAMPLE_SIZE
 
 
 
@@ -730,7 +760,18 @@ def _qa_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         status, final_gate = "FAIL", "FAIL"
     else:
         status, final_gate = "PASS", "PASS"
-    return {"status": status, "final_release_gate": final_gate, "reviewed_count": len(reviewed), "pass_count": pass_count, "issue_count": issue_count, "critical_count": critical_count}
+    return {
+        "status": status,
+        "final_release_gate": final_gate,
+        "reviewed_count": len(reviewed),
+        "pass_count": pass_count,
+        "issue_count": issue_count,
+        "critical_count": critical_count,
+        "checked": len(reviewed),
+        "passed": pass_count,
+        "failed": issue_count,
+        "training_allowed": final_gate == "PASS",
+    }
 
 
 def _qa_unique_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -904,45 +945,6 @@ def get_random_50_qa(dataset_name: str) -> dict[str, Any]:
     return qa
 
 
-def _qa_manifest_keys(row: dict[str, Any]) -> list[tuple[str, str]]:
-    keys: list[tuple[str, str]] = []
-    for field in ("image_id", "id", "crop_path", "source_image"):
-        value = str(row.get(field) or "").strip()
-        if value:
-            keys.append((field, value))
-    return keys
-
-
-def _qa_enrich_frozen_rows(client, bucket, dataset_name: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Enrich legacy manifest.csv rows from the same frozen audit artifact.
-
-    The sample universe remains manifest.csv. manifest_all.csv is only used to
-    restore split/audit columns that were absent from an older frozen export.
-    """
-    if all(_qa_split(row) for row in rows):
-        return rows
-    audit_blob = bucket.blob(f"datasets/{dataset_name}/manifest_all.csv")
-    if not audit_blob.exists(client):
-        return rows
-    audit_rows = list(csv.DictReader(audit_blob.download_as_text(encoding="utf-8")))
-    by_key: dict[tuple[str, str], dict[str, Any]] = {}
-    for audit in audit_rows:
-        for key in _qa_manifest_keys(audit):
-            by_key.setdefault(key, audit)
-    enriched: list[dict[str, Any]] = []
-    for row in rows:
-        current = dict(row)
-        audit = next((by_key.get(key) for key in _qa_manifest_keys(row) if by_key.get(key)), None)
-        if audit:
-            for field in MANIFEST_FIELDS:
-                if not str(current.get(field) or "").strip() and str(audit.get(field) or "").strip():
-                    current[field] = audit[field]
-        if not str(current.get("quality_status") or "").strip():
-            current["quality_status"] = "GOOD"
-        enriched.append(current)
-    return enriched
-
-
 def _qa_reconstruct_frozen_splits(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Reconstruct missing split labels in memory using the production helper.
 
@@ -950,7 +952,7 @@ def _qa_reconstruct_frozen_splits(rows: list[dict[str, Any]]) -> list[dict[str, 
     manifests omitted split labels. It never writes the reconstructed labels
     back to GCS or the DatasetVersion.
     """
-    if any(_qa_split(row) for row in rows):
+    if all(_qa_split(row) for row in rows):
         return rows
     selected: list[dict[str, Any]] = []
     for row in rows:
@@ -983,8 +985,7 @@ def start_random_50_qa(dataset_name: str, db) -> dict[str, Any]:
     manifest_blob = bucket.blob(f"datasets/{dataset_name}/{QA_SOURCE_MANIFEST}")
     if not manifest_blob.exists(client):
         raise FileNotFoundError(f"{QA_SOURCE_MANIFEST} not found")
-    rows = list(csv.DictReader(manifest_blob.download_as_text(encoding="utf-8")))
-    rows = _qa_enrich_frozen_rows(client, bucket, dataset_name, rows)
+    rows = list(csv.DictReader(io.StringIO(manifest_blob.download_as_text(encoding="utf-8-sig"))))
     rows = _qa_reconstruct_frozen_splits(rows)
     selected = select_random_50_qa_rows(rows, dataset_name)
     return _persist_qa(dataset_name, _qa_payload(dataset_name, selected), db)
@@ -992,7 +993,7 @@ def start_random_50_qa(dataset_name: str, db) -> dict[str, Any]:
 
 def review_random_50_qa(dataset_name: str, qa_index: int, decision: str, note: str, db) -> dict[str, Any]:
     qa = _qa_read(dataset_name)
-    if qa is None:
+    if not _qa_is_frozen_manifest(qa):
         raise ValueError("RANDOM_50_QA_NOT_STARTED")
     items = qa.get("items") or []
     if qa_index < 0 or qa_index >= len(items):
@@ -1067,10 +1068,10 @@ def read_random_50_qa_media(dataset_name: str, qa_index: int, kind: str = "crop"
         if not blob.exists(client):
             raise FileNotFoundError("RANDOM_50_QA_MEDIA_NOT_AVAILABLE")
         return blob.download_as_bytes(timeout=120)
-    if kind != "source_bbox":
+    if kind not in {"source", "source_bbox"}:
         raise FileNotFoundError("RANDOM_50_QA_MEDIA_KIND_INVALID")
     source = Image.open(io.BytesIO(_qa_source_bytes(client, bucket, dataset_name, item.get("source_image")))).convert("RGB")
-    bbox = _qa_bbox_pixels(item)
+    bbox = _qa_bbox_pixels(item) if kind == "source_bbox" else None
     if bbox is not None:
         draw = ImageDraw.Draw(source)
         left, top, right, bottom = bbox
@@ -1089,7 +1090,16 @@ def _analysis_seed(dataset_name: str, label: str = "") -> int:
 
 def _analysis_reason_parts(value: Any) -> list[str]:
     parts = [part.strip() for part in str(value or "").split(";") if part.strip()]
-    return parts or ["NO_REASON"]
+    return parts or [QUALITY_REASON_MISSING]
+
+
+def _analysis_quality_status(value: Any, *, field_available: bool) -> str:
+    """Normalize the frozen manifest quality value without inventing status."""
+
+    if not field_available:
+        return "UNAVAILABLE"
+    raw = str(value or "").strip().upper()
+    return QUALITY_STATUS_ALIASES.get(raw, "UNAVAILABLE")
 
 
 def _analysis_row_key(row: dict[str, Any]) -> str:
@@ -1110,6 +1120,12 @@ def _analysis_blob(dataset_name: str, filename: str) -> str:
     return f"datasets/{dataset_name}/reports/{filename}"
 
 
+def _frozen_manifest_uri(dataset_name: str) -> str:
+    # Keep local/dev detail pages readable when GCS is intentionally not
+    # configured.  A real deployment always returns the gs:// URI.
+    return f"gs://{_configured_bucket_name()}/datasets/{dataset_name}/{QA_SOURCE_MANIFEST}"
+
+
 def _analysis_read(dataset_name: str) -> dict[str, Any] | None:
     try:
         client, bucket = _storage()
@@ -1117,9 +1133,100 @@ def _analysis_read(dataset_name: str) -> dict[str, Any] | None:
         if not blob.exists(client):
             return None
         value = json.loads(blob.download_as_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else None
+        if not isinstance(value, dict):
+            return None
+        source = value.get("source") or {}
+        manifest_uri = str(source.get("manifest_uri") or "").rstrip("/").lower()
+        # A prior release cached the report from manifest_all.csv.  It must not
+        # survive the source correction, even when the artifact exists.
+        if not manifest_uri.endswith("/manifest.csv"):
+            return None
+        if not bool(source.get("source_is_frozen_manifest")):
+            return None
+        if str(value.get("schema_version") or "") != QUALITY_ANALYSIS_SCHEMA_VERSION:
+            return None
+        return value
     except Exception:
         return None
+
+
+def get_quality_gate_analysis_summary(dataset_name: str) -> dict[str, Any]:
+    """Return the cached quality report without scanning the manifest.
+
+    The detail API stays lightweight.  The full report is generated only by
+    the explicit Quality Gate action, and both paths advertise the same
+    frozen ``manifest.csv`` source.
+    """
+
+    report = _analysis_read(dataset_name)
+    if report is None:
+        return {
+            "status": "NOT_GENERATED",
+            "source": {
+                "manifest_uri": _frozen_manifest_uri(dataset_name),
+                "source_count": None,
+                "source_is_frozen_manifest": True,
+            },
+            "totals": {},
+            "quality_field_available": None,
+            "quality_sum_check": None,
+        }
+    return {
+        "status": "READY",
+        "source": report.get("source") or {
+            "manifest_uri": _frozen_manifest_uri(dataset_name),
+            "source_is_frozen_manifest": True,
+        },
+        "totals": report.get("totals") or {},
+        "quality_field_available": report.get("quality_field_available"),
+        "quality_sum_check": report.get("quality_sum_check"),
+        "warning_reason_coverage": report.get("warning_reason_coverage") or {},
+        "generated_at": report.get("generated_at"),
+    }
+
+
+def registered_manifest_counts(dataset: DatasetVersion) -> dict[str, int | str]:
+    """Read counts from the registered frozen ``manifest.csv`` when possible.
+
+    DatasetVersion counters remain the safe fallback for older/local records,
+    but a valid registered manifest is always preferred.  No bucket listing or
+    alternate manifest is consulted.
+    """
+
+    fallback = {
+        "total": int(dataset.train_count or 0) + int(dataset.val_count or 0) + int(dataset.test_count or 0),
+        "train": int(dataset.train_count or 0),
+        "val": int(dataset.val_count or 0),
+        "test": int(dataset.test_count or 0),
+        "source": "DatasetVersion.counters",
+    }
+    uri = str(dataset.manifest_uri or "").strip()
+    if not uri.lower().endswith(f"/{QA_SOURCE_MANIFEST}"):
+        return fallback
+    try:
+        if uri.startswith("gs://"):
+            client, _bucket = _storage()
+            data = _download(client, uri)
+        else:
+            from pathlib import Path
+
+            data = Path(uri).read_bytes()
+        rows = list(csv.DictReader(io.StringIO(data.decode("utf-8-sig"))))
+        split_counts = Counter(_qa_split(row) for row in rows)
+        if rows and sum(split_counts.get(split, 0) for split in ("train", "val", "test")) == len(rows):
+            return {
+                "total": len(rows),
+                "train": int(split_counts.get("train", 0)),
+                "val": int(split_counts.get("val", 0)),
+                "test": int(split_counts.get("test", 0)),
+                "source": "manifest.csv",
+            }
+        if rows:
+            fallback["total"] = len(rows)
+            fallback["source"] = "manifest.csv"
+    except Exception:
+        pass
+    return fallback
 
 
 def _analysis_recommendation_markdown(dataset_name, totals, reason_rows, warning_coverage) -> str:
@@ -1169,25 +1276,38 @@ def generate_quality_gate_analysis(dataset_name: str) -> dict[str, Any]:
     if existing is not None:
         return existing
     client, bucket = _storage()
-    manifest_name = f"datasets/{dataset_name}/manifest_all.csv"
+    # Quality analysis is scoped to the registered frozen Dataset artifact.
+    # Do not widen this to manifest_all.csv, bucket scans, or the accepted bbox
+    # pool: those are different lifecycle stages and can inflate the total.
+    manifest_name = f"datasets/{dataset_name}/manifest.csv"
     manifest_blob = bucket.blob(manifest_name)
     if not manifest_blob.exists(client):
-        raise FileNotFoundError("manifest_all.csv not found")
-    rows = list(csv.DictReader(manifest_blob.download_as_text(encoding="utf-8")))
-    totals = Counter(str(row.get("quality_status") or "").upper() for row in rows)
+        raise FileNotFoundError("manifest.csv not found")
+    manifest_reader = csv.DictReader(io.StringIO(manifest_blob.download_as_text(encoding="utf-8-sig")))
+    field_available = "quality_status" in (manifest_reader.fieldnames or [])
+    rows = list(manifest_reader)
     total = len(rows)
+    normalized_statuses = [
+        _analysis_quality_status(row.get("quality_status"), field_available=field_available)
+        for row in rows
+    ]
+    totals = Counter(normalized_statuses)
     totals_payload = {
         "TOTAL": total,
         "GOOD": int(totals.get("GOOD", 0)),
         "WARNING": int(totals.get("WARNING", 0)),
         "INVALID": int(totals.get("INVALID", 0)),
+        "UNAVAILABLE": int(totals.get("UNAVAILABLE", 0)),
     }
+    quality_sum_check = sum(totals_payload[key] for key in QUALITY_STATUSES) == total
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     warning_with_reason = 0
-    for row in rows:
-        status = str(row.get("quality_status") or "UNKNOWN").upper()
-        reasons = _analysis_reason_parts(row.get("quality_reason"))
-        if status == "WARNING" and reasons != ["NO_REASON"]:
+    for row, status in zip(rows, normalized_statuses):
+        if status == "UNAVAILABLE":
+            reasons = [QUALITY_REASON_UNAVAILABLE]
+        else:
+            reasons = _analysis_reason_parts(row.get("quality_reason"))
+        if status == "WARNING" and reasons != [QUALITY_REASON_MISSING]:
             warning_with_reason += 1
         for reason in reasons:
             grouped[(status, reason)].append(row)
@@ -1247,9 +1367,8 @@ def generate_quality_gate_analysis(dataset_name: str) -> dict[str, Any]:
     )
     writer = csv.DictWriter(csv_output, fieldnames=csv_fields, extrasaction="ignore")
     writer.writeheader()
-    for row in rows:
-        status = str(row.get("quality_status") or "UNKNOWN").upper()
-        reason = ";".join(_analysis_reason_parts(row.get("quality_reason")))
+    for row, status in zip(rows, normalized_statuses):
+        reason = QUALITY_REASON_UNAVAILABLE if status == "UNAVAILABLE" else ";".join(_analysis_reason_parts(row.get("quality_reason")))
         writer.writerow({
             **{field: row.get(field, "") for field in csv_fields},
             "quality_status": status,
@@ -1264,15 +1383,18 @@ def generate_quality_gate_analysis(dataset_name: str) -> dict[str, Any]:
         "dataset_version": dataset_name,
         "generated_at": _now(),
         "source": {
-            "manifest_uri": f"gs://{get_bucket_name()}/{manifest_name}",
+            "manifest_uri": _frozen_manifest_uri(dataset_name),
             "source_count": total,
-            "source_is_frozen_manifest_all": True,
+            "source_is_frozen_manifest": True,
         },
         "totals": totals_payload,
+        "quality_field_available": field_available,
+        "quality_sum_check": quality_sum_check,
         "ratios": {
             "GOOD": totals_payload["GOOD"] / max(1, total),
             "WARNING": totals_payload["WARNING"] / max(1, total),
             "INVALID": totals_payload["INVALID"] / max(1, total),
+            "UNAVAILABLE": totals_payload["UNAVAILABLE"] / max(1, total),
         },
         "warning_reason_coverage": warning_coverage,
         "reasons": reason_rows,
@@ -1321,5 +1443,6 @@ __all__ = [
     "start_crop_dataset_job", "step_crop_dataset_job", "validate_crop_split_summary",
     "get_release_gate_summary", "get_random_50_qa", "start_random_50_qa",
     "review_random_50_qa", "read_random_50_qa_media", "select_random_50_qa_rows",
-    "generate_quality_gate_analysis",
+    "generate_quality_gate_analysis", "get_quality_gate_analysis_summary",
+    "registered_manifest_counts",
 ]

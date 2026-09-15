@@ -269,7 +269,7 @@ def queue_training_run(
         if not release_gate_training_allowed(pipeline_type, release_gate):
             raise HTTPException(
                 status_code=409,
-                detail="数据集尚未完成发布前人工抽查，禁止训练",
+                detail="数据集尚未完成发布前质量确认，禁止训练。",
             )
     if dataset.train_count <= 0:
         raise ValueError("训练集为空，不能启动训练")

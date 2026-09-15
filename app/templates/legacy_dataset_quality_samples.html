@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>质量样例 · Legacy Workbench</title>
+  <style>
+    *{box-sizing:border-box}body{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f6f7f8;color:#171717}header{background:#fff;border-bottom:1px solid #e5e7eb;padding:14px 24px;display:flex;gap:22px;align-items:center;position:sticky;top:0;z-index:2;overflow:auto;white-space:nowrap}header a{text-decoration:none;color:#111827;font-weight:650}header a.active{color:#2563eb}main{max-width:1100px;margin:0 auto;padding:28px 24px 56px}.panel{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:20px;margin-top:18px}.muted{color:#6b7280}.banner{display:none;white-space:pre-wrap;padding:12px;border-radius:10px;background:#fff1f2;color:#9f1239;margin-top:14px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}a.button{display:inline-block;border:1px solid #d1d5db;border-radius:8px;padding:9px 12px;text-decoration:none;color:#111827;font-weight:650}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:16px}.metric{background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:14px}.metric span{display:block;color:#6b7280;font-size:13px}.metric b{display:block;font-size:25px;margin-top:5px}.table-wrap{overflow:auto;margin-top:16px;border:1px solid #e5e7eb;border-radius:10px}table{width:100%;border-collapse:collapse;min-width:680px}th,td{text-align:left;padding:10px;border-bottom:1px solid #eee;font-size:13px;vertical-align:top}th{color:#6b7280}tr:last-child td{border-bottom:0}.code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-all}@media(max-width:700px){main{padding:20px 16px}.grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:430px){.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<header class="app-nav"><a href="/legacy">Legacy Workbench</a><a href="/batches">数据批次</a><a href="/review">数据清洗</a><a class="active" href="/datasets">Dataset</a><a href="/training">Training</a><a href="/inference">Evaluation</a></header>
+{% include "_mobile_ux.html" %}
+<main>
+  <div class="panel" style="margin-top:0"><h1 style="margin:0">质量样例</h1><p class="muted">只读查看当前 Dataset manifest.csv 导出的质量样例，不修改冻结数据内容。</p><div id="banner" class="banner"></div><div class="actions"><a class="button" href="/datasets/{{ dataset_version|urlencode }}">返回数据集详情</a></div></div>
+  <section class="panel"><h2 style="margin-top:0">当前来源</h2><div id="source" class="code">正在读取…</div><div id="summary" class="grid"></div><div id="rows" class="table-wrap"></div></section>
+</main>
+<script>
+const datasetVersion={{ dataset_version|tojson }};
+function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+async function api(url){const r=await fetch(url);const text=await r.text();let d;try{d=JSON.parse(text)}catch{d=text}if(!r.ok)throw new Error(typeof d?.detail==='object'?JSON.stringify(d.detail):d?.detail||text);return d}
+function label(value){return String(value||'').toUpperCase()==='UNAVAILABLE'?'质量字段不可用':value||'质量字段不可用'}
+(async()=>{try{const d=await api('/api/legacy/datasets/'+encodeURIComponent(datasetVersion)+'/quality-gate-analysis');document.getElementById('source').textContent=(d.source?.manifest_uri||'当前 Dataset manifest.csv')+' · '+(d.source?.source_count??0)+' 条';const t=d.totals||{};document.getElementById('summary').innerHTML=[['GOOD',t.GOOD||0],['WARNING',t.WARNING||0],['INVALID',t.INVALID||0],['质量字段不可用',t.UNAVAILABLE||0]].map(x=>'<div class="metric"><span>'+esc(x[0])+'</span><b>'+esc(x[1])+'</b></div>').join('');const rows=Array.isArray(d.reasons)?d.reasons:[];document.getElementById('rows').innerHTML=rows.length?'<table><thead><tr><th>状态</th><th>原因</th><th>数量</th><th>样例数</th><th>样例导出位置</th></tr></thead><tbody>'+rows.map(x=>'<tr><td>'+esc(label(x.status))+'</td><td>'+esc(x.reason||'质量字段不可用')+'</td><td>'+esc(x.count||0)+'</td><td>'+esc(x.sample_size||0)+'</td><td>'+((x.example_uris||[]).length?x.example_uris.map(uri=>'<div class="code">'+esc(uri)+'</div>').join(''):'暂无样例文件')+'</td></tr>').join('')+'</tbody></table>':'<div style="padding:18px" class="muted">暂无质量样例</div>'}catch(e){const b=document.getElementById('banner');b.style.display='block';b.textContent=e.message}})();
+</script>
+</body>
+</html>
