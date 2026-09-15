@@ -70,7 +70,7 @@ def test_worker_timeout_persists_all_failure_artifacts(monkeypatch):
     response = asyncio.run(lab.run(request, db))
     status, body = _response_status_and_body(response)
     assert status == 503
-    for name in ("original", "detector_crop", "sam_visible", "sam_mask", "completion_mask", "detector_report", "sam_report", "completion_report", "shape_guided_request", "shape_guided_response", "report", "error"):
+    for name in ("original", "detector_crop", "refined_visible_fish_input", "sam_visible", "sam_mask", "completion_mask", "detector_report", "sam_report", "completion_report", "shape_guided_request", "shape_guided_response", "report", "error"):
         assert name in body
     assert "FAILED_WORKER" in body
     assert "experiment_stage" in body

@@ -39,10 +39,13 @@ from app.segmentation.service import generate_fish_cutout
 router = APIRouter(tags=["powerpaint-shape-guided-lab"])
 templates = Jinja2Templates(directory="app/templates")
 VERSION = "POWERPAINT_SHAPE_GUIDED_V0.3"
-PROMPT_ID = "FIXED_FISH_SHAPE_GUIDED_V0.3.1"
+PROMPT_ID = "FIXED_FISH_SHAPE_GUIDED_V0.3.2"
 TASK_MODE = "SHAPE_GUIDED"
 FITTING_DEGREES = (0.6, 0.8, 0.95)
 PREFIX = "experiments/powerpaint_shape_guided_lab/v0.3"
+VISIBLE_FISH_INPUT_TYPE = "RGB_CANVAS"
+VISIBLE_FISH_INPUT_BACKGROUND = (255, 255, 255)
+NEGATIVE_PROMPT_STATUS = "NEGATIVE_PROMPT_NOT_SUPPORTED"
 MAX_BYTES = 25 * 1024 * 1024
 logger = logging.getLogger(__name__)
 EXPERIMENT_STAGES = (
@@ -60,7 +63,27 @@ EXPERIMENT_STAGES = (
     "SUCCESS",
     "FAILED",
 )
-PROMPT = "a realistic fish body matching the visible fish"
+PROMPT = """Restore the missing part of the same fish.
+
+Continue the visible fish body naturally.
+
+Keep:
+- same species
+- same orientation
+- same body shape
+- same color pattern
+- same fins
+
+Only generate missing fish body.
+
+Do not generate:
+- background
+- water
+- plants
+- hands
+- bucket
+- objects
+"""
 P2_DEFAULT_FITTING_DEGREE = 0.8
 MASK_MODES = ("AUTO_V1", "MANUAL_V2")
 QUALITY_FIELDS = ("BODY_CONTINUITY", "SCALE_TEXTURE", "COLOR_MATCH", "EDGE_SEAM", "ANATOMY", "BACKGROUND_PRESERVATION")
@@ -170,6 +193,16 @@ def _visible_fish_png(crop: Image.Image, mask: np.ndarray) -> bytes:
     rgb = np.asarray(crop.convert("RGB"), dtype=np.uint8)
     visible = np.asarray(mask, dtype=bool)
     return _png(Image.fromarray(np.where(visible[..., None], rgb, 0).astype("uint8"), "RGB"))
+
+
+def _visible_fish_input_png(crop: Image.Image, mask: np.ndarray) -> bytes:
+    """Build the RGB-only Worker input without carrying original background pixels."""
+    rgb = np.asarray(crop.convert("RGB"), dtype=np.uint8)
+    visible = np.asarray(mask, dtype=bool)
+    background = np.empty_like(rgb)
+    background[...] = VISIBLE_FISH_INPUT_BACKGROUND
+    canvas = np.where(visible[..., None], rgb, background).astype("uint8")
+    return _png(Image.fromarray(canvas, "RGB"))
 
 
 def _decode_mask_data_url(value: Any, shape: tuple[int, int], field: str) -> np.ndarray:
@@ -738,6 +771,7 @@ async def run(request: Request, db=Depends(get_db)):
     visible_remove_mask_bytes = None
     refined_visible_mask_bytes = None
     refined_visible_fish_bytes = None
+    refined_visible_fish_input_bytes = None
     manual_completion_mask_bytes = None
     completion_mask_bytes = None
     completion_overlay_bytes = None
@@ -860,6 +894,7 @@ async def run(request: Request, db=Depends(get_db)):
             visible_remove_mask_bytes = _mask_png(visible_remove)
             refined_visible_mask_bytes = _mask_png(refined_visible)
             refined_visible_fish_bytes = _visible_fish_png(crop, refined_visible)
+            refined_visible_fish_input_bytes = _visible_fish_input_png(crop, refined_visible)
             report["sam"].update({
                 "refined_visible_pixels": int(refined_visible.sum()),
                 "visible_add_pixels": int(visible_add.sum()),
@@ -869,6 +904,7 @@ async def run(request: Request, db=Depends(get_db)):
             report["assets"]["visible_remove_mask"] = _persist(test_id, "visible_remove_mask.png", _mask_png(visible_remove), "image/png")
             report["assets"]["refined_visible_mask"] = _persist(test_id, "refined_visible_mask.png", refined_visible_mask_bytes, "image/png")
             report["assets"]["refined_visible_fish"] = _persist(test_id, "refined_visible_fish.png", refined_visible_fish_bytes, "image/png")
+            report["assets"]["refined_visible_fish_input"] = _persist(test_id, "refined_visible_fish_input.png", refined_visible_fish_input_bytes, "image/png")
             visible = refined_visible
             mark_progress("refined_visible", "READY", {"pixels": int(visible.sum()), "added": int(visible_add.sum()), "removed": int(visible_remove.sum())})
             _set_stage(report, "REFINED_VISIBLE_READY")
@@ -896,6 +932,7 @@ async def run(request: Request, db=Depends(get_db)):
             _persist_json(test_id, "completion_report.json", validation)
             report["preview_raw_sam"] = _data_url(raw_sam_visible_bytes, "image/png")
             report["preview_refined_visible"] = _data_url(refined_visible_fish_bytes, "image/png")
+            report["preview_refined_visible_input"] = _data_url(refined_visible_fish_input_bytes, "image/png")
             report["preview_sam"] = report["preview_refined_visible"]
             report["preview_completion_mask"] = _data_url(completion_mask_bytes, "image/png")
             mark_progress("completion_mask", "READY", validation)
@@ -903,6 +940,7 @@ async def run(request: Request, db=Depends(get_db)):
             if not comparison_mode:
                 degrees = [P2_DEFAULT_FITTING_DEGREE]
         else:
+            refined_visible_fish_input_bytes = _visible_fish_input_png(crop, visible)
             completion = build_completion_mask(visible)
             validation = validate_completion_mask(completion, visible)
             if not validation["valid"]:
@@ -914,9 +952,11 @@ async def run(request: Request, db=Depends(get_db)):
             report["completion_area_ratio"] = validation["completion_area_ratio"]
             report["visible_overlap_pixels"] = validation["visible_overlap_pixels"]
             report["assets"]["completion_mask"] = _persist(test_id, "completion_mask.png", completion_mask_bytes, "image/png")
+            report["assets"]["refined_visible_fish_input"] = _persist(test_id, "refined_visible_fish_input.png", refined_visible_fish_input_bytes, "image/png")
             _persist_json(test_id, "completion_report.json", validation)
             report["preview_raw_sam"] = _data_url(raw_sam_visible_bytes, "image/png")
             report["preview_refined_visible"] = _data_url(raw_sam_visible_bytes, "image/png")
+            report["preview_refined_visible_input"] = _data_url(refined_visible_fish_input_bytes, "image/png")
             report["preview_sam"] = report["preview_refined_visible"]
             report["preview_completion_mask"] = _data_url(completion_mask_bytes, "image/png")
             mark_progress("refined_visible", "READY", {"pixels": int(visible.sum()), "added": 0, "removed": 0})
@@ -952,18 +992,18 @@ async def run(request: Request, db=Depends(get_db)):
                 _set_stage(report, "WORKER_READY")
             except Exception as exc:
                 report["worker"] = {"health": {"status": "unreachable", "error": str(exc)}}
-                request_log.append({"task_mode": TASK_MODE, "mask_mode": mask_mode, "fitting_degree": degrees[0], "prompt_version": PROMPT_ID, "image_uri": report["assets"]["detector_crop"], "mask_uri": report["assets"]["completion_mask"], "visible_reference_uri": report["assets"].get("refined_visible_fish"), "worker_called": False})
+                request_log.append({"task_mode": TASK_MODE, "mask_mode": mask_mode, "fitting_degree": degrees[0], "prompt_version": PROMPT_ID, "negative_prompt_status": NEGATIVE_PROMPT_STATUS, "visible_fish_input_type": VISIBLE_FISH_INPUT_TYPE, "image_uri": report["assets"]["refined_visible_fish_input"], "mask_uri": report["assets"]["completion_mask"], "visible_reference_uri": report["assets"].get("refined_visible_fish_input"), "worker_called": False})
                 response_log.append({"fitting_degree": degrees[0], "worker_called": False, "http_status": None, "result_uri": None, "latency_ms": 0, "error": str(exc)})
                 raise ExperimentFailure(503, "WORKER_READY", "SHAPE_GUIDED_WORKER_FAILED", str(exc), "FAILED_WORKER") from exc
             _set_stage(report, "POWERPAINT_RUNNING")
             mark_progress("powerpaint", "RUNNING", {"fitting_degree": degrees[0]})
             for degree in degrees:
                 result_started = time.perf_counter()
-                request_entry = {"task_mode": TASK_MODE, "mask_mode": mask_mode, "fitting_degree": degree, "prompt_version": PROMPT_ID, "image_uri": report["assets"]["detector_crop"], "mask_uri": report["assets"]["completion_mask"], "visible_reference_uri": report["assets"].get("refined_visible_fish"), "mask_ratio": validation["completion_area_ratio"], "worker_called": True}
+                request_entry = {"task_mode": TASK_MODE, "mask_mode": mask_mode, "fitting_degree": degree, "prompt_version": PROMPT_ID, "negative_prompt_status": NEGATIVE_PROMPT_STATUS, "visible_fish_input_type": VISIBLE_FISH_INPUT_TYPE, "image_uri": report["assets"]["refined_visible_fish_input"], "mask_uri": report["assets"]["completion_mask"], "visible_reference_uri": report["assets"].get("refined_visible_fish_input"), "mask_ratio": validation["completion_area_ratio"], "worker_called": True}
                 request_log.append(request_entry)
                 item_result: dict[str, Any] = {"task_mode": TASK_MODE, "mask_mode": mask_mode, "fitting_degree": degree, "status": "PENDING", "worker_called": True, "visible_pixel_change_ratio": None, "generated_area_pixels": int(completion.sum()), "result_uri": None}
                 try:
-                    worker = _invoke_shape_guided(image_uri=report["assets"]["detector_crop"], mask_uri=report["assets"]["completion_mask"], visible_reference_uri=report["assets"].get("refined_visible_fish"), fitting_degree=degree)
+                    worker = _invoke_shape_guided(image_uri=report["assets"]["refined_visible_fish_input"], mask_uri=report["assets"]["completion_mask"], visible_reference_uri=report["assets"].get("refined_visible_fish_input"), fitting_degree=degree)
                     generated = _decode_data_url(worker.get("result_uri")) or _decode_data_url(worker.get("generated_roi"))
                     if generated is None and worker.get("result_uri"):
                         generated = _read_uri(worker["result_uri"])
@@ -1093,6 +1133,11 @@ async def run(request: Request, db=Depends(get_db)):
             refined_visible_mask_bytes = raw_sam_mask_bytes
         if refined_visible_fish_bytes is None:
             refined_visible_fish_bytes = raw_sam_visible_bytes
+        if refined_visible_fish_input_bytes is None:
+            if crop is not None and visible is not None:
+                refined_visible_fish_input_bytes = _visible_fish_input_png(crop, np.asarray(visible, dtype=bool))
+            else:
+                refined_visible_fish_input_bytes = _png(Image.new("RGB", (1, 1), VISIBLE_FISH_INPUT_BACKGROUND))
         if manual_completion_mask_bytes is None:
             manual_completion_mask_bytes = _mask_png(np.zeros((1, 1), dtype=bool))
         if completion_mask_bytes is None:
@@ -1107,6 +1152,7 @@ async def run(request: Request, db=Depends(get_db)):
         _safe_persist(test_id, "visible_remove_mask.png", visible_remove_mask_bytes, "image/png", report)
         _safe_persist(test_id, "refined_visible_mask.png", refined_visible_mask_bytes, "image/png", report)
         _safe_persist(test_id, "refined_visible_fish.png", refined_visible_fish_bytes, "image/png", report)
+        _safe_persist(test_id, "refined_visible_fish_input.png", refined_visible_fish_input_bytes, "image/png", report)
         _safe_persist(test_id, "sam_visible.png", refined_visible_fish_bytes, "image/png", report)
         _safe_persist(test_id, "sam_mask.png", refined_visible_mask_bytes, "image/png", report)
         _safe_persist(test_id, "manual_completion_mask.png", manual_completion_mask_bytes, "image/png", report)
