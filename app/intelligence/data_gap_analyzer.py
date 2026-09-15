@@ -202,11 +202,18 @@ def analyze_data_gaps(
         "image_quality": {species: sorted(values) for species, values in species_quality_values.items()},
     }
 
+    # Keep quantity and scene coverage as separate first-class outputs.  The
+    # older ``species_gaps`` key remains for API compatibility, while the
+    # explicit aliases let the Platform UI avoid presenting two different
+    # production problems as one generic gap.
+    quantity_gaps = [row for row in species_gaps if int(row["gap"]) > 0]
+
     return {
         "generated_at": generated_at or utcnow_iso(),
         "current_counts": dict(counts),
         "targets": dict(targets),
         "species_gaps": species_gaps,
+        "quantity_gaps": quantity_gaps,
         "scene_gaps": scene_gaps,
         "dimension_gaps": dimension_gaps,
         "required_scenes": global_required,

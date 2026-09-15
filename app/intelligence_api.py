@@ -21,7 +21,12 @@ from app.models import DatasetVersion, Evaluation, ImageAsset, InferenceAsset, M
 from app.intelligence.confusion_analyzer import build_confusion_report
 from app.intelligence.data_gap_analyzer import analyze_data_gaps
 from app.intelligence.hard_case_miner import mine_hard_cases
-from app.intelligence.task_generator import generate_collection_task, write_collection_task
+from app.intelligence.task_generator import (
+    generate_collection_task,
+    generate_collection_tasks,
+    training_recommendations,
+    write_collection_task,
+)
 from app.intelligence.detector_error_analyzer import analyze_detector_errors
 
 router = APIRouter(tags=["model-intelligence"])
@@ -393,8 +398,8 @@ def build_intelligence_payload(
     confusion = build_confusion_report(evaluation_document, model_version=resolved_model)
     manifest_rows = _registry_manifest_rows(db)
     gaps = analyze_data_gaps(manifest_rows, target_config)
-    task = generate_collection_task(confusion, gaps, model_version=resolved_model)
-    tasks = [task] if task.get("requirements", {}).get("species") else []
+    tasks = generate_collection_tasks(confusion, gaps, model_version=resolved_model)
+    task = tasks[0] if tasks else generate_collection_task(confusion, gaps, model_version=resolved_model)
     artifact_report = evaluation_document.get("evaluation_artifact_report") if isinstance(evaluation_document, Mapping) else None
     model_comparison = evaluation_document.get("model_comparison") if isinstance(evaluation_document, Mapping) else None
     if isinstance(artifact_report, Mapping) and isinstance(model_comparison, Mapping):
@@ -421,6 +426,8 @@ def build_intelligence_payload(
         "metrics": _metrics_for_dashboard(evaluation_document),
         "data_gaps": gaps,
         "production_tasks": tasks,
+        "scene_gaps": gaps.get("scene_gaps", []),
+        "training_recommendations": training_recommendations(tasks),
         "manifest": {"source": "registry", "row_count": len(manifest_rows)},
         "evaluation_artifacts": artifact_report or {
             "source": source,
@@ -461,7 +468,8 @@ def analyze_and_write_artifacts(
     document = _load_class_map(db, resolved_model, document)
     confusion = build_confusion_report(document, model_version=resolved_model)
     gaps = analyze_data_gaps(_registry_manifest_rows(db), target_config_path)
-    task = generate_collection_task(confusion, gaps, model_version=resolved_model)
+    tasks = generate_collection_tasks(confusion, gaps, model_version=resolved_model)
+    task = tasks[0] if tasks else generate_collection_task(confusion, gaps, model_version=resolved_model)
     destination = _artifact_output(output_root, resolved_model)
     destination.mkdir(parents=True, exist_ok=True)
     confusion_path = destination / "confusion_report.json"
@@ -476,6 +484,7 @@ def analyze_and_write_artifacts(
         "confusion_report": confusion,
         "data_gaps": gaps,
         "task": task,
+        "production_tasks": tasks,
         "paths": {
             "confusion_report": str(confusion_path),
             "data_gap_report": str(gaps_path),
@@ -551,12 +560,10 @@ def propose_intelligence_batch(
     db: Session = Depends(get_db),
 ):
     dashboard = intelligence_dashboard(model_version=model_version, db=db)
-    task = generate_collection_task(
-        dashboard["confusion_report"],
-        dashboard["data_gaps"],
-        task_id=task_id,
-        model_version=dashboard["model"]["model_version"],
-    )
+    tasks = dashboard.get("production_tasks") or []
+    task = next((row for row in tasks if row.get("task_id") == task_id), None)
+    if task is None:
+        raise HTTPException(status_code=404, detail="采集任务不存在或已刷新，请重新加载模型分析")
     return {
         "status": "PROPOSAL_ONLY",
         "message": "采集任务已生成；请在审核后通过现有 Batch Upload 创建批次。",
