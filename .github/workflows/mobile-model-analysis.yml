@@ -1,13 +1,6 @@
 name: Mobile Model Analysis
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/mobile-model-analysis.yml'
-      - 'scripts/export_mobile_model.py'
-      - 'scripts/evaluate_preprocess_modes.py'
-      - 'scripts/verify_tflite_parity.py'
   workflow_dispatch:
     inputs:
       model_version:
