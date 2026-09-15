@@ -204,7 +204,7 @@ def platform_crop_dataset_step(job_id: str) -> dict[str, Any]:
 
 
 @router.get("/datasets")
-def platform_datasets(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+def platform_datasets(db: Session = Depends(get_db)) -> dict[str, Any]:
     return adapters.datasets(db)
 
 

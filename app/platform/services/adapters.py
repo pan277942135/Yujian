@@ -509,6 +509,96 @@ def _dataset_version_counts(dataset: DatasetVersion) -> dict[str, int]:
     return {"total": train + val + test, "train": train, "val": val, "test": test}
 
 
+def _batch_review_stats(db: Session, batch_ids: list[str]) -> dict[str, dict[str, int]]:
+    """Aggregate registered-image counts for a bounded Batch list.
+
+    Batch rows remain the source of the uploaded-image count.  ImageAsset is
+    queried only for the review counters shown beside a recent Batch, never
+    materialized as one row per image by the Dataset page.
+    """
+
+    if not batch_ids:
+        return {}
+    pending_case = case((ImageAsset.review_status.in_(REVIEW_PENDING), 1), else_=0)
+    approved_case = case((ImageAsset.review_status == "approved", 1), else_=0)
+    try:
+        rows = db.execute(
+            select(
+                ImageAsset.batch_id,
+                func.count(ImageAsset.id),
+                func.coalesce(func.sum(approved_case), 0),
+                func.coalesce(func.sum(pending_case), 0),
+            )
+            .where(ImageAsset.batch_id.in_(batch_ids))
+            .group_by(ImageAsset.batch_id)
+        ).all()
+    except SQLAlchemyError:
+        db.rollback()
+        return {}
+    return {
+        str(batch_id): {
+            "registered_images": int(registered_images or 0),
+            "ai_valid": int(ai_valid or 0),
+            "pending_review": int(pending_review or 0),
+        }
+        for batch_id, registered_images, ai_valid, pending_review in rows
+    }
+
+
+def recent_batches(db: Session, *, limit: int = 8) -> list[dict[str, Any]]:
+    """Return recent Batch lifecycle rows without exposing storage paths."""
+
+    limit = min(max(int(limit or 8), 1), 20)
+    rows = _safe_scalars(db, select(Batch).order_by(Batch.created_at.desc(), Batch.batch_id.desc()).limit(limit))
+    stats = _batch_review_stats(db, [row.batch_id for row in rows])
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        row_stats = stats.get(row.batch_id, {})
+        result.append(
+            {
+                "batch_id": row.batch_id,
+                "name": str(row.notes or "").strip() or None,
+                "source": row.source,
+                "image_count": int(row.image_count or 0),
+                "ai_valid": int(row_stats.get("ai_valid", 0)),
+                "pending_review": int(row_stats.get("pending_review", 0)),
+                "status": _status(row.status),
+                "created_at": _iso(row.created_at),
+            }
+        )
+    return result
+
+
+def _dataset_page_summary(db: Session) -> dict[str, int]:
+    """Return Dataset/Batch lifecycle totals with distinct meanings."""
+
+    try:
+        dataset_count = int(db.scalar(select(func.count()).select_from(DatasetVersion)) or 0)
+    except SQLAlchemyError:
+        db.rollback()
+        dataset_count = 0
+    try:
+        batch_count, total_images = db.execute(
+            select(
+                func.count(Batch.batch_id),
+                func.coalesce(func.sum(Batch.image_count), 0),
+            )
+        ).one()
+        batch_count = int(batch_count or 0)
+        total_images = int(total_images or 0)
+    except SQLAlchemyError:
+        db.rollback()
+        batch_count = 0
+        total_images = 0
+    pending_review = _safe_count(db, ImageAsset, ImageAsset.review_status.in_(REVIEW_PENDING))
+    return {
+        "dataset_count": dataset_count,
+        "batch_count": batch_count,
+        "total_images": total_images,
+        "pending_review": pending_review,
+    }
+
+
 def _source_batches(metadata: Any) -> list[str]:
     """Normalize legacy Dataset metadata without inventing lineage."""
 
@@ -600,8 +690,8 @@ def _dataset_clean_report(
     }
 
 
-def datasets(db: Session) -> list[dict[str, Any]]:
-    """List DatasetVersion snapshots only; Batch is a separate lifecycle."""
+def datasets(db: Session) -> dict[str, Any]:
+    """Return DatasetVersion rows and Batch lifecycle data in separate arrays."""
 
     rows = _safe_scalars(db, select(DatasetVersion).order_by(DatasetVersion.created_at.desc()))
     result = []
@@ -622,7 +712,11 @@ def datasets(db: Session) -> list[dict[str, Any]]:
                 "created_at": _iso(row.created_at),
             }
         )
-    return result
+    return {
+        "summary": _dataset_page_summary(db),
+        "datasets": result,
+        "recent_batches": recent_batches(db),
+    }
 
 
 def dataset_detail(db: Session, dataset_id: str) -> dict[str, Any] | None:
