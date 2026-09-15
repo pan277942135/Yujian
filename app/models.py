@@ -330,6 +330,37 @@ class ModelVersion(Base):
     crop_version = Column(String(128))
     classifier_version = Column(String(128))
     dataset_version = Column(String(128))
+    is_production = Column(Boolean, nullable=False, default=False, index=True)
+    published_at = Column(DateTime(timezone=True))
+
+
+class ModelPublishJob(Base):
+    """Durable, idempotent promotion of one trained classifier to Android."""
+
+    __tablename__ = "model_publish_jobs"
+
+    publish_job_id = Column(String(128), primary_key=True)
+    run_id = Column(String(128), ForeignKey("training_runs.run_id"), nullable=False, index=True)
+    model_version = Column(String(128), ForeignKey("models.model_version"), nullable=False, index=True)
+    source_artifact_uri = Column(Text, nullable=False)
+    model_prefix = Column(Text, nullable=False)
+    target_artifact_uri = Column(Text)
+    published_filename = Column(String(256), nullable=False, default="fish_classifier_v0_2.tflite")
+    status = Column(String(32), nullable=False, default="NOT_PUBLISHED", index=True)
+    stage = Column(String(64))
+    # A nullable unique value is the database-backed global production publish lock.
+    # Active jobs hold "production"; terminal jobs clear it.
+    active_lock = Column(String(32), unique=True)
+    callback_token_sha256 = Column(String(64), nullable=False)
+    workflow_run_id = Column(String(128))
+    workflow_run_url = Column(Text)
+    github_release_url = Column(Text)
+    sha256 = Column(String(64))
+    error_code = Column(String(64))
+    error_message = Column(Text)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+    published_at = Column(DateTime(timezone=True))
 
 
 class Evaluation(Base):

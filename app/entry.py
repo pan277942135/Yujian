@@ -5,6 +5,7 @@ from fastapi import HTTPException
 from app.detector_runtime import load_detector
 from app.main import app, templates as main_templates
 from app.platform.routes.api import router as platform_api_router
+from app.model_publish_api import router as model_publish_router
 from app.presence import router as presence_router
 from app.dedupe import router as dedupe_router
 from app.bulk_review import router as bulk_review_router, templates as bulk_review_templates
@@ -84,6 +85,7 @@ def seed_target_species_catalog() -> None:
 @app.get("/health/deploy")
 def deployment_health() -> dict:
     feedback_ingest_key_configured = bool(os.getenv("FEEDBACK_INGEST_KEY", "").strip())
+    model_publish_configured = bool(os.getenv("YUJIAN_GITHUB_RELEASE_TOKEN", "").strip())
     return {
         "status": "ok",
         "version": app.version,
@@ -95,6 +97,8 @@ def deployment_health() -> dict:
         "user_auth_path": "/api/v1/auth/login",
         "user_catches_path": "/api/v1/catches",
         "feedback_ingest_key_configured": feedback_ingest_key_configured,
+        "model_publish_path": "/api/models/{model_id}/publish",
+        "model_publish_configured": model_publish_configured,
     }
 
 
@@ -147,3 +151,4 @@ app.include_router(fish_asset_import_router)
 app.include_router(fish_asset_import_page_router)
 app.include_router(platform_pages_router)
 app.include_router(platform_api_router)
+app.include_router(model_publish_router)

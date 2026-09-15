@@ -68,6 +68,8 @@ def test_platform_empty_adapters_and_allowed_tables(tmp_path):
         assert "/api/platform/dashboard" in paths
         assert "/api/platform/review/batch-confirm" in paths
         assert "/api/platform/training/create" in paths
+        assert "/api/models/{model_id}/publish" in paths
+        assert "/api/models/{model_id}/publish/status" in paths
     finally:
         db.close()
 

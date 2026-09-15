@@ -24,6 +24,7 @@ FEEDBACK_INGEST_PATHS = {
     "/api/feedback/ingest",
     "/api/v1/inference/upload",
 }
+MODEL_PUBLISH_CALLBACK_PATH = "/api/model-publish/callback"
 
 
 def _configured_key() -> str:
@@ -53,11 +54,17 @@ def install_access_guard(app: FastAPI) -> None:
         if not key or request.url.path in PUBLIC_PATHS or public_fish_read or app_api_request:
             return await call_next(request)
 
+        # The route validates a high-entropy one-time token whose SHA-256 is
+        # stored on the corresponding publish job.
+        if request.method == "POST" and request.url.path == MODEL_PUBLISH_CALLBACK_PATH:
+            return await call_next(request)
+
         ingest_key = _feedback_ingest_key()
         if request.method == "POST" and request.url.path in FEEDBACK_INGEST_PATHS and ingest_key:
             supplied = request.headers.get("X-YuJian-Ingest-Key", "")
             if supplied and secrets.compare_digest(supplied, ingest_key):
                 return await call_next(request)
+
 
         expected = _cookie_value(key)
         actual = request.cookies.get(COOKIE_NAME, "")

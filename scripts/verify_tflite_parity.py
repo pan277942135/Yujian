@@ -105,6 +105,9 @@ def main() -> None:
     interpreter.invoke()
     tflite_logits = interpreter.get_tensor(output_detail["index"]).reshape(-1).astype(np.float32)
 
+    if not np.all(np.isfinite(torch_logits)) or not np.all(np.isfinite(tflite_logits)):
+        raise RuntimeError("TFLITE_SMOKE_FAILED: inference output contains NaN or Inf")
+
     if torch_logits.shape != tflite_logits.shape:
         raise RuntimeError(f"output shape mismatch: torch={torch_logits.shape} tflite={tflite_logits.shape}")
 

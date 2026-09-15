@@ -340,7 +340,34 @@ CREATE TABLE IF NOT EXISTS models (
   crop_version TEXT,
   classifier_version TEXT,
   dataset_version TEXT,
+  is_production BOOLEAN NOT NULL DEFAULT FALSE,
+  published_at TEXT,
   FOREIGN KEY(run_id) REFERENCES training_runs(run_id)
+);
+
+CREATE TABLE IF NOT EXISTS model_publish_jobs (
+  publish_job_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  model_version TEXT NOT NULL,
+  source_artifact_uri TEXT NOT NULL,
+  model_prefix TEXT NOT NULL,
+  target_artifact_uri TEXT,
+  published_filename TEXT NOT NULL DEFAULT 'fish_classifier_v0_2.tflite',
+  status TEXT NOT NULL DEFAULT 'NOT_PUBLISHED',
+  stage TEXT,
+  active_lock TEXT UNIQUE,
+  callback_token_sha256 TEXT NOT NULL,
+  workflow_run_id TEXT,
+  workflow_run_url TEXT,
+  github_release_url TEXT,
+  sha256 TEXT,
+  error_code TEXT,
+  error_message TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  published_at TEXT,
+  FOREIGN KEY(run_id) REFERENCES training_runs(run_id),
+  FOREIGN KEY(model_version) REFERENCES models(model_version)
 );
 
 CREATE TABLE IF NOT EXISTS evaluations (

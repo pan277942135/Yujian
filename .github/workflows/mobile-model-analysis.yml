@@ -1,25 +1,49 @@
 name: Mobile Model Analysis
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/mobile-model-analysis.yml'
-      - 'scripts/export_mobile_model.py'
-      - 'scripts/evaluate_preprocess_modes.py'
-      - 'scripts/verify_tflite_parity.py'
   workflow_dispatch:
+    inputs:
+      model_version:
+        description: Registered classifier model version
+        required: false
+        default: MODEL_M1_v0.2
+        type: string
+      model_prefix:
+        description: Exact GCS model directory
+        required: false
+        default: gs://yujian-model-factory-571785698442/models/MODEL_M1_v0.2
+        type: string
+      publish_job_id:
+        description: Model Factory publish job id
+        required: false
+        default: LEGACY_MANUAL
+        type: string
+      callback_url:
+        description: Model Factory status callback URL
+        required: false
+        type: string
+      callback_token:
+        description: One-time opaque callback bearer token
+        required: false
+        type: string
 
 permissions:
   contents: write
   id-token: write
 
+concurrency:
+  group: yujian-production-classifier-publish
+  cancel-in-progress: false
+
 env:
   PROJECT_ID: gemini-api-project-503706
   WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
   DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
-  MODEL_VERSION: MODEL_M1_v0.2
-  MODEL_PREFIX: gs://yujian-model-factory-571785698442/models/MODEL_M1_v0.2
+  MODEL_VERSION: ${{ inputs.model_version || 'MODEL_M1_v0.2' }}
+  MODEL_PREFIX: ${{ inputs.model_prefix || 'gs://yujian-model-factory-571785698442/models/MODEL_M1_v0.2' }}
+  PUBLISH_JOB_ID: ${{ inputs.publish_job_id || 'LEGACY_PUSH' }}
+  CALLBACK_URL: ${{ inputs.callback_url || '' }}
+  CALLBACK_TOKEN: ${{ inputs.callback_token || '' }}
   RELEASE_TAG: mobile-model-v0.2
 
 jobs:
@@ -57,6 +81,10 @@ jobs:
 
       - name: Download exact model contract from GCS
         run: |
+          set -euo pipefail
+          if [[ -n "$CALLBACK_TOKEN" ]]; then echo "::add-mask::$CALLBACK_TOKEN"; fi
+          [[ "$MODEL_VERSION" =~ ^[A-Za-z0-9_.-]+$ ]]
+          [[ "$MODEL_PREFIX" == gs://*/models/"$MODEL_VERSION" ]]
           mkdir -p mobile-analysis
           gcloud storage cp "$MODEL_PREFIX/model_torchscript.pt" mobile-analysis/model_torchscript.pt
           gcloud storage cp "$MODEL_PREFIX/class_map.json" mobile-analysis/class_map.json
@@ -94,10 +122,22 @@ jobs:
           import json
           from ai_edge_litert.interpreter import Interpreter
           model = 'mobile-analysis/fish_classifier_v0_2.tflite'
+          metrics = json.load(open('mobile-analysis/metrics.json', encoding='utf-8'))
+          class_map = json.load(open('mobile-analysis/class_map.json', encoding='utf-8'))
+          image_size = int((metrics.get('params') or {}).get('image_size') or 224)
+          class_count = len(class_map.get('classes') or [])
           interpreter = Interpreter(model_path=model)
           interpreter.allocate_tensors()
           inputs = interpreter.get_input_details()
           outputs = interpreter.get_output_details()
+          if len(inputs) != 1 or len(outputs) != 1:
+            raise RuntimeError(f'TFLITE_LOAD_FAILED: expected one input/output, got {len(inputs)}/{len(outputs)}')
+          input_shape = [int(v) for v in inputs[0]['shape']]
+          output_shape = [int(v) for v in outputs[0]['shape']]
+          if input_shape != [1, 3, image_size, image_size]:
+            raise RuntimeError(f'INPUT_SHAPE_MISMATCH: {input_shape} != {[1, 3, image_size, image_size]}')
+          if not output_shape or output_shape[-1] != class_count:
+            raise RuntimeError(f'CLASS_COUNT_MISMATCH: output={output_shape}, classes={class_count}')
           doc = {
             'inputs': [
               {'name': x['name'], 'shape': [int(v) for v in x['shape']], 'dtype': str(x['dtype'])}
@@ -113,6 +153,15 @@ jobs:
           print(json.dumps(doc, ensure_ascii=False, indent=2))
           PY
 
+      - name: Report validation stage
+        run: |
+          if [[ -n "$CALLBACK_URL" && -n "$CALLBACK_TOKEN" && "$PUBLISH_JOB_ID" != LEGACY_* ]]; then
+            python - <<'PY' | curl -fsS --retry 2 -H 'Content-Type: application/json' -H "X-YuJian-Publish-Key: $CALLBACK_TOKEN" --data-binary @- "$CALLBACK_URL" || echo 'warning: validation callback failed'
+          import json, os
+          print(json.dumps({'publish_job_id':os.environ['PUBLISH_JOB_ID'],'model_version':os.environ['MODEL_VERSION'],'status':'VALIDATING','stage':'TFLITE_PARITY','workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow_run_url':f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"}))
+          PY
+          fi
+
       - name: Download shared golden image
         run: |
           curl -fL --retry 3 --retry-delay 2 \
@@ -126,14 +175,50 @@ jobs:
             --torchscript mobile-analysis/model_torchscript.pt \
             --tflite mobile-analysis/fish_classifier_v0_2.tflite \
             --image mobile-analysis/golden_yellow_catfish_224.jpg \
-            --expected-index 7 \
             --out mobile-analysis/parity_report.json
 
-      - name: Verify release model checksum
+      - name: Verify release model integrity
         run: |
-          test "$(stat -c%s mobile-analysis/fish_classifier_v0_2.tflite)" = "6220308"
-          echo "9575ede5c6c85b850647016d76e8e5175fa9ea6b609c47c83f54b4062e47d14e  mobile-analysis/fish_classifier_v0_2.tflite" | sha256sum -c -
+          test "$(stat -c%s mobile-analysis/fish_classifier_v0_2.tflite)" -gt 0
           test "$(dd if=mobile-analysis/fish_classifier_v0_2.tflite bs=1 skip=4 count=4 status=none)" = "TFL3"
+          sha256sum mobile-analysis/fish_classifier_v0_2.tflite | tee mobile-analysis/tflite_sha256.txt
+
+      - name: Build release metadata
+        run: |
+          python - <<'PY'
+          import datetime, hashlib, json, os, pathlib
+          root=pathlib.Path('mobile-analysis')
+          report=json.loads((root/'export_report.json').read_text())
+          classes=json.loads((root/'class_map.json').read_text())
+          source=root/'model_torchscript.pt'; target=root/'fish_classifier_v0_2.tflite'
+          metadata={
+            'model_id':os.environ['MODEL_VERSION'], 'publish_job_id':os.environ['PUBLISH_JOB_ID'],
+            'source_pt_uri':f"{os.environ['MODEL_PREFIX']}/model_torchscript.pt",
+            'dataset_id':json.loads((root/'metrics.json').read_text()).get('dataset_version'),
+            'input_size':report['image_size'], 'num_classes':report['num_classes'],
+            'class_names':[x.get('species_key') or x.get('common_name_zh') for x in sorted(classes.get('classes',[]),key=lambda x:int(x.get('class_index',0)))],
+            'git_commit':os.environ['GITHUB_SHA'], 'conversion_version':'litert-torch',
+            'published_filename':'fish_classifier_v0_2.tflite', 'sha256':hashlib.sha256(target.read_bytes()).hexdigest(),
+            'created_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+          }
+          (root/'fish_classifier_v0_2.metadata.json').write_text(json.dumps(metadata,ensure_ascii=False,indent=2))
+          versioned=root/f"{os.environ['MODEL_VERSION']}.tflite"
+          versioned.write_bytes(target.read_bytes())
+          PY
+
+      - name: Report publishing stage
+        run: |
+          if [[ -n "$CALLBACK_URL" && -n "$CALLBACK_TOKEN" && "$PUBLISH_JOB_ID" != LEGACY_* ]]; then
+            python - <<'PY' | curl -fsS --retry 2 -H 'Content-Type: application/json' -H "X-YuJian-Publish-Key: $CALLBACK_TOKEN" --data-binary @- "$CALLBACK_URL" || echo 'warning: publishing callback failed'
+          import json, os
+          print(json.dumps({'publish_job_id':os.environ['PUBLISH_JOB_ID'],'model_version':os.environ['MODEL_VERSION'],'status':'PUBLISHING','stage':'GITHUB_RELEASE','workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow_run_url':f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"}))
+          PY
+          fi
+
+      - name: Archive versioned TFLite artifact
+        run: |
+          gcloud storage cp "mobile-analysis/${MODEL_VERSION}.tflite" "$MODEL_PREFIX/export/${MODEL_VERSION}.tflite"
+          gcloud storage cp mobile-analysis/fish_classifier_v0_2.metadata.json "$MODEL_PREFIX/export/fish_classifier_v0_2.metadata.json"
 
       - name: Publish verified mobile model release
         env:
@@ -141,11 +226,12 @@ jobs:
         run: |
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" \
-              --title "MODEL_M1_v0.2 Mobile" \
-              --notes "Verified MODEL_M1_v0.2 LiteRT/TFLite export. Whole-image letterbox is the approved mobile preprocessing mode."
+              --title "YuJian Android Classifier" \
+              --notes "Verified LiteRT/TFLite production classifier. The stable Android asset is fish_classifier_v0_2.tflite."
           fi
           gh release upload "$RELEASE_TAG" \
             mobile-analysis/fish_classifier_v0_2.tflite \
+            mobile-analysis/fish_classifier_v0_2.metadata.json \
             mobile-analysis/class_map.json \
             mobile-analysis/metrics.json \
             mobile-analysis/preprocess_comparison.json \
@@ -154,12 +240,59 @@ jobs:
             mobile-analysis/parity_report.json \
             --clobber
 
+      - name: Verify published GitHub asset and write manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p mobile-analysis/remote
+          gh release download "$RELEASE_TAG" --pattern fish_classifier_v0_2.tflite --dir mobile-analysis/remote --clobber
+          cmp mobile-analysis/fish_classifier_v0_2.tflite mobile-analysis/remote/fish_classifier_v0_2.tflite
+          python - <<'PY'
+          import datetime, hashlib, json, os, pathlib
+          root=pathlib.Path('mobile-analysis'); target=root/'fish_classifier_v0_2.tflite'
+          export=json.loads((root/'export_report.json').read_text())
+          contract=json.loads((root/'tensor_contract.json').read_text())
+          manifest={
+            'publish_job_id':os.environ['PUBLISH_JOB_ID'],'model_id':os.environ['MODEL_VERSION'],
+            'source_format':'torchscript','source_artifact':'model_torchscript.pt','target_format':'tflite',
+            'published_filename':'fish_classifier_v0_2.tflite','target_artifact_uri':f"{os.environ['MODEL_PREFIX']}/export/{os.environ['MODEL_VERSION']}.tflite",
+            'input_shape':contract['inputs'][0]['shape'],'output_shape':contract['outputs'][0]['shape'],
+            'num_classes':export['num_classes'],'sha256':hashlib.sha256(target.read_bytes()).hexdigest(),
+            'conversion_status':'PASS','validation_status':'PASS','github_release_status':'PASS',
+            'github_release_url':f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/releases/tag/{os.environ['RELEASE_TAG']}",
+            'workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow_run_url':f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+            'published_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+          }
+          (root/'publish_manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2))
+          PY
+          gcloud storage cp mobile-analysis/publish_manifest.json "$MODEL_PREFIX/publish/publish_manifest.json"
+
+      - name: Report publish success
+        run: |
+          if [[ -n "$CALLBACK_URL" && -n "$CALLBACK_TOKEN" && "$PUBLISH_JOB_ID" != LEGACY_* ]]; then
+            python - <<'PY' | curl -fsS --retry 2 -H 'Content-Type: application/json' -H "X-YuJian-Publish-Key: $CALLBACK_TOKEN" --data-binary @- "$CALLBACK_URL" || echo 'warning: success callback failed; Console will reconcile GCS manifest'
+          import json, os, pathlib
+          m=json.loads(pathlib.Path('mobile-analysis/publish_manifest.json').read_text()); m['model_version']=os.environ['MODEL_VERSION']; m['status']='PUBLISHED'; m['stage']='COMPLETE'
+          print(json.dumps(m))
+          PY
+          fi
+
+      - name: Report publish failure
+        if: failure()
+        run: |
+          if [[ -n "$CALLBACK_URL" && -n "$CALLBACK_TOKEN" && "$PUBLISH_JOB_ID" != LEGACY_* ]]; then
+            python - <<'PY' | curl -fsS --retry 2 -H 'Content-Type: application/json' -H "X-YuJian-Publish-Key: $CALLBACK_TOKEN" --data-binary @- "$CALLBACK_URL" || true
+          import json, os
+          print(json.dumps({'publish_job_id':os.environ['PUBLISH_JOB_ID'],'model_version':os.environ['MODEL_VERSION'],'status':'FAILED','stage':'GITHUB_ACTIONS','error_code':'MODEL_PUBLISH_WORKFLOW_FAILED','error_message':'GitHub Actions 转换、校验或 Release 发布失败','workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow_run_url':f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"}))
+          PY
+          fi
+
       - name: Publish analysis summary
         if: always()
         shell: bash
         run: |
           {
-            echo '### MODEL_M1_v0.2 mobile analysis'
+            echo "### ${MODEL_VERSION} mobile publish"
             if [[ -f mobile-analysis/preprocess_comparison.json ]]; then
               python - <<'PY'
           import json
