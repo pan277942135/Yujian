@@ -248,6 +248,27 @@ def flywheel_summary(db: Session) -> dict:
     approved_species = [{"species": name, "count": count} for name, count in distribution]
     if unconfirmed_truth:
         approved_species.append({"species": UNCONFIRMED_TRUTH, "count": unconfirmed_truth})
+    try:
+        # The legacy Dataset page uses this additive summary to show the
+        # materialised Accepted Pool.  GCS is optional in local/dev tests, so
+        # a storage failure must not make the existing summary endpoint fail.
+        from app.accepted_pool import accepted_pool_summary
+
+        accepted_pool = accepted_pool_summary(db)
+    except Exception:
+        accepted_pool = {
+            "source": "ACCEPTED_POOL",
+            "source_count": int(accepted_bbox_pool),
+            "current_accepted_bbox_count": int(accepted_bbox_pool),
+            "pool_count": 0,
+            "materialized_count": 0,
+            "pending_count": int(accepted_bbox_pool),
+            "species": [],
+            "accepted_pool_species": [],
+            "manifest_uri": None,
+            "last_sync_at": None,
+            "job": None,
+        }
     return {
         "approved_master_pool": approved_total,
         "accepted_bbox_pool": int(accepted_bbox_pool),
@@ -259,6 +280,7 @@ def flywheel_summary(db: Session) -> dict:
         "new_feedback": feedback_new,
         "latest_dataset": latest.dataset_version if latest else None,
         "approved_species": approved_species,
+        "accepted_pool": accepted_pool,
     }
 
 
