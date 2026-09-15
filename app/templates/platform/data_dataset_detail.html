@@ -13,7 +13,7 @@
       <a class="button primary" id="trainingLink" href="#">生成训练任务</a>
       <small id="trainingGateHint" class="muted" style="display:block;max-width:180px"></small>
       <button class="button" type="button" onclick="focusCleanReport()">查看清洗报告</button>
-      <button class="button" type="button" onclick="loadQualityAnalysis()">查看 Quality Gate 分析</button>
+      <button class="button" type="button" onclick="loadQualityAnalysis()">查看数据质量分析</button>
       <a class="button" id="manifestLink" href="#">导出 Manifest</a>
     </div>
   </div>
@@ -23,9 +23,14 @@
     <div id="datasetCounts" class="metric-grid"></div>
   </section>
 
+  <section id="acceptedPoolProgressSection" class="panel" hidden>
+    <div class="panel-heading"><div><h2>Accepted Pool 处理进度</h2><p>人工确认数据全部进入 Detector → BBox → Crop；质量标签只用于风险分析。</p></div><span class="code">ACCEPTED_POOL</span></div>
+    <div id="acceptedPoolProgress" class="metric-grid"></div>
+  </section>
+
 
   <section id="releaseQaSection" class="panel" hidden>
-    <div class="panel-heading"><div><h2>发布前人工抽查</h2><p>完整数据集已完成机器校验。请完成 50 张固定随机样本的人眼检查，通过后才可正式训练。</p></div><span id="releaseQaStatus"></span></div>
+    <div class="panel-heading"><div><h2>发布前人工抽查</h2><p>Dataset 已完成生成。请完成 50 张固定随机样本的人眼检查，通过后才可正式训练。</p></div><span id="releaseQaStatus"></span></div>
     <div id="releaseQaSummary" class="metric-grid"></div>
     <div id="releaseQaState" class="muted" style="margin-top:12px"></div>
     <div id="releaseQaActions" style="margin-top:16px"></div>
@@ -48,7 +53,7 @@
   </section>
 
   <section id="qualityAnalysisSection" class="panel" hidden>
-    <div class="panel-heading"><div><h2>Quality Gate 分布分析</h2><p>只读分析冻结 manifest_all.csv，不修改 Dataset。</p></div></div>
+    <div class="panel-heading"><div><h2>数据质量分析</h2><p id="qualityAnalysisDescription">只读分析当前 Dataset manifest.csv，不修改 Dataset。</p></div></div>
     <div id="qualityAnalysisSummary" class="metric-grid"></div>
     <div id="qualityAnalysisCoverage" class="muted" style="margin-top:12px"></div>
     <div id="qualityAnalysisReasons" style="margin-top:16px;overflow:auto"></div>
@@ -72,7 +77,7 @@ const detailCleanLabels = {
 
 function detailStatus(status) {
   const normalized = String(status || 'UNKNOWN').toUpperCase();
-  const labels = {READY: '可训练', FROZEN: '可训练', READY_FOR_TRAINING: '可训练', REVIEW: '待审核', DRAFT: '草稿'};
+  const labels = {READY: '可训练', FROZEN: '可训练', READY_FOR_TRAINING: '可训练', REVIEW: '待审核', DRAFT: '草稿', CREATED: '已创建', BBOX_PROCESSING: '生成检测框', CROP_READY: '训练图片已生成', RELEASE_QA_PENDING: '等待发布确认'};
   return `<span class="status-tag status-${normalized.toLowerCase()}"><span class="status-dot"></span>${esc(labels[normalized] || normalized || '未知')}</span>`;
 }
 
@@ -91,13 +96,16 @@ function configureTrainingGate(detail) {
   const hint=document.getElementById('trainingGateHint');
   const isCrop=String(detail.type || '').toUpperCase()==='CROP_CLASSIFIER_V1';
   const gate=detail.release_gate || {};
-  const passed=!isCrop || String(gate.final_release_gate || 'PARTIAL_PASS').toUpperCase()==='PASS';
+  const counts=detail.counts || {};
+  const processing=detail.processing || {};
+  const generated=!detail.source || String(detail.source).toUpperCase()!=='ACCEPTED_POOL' || Number(processing.dataset_count || 0)>=Number(counts.total || 0);
+  const passed=(!isCrop || (generated && String(gate.final_release_gate || 'PARTIAL_PASS').toUpperCase()==='PASS'));
   link.classList.remove('primary');
   link.style.pointerEvents=passed?'':'none';
   link.style.opacity=passed?'':'0.55';
   link.setAttribute('aria-disabled',passed?'false':'true');
   if(passed){link.textContent='生成训练任务';hint.textContent='';}
-  else{link.textContent='🔒 开始模型训练';link.removeAttribute('href');hint.textContent='完成发布前人工抽查后开放';}
+  else{link.textContent='🔒 开始模型训练';link.removeAttribute('href');hint.textContent=generated?'完成发布前人工抽查后开放':'Dataset 生成完成后开放';}
 }
 
 function renderQaItem(item) {
@@ -111,14 +119,16 @@ function renderQaItem(item) {
   const decision=String(item.decision || '').toUpperCase();
   const decisionText=decision ? `已记录：${esc(decision)}` : '尚未检查';
   const bboxText=item.pixel_bbox || item.bbox || '未记录';
+  const riskOnly=String(datasetDetail.dataset.source||'').toUpperCase()==='ACCEPTED_POOL';
+  const qualityLabel=riskOnly?({GOOD:'低风险',WARNING:'风险提示',INVALID:'高风险'}[String(item.quality_status||'').toUpperCase()]||'风险状态'):(item.quality_status||'GOOD');
   return `<div class="metric-card" style="min-width:460px">
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-      <div><div class="muted" style="font-size:12px;margin-bottom:4px">原图 + Accepted BBox</div>${sourceImage}</div>
+      <div><div class="muted" style="font-size:12px;margin-bottom:4px">原图 + Detector BBox</div>${sourceImage}</div>
       <div><div class="muted" style="font-size:12px;margin-bottom:4px">冻结 Crop</div>${cropImage}</div>
     </div>
     <div style="margin-top:10px"><strong>${esc(item.species || '')}</strong> · ${esc(item.split || '未分片')}</div>
     <div class="muted" style="font-size:12px;margin-top:4px">image_id: ${esc(item.image_id || '')} · BBox: ${esc(bboxText)}</div>
-    <div class="muted" style="font-size:12px;margin-top:4px">质量状态：${esc(item.quality_status || 'GOOD')}</div>
+    <div class="muted" style="font-size:12px;margin-top:4px">${riskOnly?'风险提示':'质量状态'}：${esc(qualityLabel)}</div>
     <div style="margin-top:8px">${decisionText}</div>
     <input id="qa-note-${index}" class="input" maxlength="1000" placeholder="可选：记录问题" value="${esc(item.note || '')}" style="width:100%;margin-top:8px">
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
@@ -209,6 +219,20 @@ function renderDetail(detail) {
     detailMetric('测试', counts.test),
   ].join('');
 
+  const accepted = String(detail.source || '').toUpperCase() === 'ACCEPTED_POOL';
+  datasetDetail.dataset.source = detail.source || '';
+  const progressSection = document.getElementById('acceptedPoolProgressSection');
+  progressSection.hidden = !accepted;
+  if (accepted) {
+    const processing = detail.processing || {};
+    document.getElementById('acceptedPoolProgress').innerHTML = [
+      detailMetric('人工确认样本', processing.accepted_pool_count || processing.source_count || counts.total || 0),
+      detailMetric('BBox 生成', `${processing.bbox_generated || 0} / ${processing.source_count || counts.total || 0}`),
+      detailMetric('Crop 生成', `${processing.crop_generated || 0} / ${processing.source_count || counts.total || 0}`),
+      detailMetric('Release QA', `${detail.release_gate?.reviewed_count || 0} / ${detail.release_gate?.sample_size || 50}`),
+    ].join('');
+  }
+
   const sources = Array.isArray(detail.source_batches) ? detail.source_batches : [];
   document.getElementById('datasetSources').innerHTML = sources.length
     ? sources.map(source => `<span class="code">${esc(source)}</span>`).join('')
@@ -229,11 +253,15 @@ function renderQualityAnalysis(report) {
   const section = document.getElementById('qualityAnalysisSection');
   section.hidden = false;
   const totals = report.totals || {};
+  const riskOnly = String(report.mode || '').toUpperCase() === 'RISK_ONLY';
+  document.getElementById('qualityAnalysisDescription').textContent = riskOnly
+    ? '分析当前数据风险，不影响人工确认数据进入训练。'
+    : '只读分析当前 Dataset manifest.csv，不修改 Dataset。';
   document.getElementById('qualityAnalysisSummary').innerHTML = [
     detailMetric('总样本', totals.TOTAL || 0),
-    detailMetric('GOOD', totals.GOOD || 0),
-    detailMetric('WARNING', totals.WARNING || 0),
-    detailMetric('INVALID', totals.INVALID || 0),
+    detailMetric(riskOnly ? '低风险' : 'GOOD', totals.GOOD || 0),
+    detailMetric(riskOnly ? '风险提示' : 'WARNING', totals.WARNING || 0),
+    detailMetric(riskOnly ? '高风险' : 'INVALID', totals.INVALID || 0),
   ].join('');
   const coverage = report.warning_reason_coverage || {};
   document.getElementById('qualityAnalysisCoverage').textContent =
@@ -241,15 +269,16 @@ function renderQualityAnalysis(report) {
     '（' + (((coverage.coverage_ratio || 0) * 100).toFixed(1)) + '%）。样例已按原因固定抽取，未改变数据集。';
   const reasons = Array.isArray(report.reasons) ? report.reasons : [];
   document.getElementById('qualityAnalysisReasons').innerHTML =
-    '<table class="data-table"><thead><tr><th>状态</th><th>原因</th><th>数量</th><th>占本状态</th><th>训练候选分析</th><th>样例</th></tr></thead><tbody>' +
-    reasons.map(item => '<tr><td>' + esc(item.status) + '</td><td><code>' + esc(item.reason) + '</code></td><td>' +
+    '<table class="data-table"><thead><tr><th>' + (riskOnly ? '风险级别' : '状态') + '</th><th>原因</th><th>数量</th><th>占本状态</th><th>训练候选分析</th><th>样例</th></tr></thead><tbody>' +
+    reasons.map(item => '<tr><td>' + esc(riskOnly ? ({GOOD:'低风险',WARNING:'风险提示',INVALID:'高风险',UNAVAILABLE:'质量字段不可用'}[String(item.status || '').toUpperCase()] || '风险状态') : item.status) + '</td><td><code>' + esc(item.reason) + '</code></td><td>' +
       esc(item.count) + '</td><td>' + (((item.ratio_within_status || 0) * 100).toFixed(1)) +
       '%</td><td>' + esc(item.train_candidate) + '</td><td>' + esc(item.sample_size || 0) + '</td></tr>').join('') +
     '</tbody></table>';
   const trainingValue = report.training_value || {};
-  document.getElementById('qualityAnalysisRecommendation').textContent =
-    '训练候选建议：' + (trainingValue.warning_train_candidate || 'PENDING_HUMAN_REVIEW') +
-    '。当前不会自动把 WARNING 提升为 GOOD，请结合导出的 quality_examples 人工制定 V1.1 规则。';
+  document.getElementById('qualityAnalysisRecommendation').textContent = riskOnly
+    ? '风险分析只读；WARNING/INVALID 不会从 Accepted Pool 生成的 Dataset 中删除。Release QA 负责确认原图、BBox、Crop 与训练输入一致。'
+    : '训练候选建议：' + (trainingValue.warning_train_candidate || 'PENDING_HUMAN_REVIEW') +
+      '。当前不会自动把 WARNING 提升为 GOOD，请结合导出的 quality_examples 人工制定 V1.1 规则。';
   section.scrollIntoView({behavior:'smooth', block:'start'});
 }
 async function loadQualityAnalysis() {
