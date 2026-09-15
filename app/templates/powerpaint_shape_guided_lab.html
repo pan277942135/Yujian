@@ -116,13 +116,13 @@
 
   <section class="card">
     <h2>步骤4 · AI生成与最终效果</h2>
-    <p class="muted">PowerPaint 只修改补全区域，其他区域会保留原图。</p>
+    <p class="muted">PowerPaint 生成并优化鱼体主体；④及所有结果预览均不回贴原始背景、手或桶。</p>
     <div class="action-band"><button id="runP25Bottom" class="primary" disabled>生成补全结果</button><span id="generateHint" class="muted-small">完成步骤2和步骤3后可开始。</span></div>
     <div class="preview-grid">
       <figure><div class="media-frame" id="originalFrame"><div class="media-placeholder">等待处理</div><img id="original" alt="原始照片" hidden loading="lazy" decoding="async"></div><figcaption>① 原始照片</figcaption></figure>
       <figure><div class="media-frame" id="refinedOutputFrame"><div class="media-placeholder">等待处理</div><img id="refinedOutput" alt="PowerPaint输入：修正后的鱼体" hidden loading="lazy" decoding="async"></div><figcaption>PowerPaint 输入：② 修正后的鱼体（RGB Canvas）</figcaption></figure>
-      <figure><div class="media-frame" id="generatedOutputFrame"><div class="media-placeholder">AI生成后显示</div><img id="generatedOutput" alt="AI补全结果" hidden loading="lazy" decoding="async"></div><figcaption>③ AI补全结果</figcaption></figure>
-      <figure><div class="media-frame" id="feather5OutputFrame"><div class="media-placeholder">AI生成后显示</div><img id="feather5Output" alt="最终融合效果" hidden loading="lazy" decoding="async"></div><figcaption>④ 最终融合效果</figcaption></figure>
+      <figure><div class="media-frame" id="generatedOutputFrame"><div class="media-placeholder">AI生成后显示</div><img id="generatedOutput" alt="AI补全结果" hidden loading="lazy" decoding="async"></div><figcaption>③ AI补全结果（鱼体主体）</figcaption></figure>
+      <figure><div class="media-frame" id="feather5OutputFrame"><div class="media-placeholder">AI生成后显示</div><img id="feather5Output" alt="最终融合效果" hidden loading="lazy" decoding="async"></div><figcaption>④ 最终鱼体主体效果</figcaption></figure>
     </div>
     <div id="finalStatus" class="validation">完成生成后，这里会显示最终结果状态。</div>
 
@@ -132,8 +132,8 @@
       <div class="preview-grid">
         <figure><div class="media-frame" id="completionOutputFrame"><div class="media-placeholder">等待处理</div><img id="completionOutput" alt="补全区域" hidden loading="lazy" decoding="async"></div><figcaption>C1 · 补全区域</figcaption></figure>
         <figure><div class="media-frame" id="completionOverlayFrame"><div class="media-placeholder">等待处理</div><img id="completionOverlay" alt="补全区域覆盖图" hidden loading="lazy" decoding="async"></div><figcaption>C2 · 补全区域覆盖图</figcaption></figure>
-        <figure><div class="media-frame" id="hardComposeOutputFrame"><div class="media-placeholder">等待处理</div><img id="hardComposeOutput" alt="Hard Compose" hidden loading="lazy" decoding="async"></div><figcaption>E1 · Hard Compose</figcaption></figure>
-        <figure><div class="media-frame" id="feather3OutputFrame"><div class="media-placeholder">等待处理</div><img id="feather3Output" alt="Feather Compose 3px" hidden loading="lazy" decoding="async"></div><figcaption>E2 · Feather Compose 3px</figcaption></figure>
+        <figure><div class="media-frame" id="hardComposeOutputFrame"><div class="media-placeholder">等待处理</div><img id="hardComposeOutput" alt="Hard Compose · 鱼体主体" hidden loading="lazy" decoding="async"></div><figcaption>E1 · Hard Compose（鱼体主体）</figcaption></figure>
+        <figure><div class="media-frame" id="feather3OutputFrame"><div class="media-placeholder">等待处理</div><img id="feather3Output" alt="Feather Compose 3px · 鱼体主体" hidden loading="lazy" decoding="async"></div><figcaption>E2 · Feather Compose 3px（鱼体主体）</figcaption></figure>
       </div>
       <div class="stats" id="boundaryStats"></div>
       <div id="degreeResults" class="degree-grid"></div>
@@ -277,7 +277,7 @@ async function prepare(){
     state.add=addMask?.mask||blank();state.remove=removeMask?.mask||blank();state.refined=new Uint8Array(state.raw);state.completion=completionMask?.mask||blank();state.visibleHistory=[];state.completionHistory=[];state.visibleConfirmed=false;state.completionConfirmed=false;state.lastReport=null;state.prep=d;
     setImg('rawOriginalPreview',d.preview_original,'等待 AI 识别');setImg('rawSamPreview',d.preview_raw_sam,'等待 AI 识别');setImg('visibleEditorImage',d.preview_raw_sam,'等待 AI 识别');setImg('completionOriginal',d.preview_original,'等待确认鱼体范围');setImg('completionEditorImage',d.preview_original,'确认鱼体范围后开始标记');
     $('visibleCanvas').width=state.w;$('visibleCanvas').height=state.h;$('completionCanvas').width=state.w;$('completionCanvas').height=state.h;
-    await recomputeVisible();recomputeCompletion();renderProgress(d.report.progress||[]);$('report').textContent=JSON.stringify(d.report,null,2);$('technicalPrompt').textContent='Prompt ID: '+(d.report.prompt_id||'FIXED_FISH_SHAPE_GUIDED_V0.3.2')+' · PowerPaint 输入：refined_visible_fish_input.png · RGB_CANVAS · Negative Prompt: NEGATIVE_PROMPT_NOT_SUPPORTED';$('status').textContent='AI已识别鱼体。请完成步骤2：确认鱼体范围。';syncActions()
+    await recomputeVisible();recomputeCompletion();renderProgress(d.report.progress||[]);$('report').textContent=JSON.stringify(d.report,null,2);$('technicalPrompt').textContent='Prompt ID: '+(d.report.prompt_id||'FIXED_FISH_SHAPE_GUIDED_V0.3.2')+' · PowerPaint 输入：refined_visible_fish_input.png · RGB_CANVAS · 输出：RGBA_FISH_SUBJECT · Negative Prompt: NEGATIVE_PROMPT_NOT_SUPPORTED';$('status').textContent='AI已识别鱼体。请完成步骤2：确认鱼体范围。';syncActions()
   }catch(e){$('status').textContent='AI识别失败：'+String(e)}
   finally{setBusy(false)}
 }

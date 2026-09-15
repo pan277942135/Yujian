@@ -45,6 +45,7 @@ FITTING_DEGREES = (0.6, 0.8, 0.95)
 PREFIX = "experiments/powerpaint_shape_guided_lab/v0.3"
 VISIBLE_FISH_INPUT_TYPE = "RGB_CANVAS"
 VISIBLE_FISH_INPUT_BACKGROUND = (255, 255, 255)
+FISH_SUBJECT_OUTPUT_TYPE = "RGBA_FISH_SUBJECT"
 NEGATIVE_PROMPT_STATUS = "NEGATIVE_PROMPT_NOT_SUPPORTED"
 MAX_BYTES = 25 * 1024 * 1024
 logger = logging.getLogger(__name__)
@@ -597,24 +598,23 @@ def _feather_alpha(mask: np.ndarray, radius: int) -> np.ndarray:
     return alpha
 
 
-def _compose_feather(original: Image.Image, generated: Image.Image, completion_mask: np.ndarray, radius: int) -> bytes:
-    base = np.asarray(original.convert("RGB"), dtype=np.float32)
-    out = np.asarray(generated.convert("RGB").resize(original.size), dtype=np.float32)
-    alpha = _feather_alpha(completion_mask, radius)[..., None]
-    blended = base * (1.0 - alpha) + out * alpha
-    return _png(Image.fromarray(np.clip(np.rint(blended), 0, 255).astype("uint8"), "RGB"))
+def _fish_subject_png(image: Image.Image, fish_mask: np.ndarray, feather_radius: int = 0) -> bytes:
+    """Render only the fish subject; never use the original photo as a background."""
+    mask = np.asarray(fish_mask, dtype=bool)
+    if mask.ndim != 2:
+        raise ValueError("fish subject mask must be two-dimensional")
+    height, width = mask.shape
+    rgb = np.asarray(image.convert("RGB").resize((width, height)), dtype=np.uint8)
+    if feather_radius:
+        alpha = np.rint(_feather_alpha(mask, feather_radius) * 255.0).astype("uint8")
+    else:
+        alpha = np.where(mask, 255, 0).astype("uint8")
+    rgba = np.dstack((rgb, alpha))
+    return _png(Image.fromarray(rgba, "RGBA"))
 
 
-def _compose(original: Image.Image, generated: Image.Image, completion_mask: np.ndarray) -> tuple[bytes, float]:
-    base = np.asarray(original.convert("RGB"), dtype=np.uint8)
-    out = np.asarray(generated.convert("RGB").resize(original.size), dtype=np.uint8)
-    mask = np.asarray(completion_mask, dtype=bool)
-    final = base.copy()
-    final[mask] = out[mask]
-    visible = ~mask
-    changed = np.any(final != base, axis=2)
-    ratio = float(changed[visible].sum()) / max(int(visible.sum()), 1)
-    return _png(Image.fromarray(final, "RGB")), round(ratio, 6)
+def _fish_subject_mask(visible: np.ndarray, completion: np.ndarray) -> np.ndarray:
+    return np.asarray(visible, dtype=bool) | np.asarray(completion, dtype=bool)
 
 
 def _error(status: int, test_id: str, stage: str, code: str, message: str, report: dict[str, Any] | None = None) -> JSONResponse:
@@ -775,6 +775,7 @@ async def run(request: Request, db=Depends(get_db)):
     manual_completion_mask_bytes = None
     completion_mask_bytes = None
     completion_overlay_bytes = None
+    completion = None
     request_log: list[dict[str, Any]] = []
     response_log: list[dict[str, Any]] = []
     error_info: dict[str, Any] | None = None
@@ -978,9 +979,13 @@ async def run(request: Request, db=Depends(get_db)):
             report["result"] = "NOT_REQUIRED"
             report["result_classification"] = "SUCCESS_NOT_REQUIRED"
             report["completion_case"] = "COMPLETE_FISH"
-            report["assets"]["powerpaint_output"] = _persist(test_id, "powerpaint_output.png", original_bytes, "image/png")
-            report["assets"]["final_result"] = _persist(test_id, "final_result.png", original_bytes, "image/png")
-            report["result_preview"] = _data_url(original_bytes, "image/png")
+            fish_subject_mask = np.asarray(visible, dtype=bool)
+            fish_subject_bytes = _fish_subject_png(crop, fish_subject_mask)
+            report["assets"]["powerpaint_output"] = _persist(test_id, "powerpaint_output.png", fish_subject_bytes, "image/png")
+            report["assets"]["final_result"] = _persist(test_id, "final_result.png", fish_subject_bytes, "image/png")
+            report["result_preview"] = _data_url(fish_subject_bytes, "image/png")
+            report["output_mode"] = FISH_SUBJECT_OUTPUT_TYPE
+            report["background_removed"] = True
             mark_progress("powerpaint", "SUCCESS", "NOT_REQUIRED")
             mark_progress("final_compose", "READY", "NOT_REQUIRED")
             _set_stage(report, "FINAL_COMPOSE_READY")
@@ -1009,12 +1014,14 @@ async def run(request: Request, db=Depends(get_db)):
                         generated = _read_uri(worker["result_uri"])
                     if not generated:
                         raise RuntimeError("SHAPE_GUIDED_WORKER_EMPTY_OUTPUT")
-                    output_uri = _persist(test_id, f"powerpaint_output_{degree:g}.png", generated, "image/png")
                     suffix = f"{degree:g}"
+                    subject_mask = _fish_subject_mask(visible, completion)
                     with Image.open(io.BytesIO(generated)) as generated_image:
-                        hard_bytes, visible_change = _compose(crop, generated_image, completion)
-                        feather3_bytes = _compose_feather(crop, generated_image, completion, 3)
-                        feather5_bytes = _compose_feather(crop, generated_image, completion, 5)
+                        hard_bytes = _fish_subject_png(generated_image, subject_mask)
+                        feather3_bytes = _fish_subject_png(generated_image, subject_mask, 3)
+                        feather5_bytes = _fish_subject_png(generated_image, subject_mask, 5)
+                    output_uri = _persist(test_id, f"powerpaint_output_{degree:g}.png", hard_bytes, "image/png")
+                    visible_change = 0.0
                     hard_name = "final_hard_compose.png" if degree == P2_DEFAULT_FITTING_DEGREE else f"final_hard_compose_{suffix}.png"
                     feather3_name = "final_feather_3px.png" if degree == P2_DEFAULT_FITTING_DEGREE else f"final_feather_3px_{suffix}.png"
                     feather5_name = "final_feather_5px.png" if degree == P2_DEFAULT_FITTING_DEGREE else f"final_feather_5px_{suffix}.png"
@@ -1022,8 +1029,8 @@ async def run(request: Request, db=Depends(get_db)):
                     feather3_uri = _persist(test_id, feather3_name, feather3_bytes, "image/png")
                     feather5_uri = _persist(test_id, feather5_name, feather5_bytes, "image/png")
                     latency_ms = round((time.perf_counter() - result_started) * 1000, 2)
-                    item_result.update({"status": "SUCCESS", "result_uri": worker.get("result_uri"), "output_asset": output_uri, "final_asset": hard_uri, "hard_compose_asset": hard_uri, "feather_3px_asset": feather3_uri, "feather_5px_asset": feather5_uri, "worker_ms": latency_ms, "inference_time_ms": worker.get("inference_time_ms"), "model_version": worker.get("model_version"), "raw_output_preview": _data_url(generated, "image/png"), "visible_pixel_change_ratio": visible_change, "fish_identity_check": "PENDING", "background_change": "PENDING", "result_preview": _data_url(hard_bytes, "image/png"), "hard_compose_preview": _data_url(hard_bytes, "image/png"), "feather_3px_preview": _data_url(feather3_bytes, "image/png"), "feather_5px_preview": _data_url(feather5_bytes, "image/png")})
-                    response_log.append({"fitting_degree": degree, "worker_called": True, "http_status": worker.get("http_status"), "result_uri": worker.get("result_uri"), "inference_time_ms": worker.get("inference_time_ms"), "model_version": worker.get("model_version"), "latency_ms": latency_ms, "hard_compose_asset": hard_uri, "feather_3px_asset": feather3_uri, "feather_5px_asset": feather5_uri, "error": None})
+                    item_result.update({"status": "SUCCESS", "result_uri": worker.get("result_uri"), "output_asset": output_uri, "final_asset": hard_uri, "hard_compose_asset": hard_uri, "feather_3px_asset": feather3_uri, "feather_5px_asset": feather5_uri, "output_mode": FISH_SUBJECT_OUTPUT_TYPE, "fish_subject_mask_pixels": int(subject_mask.sum()), "worker_ms": latency_ms, "inference_time_ms": worker.get("inference_time_ms"), "model_version": worker.get("model_version"), "raw_output_preview": _data_url(hard_bytes, "image/png"), "visible_pixel_change_ratio": visible_change, "fish_identity_check": "PENDING", "background_change": "REMOVED", "result_preview": _data_url(hard_bytes, "image/png"), "hard_compose_preview": _data_url(hard_bytes, "image/png"), "feather_3px_preview": _data_url(feather3_bytes, "image/png"), "feather_5px_preview": _data_url(feather5_bytes, "image/png")})
+                    response_log.append({"fitting_degree": degree, "worker_called": True, "http_status": worker.get("http_status"), "result_uri": worker.get("result_uri"), "inference_time_ms": worker.get("inference_time_ms"), "model_version": worker.get("model_version"), "latency_ms": latency_ms, "hard_compose_asset": hard_uri, "feather_3px_asset": feather3_uri, "feather_5px_asset": feather5_uri, "output_mode": FISH_SUBJECT_OUTPUT_TYPE, "error": None})
                     report["assets"][f"powerpaint_output_{suffix}"] = output_uri
                     report["assets"][f"final_hard_compose_{suffix}"] = hard_uri
                     report["assets"][f"final_feather_3px_{suffix}"] = feather3_uri
@@ -1057,6 +1064,8 @@ async def run(request: Request, db=Depends(get_db)):
                 report["preview_hard_compose"] = best.get("hard_compose_preview")
                 report["preview_feather_3px"] = best.get("feather_3px_preview")
                 report["preview_feather_5px"] = best.get("feather_5px_preview")
+                report["output_mode"] = FISH_SUBJECT_OUTPUT_TYPE
+                report["background_removed"] = True
                 report["result_classification"] = "SUCCESS_COMPLETED"
                 _set_stage(report, "FINAL_COMPOSE_READY")
                 mark_progress("powerpaint", "SUCCESS", {"successful_degrees": [x["fitting_degree"] for x in successful]})
@@ -1165,10 +1174,19 @@ async def run(request: Request, db=Depends(get_db)):
         report["assets"]["completion_mask_report"] = _safe_persist_json(test_id, "completion_mask_report.json", report.get("completion_mask", {"status": "NOT_REACHED"}))
         report["assets"]["shape_guided_request"] = _safe_persist_json(test_id, "shape_guided_request.json", {"requests": request_log})
         report["assets"]["shape_guided_response"] = _safe_persist_json(test_id, "shape_guided_response.json", {"responses": response_log})
+        if crop is not None:
+            fallback_mask = np.zeros((crop.height, crop.width), dtype=bool)
+            if visible is not None:
+                fallback_mask |= np.asarray(visible, dtype=bool)
+            if completion is not None:
+                fallback_mask |= np.asarray(completion, dtype=bool)
+            fallback_subject_bytes = _fish_subject_png(crop, fallback_mask)
+        else:
+            fallback_subject_bytes = _png(Image.new("RGBA", (1, 1), (0, 0, 0, 0)))
         if "powerpaint_output" not in report["assets"]:
-            report["assets"]["powerpaint_output"] = _safe_persist(test_id, "powerpaint_output.png", original_bytes, "image/png", report)
+            report["assets"]["powerpaint_output"] = _safe_persist(test_id, "powerpaint_output.png", fallback_subject_bytes, "image/png", report)
         if "final_result" not in report["assets"]:
-            report["assets"]["final_result"] = _safe_persist(test_id, "final_result.png", original_bytes, "image/png", report)
+            report["assets"]["final_result"] = _safe_persist(test_id, "final_result.png", fallback_subject_bytes, "image/png", report)
         report["timings"]["total_ms"] = round((time.perf_counter() - started) * 1000, 2)
         report["artifacts_ready"] = not bool(report.get("persistence_errors"))
         report["error"] = error_info
