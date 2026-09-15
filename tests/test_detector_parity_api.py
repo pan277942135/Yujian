@@ -29,6 +29,8 @@ def test_detector_parity_returns_real_pipeline_metadata_and_overlay(monkeypatch)
     assert payload["detector"]["bbox_normalized"] == [0.1, 0.2, 0.7, 0.7]
     assert payload["preprocess"]["letterbox"]["fill"] == 114
     assert payload["overlay"]["data_url"].startswith("data:image/png;base64,")
+    assert payload["classifier_crop"]["data_url"].startswith("data:image/png;base64,")
+    assert payload["classifier_crop"]["pixels"] == [0, 4, 91, 50]
 
 
 def test_detector_parity_upload_field_is_image():
