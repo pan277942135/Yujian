@@ -1,6 +1,8 @@
 import inspect
+import io
 
 import numpy as np
+from PIL import Image
 
 import app.powerpaint_shape_guided_lab as lab
 
@@ -11,8 +13,21 @@ def test_shape_guided_route_and_contract():
     assert "/api/debug/powerpaint-shape-guided-lab/run" in paths
     assert lab.TASK_MODE == "SHAPE_GUIDED"
     assert lab.FITTING_DEGREES == (0.6, 0.8, 0.95)
-    assert lab.PROMPT_ID == "FIXED_FISH_SHAPE_GUIDED_V0.3.1"
-    assert lab.PROMPT == "a realistic fish body matching the visible fish"
+    assert lab.PROMPT_ID == "FIXED_FISH_SHAPE_GUIDED_V0.3.2"
+    assert lab.PROMPT.startswith("Restore the missing part of the same fish.")
+    assert lab.NEGATIVE_PROMPT_STATUS == "NEGATIVE_PROMPT_NOT_SUPPORTED"
+    assert lab.VISIBLE_FISH_INPUT_TYPE == "RGB_CANVAS"
+
+
+def test_refined_visible_input_is_rgb_canvas():
+    crop = Image.new("RGB", (4, 3), (20, 40, 60))
+    visible = np.zeros((3, 4), dtype=bool)
+    visible[1, 1:3] = True
+    data = lab._visible_fish_input_png(crop, visible)
+    with Image.open(io.BytesIO(data)) as image:
+        assert image.mode == "RGB"
+        assert image.getpixel((0, 0)) == (255, 255, 255)
+        assert image.getpixel((1, 1)) == (20, 40, 60)
 
 
 def test_completion_mask_is_disjoint_and_capped():
@@ -47,6 +62,13 @@ def test_fitting_degree_validation_and_report_schema():
         "background_change", "status",
     }
     assert report["task_mode"] == "SHAPE_GUIDED"
+
+
+def test_powerpaint_request_uses_refined_visible_input():
+    source = inspect.getsource(lab.run)
+    assert '"image_uri": report["assets"]["refined_visible_fish_input"]' in source
+    assert 'image_uri=report["assets"]["refined_visible_fish_input"]' in source
+    assert '"mask_uri": report["assets"]["completion_mask"]' in source
 
 
 def test_shape_guided_module_is_independent():
