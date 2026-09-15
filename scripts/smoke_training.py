@@ -97,6 +97,23 @@ def main() -> None:
                 selection_mode="ALL_APPROVED",
                 status="FROZEN",
                 pipeline_type=CROP_CLASSIFIER_V1,
+                metadata_json=json.dumps({
+                    "release_gate": {
+                        "required": True,
+                        "random_50_qa": {
+                            "schema_version": "RANDOM_50_QA_V1",
+                            "status": "PASS",
+                            "sample_size": 50,
+                            "reviewed_count": 50,
+                            "pass_count": 50,
+                            "issue_count": 0,
+                            "critical_count": 0,
+                            "qa_uri": "gs://test-bucket/datasets/DS_M1_v0.1/qa/random_50_qa.json",
+                            "qa_csv_uri": "gs://test-bucket/datasets/DS_M1_v0.1/qa/random_50_qa.csv",
+                        },
+                        "final_release_gate": "PASS",
+                    }
+                }, ensure_ascii=False),
             )
         )
         db.commit()

@@ -828,6 +828,28 @@ def get_release_gate_summary(db, dataset_name: str) -> dict[str, Any] | None:
         return None
     if str(getattr(dataset, "pipeline_type", "") or "").upper() != CROP_PIPELINE_TYPE:
         return None
+    # metadata_json is the persisted release-gate summary written together with
+    # the QA artifact. Read it first so training/UI checks remain deterministic
+    # even when a process cannot reach GCS at the time of the check.
+    metadata = _json(getattr(dataset, "metadata_json", None)) or {}
+    stored_gate = metadata.get("release_gate") if isinstance(metadata, dict) else None
+    stored_qa = stored_gate.get("random_50_qa") if isinstance(stored_gate, dict) else None
+    if isinstance(stored_gate, dict) and isinstance(stored_qa, dict):
+        return {
+            "required": True,
+            "schema_version": stored_qa.get("schema_version", QA_SCHEMA_VERSION),
+            "source_manifest": stored_qa.get("source_manifest", QA_SOURCE_MANIFEST),
+            "sample_plan": stored_qa.get("sample_plan", {split: count for split, count in QA_SPLIT_PLAN}),
+            "status": stored_qa.get("status", "NOT_PERFORMED"),
+            "sample_size": int(stored_qa.get("sample_size", QA_SAMPLE_SIZE) or QA_SAMPLE_SIZE),
+            "reviewed_count": int(stored_qa.get("reviewed_count", 0) or 0),
+            "pass_count": int(stored_qa.get("pass_count", 0) or 0),
+            "issue_count": int(stored_qa.get("issue_count", 0) or 0),
+            "critical_count": int(stored_qa.get("critical_count", 0) or 0),
+            "final_release_gate": stored_gate.get("final_release_gate", "PARTIAL_PASS"),
+            "qa_uri": stored_qa.get("qa_uri"),
+            "qa_csv_uri": stored_qa.get("qa_csv_uri"),
+        }
     qa = _qa_read(dataset_name)
     if not _qa_is_frozen_manifest(qa):
         return {
