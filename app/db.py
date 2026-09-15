@@ -87,6 +87,8 @@ def _ensure_production_pipeline_columns() -> None:
             "crop_version": "VARCHAR(128)",
             "classifier_version": "VARCHAR(128)",
             "dataset_version": "VARCHAR(128)",
+            "is_production": "BOOLEAN NOT NULL DEFAULT FALSE",
+            "published_at": "TIMESTAMP WITH TIME ZONE",
         },
         "batch_crop_reviews": {
             "detector_version": "VARCHAR(128)",

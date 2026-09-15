@@ -11,7 +11,7 @@ def test_model_factory_pages_expose_simple_and_advanced_workflows():
     assert pages["/platform/model/registry"].template == "platform/model_registry.html"
     assert pages["/platform/model/evaluation"].template == "platform/model_evaluation.html"
     for path, markers in {
-        "/platform/model/training": ("开始训练", "高级参数", "Epoch", "Batch Size"),
+        "/platform/model/training": ("开始训练", "高级参数", "Epoch", "Batch Size", "发布模型", "fish_classifier_v0_2.tflite"),
         "/platform/model/registry": ("模型版本", "发布状态", "不展示内部存储路径"),
         "/platform/model/evaluation": ("Accuracy", "混淆矩阵", "错误案例", "模型智能分析", "Hard Case", "生成采集Batch"),
     }.items():

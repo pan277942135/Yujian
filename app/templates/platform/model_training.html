@@ -40,14 +40,44 @@
   <div class="panel-heading"><div><h2>训练结果报告</h2><p id="reportTitle"></p></div><button class="button" type="button" onclick="document.getElementById('trainingReport').hidden=true">关闭</button></div>
   <div id="reportState"></div>
 </section>
+<dialog id="publishDialog" style="width:min(520px,calc(100vw - 32px));border:1px solid #d8e5e0;border-radius:16px;padding:0;box-shadow:0 24px 70px rgba(20,62,57,.24)">
+  <form method="dialog" style="padding:22px">
+    <div class="panel-heading"><div><h2>发布模型</h2><p>转换、校验并更新 Android 模型 Release</p></div></div>
+    <div id="publishDialogBody" class="notice"></div>
+    <div class="form-actions"><button class="button" value="cancel">取消</button><button id="publishConfirm" class="button primary" value="confirm">确认发布</button></div>
+  </form>
+</dialog>
 {% endblock %}
 {% block scripts %}
 <script>
 const jobsTarget=document.getElementById('trainingJobs');
+const publishDialog=document.getElementById('publishDialog');
+let publishModelId='';let publishPollTimer=null;
+let trainingRowsByModel=new Map();
 function pct(value){return value==null?'—':(Number(value)*100).toFixed(1)+'%'}
+function publishLabel(status){return ({NOT_PUBLISHED:'未发布',CONVERTING:'转换中',VALIDATING:'校验中',PUBLISHING:'发布中',PUBLISHED:'已发布',FAILED:'发布失败'})[status]||status||'未发布'}
+function publishClass(status){return status==='PUBLISHED'?'success':status==='FAILED'?'failed':['CONVERTING','VALIDATING','PUBLISHING'].includes(status)?'running':'neutral'}
+function publishAction(row){
+  const status=row.publish_status||'NOT_PUBLISHED';
+  if(['CONVERTING','VALIDATING','PUBLISHING'].includes(status))return '<button class="button gold" disabled>发布中…</button>';
+  if(!row.can_publish){const reason=row.status==='COMPLETED'?'未找到模型 Artifact':'训练尚未完成';return `<button class="button" disabled title="${esc(reason)}">发布模型</button>`}
+  const label=status==='NOT_PUBLISHED'?'发布模型':'重新发布';
+  return `<button class="button gold" onclick="openPublish('${esc(row.model_version)}')">${label}</button>`
+}
 function renderJobs(rows){
+  trainingRowsByModel=new Map(rows.filter(row=>row.model_version).map(row=>[row.model_version,row]));
   if(!rows.length){jobsTarget.innerHTML='<div class="empty">暂无训练任务</div>';return}
-  jobsTarget.innerHTML=`<div class="table-wrap"><table class="data-table"><thead><tr><th>任务 ID</th><th>数据集</th><th>模型</th><th>状态</th><th>开始时间</th><th>结果</th><th></th></tr></thead><tbody>${rows.map(row=>`<tr><td><strong class="code">${esc(row.task_id)}</strong></td><td>${esc(row.dataset)}</td><td>${esc(row.model)}</td><td><span class="status-tag status-${String(row.status||'').toLowerCase()}"><span class="status-dot"></span>${esc(row.status)}</span></td><td>${esc(row.started_at||'—')}</td><td>${row.result&&row.result.f1?`F1 ${esc(pct(row.result.f1))}`:'—'}</td><td><button class="button" onclick="showReport('${esc(row.id)}')">查看报告</button></td></tr>`).join('')}</tbody></table></div>`
+  jobsTarget.innerHTML=`<div class="table-wrap"><table class="data-table"><thead><tr><th>任务 ID</th><th>数据集</th><th>模型</th><th>训练状态</th><th>发布状态</th><th>开始时间</th><th>结果</th><th>操作</th></tr></thead><tbody>${rows.map(row=>{const failure=row.publish_error_message?`<div class="muted" title="${esc(row.publish_error_message)}">${esc(row.publish_error_code||'失败详情')}</div>`:'';return `<tr><td><strong class="code">${esc(row.task_id)}</strong></td><td>${esc(row.dataset)}</td><td><strong>${esc(row.model_version||row.model)}</strong><div class="muted">${esc(row.model)}</div></td><td><span class="status-tag status-${String(row.status||'').toLowerCase()}"><span class="status-dot"></span>${esc(row.status)}</span></td><td><span class="status-tag status-${publishClass(row.publish_status)}"><span class="status-dot"></span>${esc(publishLabel(row.publish_status))}</span>${failure}</td><td>${esc(row.started_at||'—')}</td><td>${row.result&&row.result.f1?`F1 ${esc(pct(row.result.f1))}`:'—'}</td><td><div class="inline"><button class="button" onclick="showReport('${esc(row.id)}')">查看报告</button>${publishAction(row)}${row.github_release_url?`<a class="button" href="${esc(row.github_release_url)}" target="_blank" rel="noopener">查看 Release</a>`:''}</div></td></tr>`}).join('')}</tbody></table></div>`
+}
+function openPublish(modelId){const row=trainingRowsByModel.get(modelId)||{};const republish=(row.publish_status||'NOT_PUBLISHED')!=='NOT_PUBLISHED';const top1=row.result?.top1;const f1=row.result?.f1;publishModelId=modelId;document.getElementById('publishDialogBody').innerHTML=`即将${republish?'重新':''}发布：<br><strong class="code">${esc(modelId)}</strong><br><br>数据集：${esc(row.dataset||'—')}<br>Top1：${esc(top1?pct(top1):'—')}　Macro F1：${esc(f1?pct(f1):'—')}<br><br>系统将自动读取训练模型、转换并校验 TFLite，然后覆盖 GitHub Release 中的：<br><strong class="code">fish_classifier_v0_2.tflite</strong>`;publishDialog.showModal()}
+publishDialog.addEventListener('close',()=>{if(publishDialog.returnValue==='confirm'&&publishModelId)startPublish(publishModelId)});
+async function startPublish(modelId){
+  const notice=document.getElementById('trainingNotice');notice.innerHTML='<div class="notice">正在创建模型发布任务…</div>';
+  try{const data=await platformFetch(`/api/models/${encodeURIComponent(modelId)}/publish`,{method:'POST'});notice.innerHTML=`<div class="notice">发布任务已创建：<span class="code">${esc(data.publish_job_id)}</span>，正在转换模型。</div>`;await loadTrainingJobs();pollPublish(modelId)}catch(error){notice.innerHTML=`<div class="error-state">${esc(platformError(error))}</div>`;await loadTrainingJobs()}
+}
+async function pollPublish(modelId){
+  clearTimeout(publishPollTimer);
+  try{const data=await platformFetch(`/api/models/${encodeURIComponent(modelId)}/publish/status`);const notice=document.getElementById('trainingNotice');if(data.status==='PUBLISHED'){notice.innerHTML=`<div class="notice">发布成功：<strong>${esc(data.model_id)}</strong> → <span class="code">${esc(data.published_filename)}</span>${data.github_release_url?`　<a href="${esc(data.github_release_url)}" target="_blank" rel="noopener">查看 Release</a>`:''}</div>`;await loadTrainingJobs();return}if(data.status==='FAILED'){notice.innerHTML=`<div class="error-state">发布失败：${esc(data.error_code||'PUBLISH_INTERNAL_ERROR')}<br>${esc(data.error_message||'请查看 GitHub Actions 日志')}</div>`;await loadTrainingJobs();return}notice.innerHTML=`<div class="notice">${esc(publishLabel(data.status))}：${esc(data.stage||'处理中')} <span class="code">${esc(data.publish_job_id||'')}</span></div>`;await loadTrainingJobs();publishPollTimer=setTimeout(()=>pollPublish(modelId),5000)}catch(error){document.getElementById('trainingNotice').innerHTML=`<div class="error-state">${esc(platformError(error))}</div>`}
 }
 async function loadDatasets(){
   try{const payload=await platformFetch('/api/platform/datasets');const rows=Array.isArray(payload)?payload:(payload.datasets||[]);const eligible=rows.filter(row=>['FROZEN','READY_FOR_TRAINING'].includes(String(row.status||'').toUpperCase()));const select=document.getElementById('trainDataset');select.innerHTML='<option value="">请选择可训练数据集</option>'+eligible.map(row=>`<option value="${esc(row.id)}">${esc(row.name||row.id)} · ${esc(row.status)}</option>`).join('')}

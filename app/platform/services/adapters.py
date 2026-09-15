@@ -35,6 +35,7 @@ from app.models import (
     FeedbackEvent,
     ImageAsset,
     ModelVersion,
+    ModelPublishJob,
     TrainingRun,
 )
 from app.dataset_models import DatasetItem
@@ -803,6 +804,21 @@ def training_jobs(db: Session) -> list[dict[str, Any]]:
     result = []
     for row in rows:
         params = _json(row.params_json, {}) or {}
+        model_version = str(params.get("model_version") or "").strip()
+        model = db.get(ModelVersion, model_version) if model_version else None
+        if model is None:
+            model = db.scalar(select(ModelVersion).where(ModelVersion.run_id == row.run_id).limit(1))
+        publish_job = None
+        if model is not None:
+            publish_job = db.scalar(
+                select(ModelPublishJob)
+                .where(ModelPublishJob.model_version == model.model_version)
+                .order_by(ModelPublishJob.created_at.desc())
+                .limit(1)
+            )
+        training_complete = _status(row.status) in {"COMPLETED", "SUCCESS"}
+        classifier = "CLASSIFIER" in _status(getattr(row, "pipeline_type", ""))
+        artifact_ready = bool(model and (model.artifact_uri or row.artifact_uri))
         result.append(
             {
                 "id": row.run_id,
@@ -815,6 +831,16 @@ def training_jobs(db: Session) -> list[dict[str, Any]]:
                 "finished_at": _iso(row.finished_at),
                 "progress": params.get("progress"),
                 "result": _json(params.get("metrics"), {}) or {},
+                "model_version": model.model_version if model else model_version or None,
+                "artifact_ready": artifact_ready,
+                "can_publish": bool(training_complete and classifier and artifact_ready),
+                "publish_status": publish_job.status if publish_job else "NOT_PUBLISHED",
+                "publish_stage": publish_job.stage if publish_job else None,
+                "publish_job_id": publish_job.publish_job_id if publish_job else None,
+                "publish_error_code": publish_job.error_code if publish_job else None,
+                "publish_error_message": publish_job.error_message if publish_job else None,
+                "github_release_url": publish_job.github_release_url if publish_job else None,
+                "published_at": _iso(publish_job.published_at) if publish_job else None,
             }
         )
     return result
