@@ -12,6 +12,7 @@ from starlette.requests import Request
 from app.db import Base
 from app.entry import app
 from app.models import Batch, DatasetVersion, ImageAsset
+from app.batch_upload_api import UploadFinalizeRequest, UploadStartRequest
 from app.platform.routes.api import platform_dataset_manifest
 from app.platform.routes.pages import (
     PLATFORM_PAGES,
@@ -145,13 +146,18 @@ def test_platform_datasets_returns_only_dataset_versions(tmp_path):
             )
         )
         db.commit()
-        rows = adapters.datasets(db)
+        payload = adapters.datasets(db)
+        rows = payload["datasets"]
         assert [row["id"] for row in rows] == ["DS_M1_v0.7"]
         assert all(not row["id"].startswith("BATCH_") for row in rows)
         assert rows[0]["total"] == 40
         assert rows[0]["train"] == 30
         assert rows[0]["val"] == 5
         assert rows[0]["test"] == 5
+        assert payload["summary"]["dataset_count"] == 1
+        assert payload["summary"]["batch_count"] == 1
+        assert payload["summary"]["total_images"] == 40
+        assert payload["recent_batches"][0]["batch_id"] == "BATCH_RAW_001"
         assert adapters.dataset_detail(db, "BATCH_RAW_001") is None
     finally:
         db.close()
@@ -197,7 +203,8 @@ def test_platform_dataset_api_normalizes_version_fields_and_source_batches(tmp_p
         )
         db.commit()
 
-        rows = adapters.datasets(db)
+        payload = adapters.datasets(db)
+        rows = payload["datasets"]
 
         assert [row["id"] for row in rows] == ["DS_M1_v0.7", "DS_M1_v0.6"]
         assert all(not row["id"].startswith("BATCH_") for row in rows)
@@ -299,11 +306,13 @@ def test_platform_dataset_list_uses_one_dataset_version_query(tmp_path, monkeypa
         queries = []
         event.listen(db.bind, "before_cursor_execute", lambda *args: queries.append(args[2]))
 
-        rows = adapters.datasets(db)
+        payload = adapters.datasets(db)
+        rows = payload["datasets"]
 
         assert len(rows) == 1
         assert rows[0]["total"] == 3
-        assert len(queries) == 1
+        assert payload["recent_batches"] == []
+        assert len(queries) <= 5
     finally:
         db.close()
 
@@ -359,12 +368,13 @@ def test_dataset_templates_separate_detail_and_clean_report_actions():
         platform_pages=PLATFORM_PAGES,
     )
 
-    assert "当前生产版本" in rendered
-    assert "历史版本累计样本" in rendered
-    assert "当前训练数据" in rendered
+    assert "数据集版本" in rendered
+    assert "数据批次" in rendered
+    assert "累计图片" in rendered
+    assert "待审核" in rendered
     assert "查看详情" in rendered
     assert "清洗报告" in rendered
-    assert "row.name" not in rendered
+    assert "row.name" in rendered
     assert "row.source_batch||" not in rendered
     assert "暂无完整关联信息" not in rendered
     assert "/api/platform/datasets/${encodeURIComponent(id)}/clean-report" in rendered
@@ -453,3 +463,92 @@ def test_platform_endpoint_perf_evidence_3700_review_rows(tmp_path, monkeypatch)
         )
     finally:
         db.close()
+
+
+def test_dataset_page_payload_separates_recent_batch_review_stats(tmp_path):
+    db = _session(tmp_path)
+    try:
+        db.add(
+            Batch(
+                batch_id="BATCH_RECENT_001",
+                source="real_collection",
+                manifest_uri="/tmp/manifest.csv",
+                raw_uri="/tmp/raw",
+                image_count=7,
+                status="REGISTERED",
+                notes="2026 秋季真实鱼获采集-01",
+            )
+        )
+        db.add_all(
+            [
+                ImageAsset(
+                    batch_id="BATCH_RECENT_001",
+                    image_id="approved-1",
+                    file_name="approved.jpg",
+                    object_name="approved.jpg",
+                    gcs_uri="gs://private/approved.jpg",
+                    review_status="approved",
+                ),
+                ImageAsset(
+                    batch_id="BATCH_RECENT_001",
+                    image_id="pending-1",
+                    file_name="pending.jpg",
+                    object_name="pending.jpg",
+                    gcs_uri="gs://private/pending.jpg",
+                    review_status="pending",
+                ),
+            ]
+        )
+        db.commit()
+
+        payload = adapters.datasets(db)
+
+        assert [row["id"] for row in payload["datasets"]] == []
+        assert payload["summary"] == {
+            "dataset_count": 0,
+            "batch_count": 1,
+            "total_images": 7,
+            "pending_review": 1,
+        }
+        assert payload["recent_batches"] == [
+            {
+                "batch_id": "BATCH_RECENT_001",
+                "name": "2026 秋季真实鱼获采集-01",
+                "source": "real_collection",
+                "image_count": 7,
+                "ai_valid": 1,
+                "pending_review": 1,
+                "status": "REGISTERED",
+                "created_at": payload["recent_batches"][0]["created_at"],
+            }
+        ]
+    finally:
+        db.close()
+
+
+def test_platform_import_page_reuses_existing_batch_upload_endpoints():
+    page = next(page for page in PLATFORM_PAGES if page.path == "/platform/data/import")
+    rendered = templates.env.get_template(page.template).render(
+        request=_request(page.path), page=page, page_title=page.title, platform_pages=PLATFORM_PAGES
+    )
+
+    assert "创建数据批次" in rendered
+    assert "导入真实鱼获采集图片" in rendered
+    assert "批次名称" in rendered
+    assert "/api/batches/upload-start" in rendered
+    assert "/api/batches/upload-file" in rendered
+    assert "/api/batches/upload-finalize" in rendered
+    assert "/api/batches/upload" in rendered
+    assert "新建数据集" not in rendered
+    assert "iframe" not in rendered.lower()
+
+
+def test_existing_batch_upload_contract_accepts_optional_platform_batch_name():
+    start = UploadStartRequest(batch_name="2026 秋季真实鱼获采集-01", source="real_collection")
+    finalize = UploadFinalizeRequest(
+        batch_id="BATCH_20260915_TEST_001",
+        batch_name="2026 秋季真实鱼获采集-01",
+        source="real_collection",
+    )
+    assert start.batch_name == finalize.batch_name
+    assert start.source == finalize.source
