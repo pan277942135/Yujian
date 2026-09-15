@@ -716,7 +716,14 @@ def _qa_read(dataset_name: str) -> dict[str, Any] | None:
 
 
 def _qa_is_frozen_manifest(qa: dict[str, Any] | None) -> bool:
-    return isinstance(qa, dict) and str(qa.get("source_manifest") or "") == QA_SOURCE_MANIFEST
+    if not isinstance(qa, dict) or str(qa.get("source_manifest") or "") != QA_SOURCE_MANIFEST:
+        return False
+    items = qa.get("items") or []
+    try:
+        sample_size = int(qa.get("sample_size") or 0)
+    except (TypeError, ValueError):
+        return False
+    return sample_size == QA_SAMPLE_SIZE and len(items) == QA_SAMPLE_SIZE
 
 
 
@@ -746,7 +753,18 @@ def _qa_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         status, final_gate = "FAIL", "FAIL"
     else:
         status, final_gate = "PASS", "PASS"
-    return {"status": status, "final_release_gate": final_gate, "reviewed_count": len(reviewed), "pass_count": pass_count, "issue_count": issue_count, "critical_count": critical_count}
+    return {
+        "status": status,
+        "final_release_gate": final_gate,
+        "reviewed_count": len(reviewed),
+        "pass_count": pass_count,
+        "issue_count": issue_count,
+        "critical_count": critical_count,
+        "checked": len(reviewed),
+        "passed": pass_count,
+        "failed": issue_count,
+        "training_allowed": final_gate == "PASS",
+    }
 
 
 def _qa_unique_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -920,45 +938,6 @@ def get_random_50_qa(dataset_name: str) -> dict[str, Any]:
     return qa
 
 
-def _qa_manifest_keys(row: dict[str, Any]) -> list[tuple[str, str]]:
-    keys: list[tuple[str, str]] = []
-    for field in ("image_id", "id", "crop_path", "source_image"):
-        value = str(row.get(field) or "").strip()
-        if value:
-            keys.append((field, value))
-    return keys
-
-
-def _qa_enrich_frozen_rows(client, bucket, dataset_name: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Enrich legacy manifest.csv rows from the same frozen audit artifact.
-
-    The sample universe remains manifest.csv. manifest_all.csv is only used to
-    restore split/audit columns that were absent from an older frozen export.
-    """
-    if all(_qa_split(row) for row in rows):
-        return rows
-    audit_blob = bucket.blob(f"datasets/{dataset_name}/manifest_all.csv")
-    if not audit_blob.exists(client):
-        return rows
-    audit_rows = list(csv.DictReader(audit_blob.download_as_text(encoding="utf-8")))
-    by_key: dict[tuple[str, str], dict[str, Any]] = {}
-    for audit in audit_rows:
-        for key in _qa_manifest_keys(audit):
-            by_key.setdefault(key, audit)
-    enriched: list[dict[str, Any]] = []
-    for row in rows:
-        current = dict(row)
-        audit = next((by_key.get(key) for key in _qa_manifest_keys(row) if by_key.get(key)), None)
-        if audit:
-            for field in MANIFEST_FIELDS:
-                if not str(current.get(field) or "").strip() and str(audit.get(field) or "").strip():
-                    current[field] = audit[field]
-        if not str(current.get("quality_status") or "").strip():
-            current["quality_status"] = "GOOD"
-        enriched.append(current)
-    return enriched
-
-
 def _qa_reconstruct_frozen_splits(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Reconstruct missing split labels in memory using the production helper.
 
@@ -966,7 +945,7 @@ def _qa_reconstruct_frozen_splits(rows: list[dict[str, Any]]) -> list[dict[str, 
     manifests omitted split labels. It never writes the reconstructed labels
     back to GCS or the DatasetVersion.
     """
-    if any(_qa_split(row) for row in rows):
+    if all(_qa_split(row) for row in rows):
         return rows
     selected: list[dict[str, Any]] = []
     for row in rows:
@@ -1000,7 +979,6 @@ def start_random_50_qa(dataset_name: str, db) -> dict[str, Any]:
     if not manifest_blob.exists(client):
         raise FileNotFoundError(f"{QA_SOURCE_MANIFEST} not found")
     rows = list(csv.DictReader(manifest_blob.download_as_text(encoding="utf-8")))
-    rows = _qa_enrich_frozen_rows(client, bucket, dataset_name, rows)
     rows = _qa_reconstruct_frozen_splits(rows)
     selected = select_random_50_qa_rows(rows, dataset_name)
     return _persist_qa(dataset_name, _qa_payload(dataset_name, selected), db)
@@ -1008,7 +986,7 @@ def start_random_50_qa(dataset_name: str, db) -> dict[str, Any]:
 
 def review_random_50_qa(dataset_name: str, qa_index: int, decision: str, note: str, db) -> dict[str, Any]:
     qa = _qa_read(dataset_name)
-    if qa is None:
+    if not _qa_is_frozen_manifest(qa):
         raise ValueError("RANDOM_50_QA_NOT_STARTED")
     items = qa.get("items") or []
     if qa_index < 0 or qa_index >= len(items):
@@ -1083,10 +1061,10 @@ def read_random_50_qa_media(dataset_name: str, qa_index: int, kind: str = "crop"
         if not blob.exists(client):
             raise FileNotFoundError("RANDOM_50_QA_MEDIA_NOT_AVAILABLE")
         return blob.download_as_bytes(timeout=120)
-    if kind != "source_bbox":
+    if kind not in {"source", "source_bbox"}:
         raise FileNotFoundError("RANDOM_50_QA_MEDIA_KIND_INVALID")
     source = Image.open(io.BytesIO(_qa_source_bytes(client, bucket, dataset_name, item.get("source_image")))).convert("RGB")
-    bbox = _qa_bbox_pixels(item)
+    bbox = _qa_bbox_pixels(item) if kind == "source_bbox" else None
     if bbox is not None:
         draw = ImageDraw.Draw(source)
         left, top, right, bottom = bbox
