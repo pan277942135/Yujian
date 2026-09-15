@@ -921,6 +921,33 @@ def _qa_enrich_frozen_rows(client, bucket, dataset_name: str, rows: list[dict[st
     return enriched
 
 
+def _qa_reconstruct_frozen_splits(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Reconstruct missing split labels in memory using the production helper.
+
+    This is only a compatibility path for the frozen 323-row export whose
+    manifests omitted split labels. It never writes the reconstructed labels
+    back to GCS or the DatasetVersion.
+    """
+    if any(_qa_split(row) for row in rows):
+        return rows
+    selected: list[dict[str, Any]] = []
+    for row in rows:
+        species = str(row.get("species") or "").strip()
+        if not species:
+            continue
+        selected.append({
+            "catalog": SimpleNamespace(species_key=species, common_name_zh=species),
+            "group_key": _qa_item_id(row),
+            "row": row,
+        })
+    if not selected:
+        return rows
+    _assign_stratified_group_splits(selected, seed=CROP_SPLIT_SEED, train=0.70, val=0.15)
+    for item in selected:
+        item["row"]["split"] = item["split"]
+    return rows
+
+
 def start_random_50_qa(dataset_name: str, db) -> dict[str, Any]:
     dataset = db.get(DatasetVersion, dataset_name)
     if dataset is None:
@@ -936,6 +963,7 @@ def start_random_50_qa(dataset_name: str, db) -> dict[str, Any]:
         raise FileNotFoundError(f"{QA_SOURCE_MANIFEST} not found")
     rows = list(csv.DictReader(manifest_blob.download_as_text(encoding="utf-8")))
     rows = _qa_enrich_frozen_rows(client, bucket, dataset_name, rows)
+    rows = _qa_reconstruct_frozen_splits(rows)
     selected = select_random_50_qa_rows(rows, dataset_name)
     return _persist_qa(dataset_name, _qa_payload(dataset_name, selected), db)
 
