@@ -49,7 +49,15 @@ def test_platform_empty_adapters_and_allowed_tables(tmp_path):
     db = _session(tmp_path)
     try:
         assert adapters.dashboard(db)["datasets"] == 0
-        assert adapters.datasets(db) == []
+        dataset_payload = adapters.datasets(db)
+        assert dataset_payload["datasets"] == []
+        assert dataset_payload["recent_batches"] == []
+        assert dataset_payload["summary"] == {
+            "dataset_count": 0,
+            "batch_count": 0,
+            "total_images": 0,
+            "pending_review": 0,
+        }
         assert adapters.review_queue(db)["total"] == 0
         assert adapters.models(db) == []
         assert adapters.pipelines(db) == []

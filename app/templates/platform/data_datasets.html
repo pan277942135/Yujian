@@ -15,6 +15,17 @@
   <div class="metric-card"><div class="loading">加载中…</div></div>
 </div>
 
+<section class="panel" style="margin-top:16px" id="recentBatchPanel">
+  <div class="panel-heading">
+    <div>
+      <h2>最近数据批次</h2>
+      <p>Batch 代表一次采集/导入及其处理状态，不是训练数据版本。</p>
+    </div>
+    <a class="button" href="/batches">查看全部批次</a>
+  </div>
+  <div id="recentBatchState"><div class="loading">加载中…</div></div>
+</section>
+
 <section class="panel" style="margin-top:16px" id="cropDatasetPanel">
   <div class="panel-heading">
     <div>
@@ -91,15 +102,58 @@ function datasetMetric(label, value, detail) {
   return `<div class="metric-card"><div class="metric-label">${esc(label)}</div><div class="metric-value">${esc(value ?? 0)}</div><div class="metric-detail">${esc(detail || '')}</div></div>`;
 }
 
-function renderDatasetMetrics(rows) {
-  const latest = rows[0] || null;
+function renderDatasetMetrics(summary, rows) {
   const historicalTotal = rows.reduce((sum, row) => sum + Number(row.total || 0), 0);
-  const currentTraining = rows.reduce((sum, row) => sum + Number(row.train || 0), 0);
+  const data = summary || {};
   document.getElementById('datasetMetrics').innerHTML = [
-    datasetMetric('当前生产版本', latest ? `${latest.id} · ${Number(latest.total || 0)}` : '暂无', latest ? '最新 DatasetVersion · 样本数' : '暂无 DatasetVersion'),
-    datasetMetric('历史版本累计样本', historicalTotal, '所有 DatasetVersion 样本计数合计'),
-    datasetMetric('当前训练数据', currentTraining, '各 DatasetVersion train_count 合计'),
+    datasetMetric('数据集版本', data.dataset_count ?? rows.length, '真正的 DatasetVersion 数量'),
+    datasetMetric('数据批次', data.batch_count ?? 0, '一次采集/导入形成的 Batch 数量'),
+    datasetMetric('累计图片', data.total_images ?? historicalTotal, '所有 Batch 的上传图片数'),
+    datasetMetric('待审核', data.pending_review ?? 0, '当前 Review 待处理图片数'),
   ].join('');
+}
+
+function batchStatus(status) {
+  const normalized = String(status || 'UNKNOWN').toUpperCase();
+  const labels = {
+    UPLOADED: '已上传',
+    MANIFEST_READY: '数据已解析',
+    READY_FOR_AUDIT: '待准备审核',
+    INGESTED: '已入库',
+    REGISTERED: '已登记',
+  };
+  return `<span class="status-tag status-${normalized.toLowerCase()}"><span class="status-dot"></span>${esc(labels[normalized] || normalized || '未知')}</span>`;
+}
+
+function batchSource(source) {
+  return ({
+    real_collection: '真实采集',
+    user_feedback: '用户反馈',
+    internal_collection: '内部采集',
+    historical_data: '历史数据',
+    test_data: '测试数据',
+    other: '其他',
+  })[source] || source || '—';
+}
+
+function renderRecentBatches(rows) {
+  const target = document.getElementById('recentBatchState');
+  if (!Array.isArray(rows) || !rows.length) {
+    target.innerHTML = '<div class="empty">暂无数据批次<br><span class="muted">请先从“导入采集数据”上传原始图片。</span></div>';
+    return;
+  }
+  target.innerHTML = `<div class="table-wrap"><table class="data-table"><thead><tr>
+    <th>批次</th><th>数据来源</th><th>上传图片</th><th>AI 有效/已通过</th><th>待审核</th><th>状态</th><th>创建时间</th><th>操作</th>
+  </tr></thead><tbody>${rows.map(row => `<tr>
+    <td><strong>${esc(row.batch_id)}</strong>${row.name ? `<br><span class="muted">${esc(row.name)}</span>` : ''}</td>
+    <td>${esc(batchSource(row.source))}</td>
+    <td>${esc(row.image_count ?? 0)}</td>
+    <td>${esc(row.ai_valid ?? 0)}</td>
+    <td>${esc(row.pending_review ?? 0)}</td>
+    <td>${batchStatus(row.status)}</td>
+    <td>${esc(row.created_at || '—')}</td>
+    <td><a class="button" href="/batches?batch_id=${encodeURIComponent(row.batch_id || '')}">查看</a></td>
+  </tr>`).join('')}</tbody></table></div>`;
 }
 
 function renderSourceBatches(row) {
@@ -171,8 +225,12 @@ function closeCleanReport() {
 
 async function loadDatasets() {
   try {
-    const rows = await platformFetch('/api/platform/datasets');
-    renderDatasetMetrics(rows);
+    const payload = await platformFetch('/api/platform/datasets');
+    const rows = Array.isArray(payload) ? payload : (Array.isArray(payload.datasets) ? payload.datasets : []);
+    const summary = Array.isArray(payload) ? null : payload.summary;
+    const batches = Array.isArray(payload) ? [] : payload.recent_batches;
+    renderDatasetMetrics(summary, rows);
+    renderRecentBatches(batches);
     renderDatasets(rows);
     const requested = new URLSearchParams(location.search).get('dataset');
     if (requested) showCleanReport(requested);

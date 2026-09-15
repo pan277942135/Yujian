@@ -9,6 +9,7 @@ import mimetypes
 import os
 import re
 import zipfile
+from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from uuid import uuid4
 
@@ -36,11 +37,13 @@ BATCH_ID_RE = re.compile(r"^BATCH_[A-Za-z0-9_.-]{3,120}$")
 class UploadStartRequest(BaseModel):
     batch_id: str | None = Field(default=None, max_length=128)
     source: str = Field(default="other", min_length=1, max_length=64)
+    batch_name: str | None = Field(default=None, max_length=128)
 
 
 class UploadFinalizeRequest(BaseModel):
     batch_id: str = Field(min_length=4, max_length=128)
     source: str = Field(default="other", min_length=1, max_length=64)
+    batch_name: str | None = Field(default=None, max_length=128)
 
 
 def _validate_batch_id(value: str | None) -> str:
@@ -296,7 +299,7 @@ def _manifest_error_response(exc: ManifestNormalizationError) -> JSONResponse:
     return JSONResponse(status_code=400, content=exc.as_dict())
 
 
-def _finalize_upload(batch_id: str, source: str) -> dict:
+def _finalize_upload(batch_id: str, source: str, batch_name: str | None = None) -> dict:
     batch_id = _validate_batch_id(batch_id)
     bucket_name = get_bucket_name()
     client = storage.Client()
@@ -319,10 +322,14 @@ def _finalize_upload(batch_id: str, source: str) -> dict:
     generated_manifest = bool(manifest_info["generated"])
     manifest_rows = int(manifest_info["manifest_rows"])
     status_history = ["UPLOADED", "MANIFEST_READY", "READY_FOR_AUDIT"]
+    created_at = datetime.now(timezone.utc).isoformat()
+    display_name = (batch_name or "").strip()[:128] or batch_id
 
     marker = {
         "batch_id": batch_id,
+        "batch_name": display_name,
         "source": source,
+        "created_at": created_at,
         "image_count": len(images),
         "manifest_rows": manifest_rows,
         "generated_fish_manifest": generated_manifest,
@@ -337,8 +344,10 @@ def _finalize_upload(batch_id: str, source: str) -> dict:
 
     return {
         "batch_id": batch_id,
+        "batch_name": display_name,
         "incoming_prefix": _prefix(batch_id),
         "source": source,
+        "created_at": created_at,
         "uploaded_files": len(blobs),
         "image_count": len(images),
         "manifest_rows": manifest_rows,
@@ -364,6 +373,7 @@ def start_batch_upload(payload: UploadStartRequest):
         existing = next(iter(client.list_blobs(bucket_name, prefix=_prefix(batch_id), max_results=1)), None)
         return {
             "batch_id": batch_id,
+            "batch_name": (payload.batch_name or "").strip()[:128] or batch_id,
             "source": payload.source,
             "status": "RESUME" if existing is not None else "READY_FOR_FILES",
             "resumed": existing is not None,
@@ -409,7 +419,7 @@ async def upload_batch_file(
 @router.post("/api/batches/upload-finalize")
 def finalize_batch_upload(payload: UploadFinalizeRequest):
     try:
-        return _finalize_upload(payload.batch_id, payload.source)
+        return _finalize_upload(payload.batch_id, payload.source, payload.batch_name)
     except ManifestNormalizationError as exc:
         return _manifest_error_response(exc)
     except Exception as exc:
@@ -421,6 +431,7 @@ async def upload_batch_dataset(
     file: UploadFile = File(...),
     batch_id: str | None = Form(default=None),
     source: str = Form(default="other"),
+    batch_name: str | None = Form(default=None),
 ):
     """Small-ZIP convenience path.
 
@@ -480,7 +491,7 @@ async def upload_batch_dataset(
                     "conflicts": conflicts,
                     "upload_summary": upload_counts,
                 }
-        result = _finalize_upload(final_batch, source)
+        result = _finalize_upload(final_batch, source, batch_name)
         result["upload_summary"] = upload_counts
         result.update(
             {

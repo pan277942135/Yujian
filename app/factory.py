@@ -314,6 +314,15 @@ def promote_incoming_batch(
         doc["already_exists"] = True
         return doc
 
+    upload_metadata: dict = {}
+    upload_marker = bucket.blob(prefix + "_upload.json")
+    if upload_marker.exists(client):
+        try:
+            upload_metadata = json.loads(_download_text(upload_marker, "utf-8"))
+        except Exception:
+            upload_metadata = {}
+    batch_name = str(upload_metadata.get("batch_name") or "").strip()[:128] or None
+
     incoming = [b for b in client.list_blobs(bucket_name, prefix=prefix) if not b.name.endswith("/")]
     if not incoming:
         raise RuntimeError(f"no objects found under gs://{bucket_name}/{prefix}")
@@ -347,6 +356,7 @@ def promote_incoming_batch(
     manifest_rel = manifests[0].name[len(prefix):]
     batch = {
         "batch_id": batch_id,
+        "batch_name": batch_name,
         "source": source,
         "created_at": utcnow_iso(),
         "image_count": len(images),
@@ -441,6 +451,7 @@ def sync_batch_registry(db: Session, batch_id: str, bucket_name: str | None = No
         batch = Batch(
             batch_id=batch_id,
             source=batch_doc.get("source", "unknown"),
+            notes=batch_doc.get("batch_name") or None,
             image_count=batch_doc.get("image_count", len(image_objects)),
             manifest_uri=manifest_uri,
             raw_uri=batch_doc["raw_uri"],
@@ -452,6 +463,8 @@ def sync_batch_registry(db: Session, batch_id: str, bucket_name: str | None = No
         batch.manifest_uri = manifest_uri
         batch.raw_uri = batch_doc["raw_uri"]
         batch.status = "REGISTERED"
+        if batch_doc.get("batch_name"):
+            batch.notes = str(batch_doc["batch_name"]).strip()[:128]
 
     inserted = updated = missing = 0
     for row in rows:

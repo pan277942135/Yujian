@@ -68,6 +68,7 @@ def list_incoming_batches(bucket_name: str | None = None) -> list[dict]:
                 "manifest_count": len(manifests),
                 "size_bytes": sum(b.size or 0 for b in blobs),
                 "canonical_batch_id": canonical_batch,
+                "batch_name": upload_state.get("batch_name") or None,
                 "source": source,
                 "audit": audit,
                 "promoted": raw_marker.exists(client),
