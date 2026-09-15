@@ -37,8 +37,24 @@ QA_SAMPLE_SIZE = 50
 QA_SOURCE_MANIFEST = "manifest.csv"
 QA_SPLIT_PLAN = (("train", 35), ("val", 8), ("test", 7))
 QA_DECISIONS = {"PASS", "ISSUE", "CRITICAL"}
-QUALITY_ANALYSIS_SCHEMA_VERSION = "QUALITY_GATE_ANALYSIS_V1"
+QUALITY_ANALYSIS_SCHEMA_VERSION = "QUALITY_GATE_ANALYSIS_V1_1"
 QUALITY_ANALYSIS_SAMPLE_SIZE = 10
+QUALITY_STATUSES = {"GOOD", "WARNING", "INVALID"}
+QUALITY_STATUS_ALIASES = {
+    "GOOD": "GOOD",
+    "OK": "GOOD",
+    "CLEAR": "GOOD",
+    "PASS": "GOOD",
+    "VALID": "GOOD",
+    "WARNING": "WARNING",
+    "WARN": "WARNING",
+    "INVALID": "INVALID",
+    "BAD": "INVALID",
+    "ERROR": "INVALID",
+}
+QUALITY_FIELD_UNAVAILABLE = "质量字段不可用"
+QUALITY_REASON_UNAVAILABLE = "质量字段不可用"
+QUALITY_REASON_MISSING = "原因未提供"
 ACCEPTED_STATUSES = {"ACCEPTED", "TRAINING_READY"}
 JOB_STATES = {"PENDING", "RUNNING", "SUCCESS", "FAILED"}
 
@@ -1089,7 +1105,16 @@ def _analysis_seed(dataset_name: str, label: str = "") -> int:
 
 def _analysis_reason_parts(value: Any) -> list[str]:
     parts = [part.strip() for part in str(value or "").split(";") if part.strip()]
-    return parts or ["NO_REASON"]
+    return parts or [QUALITY_REASON_MISSING]
+
+
+def _analysis_quality_status(value: Any, *, field_available: bool) -> str:
+    """Normalize the frozen manifest quality value without inventing status."""
+
+    if not field_available:
+        return "UNAVAILABLE"
+    raw = str(value or "").strip().upper()
+    return QUALITY_STATUS_ALIASES.get(raw, "UNAVAILABLE")
 
 
 def _analysis_row_key(row: dict[str, Any]) -> str:
@@ -1117,7 +1142,19 @@ def _analysis_read(dataset_name: str) -> dict[str, Any] | None:
         if not blob.exists(client):
             return None
         value = json.loads(blob.download_as_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else None
+        if not isinstance(value, dict):
+            return None
+        source = value.get("source") or {}
+        manifest_uri = str(source.get("manifest_uri") or "").rstrip("/").lower()
+        # A prior release cached the report from manifest_all.csv.  It must not
+        # survive the source correction, even when the artifact exists.
+        if not manifest_uri.endswith("/manifest.csv"):
+            return None
+        if not bool(source.get("source_is_frozen_manifest")):
+            return None
+        if str(value.get("schema_version") or "") != QUALITY_ANALYSIS_SCHEMA_VERSION:
+            return None
+        return value
     except Exception:
         return None
 
@@ -1169,25 +1206,38 @@ def generate_quality_gate_analysis(dataset_name: str) -> dict[str, Any]:
     if existing is not None:
         return existing
     client, bucket = _storage()
-    manifest_name = f"datasets/{dataset_name}/manifest_all.csv"
+    # Quality analysis is scoped to the registered frozen Dataset artifact.
+    # Do not widen this to manifest_all.csv, bucket scans, or the accepted bbox
+    # pool: those are different lifecycle stages and can inflate the total.
+    manifest_name = f"datasets/{dataset_name}/manifest.csv"
     manifest_blob = bucket.blob(manifest_name)
     if not manifest_blob.exists(client):
-        raise FileNotFoundError("manifest_all.csv not found")
-    rows = list(csv.DictReader(manifest_blob.download_as_text(encoding="utf-8")))
-    totals = Counter(str(row.get("quality_status") or "").upper() for row in rows)
+        raise FileNotFoundError("manifest.csv not found")
+    manifest_reader = csv.DictReader(manifest_blob.download_as_text(encoding="utf-8-sig"))
+    field_available = "quality_status" in (manifest_reader.fieldnames or [])
+    rows = list(manifest_reader)
     total = len(rows)
+    normalized_statuses = [
+        _analysis_quality_status(row.get("quality_status"), field_available=field_available)
+        for row in rows
+    ]
+    totals = Counter(normalized_statuses)
     totals_payload = {
         "TOTAL": total,
         "GOOD": int(totals.get("GOOD", 0)),
         "WARNING": int(totals.get("WARNING", 0)),
         "INVALID": int(totals.get("INVALID", 0)),
+        "UNAVAILABLE": int(totals.get("UNAVAILABLE", 0)),
     }
+    quality_sum_check = sum(totals_payload[key] for key in QUALITY_STATUSES) == total
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     warning_with_reason = 0
-    for row in rows:
-        status = str(row.get("quality_status") or "UNKNOWN").upper()
-        reasons = _analysis_reason_parts(row.get("quality_reason"))
-        if status == "WARNING" and reasons != ["NO_REASON"]:
+    for row, status in zip(rows, normalized_statuses):
+        if status == "UNAVAILABLE":
+            reasons = [QUALITY_REASON_UNAVAILABLE]
+        else:
+            reasons = _analysis_reason_parts(row.get("quality_reason"))
+        if status == "WARNING" and reasons != [QUALITY_REASON_MISSING]:
             warning_with_reason += 1
         for reason in reasons:
             grouped[(status, reason)].append(row)
@@ -1247,9 +1297,8 @@ def generate_quality_gate_analysis(dataset_name: str) -> dict[str, Any]:
     )
     writer = csv.DictWriter(csv_output, fieldnames=csv_fields, extrasaction="ignore")
     writer.writeheader()
-    for row in rows:
-        status = str(row.get("quality_status") or "UNKNOWN").upper()
-        reason = ";".join(_analysis_reason_parts(row.get("quality_reason")))
+    for row, status in zip(rows, normalized_statuses):
+        reason = QUALITY_REASON_UNAVAILABLE if status == "UNAVAILABLE" else ";".join(_analysis_reason_parts(row.get("quality_reason")))
         writer.writerow({
             **{field: row.get(field, "") for field in csv_fields},
             "quality_status": status,
@@ -1266,13 +1315,16 @@ def generate_quality_gate_analysis(dataset_name: str) -> dict[str, Any]:
         "source": {
             "manifest_uri": f"gs://{get_bucket_name()}/{manifest_name}",
             "source_count": total,
-            "source_is_frozen_manifest_all": True,
+            "source_is_frozen_manifest": True,
         },
         "totals": totals_payload,
+        "quality_field_available": field_available,
+        "quality_sum_check": quality_sum_check,
         "ratios": {
             "GOOD": totals_payload["GOOD"] / max(1, total),
             "WARNING": totals_payload["WARNING"] / max(1, total),
             "INVALID": totals_payload["INVALID"] / max(1, total),
+            "UNAVAILABLE": totals_payload["UNAVAILABLE"] / max(1, total),
         },
         "warning_reason_coverage": warning_coverage,
         "reasons": reason_rows,
