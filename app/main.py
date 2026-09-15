@@ -891,49 +891,6 @@ def _legacy_source_batches(metadata: dict) -> list[str]:
     return result
 
 
-def _legacy_release_gate(db: Session, dataset: DatasetVersion) -> dict:
-    from app.platform.services.crop_dataset import get_release_gate_summary
-
-    pipeline_type = str(getattr(dataset, "pipeline_type", "") or "").upper()
-    raw = get_release_gate_summary(db, dataset.dataset_version) if pipeline_type == "CROP_CLASSIFIER_V1" else None
-    if not raw:
-        if pipeline_type != "CROP_CLASSIFIER_V1":
-            return {
-                "required": False,
-                "status": "NOT_REQUIRED",
-                "total": 0,
-                "checked": 0,
-                "passed": 0,
-                "failed": 0,
-                "training_allowed": True,
-                "final_release_gate": "PASS",
-            }
-        raw = {}
-    final_gate = str(raw.get("final_release_gate") or "PARTIAL_PASS").upper()
-    status = str(raw.get("status") or "PENDING").upper()
-    if status == "NOT_PERFORMED":
-        status = "PENDING"
-    return {
-        "required": True,
-        "status": status,
-        "total": int(raw.get("sample_size", raw.get("total", 50)) or 50),
-        "checked": int(raw.get("reviewed_count", raw.get("checked", 0)) or 0),
-        "passed": int(raw.get("pass_count", raw.get("passed", 0)) or 0),
-        "failed": int(raw.get("failed", raw.get("issue_count", 0)) or 0),
-        "training_allowed": final_gate == "PASS",
-        "final_release_gate": final_gate,
-        "source_manifest": "manifest.csv",
-        "sample_plan": raw.get("sample_plan") or {},
-        "sample_size": int(raw.get("sample_size", 50) or 50),
-        "reviewed_count": int(raw.get("reviewed_count", 0) or 0),
-        "pass_count": int(raw.get("pass_count", 0) or 0),
-        "issue_count": int(raw.get("issue_count", 0) or 0),
-        "critical_count": int(raw.get("critical_count", 0) or 0),
-        "qa_uri": raw.get("qa_uri"),
-        "qa_csv_uri": raw.get("qa_csv_uri"),
-    }
-
-
 @app.get("/datasets/{dataset_version}", response_class=HTMLResponse)
 def legacy_dataset_detail_page(request: Request, dataset_version: str):
     return templates.TemplateResponse(
@@ -970,7 +927,6 @@ def legacy_dataset_detail(dataset_version: str, db: Session = Depends(get_db)):
     counts = registered_manifest_counts(dataset)
     pipeline_type = getattr(dataset, "pipeline_type", None) or "WHOLE_IMAGE_V1"
     quality_analysis = get_quality_gate_analysis_summary(dataset_version)
-    release_gate = _legacy_release_gate(db, dataset)
     source_mode = str(metadata.get("source") or metadata.get("source_type") or "").strip().upper()
     is_accepted_pool = source_mode == "ACCEPTED_POOL"
     accepted_pool_count = int(metadata.get("accepted_pool_count", counts["total"]) or 0)
@@ -989,7 +945,6 @@ def legacy_dataset_detail(dataset_version: str, db: Session = Depends(get_db)):
         "test_count": int(counts["test"]),
         "manifest_uri": dataset.manifest_uri,
         "quality_analysis": quality_analysis,
-        "release_gate": release_gate,
         # Kept for existing Legacy consumers while they migrate to the V1
         # names above.  These are the same frozen DatasetVersion values.
         "dataset_version": dataset.dataset_version,
@@ -1013,8 +968,6 @@ def legacy_dataset_detail(dataset_version: str, db: Session = Depends(get_db)):
             "bbox_total": source_count if is_accepted_pool else None,
             "crop_generated": crop_generated if is_accepted_pool else None,
             "crop_total": source_count if is_accepted_pool else None,
-            "release_qa_checked": int(release_gate.get("checked", 0) or 0),
-            "release_qa_total": int(release_gate.get("total", 50) or 50),
         },
     }
 

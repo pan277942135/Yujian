@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
 from PIL import Image
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -198,26 +197,9 @@ def test_registered_manifest_counts_are_preferred_to_stale_dataset_counters(tmp_
         assert result["train_count"] == 2
         assert result["val_count"] == 1
         assert result["test_count"] == 1
-        gate = result["release_gate"]
-        assert gate == {
-            "required": True,
-            "status": "PENDING",
-            "total": 50,
-            "checked": 0,
-            "passed": 0,
-            "failed": 0,
-            "training_allowed": False,
-            "final_release_gate": "PARTIAL_PASS",
-            "source_manifest": "manifest.csv",
-            "sample_plan": {},
-            "sample_size": 50,
-            "reviewed_count": 0,
-            "pass_count": 0,
-            "issue_count": 0,
-            "critical_count": 0,
-            "qa_uri": crop_dataset._qa_uri("DS_CROP_M1_v0.1", "random_50_qa.json"),
-            "qa_csv_uri": crop_dataset._qa_uri("DS_CROP_M1_v0.1", "random_50_qa.csv"),
-        }
+        assert "release_gate" not in result
+        assert "release_qa_checked" not in result["processing"]
+        assert "release_qa_total" not in result["processing"]
     finally:
         db.close()
 
@@ -289,26 +271,29 @@ def test_release_qa_media_exposes_source_overlay_and_training_crop(monkeypatch):
     assert media["crop_media_url"].endswith("kind=crop")
 
 
-def test_training_gate_returns_required_409_before_release_pass(monkeypatch, tmp_path: Path):
+def test_training_does_not_require_release_qa_after_dataset_freeze(monkeypatch, tmp_path: Path):
     bucket = FakeBucket()
     _install_storage(monkeypatch, bucket)
     db = _db(tmp_path)
     try:
-        db.add(_dataset(uri="gs://test-bucket/datasets/DS_CROP_M1_v0.1/manifest.csv"))
-        db.commit()
-        with pytest.raises(HTTPException) as error:
-            queue_training_run(
-                db,
-                TrainingCreate(
-                    dataset_version="DS_CROP_M1_v0.1",
-                    run_id="RUN_CROP_M1_v0.1_GATE",
-                    model_version="MODEL_CROP_M1_v0.1_GATE",
-                    pipeline_type="CROP_CLASSIFIER_V1",
-                ),
-                launcher=lambda *_args: {"name": "unused"},
+        db.add(
+            _dataset(
+                uri="gs://test-bucket/datasets/DS_CROP_M1_v0.1/manifest.csv",
+                status="FROZEN",
             )
-        assert error.value.status_code == 409
-        assert error.value.detail == "数据集尚未完成发布前质量确认，禁止训练。"
+        )
+        db.commit()
+        result = queue_training_run(
+            db,
+            TrainingCreate(
+                dataset_version="DS_CROP_M1_v0.1",
+                run_id="RUN_CROP_M1_v0.1_GATE",
+                model_version="MODEL_CROP_M1_v0.1_GATE",
+                pipeline_type="CROP_CLASSIFIER_V1",
+            ),
+            launcher=lambda *_args: {"name": "unused"},
+        )
+        assert result["dataset_version"] == "DS_CROP_M1_v0.1"
     finally:
         db.close()
 
@@ -341,17 +326,20 @@ def test_dataset_detail_page_and_operation_timeline_contract(tmp_path: Path):
             "数据集详情",
             "A 数据集概览",
             "B 冻结数据质量分析",
-            "C 发布前质量确认",
-            "D 模型训练",
-            "E 操作记录",
-            "通过并下一张",
-            "标记问题",
-            "原始图片",
-            "BBox Overlay",
-            "Crop图片（实际训练输入）",
-            "完成质量确认后开放",
+            "C 模型训练",
+            "D 操作记录",
+            "创建训练任务",
         ):
             assert text in rendered
+        for text in (
+            "发布前质量确认",
+            "Release QA",
+            "/release-qa",
+            "通过并下一张",
+            "标记问题",
+            "BBox Overlay",
+        ):
+            assert text not in rendered
         assert "UNKNOWN" not in rendered
         assert "NO_REASON" not in rendered
         assert "严重问题" not in rendered

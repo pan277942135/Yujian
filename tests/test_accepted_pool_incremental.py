@@ -18,7 +18,7 @@ from app.accepted_pool import (
     step_accepted_pool_job,
 )
 from app.db import Base
-from app.models import Batch, BatchCropReview, DatasetVersion, ImageAsset
+from app.models import Batch, BatchCropReview, DatasetVersion, ImageAsset, SpeciesCatalog
 from app.platform.services import crop_dataset
 
 
@@ -40,16 +40,15 @@ class MemoryBlob:
     def upload_from_string(self, data, **_kwargs):
         self.data = data.encode("utf-8") if isinstance(data, str) else bytes(data)
 
-    def copy_to(self, bucket: "MemoryBucket", destination: str):
-        bucket.blob(destination).data = self.data
-
-
 class MemoryBucket:
     def __init__(self):
         self._blobs: dict[str, MemoryBlob] = {}
 
     def blob(self, name: str):
         return self._blobs.setdefault(name, MemoryBlob(self, name))
+
+    def copy_blob(self, source_blob: MemoryBlob, destination_bucket: "MemoryBucket", new_name: str):
+        destination_bucket.blob(new_name).data = source_blob.data
 
     def list_blobs(self, prefix: str = ""):
         return [blob for name, blob in self._blobs.items() if name.startswith(prefix) and blob.data is not None]
@@ -75,7 +74,7 @@ def _session(tmp_path: Path):
     return sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
-def _add_accepted(db, bucket: MemoryBucket, index: int, *, bbox=None):
+def _add_accepted(db, bucket: MemoryBucket, index: int, *, bbox=None, species="草鱼"):
     batch_id = f"BATCH_ACCEPTED_{index:03d}"
     image_id = f"accepted-{index:03d}"
     db.add(Batch(batch_id=batch_id, source="upload", manifest_uri="gs://pool/manifest.csv", raw_uri="gs://pool/raw"))
@@ -85,7 +84,7 @@ def _add_accepted(db, bucket: MemoryBucket, index: int, *, bbox=None):
         file_name=f"{image_id}.jpg",
         object_name=f"source/{image_id}.jpg",
         gcs_uri=f"gs://pool/source/{image_id}.jpg",
-        truth_species="草鱼",
+        truth_species=species,
         review_status="approved",
     )
     db.add(image)
@@ -96,7 +95,7 @@ def _add_accepted(db, bucket: MemoryBucket, index: int, *, bbox=None):
             image_asset_id=image.id,
             image_id=image_id,
             accepted_bbox_json=json.dumps(bbox or [0.15, 0.10, 0.50, 0.60]),
-            species_name="草鱼",
+            species_name=species,
             status="ACCEPTED",
         )
     )
@@ -213,6 +212,53 @@ def test_accepted_pool_is_persistent_incremental_and_freeze_is_explicit(monkeypa
         db.close()
 
 
+def test_accepted_pool_freeze_excludes_candidate_species_and_uses_bucket_copy_api(monkeypatch, tmp_path: Path):
+    bucket = MemoryBucket()
+    client = MemoryClient(bucket)
+    Session = _session(tmp_path)
+    monkeypatch.setattr(crop_dataset, "_storage", lambda: (client, bucket))
+    monkeypatch.setattr(crop_dataset, "get_bucket_name", lambda: "pool")
+    monkeypatch.setattr("app.accepted_pool.SessionLocal", Session)
+    monkeypatch.setattr("app.accepted_pool._jobs", {})
+    monkeypatch.setattr("app.accepted_pool._job_locks", {})
+
+    db = Session()
+    try:
+        db.add(SpeciesCatalog(species_key="grass_carp", catalog_order=0, common_name_zh="草鱼", status="candidate"))
+        db.add(SpeciesCatalog(species_key="crucian_carp", catalog_order=1, common_name_zh="鲫鱼", status="active"))
+        _add_accepted(db, bucket, 0, species="草鱼")
+        _add_accepted(db, bucket, 1, species="鲫鱼")
+        db.commit()
+
+        synced = _run_to_terminal(start_accepted_pool_sync(db))
+        assert synced["accepted_pool_count"] == 2
+
+        preview = accepted_pool_freeze_preview(db, dataset_version="DS_CROP_M1_v0.2")
+        assert preview["accepted_pool_count"] == 2
+        assert preview["image_count"] == 1
+        assert preview["species_count"] == 1
+        assert preview["candidate_excluded_count"] == 1
+        assert preview["candidate_excluded_species"] == {"草鱼": 1}
+
+        frozen = freeze_accepted_pool_dataset(
+            db,
+            dataset_version="DS_CROP_M1_v0.2",
+            preview_hash=preview["selection_hash"],
+            git_commit="test-sha",
+        )
+        assert frozen["status"] == "FROZEN"
+        assert frozen["image_count"] == 1
+        assert frozen["candidate_excluded_count"] == 1
+
+        frozen_rows = list(csv.DictReader(io.StringIO(bucket.blob("datasets/DS_CROP_M1_v0.2/manifest.csv").download_as_text())))
+        assert len(frozen_rows) == 1
+        assert frozen_rows[0]["species_name"] == "鲫鱼"
+        class_map = json.loads(bucket.blob("datasets/DS_CROP_M1_v0.2/class_map.json").download_as_text())
+        assert [item["common_name_zh"] for item in class_map["classes"]] == ["鲫鱼"]
+    finally:
+        db.close()
+
+
 def test_legacy_dataset_page_uses_explicit_freeze_for_both_sources():
     source = Path("app/templates/datasets.html").read_text(encoding="utf-8")
     assert 'id="sourceMode"' in source
@@ -220,3 +266,6 @@ def test_legacy_dataset_page_uses_explicit_freeze_for_both_sources():
     assert 'value="ACCEPTED_POOL"' in source
     assert "/api/platform/datasets/crop/create" not in source
     assert "不会自动创建 DatasetVersion" in source
+    assert "/inspect?review_status=approved&species=" in source
+    assert "/datasets/accepted-bbox?status=ACCEPTED&species=" not in source
+    assert 'href="/inspect?review_status=approved"' in source
