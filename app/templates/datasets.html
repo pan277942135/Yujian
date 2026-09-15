@@ -27,7 +27,7 @@
       <h2>累计 Accepted Pool 池</h2>
       <div id="acceptedPoolSummary"><span class="muted">正在读取 Accepted Pool…</span></div>
       <div class="rule"><b>可复用训练 Crop</b><br><span class="muted">Accepted Pool 使用人工确认的 accepted_bbox 生成并累计保存 Crop；后续同步只处理新增或发生变化的图片，历史 Crop 不重复生成。这里不会自动创建 Dataset Freeze。</span></div>
-      <div class="actions"><button class="linkBtn primary" onclick="syncAcceptedPoolFromCard()">同步 Accepted Pool</button><a class="linkBtn" href="/inspect?review_status=approved">进入数据检查</a></div>
+      <div class="actions"><button class="linkBtn primary" onclick="syncAcceptedPoolFromCard()">同步 Accepted Pool</button><a class="linkBtn" href="/inspect?source=accepted_pool&review_status=approved" target="yujian-data-inspect">进入 Accepted Pool 数据检查</a></div>
       <div id="acceptedPoolJob" class="muted" style="margin-top:9px"></div>
     </div>
   </div>
@@ -100,7 +100,7 @@ function renderAcceptedPool(pool){
   const materialized=Number(pool.materialized_count||pool.pool_count||0);
   const pending=Number(pool.pending_count||0);
   const species=Array.isArray(pool.species)?pool.species:[];
-  target.innerHTML='<div class="metrics"><div class="metric"><span class="muted">人工确认 accepted_bbox</span><b>'+source+'</b></div><div class="metric"><span class="muted">已物料化 Crop</span><b>'+materialized+'</b></div><div class="metric"><span class="muted">待增量处理</span><b>'+pending+'</b></div></div><div class="species">'+(species.map(x=>'<a class="pill pillBtn '+(pending?'warn':'good')+'" href="/inspect?review_status=approved&species='+encodeURIComponent(x.species||'')+'">'+esc(x.species||'未标注')+' '+Number(x.count||0)+'</a>').join('')||'<span class="muted">暂无已确认鱼种</span>')+'</div>';
+  target.innerHTML='<div class="metrics"><div class="metric"><span class="muted">人工确认 accepted_bbox</span><b>'+source+'</b></div><div class="metric"><span class="muted">已物料化 Crop</span><b>'+materialized+'</b></div><div class="metric"><span class="muted">待增量处理</span><b>'+pending+'</b></div></div><div class="species">'+(species.map(x=>'<a class="pill pillBtn '+(pending?'warn':'good')+'" target="yujian-data-inspect" href="/inspect?source=accepted_pool&review_status=approved&species='+encodeURIComponent(x.species||'')+'">'+esc(x.species||'未标注')+' '+Number(x.count||0)+'</a>').join('')||'<span class="muted">暂无已确认鱼种</span>')+'</div>';
   const job=pool.job;if(job)renderAcceptedPoolJob(job);
 }
 function renderAcceptedPoolJob(job){

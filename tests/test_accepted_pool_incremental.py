@@ -266,6 +266,6 @@ def test_legacy_dataset_page_uses_explicit_freeze_for_both_sources():
     assert 'value="ACCEPTED_POOL"' in source
     assert "/api/platform/datasets/crop/create" not in source
     assert "不会自动创建 DatasetVersion" in source
-    assert "/inspect?review_status=approved&species=" in source
+    assert "/inspect?source=accepted_pool&review_status=approved&species=" in source
     assert "/datasets/accepted-bbox?status=ACCEPTED&species=" not in source
-    assert 'href="/inspect?review_status=approved"' in source
+    assert 'href="/inspect?source=accepted_pool&review_status=approved"' in source

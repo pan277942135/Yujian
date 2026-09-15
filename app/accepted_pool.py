@@ -1034,6 +1034,78 @@ def _pool_manifest_rows() -> tuple[list[dict[str, str]], str]:
     return active, digest
 
 
+def list_accepted_pool_manifest_rows(
+    *,
+    species: str | None = None,
+    batch_id: str | None = None,
+    q: str | None = None,
+) -> tuple[list[dict[str, str]], int]:
+    """Return materialised Accepted Pool rows for the Legacy data checker.
+
+    The durable Accepted Pool manifest is the source of truth for this view.
+    In particular, this function does not rebuild crops from ``ImageAsset``
+    and does not fall back to the original-image registry.  A row without a
+    ``crop_path`` remains visible as an unmaterialised pool row so the UI can
+    report the missing artifact instead of silently showing the wrong image.
+    """
+
+    rows, _ = _pool_manifest_rows()
+    wanted_species = str(species or "").strip()
+    wanted_batch = str(batch_id or "").strip()
+    needle = str(q or "").strip().lower()
+    filtered: list[dict[str, str]] = []
+    for row in rows:
+        row_species = str(row.get("species_name") or row.get("species") or "").strip()
+        row_batch = str(row.get("source_batch") or row.get("batch_id") or "").strip()
+        if wanted_species and row_species != wanted_species:
+            continue
+        if wanted_batch and row_batch != wanted_batch:
+            continue
+        if needle:
+            haystack = " ".join(
+                str(row.get(key) or "")
+                for key in ("image_id", "file_name", "source_image", "source_batch", "batch_id")
+            ).lower()
+            if needle not in haystack:
+                continue
+        filtered.append(row)
+    return filtered, len(filtered)
+
+
+def find_accepted_pool_manifest_row(pool_key: str) -> dict[str, str] | None:
+    """Find one active materialised pool row by its stable source key."""
+
+    wanted = str(pool_key or "").strip()
+    if not wanted:
+        return None
+    rows, _ = _pool_manifest_rows()
+    return next((row for row in rows if _existing_key(row) == wanted), None)
+
+
+def accepted_pool_crop_object_name(row: dict[str, Any]) -> str:
+    """Resolve a manifest crop path to a safe object in the Accepted Pool prefix."""
+
+    import posixpath
+
+    raw = str(row.get("crop_path") or row.get("local_path") or "").strip()
+    if not raw:
+        raise ValueError("Accepted Pool crop path is missing")
+    if raw.startswith("gs://"):
+        prefix = f"gs://{crop_dataset.get_bucket_name()}/"
+        if not raw.startswith(prefix):
+            raise ValueError("Accepted Pool crop URI points outside the configured bucket")
+        raw = raw[len(prefix) :]
+        expected_prefix = f"{ACCEPTED_POOL_PREFIX}/"
+        if not raw.startswith(expected_prefix):
+            raise ValueError("Accepted Pool crop URI points outside the Accepted Pool prefix")
+        raw = raw[len(expected_prefix) :]
+    raw = raw.lstrip("/")
+    normalized = posixpath.normpath(raw)
+    if normalized in {"", "."} or normalized != raw or normalized.startswith("../") or "/../" in raw:
+        raise ValueError("Accepted Pool crop path is invalid")
+    return f"{ACCEPTED_POOL_PREFIX}/{normalized}"
+
+
 def _pool_parent_version(db: Session, parent_version: str | None) -> str | None:
     if parent_version:
         parent = db.get(DatasetVersion, parent_version)
@@ -1437,10 +1509,13 @@ __all__ = [
     "ACCEPTED_POOL_SOURCE",
     "CUMULATIVE_MANIFEST_FIELDS",
     "accepted_pool_summary",
+    "accepted_pool_crop_object_name",
     "accepted_pool_freeze_preview",
     "enqueue_accepted_pool_sync",
+    "find_accepted_pool_manifest_row",
     "freeze_accepted_pool_dataset",
     "get_accepted_pool_job",
+    "list_accepted_pool_manifest_rows",
     "start_accepted_pool_sync",
     "step_accepted_pool_job",
 ]
