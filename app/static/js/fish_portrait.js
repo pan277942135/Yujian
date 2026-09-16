@@ -36,6 +36,13 @@
     SUCCESS: '成功',
     FAILED: '失败',
   };
+  const referenceTypeLabels = {
+    transparent_main: 'transparent 主图',
+    transparent_alt: 'transparent 备选',
+    COVER_CARD: 'Cover 列表图',
+    COVER_CARD_TRANSPARENT_LEFT: 'Cover 透明左图',
+    COVER_CARD_TRANSPARENT_RIGHT: 'Cover 透明右图',
+  };
 
   function statusTag(status) {
     const normalized = String(status || 'UNKNOWN').toUpperCase();
@@ -119,15 +126,16 @@
       el.portraitReference.hidden = true;
       el.portraitReferenceState.hidden = false;
       el.portraitReferenceState.className = 'portrait-empty';
-      el.portraitReferenceState.textContent = '没有找到该鱼种的 transparent 标准鱼体资产。';
+      el.portraitReferenceState.textContent = '没有找到该鱼种的标准参考图（transparent / Cover 资产包）。';
       updateSubmit();
       return;
     }
     el.portraitReferenceState.hidden = true;
     el.portraitReference.hidden = false;
     el.portraitReferenceImage.src = reference.url || '';
-    el.portraitReferenceTitle.textContent = (reference.species_name || reference.species_id || '标准鱼体') + ' · ' + (reference.type || 'transparent_main');
-    el.portraitReferenceMeta.textContent = 'Asset ' + (reference.asset_id || '—') + ' · ' + (reference.version || '—');
+    const referenceType = reference.type || 'transparent_main';
+    el.portraitReferenceTitle.textContent = (reference.species_name || reference.species_id || '标准鱼体') + ' · ' + (referenceTypeLabels[referenceType] || referenceType);
+    el.portraitReferenceMeta.textContent = 'Asset ' + (reference.asset_id || '—') + ' · ' + (reference.version || '—') + (reference.source_kind === 'knowledge_cover' ? ' · 鱼种 Cover 资产包' : '');
     el.portraitReferenceSwitch.hidden = state.references.length < 2;
     updateSubmit();
   }
@@ -138,7 +146,7 @@
     el.portraitReference.hidden = true;
     el.portraitReferenceState.hidden = false;
     el.portraitReferenceState.className = 'portrait-empty';
-    el.portraitReferenceState.textContent = '正在按鱼种匹配标准鱼体…';
+    el.portraitReferenceState.textContent = '正在按鱼种匹配标准参考图…';
     if (!speciesId) return;
     try {
       const primary = await platformFetch('/api/platform/portrait/reference/' + encodeURIComponent(speciesId));

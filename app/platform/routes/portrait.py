@@ -25,6 +25,10 @@ from sqlalchemy.orm import Session
 
 from app.dataset_models import DatasetItem
 from app.db import SessionLocal, get_db
+from app.factory import get_bucket_name
+from app.fish_knowledge.cover import FishSpeciesCover
+from app.fish_knowledge.gallery import managed_knowledge_asset_url
+from app.fish_knowledge.import_batch import FishKnowledgeAssetVersion
 from app.models import DatasetVersion, ImageAsset
 from app.platform.models import FishAsset, PipelineRun
 from app.platform.services import adapters
@@ -52,6 +56,12 @@ STAGES = ("load_source", "load_reference", "sdxl_generate", "persist_result")
 ACTIVE_JOB_STATUSES = {"PENDING", "RUNNING"}
 REFERENCE_STATUSES = {"ACTIVE", "READY", "PUBLISHED"}
 PORTRAIT_PREFIX = "PORTRAIT_"
+KNOWLEDGE_REFERENCE_PREFIX = "KNOWLEDGE_COVER_"
+REFERENCE_VARIANT_ORDER = (
+    "COVER_CARD_TRANSPARENT_LEFT",
+    "COVER_CARD_TRANSPARENT_RIGHT",
+    "COVER_CARD",
+)
 
 
 class PortraitParams(BaseModel):
@@ -149,25 +159,185 @@ def _asset_media_url(asset_id: str, kind: str = "transparent") -> str:
     return f"/api/platform/assets/{asset_id}/media/{kind}"
 
 
-def _reference_rows(db: Session, species_id: str, asset_type: str = "transparent") -> list[FishAsset]:
+def _knowledge_cover_variant(row: FishKnowledgeAssetVersion) -> str:
+    metadata = _json(getattr(row, "metadata_json", None), {})
+    metadata = metadata if isinstance(metadata, dict) else {}
+    value = str(
+        metadata.get("cover_variant")
+        or metadata.get("asset_role")
+        or metadata.get("reference_variant")
+        or ""
+    ).strip().upper()
+    aliases = {
+        "COVER_CARD_TRANSPARENT_MAIN": "COVER_CARD_TRANSPARENT_LEFT",
+        "TRANSPARENT_MAIN": "COVER_CARD_TRANSPARENT_LEFT",
+        "TRANSPARENT_LEFT": "COVER_CARD_TRANSPARENT_LEFT",
+        "COVER_CARD_TRANSPARENT_ALT": "COVER_CARD_TRANSPARENT_RIGHT",
+        "TRANSPARENT_ALT": "COVER_CARD_TRANSPARENT_RIGHT",
+        "TRANSPARENT_RIGHT": "COVER_CARD_TRANSPARENT_RIGHT",
+        "COVER": "COVER_CARD",
+    }
+    value = aliases.get(value, value)
+    if value in REFERENCE_VARIANT_ORDER:
+        return value
+    source_filename = str(metadata.get("source_filename") or "").strip().lower()
+    stem = source_filename.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    if stem.startswith("01_transparent_main"):
+        return "COVER_CARD_TRANSPARENT_LEFT"
+    if stem.startswith("02_transparent_alt"):
+        return "COVER_CARD_TRANSPARENT_RIGHT"
+    return "COVER_CARD"
+
+
+def _knowledge_reference_id(row: FishKnowledgeAssetVersion, variant: str) -> str:
+    return f"{KNOWLEDGE_REFERENCE_PREFIX}{row.species_id}_{variant}_V{row.version}"
+
+
+def _knowledge_reference_url(row: FishKnowledgeAssetVersion) -> str:
+    value = str(row.image_url or "").strip()
+    if value:
+        return managed_knowledge_asset_url(row.species_id, "COVER", value)
+    return f"/api/v1/fish/knowledge-media/{row.species_id}/cover/v{row.version}.webp"
+
+
+def _knowledge_reference_uri(row: FishKnowledgeAssetVersion) -> str:
+    try:
+        bucket = get_bucket_name()
+    except Exception:
+        bucket = ""
+    if bucket and row.object_name:
+        return f"gs://{bucket}/{row.object_name}"
+    return _knowledge_reference_url(row)
+
+
+def _knowledge_reference_record(
+    row: FishKnowledgeAssetVersion,
+    *,
+    species_id: str,
+    variant: str | None = None,
+) -> dict[str, Any]:
+    context = _species_context(species_id)
+    selected_variant = variant or _knowledge_cover_variant(row)
+    return {
+        "asset_id": _knowledge_reference_id(row, selected_variant),
+        "type": selected_variant,
+        "url": _knowledge_reference_url(row),
+        "uri": _knowledge_reference_uri(row),
+        "species_id": context["species_id"],
+        "species_name": context["species_name"],
+        "version": f"v{row.version}",
+        "status": _status(row.status),
+        "kind": "knowledge_cover",
+        "cover_variant": selected_variant,
+        "source": {
+            "asset_type": "COVER",
+            "object_name": row.object_name,
+            "version_id": row.id,
+        },
+    }
+
+
+def _knowledge_cover_reference_rows(db: Session, species_id: str) -> list[dict[str, Any]]:
+    wanted = _species_context(species_id)
+    rows = db.scalars(
+        select(FishKnowledgeAssetVersion)
+        .where(
+            FishKnowledgeAssetVersion.asset_type == "COVER",
+            FishKnowledgeAssetVersion.status == "ACTIVE",
+        )
+        .order_by(
+            FishKnowledgeAssetVersion.created_at.desc(),
+            FishKnowledgeAssetVersion.version.desc(),
+            FishKnowledgeAssetVersion.id.desc(),
+        )
+    ).all()
+    selected: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not _species_matches(row.species_id, wanted):
+            continue
+        variant = _knowledge_cover_variant(row)
+        if variant not in selected:
+            selected[variant] = _knowledge_reference_record(
+                row,
+                species_id=wanted["species_id"],
+                variant=variant,
+            )
+    # A manually managed FishSpeciesCover remains a valid COVER_CARD fallback
+    # when the imported version table does not contain the list-page cover.
+    if "COVER_CARD" not in selected:
+        cover = db.scalar(
+            select(FishSpeciesCover).where(
+                FishSpeciesCover.species_id == wanted["species_id"],
+                FishSpeciesCover.status == "ACTIVE",
+            )
+        )
+        if cover is not None and str(cover.image_url or "").strip():
+            context = _species_context(wanted["species_id"])
+            selected["COVER_CARD"] = {
+                "asset_id": f"{KNOWLEDGE_REFERENCE_PREFIX}{wanted['species_id']}_COVER_CARD",
+                "type": "COVER_CARD",
+                "url": managed_knowledge_asset_url(wanted["species_id"], "COVER", cover.image_url),
+                "uri": str(cover.image_url).strip(),
+                "species_id": context["species_id"],
+                "species_name": context["species_name"],
+                "version": None,
+                "status": _status(cover.status),
+                "kind": "knowledge_cover",
+                "cover_variant": "COVER_CARD",
+                "source": {"asset_type": "COVER", "cover_id": cover.id},
+            }
+    return [
+        selected[variant]
+        for variant in REFERENCE_VARIANT_ORDER
+        if variant in selected
+    ]
+
+
+def _fish_reference_record(row: FishAsset, species_id: str, index: int) -> dict[str, Any]:
+    context = _species_context(row.species or species_id)
+    return {
+        "asset_id": row.asset_id,
+        "type": "transparent_main" if index == 0 else "transparent_alt",
+        "url": _asset_media_url(row.asset_id),
+        "uri": row.transparent_uri,
+        "species_id": context["species_id"],
+        "species_name": context["species_name"],
+        "version": row.version,
+        "status": _status(row.status),
+        "kind": "fish_asset",
+        "source": {
+            "batch_id": row.source_batch_id,
+            "image_id": row.source_image_id,
+        },
+    }
+
+
+def _reference_rows(db: Session, species_id: str, asset_type: str = "transparent") -> list[dict[str, Any]]:
     requested_type = str(asset_type or "transparent").strip().lower()
+    if requested_type in {"cover", "cover_card"}:
+        requested_type = "transparent"
     if requested_type not in {"transparent", "transparent_main", "transparent_alt"}:
-        raise HTTPException(status_code=400, detail="仅支持 transparent 鱼体参考资产")
+        raise HTTPException(status_code=400, detail="仅支持 transparent 或 Cover 资产包参考图")
     wanted = _species_context(species_id)
     rows = db.scalars(
         select(FishAsset)
         .where(FishAsset.transparent_uri.is_not(None))
         .order_by(FishAsset.created_at.desc(), FishAsset.asset_id.desc())
     ).all()
-    matched: list[FishAsset] = []
-    for row in rows:
-        if _status(row.status) not in REFERENCE_STATUSES:
-            continue
-        # Never use a generated portrait as the next standard reference.
-        if str(row.asset_id or "").upper().startswith(PORTRAIT_PREFIX):
-            continue
-        if _species_matches(row.species, wanted):
-            matched.append(row)
+    matched = [
+        _fish_reference_record(row, wanted["species_id"], index)
+        for index, row in enumerate(
+            row
+            for row in rows
+            if _status(row.status) in REFERENCE_STATUSES
+            and not str(row.asset_id or "").upper().startswith(PORTRAIT_PREFIX)
+            and _species_matches(row.species, wanted)
+        )
+    ]
+    # The Cover/Card package is the supported fallback when no FishAsset
+    # transparent output exists for this species.
+    if not matched:
+        matched = _knowledge_cover_reference_rows(db, wanted["species_id"])
     if requested_type == "transparent_main":
         return matched[:1]
     if requested_type == "transparent_alt":
@@ -175,22 +345,20 @@ def _reference_rows(db: Session, species_id: str, asset_type: str = "transparent
     return matched
 
 
-def _reference_dto(row: FishAsset, species_id: str, index: int) -> dict[str, Any]:
+def _reference_dto(reference: dict[str, Any], species_id: str, index: int) -> dict[str, Any]:
     context = _species_context(species_id)
     return {
-        "asset_id": row.asset_id,
-        "type": "transparent_main" if index == 0 else "transparent_alt",
-        "url": _asset_media_url(row.asset_id),
-        "species_id": context["species_id"],
-        "species_name": context["species_name"],
-        "version": row.version,
-        "status": _status(row.status),
-        "source": {
-            "batch_id": row.source_batch_id,
-            "image_id": row.source_image_id,
-        },
+        "asset_id": reference.get("asset_id"),
+        "type": reference.get("type") or ("transparent_main" if index == 0 else "transparent_alt"),
+        "url": reference.get("url"),
+        "species_id": reference.get("species_id") or context["species_id"],
+        "species_name": reference.get("species_name") or context["species_name"],
+        "version": reference.get("version"),
+        "status": reference.get("status"),
+        "source": reference.get("source"),
+        "source_kind": reference.get("kind"),
+        "cover_variant": reference.get("cover_variant"),
     }
-
 
 def _resolve_source_item(db: Session, dataset_id: str, source_item_id: int | str) -> DatasetItem:
     candidate = str(source_item_id).strip()
@@ -257,8 +425,10 @@ def _public_reference(reference: dict[str, Any] | None) -> dict[str, Any] | None
         "species_id": reference.get("species_id"),
         "species_name": reference.get("species_name"),
         "type": reference.get("type", "transparent_main"),
-        "url": _asset_media_url(str(reference["asset_id"])) if reference.get("asset_id") else None,
+        "url": reference.get("url"),
         "version": reference.get("version"),
+        "source_kind": reference.get("kind"),
+        "cover_variant": reference.get("cover_variant"),
     }
 
 
@@ -266,25 +436,28 @@ def _initial_state(
     *,
     dataset_id: str,
     source: dict[str, Any],
-    reference: FishAsset,
+    reference: dict[str, Any],
     params: dict[str, Any],
 ) -> dict[str, Any]:
-    reference_context = _species_context(reference.species)
     return {
         "request": {
             "dataset_id": dataset_id,
             "source_item_id": str(source["item_id"]),
-            "reference_asset_id": reference.asset_id,
+            "reference_asset_id": reference.get("asset_id"),
             "model": MODEL_ID,
             "params": params,
         },
         "source": source,
         "reference": {
-            "asset_id": reference.asset_id,
-            "species_id": reference_context["species_id"],
-            "species_name": reference_context["species_name"],
-            "uri": reference.transparent_uri,
-            "version": reference.version,
+            "asset_id": reference.get("asset_id"),
+            "species_id": reference.get("species_id"),
+            "species_name": reference.get("species_name"),
+            "uri": reference.get("uri"),
+            "version": reference.get("version"),
+            "type": reference.get("type"),
+            "kind": reference.get("kind"),
+            "cover_variant": reference.get("cover_variant"),
+            "url": reference.get("url"),
         },
         "stages": [{"name": stage, "status": "PENDING"} for stage in STAGES],
         "worker": None,
@@ -752,16 +925,27 @@ def create_portrait_job(
     item = _resolve_source_item(db, dataset_id, payload.source_item_id)
     source = _source_state(db, item)
     wanted_species = _species_context(item.species_key or item.species_name)
-    reference = None
+    reference: dict[str, Any] | None = None
     if payload.reference_asset_id:
-        reference = db.get(FishAsset, payload.reference_asset_id)
+        fish_asset = db.get(FishAsset, payload.reference_asset_id)
+        if fish_asset is not None:
+            reference = _fish_reference_record(fish_asset, wanted_species["species_id"], 0)
+        else:
+            reference = next(
+                (
+                    row
+                    for row in _reference_rows(db, wanted_species["species_id"], "transparent")
+                    if row.get("asset_id") == payload.reference_asset_id
+                ),
+                None,
+            )
         if reference is None:
             raise HTTPException(status_code=404, detail="标准鱼体参考资产不存在")
-        if not reference.transparent_uri or _status(reference.status) not in REFERENCE_STATUSES:
-            raise HTTPException(status_code=409, detail="参考资产没有可用的 transparent 图")
-        if str(reference.asset_id or "").upper().startswith(PORTRAIT_PREFIX):
+        if not reference.get("uri") or _status(reference.get("status")) not in REFERENCE_STATUSES:
+            raise HTTPException(status_code=409, detail="参考资产没有可用的 transparent 或 Cover 图")
+        if str(reference.get("asset_id") or "").upper().startswith(PORTRAIT_PREFIX):
             raise HTTPException(status_code=409, detail="生成结果不能作为标准参考资产")
-        if not _species_matches(reference.species, wanted_species):
+        if not _species_matches(reference.get("species_id"), wanted_species):
             raise HTTPException(status_code=409, detail="参考鱼体与 A 图鱼种不匹配")
     else:
         rows = _reference_rows(db, wanted_species["species_id"], "transparent")
@@ -770,7 +954,7 @@ def create_portrait_job(
                 status_code=409,
                 detail={
                     "error_code": "REFERENCE_ASSET_NOT_FOUND",
-                    "message": "没有找到该鱼种的 transparent 标准鱼体资产",
+                    "message": "没有找到该鱼种的 transparent 或 Cover 资产包参考图",
                 },
             )
         reference = rows[0]
@@ -779,7 +963,7 @@ def create_portrait_job(
         db,
         dataset_id=dataset_id,
         source_item_id=str(item.id),
-        reference_asset_id=reference.asset_id,
+        reference_asset_id=str(reference.get("asset_id") or ""),
         params=params,
     )
     if existing is not None:
@@ -814,7 +998,7 @@ def create_portrait_job(
         detail={
             "dataset_id": dataset_id,
             "source_item_id": item.id,
-            "reference_asset_id": reference.asset_id,
+            "reference_asset_id": reference.get("asset_id"),
             "model": MODEL_ID,
         },
     )

@@ -39,8 +39,19 @@ ASSET_DIR = {
 }
 EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 IGNORED_FILES = {"readme.txt", "asset_manifest.csv", "manifest.csv"}
+# The 3-image cover package is stored under the existing COVER slot in
+# FishKnowledgeAssetVersion.  The variant is preserved in metadata_json so
+# portrait generation can select the transparent left/right reference without
+# introducing a second asset table or weakening the existing DB constraint.
+COVER_VARIANT_ORDER = (
+    "COVER_CARD",
+    "COVER_CARD_TRANSPARENT_LEFT",
+    "COVER_CARD_TRANSPARENT_RIGHT",
+)
 ASSET_PATTERNS = (
-    (re.compile(r"^00_cover(?:_.*)?$", re.I), "COVER"),
+    (re.compile(r"^00_cover(?:_list)?(?:_.*)?$", re.I), "COVER"),
+    (re.compile(r"^01_transparent_main(?:_.*)?$", re.I), "COVER"),
+    (re.compile(r"^02_transparent_alt(?:_.*)?$", re.I), "COVER"),
     (re.compile(r"^01_hero(?:_.*)?$", re.I), "HERO"),
     (re.compile(r"^02_identification(?:_.*)?$", re.I), "IDENTIFICATION"),
     (re.compile(r"^03_(?:ecology|eco)(?:_.*)?$", re.I), "ECO"),
@@ -225,6 +236,38 @@ def _resolve_species(db: Session, folder: str) -> FishSpecies | None:
 def _resolve_species_name(db: Session, folder: str) -> str | None:
     row = _resolve_species(db, folder)
     return row.id if row else None
+
+
+def _cover_variant_for_filename(filename: str) -> str | None:
+    stem = filename.rsplit(".", 1)[0]
+    if re.fullmatch(r"00_cover(?:_list)?(?:_.*)?", stem, re.I):
+        return "COVER_CARD"
+    if re.fullmatch(r"01_transparent_main(?:_.*)?", stem, re.I):
+        return "COVER_CARD_TRANSPARENT_LEFT"
+    if re.fullmatch(r"02_transparent_alt(?:_.*)?", stem, re.I):
+        return "COVER_CARD_TRANSPARENT_RIGHT"
+    return None
+
+
+def _cover_variant_for_version(version: FishKnowledgeAssetVersion) -> str:
+    metadata = _read_json(version.metadata_json, {})
+    metadata = metadata if isinstance(metadata, dict) else {}
+    value = str(
+        metadata.get("cover_variant")
+        or metadata.get("asset_role")
+        or metadata.get("reference_variant")
+        or ""
+    ).strip().upper()
+    aliases = {
+        "COVER_CARD_TRANSPARENT_MAIN": "COVER_CARD_TRANSPARENT_LEFT",
+        "TRANSPARENT_MAIN": "COVER_CARD_TRANSPARENT_LEFT",
+        "TRANSPARENT_LEFT": "COVER_CARD_TRANSPARENT_LEFT",
+        "COVER_CARD_TRANSPARENT_ALT": "COVER_CARD_TRANSPARENT_RIGHT",
+        "TRANSPARENT_ALT": "COVER_CARD_TRANSPARENT_RIGHT",
+        "TRANSPARENT_RIGHT": "COVER_CARD_TRANSPARENT_RIGHT",
+    }
+    value = aliases.get(value, value)
+    return value if value in COVER_VARIANT_ORDER else "COVER_CARD"
 
 
 def _asset_type_for_filename(filename: str) -> str | None:
@@ -449,35 +492,42 @@ def _scan_item(db: Session, client: Any, bucket: Any, batch: FishAssetImportBatc
 
 
 def _mark_duplicate_slots(items: list[FishAssetImportItem]) -> None:
-    slots: dict[tuple[str | None, str | None], list[FishAssetImportItem]] = {}
+    # Cover-card packages intentionally contain three files.  De-duplicate by
+    # cover variant, while retaining the legacy one-file-per-card rule.
+    slots: dict[tuple[str | None, str | None, str | None], list[FishAssetImportItem]] = {}
     for item in items:
-        key = (item.species_id, item.asset_type)
+        variant = (
+            _cover_variant_for_filename(item.source_filename)
+            if item.asset_type == "COVER"
+            else None
+        )
+        key = (item.species_id, item.asset_type, variant)
         if item.species_id and item.asset_type:
             slots.setdefault(key, []).append(item)
-    for values in slots.values():
+    for (species_id, asset_type, variant), values in slots.items():
         if len(values) < 2:
             continue
         for item in values:
             errors = _read_json(item.validation_errors, [])
+            label = f"{species_id} {variant or asset_type}"
             if not any(error.get("code") == "DUPLICATE_ASSET_SLOT" for error in errors):
-                errors.append(_validation("DUPLICATE_ASSET_SLOT", f"{item.species_id} {item.asset_type} has {len(values)} files"))
+                errors.append(_validation("DUPLICATE_ASSET_SLOT", f"{label} has {len(values)} files"))
             item.validation_errors = _json(errors)
             item.validation_status = "INVALID"
 
 
 def _assign_targets(db: Session, client: Any, bucket: Any, items: list[FishAssetImportItem]) -> None:
-    allocated: set[tuple[str, str]] = set()
+    next_versions: dict[tuple[str, str], int] = {}
     for item in items:
         if item.validation_status == "INVALID" or not item.species_id or not item.asset_type:
             continue
         if item.target_object:
             continue
         key = (item.species_id, item.asset_type)
-        if key not in allocated:
-            version = _next_version(db, client, bucket, item.species_id, item.asset_type)
-            allocated.add(key)
-        else:
-            continue
+        if key not in next_versions:
+            next_versions[key] = _next_version(db, client, bucket, item.species_id, item.asset_type)
+        version = next_versions[key]
+        next_versions[key] = version + 1
         item.target_object = f"{TARGET_ROOT}{item.species_id}/{ASSET_DIR[item.asset_type]}/v{version}.webp"
 
 
@@ -519,6 +569,11 @@ def _bind_imported_version(db: Session, version: FishKnowledgeAssetVersion) -> s
         raise RuntimeError(f"species {version.species_id} not found while binding imported asset")
 
     if version.asset_type == "COVER":
+        # Transparent left/right cover images are reference-only assets.  They
+        # must become ACTIVE versions for Fish Portrait, but must never replace
+        # the list-page COVER_CARD slot.
+        if _cover_variant_for_version(version) != "COVER_CARD":
+            return "REFERENCE_ONLY"
         current = db.scalar(select(FishSpeciesCover).where(FishSpeciesCover.species_id == species.id))
         if current is None:
             db.add(
@@ -626,6 +681,12 @@ def _import_item(db: Session, client: Any, bucket: Any, batch: FishAssetImportBa
                     "height": metadata.get("height"),
                     "original_content_type": metadata.get("original_content_type"),
                     "stored_size_bytes": metadata.get("stored_size_bytes"),
+                    "source_filename": item.source_filename,
+                    "cover_variant": (
+                        _cover_variant_for_filename(item.source_filename)
+                        if item.asset_type == "COVER"
+                        else None
+                    ),
                 }),
                 batch_id=batch.batch_id,
                 item_id=item.id,
@@ -639,6 +700,8 @@ def _import_item(db: Session, client: Any, bucket: Any, batch: FishAssetImportBa
 
         binding = _bind_imported_version(db, version_row)
         item.validation_status = "IMPORTED"
+        if binding == "REFERENCE_ONLY":
+            return "IMPORTED_REFERENCE_ONLY"
         return "IMPORTED_ACTIVE_PRESERVED" if binding == "ACTIVE_PRESERVED" else "IMPORTED"
     except Exception as exc:
         item.validation_status = "FAILED"
@@ -651,6 +714,7 @@ def _run_import(db: Session, batch: FishAssetImportBatch, *, retry_failed: bool 
     items = db.scalars(select(FishAssetImportItem).where(FishAssetImportItem.batch_id == batch.batch_id).order_by(FishAssetImportItem.id)).all()
     totals = {
         "imported": 0,
+        "reference_only": 0,
         "skipped_duplicate": 0,
         "skipped_imported": 0,
         "active_preserved": 0,
@@ -664,6 +728,7 @@ def _run_import(db: Session, batch: FishAssetImportBatch, *, retry_failed: bool 
             "SKIP_DUPLICATE": "skipped_duplicate",
             "SKIP_IMPORTED": "skipped_imported",
             "IMPORTED": "imported",
+            "IMPORTED_REFERENCE_ONLY": "reference_only",
             "IMPORTED_ACTIVE_PRESERVED": "active_preserved",
             "FAILED": "failed",
             "SKIP_INVALID": "failed",
@@ -855,14 +920,17 @@ def sync_content(batch_id: str, db: Session = Depends(get_db)) -> dict[str, Any]
         )
         .order_by(FishAssetImportItem.id)
     ).all()
-    totals = {"bound": 0, "active_preserved": 0, "missing_version": 0}
+    totals = {"bound": 0, "reference_only": 0, "active_preserved": 0, "missing_version": 0}
     for item in items:
         version = db.get(FishKnowledgeAssetVersion, item.version_id)
         if version is None:
             totals["missing_version"] += 1
             continue
         binding = _bind_imported_version(db, version)
-        totals["active_preserved" if binding == "ACTIVE_PRESERVED" else "bound"] += 1
+        if binding == "REFERENCE_ONLY":
+            totals["reference_only"] += 1
+        else:
+            totals["active_preserved" if binding == "ACTIVE_PRESERVED" else "bound"] += 1
     previous = _read_json(batch.result_json, {})
     previous["content_sync"] = totals
     batch.result_json = _json(previous)
@@ -910,6 +978,20 @@ def activate_version(batch_id: str, version_id: int, db: Session = Depends(get_d
     if species is None:
         raise HTTPException(status_code=404, detail={"code": "SPECIES_NOT_FOUND", "message": "鱼种不存在"})
     if version.asset_type == "COVER":
+        if _cover_variant_for_version(version) != "COVER_CARD":
+            version.status = "ACTIVE"
+            _commit(db)
+            return {
+                "success": True,
+                "batch_id": batch.batch_id,
+                "version_id": version.id,
+                "species_id": version.species_id,
+                "asset_type": version.asset_type,
+                "cover_variant": _cover_variant_for_version(version),
+                "reference_only": True,
+                "status": "ACTIVE",
+                "image_url": version.image_url,
+            }
         current = db.scalar(select(FishSpeciesCover).where(FishSpeciesCover.species_id == species.id))
         if current is None:
             current = FishSpeciesCover(species_id=species.id, image_url=version.image_url, title=f"{species.name_cn}封面", status="ACTIVE")
