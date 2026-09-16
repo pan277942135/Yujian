@@ -7,6 +7,7 @@ from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from google.cloud import storage
 from PIL import Image
@@ -60,6 +61,7 @@ TRUTH_VALUES = {
 
 app = FastAPI(title="YuJian AI Model Factory", version="0.1.0")
 templates = Jinja2Templates(directory="app/templates")
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
 install_access_guard(app)
 
 
