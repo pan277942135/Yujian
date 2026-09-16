@@ -162,7 +162,7 @@ function publishAction(row){
   const label=status==='NOT_PUBLISHED'?'发布模型':active?'发布中…':'重新发布';
   const disabled=active?' disabled':'';
   const title=active?(PUBLISH_STAGE_LABELS[state.stage]||'发布任务进行中'):'点击后自动转换并更新 GitHub Release';
-  return '<div class="publishCell" data-publish-model="'+esc(model)+'" data-publish-run="'+esc(row.run_id)+'">'+publishStatusPill(status)+'<button type="button" class="publishBtn"'+disabled+' title="'+esc(title)+'" onclick="openLegacyPublish(\\''+esc(row.run_id)+'\\')">'+esc(label)+'</button></div>';
+  return '<div class="publishCell" data-publish-model="'+esc(model)+'" data-publish-run="'+esc(row.run_id)+'">'+publishStatusPill(status)+'<button type="button" class="publishBtn"'+disabled+' title="'+esc(title)+'" onclick="openLegacyPublish(\''+esc(row.run_id)+'\')">'+esc(label)+'</button></div>';
 }
 function updateLegacyPublishCells(model){
   document.querySelectorAll('.publishCell').forEach(cell=>{
@@ -275,7 +275,7 @@ async function loadRuns(){
     document.getElementById('runs').innerHTML=rows.map(x=>{
       const model=x.params?.model_version||'-';
       const time=(x.started_at?new Date(x.started_at).toLocaleString():'-')+'<br>'+(x.finished_at?new Date(x.finished_at).toLocaleString():'-');
-      const metricAction=x.status==='COMPLETED'?'<button type="button" onclick="showMetrics(\\''+esc(x.run_id)+'\\')">看指标</button>':'';
+      const metricAction=x.status==='COMPLETED'?'<button type="button" onclick="showMetrics(\''+esc(x.run_id)+'\')">看指标</button>':'';
       const action='<div class="operationCell">'+metricAction+publishAction(x)+'</div>';
       return '<tr><td><b>'+esc(x.run_id)+'</b></td><td>'+esc(x.dataset_version)+'</td><td>'+esc(model)+'<div class="muted">'+esc(x.model_family)+'</div></td><td>'+statusPill(x.status)+'</td><td>'+time+'</td><td><div class="uri">'+esc(x.artifact_uri||x.metrics_uri||'-')+'</div></td><td>'+action+'</td></tr>';
     }).join('')||'<tr><td colspan="7" class="muted">还没有训练记录</td></tr>';
