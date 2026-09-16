@@ -27,6 +27,7 @@ from app.dataset_models import DatasetItem
 from app.db import SessionLocal, get_db
 from app.models import DatasetVersion, ImageAsset
 from app.platform.models import FishAsset, PipelineRun
+from app.fish_knowledge.asset_types import COVER_ASSET_TYPES
 from app.platform.services import adapters
 from app.portrait_worker_client import (
     PortraitWorkerError,
@@ -50,7 +51,7 @@ DEFAULT_PARAMS = {
 }
 STAGES = ("load_source", "load_reference", "sdxl_generate", "persist_result")
 ACTIVE_JOB_STATUSES = {"PENDING", "RUNNING"}
-REFERENCE_STATUSES = {"ACTIVE", "READY", "PUBLISHED"}
+REFERENCE_STATUSES = {"ACTIVE", "READY", "PUBLISHED", "DRAFT"}
 PORTRAIT_PREFIX = "PORTRAIT_"
 
 
@@ -149,38 +150,76 @@ def _asset_media_url(asset_id: str, kind: str = "transparent") -> str:
     return f"/api/platform/assets/{asset_id}/media/{kind}"
 
 
+def _reference_uri(row: FishAsset) -> str | None:
+    return (row.asset_uri or row.transparent_uri or "").strip() or None
+
+
 def _reference_rows(db: Session, species_id: str, asset_type: str = "transparent") -> list[FishAsset]:
     requested_type = str(asset_type or "transparent").strip().lower()
-    if requested_type not in {"transparent", "transparent_main", "transparent_alt"}:
+    aliases = {
+        "transparent": None,
+        "transparent_main": "COVER_CARD_TRANSPARENT_LEFT",
+        "transparent_left": "COVER_CARD_TRANSPARENT_LEFT",
+        "left": "COVER_CARD_TRANSPARENT_LEFT",
+        "transparent_alt": "COVER_CARD_TRANSPARENT_RIGHT",
+        "transparent_right": "COVER_CARD_TRANSPARENT_RIGHT",
+        "right": "COVER_CARD_TRANSPARENT_RIGHT",
+    }
+    if requested_type not in aliases:
         raise HTTPException(status_code=400, detail="仅支持 transparent 鱼体参考资产")
     wanted = _species_context(species_id)
     rows = db.scalars(
         select(FishAsset)
-        .where(FishAsset.transparent_uri.is_not(None))
+        .where(
+            FishAsset.asset_type.in_(COVER_ASSET_TYPES)
+            | FishAsset.transparent_uri.is_not(None)
+        )
         .order_by(FishAsset.created_at.desc(), FishAsset.asset_id.desc())
     ).all()
     matched: list[FishAsset] = []
     for row in rows:
-        if _status(row.status) not in REFERENCE_STATUSES:
+        if not _reference_uri(row) or _status(row.status) not in REFERENCE_STATUSES:
             continue
-        # Never use a generated portrait as the next standard reference.
         if str(row.asset_id or "").upper().startswith(PORTRAIT_PREFIX):
             continue
-        if _species_matches(row.species, wanted):
-            matched.append(row)
-    if requested_type == "transparent_main":
+        if not _species_matches(row.species, wanted):
+            continue
+        canonical = str(row.asset_type or "").upper()
+        if aliases[requested_type] and canonical != aliases[requested_type]:
+            continue
+        matched.append(row)
+    canonical_rows = [row for row in matched if str(row.asset_type or "").upper() in COVER_ASSET_TYPES]
+    legacy_rows = [row for row in matched if row not in canonical_rows]
+    matched = sorted(
+        canonical_rows + legacy_rows,
+        key=lambda row: (
+            0 if str(row.asset_type or "").upper().endswith("LEFT") else
+            1 if str(row.asset_type or "").upper().endswith("RIGHT") else 2,
+            -(row.created_at.timestamp() if row.created_at else 0),
+            str(row.asset_id),
+        ),
+    )
+    if requested_type in {"transparent_main", "transparent_left", "left"}:
         return matched[:1]
-    if requested_type == "transparent_alt":
-        return matched[1:]
+    if requested_type in {"transparent_alt", "transparent_right", "right"}:
+        canonical_right = [row for row in matched if str(row.asset_type or "").upper().endswith("RIGHT")]
+        return canonical_right[:1] if canonical_right else matched[1:]
     return matched
 
 
 def _reference_dto(row: FishAsset, species_id: str, index: int) -> dict[str, Any]:
     context = _species_context(species_id)
+    canonical = str(row.asset_type or "").upper()
+    if canonical.endswith("LEFT"):
+        reference_type = "LEFT"
+    elif canonical.endswith("RIGHT"):
+        reference_type = "RIGHT"
+    else:
+        reference_type = "transparent_main" if index == 0 else "transparent_alt"
     return {
         "asset_id": row.asset_id,
-        "type": "transparent_main" if index == 0 else "transparent_alt",
-        "url": _asset_media_url(row.asset_id),
+        "type": reference_type,
+        "url": _reference_uri(row) if row.asset_uri else _asset_media_url(row.asset_id),
         "species_id": context["species_id"],
         "species_name": context["species_name"],
         "version": row.version,
@@ -190,6 +229,7 @@ def _reference_dto(row: FishAsset, species_id: str, index: int) -> dict[str, Any
             "image_id": row.source_image_id,
         },
     }
+
 
 
 def _resolve_source_item(db: Session, dataset_id: str, source_item_id: int | str) -> DatasetItem:
@@ -257,7 +297,7 @@ def _public_reference(reference: dict[str, Any] | None) -> dict[str, Any] | None
         "species_id": reference.get("species_id"),
         "species_name": reference.get("species_name"),
         "type": reference.get("type", "transparent_main"),
-        "url": _asset_media_url(str(reference["asset_id"])) if reference.get("asset_id") else None,
+        "url": reference.get("url") or (_asset_media_url(str(reference["asset_id"])) if reference.get("asset_id") else None),
         "version": reference.get("version"),
     }
 
@@ -283,7 +323,8 @@ def _initial_state(
             "asset_id": reference.asset_id,
             "species_id": reference_context["species_id"],
             "species_name": reference_context["species_name"],
-            "uri": reference.transparent_uri,
+            "uri": _reference_uri(reference),
+            "url": _reference_uri(reference),
             "version": reference.version,
         },
         "stages": [{"name": stage, "status": "PENDING"} for stage in STAGES],
@@ -704,8 +745,10 @@ def fish_reference_assets(
     context = _species_context(species_id)
     return {
         "species_id": context["species_id"],
+        "species": context["species_name"],
         "species_name": context["species_name"],
         "assets": [_reference_dto(row, context["species_id"], index) for index, row in enumerate(rows)],
+        "references": [_reference_dto(row, context["species_id"], index) for index, row in enumerate(rows)],
     }
 
 
@@ -757,7 +800,7 @@ def create_portrait_job(
         reference = db.get(FishAsset, payload.reference_asset_id)
         if reference is None:
             raise HTTPException(status_code=404, detail="标准鱼体参考资产不存在")
-        if not reference.transparent_uri or _status(reference.status) not in REFERENCE_STATUSES:
+        if not _reference_uri(reference) or _status(reference.status) not in REFERENCE_STATUSES:
             raise HTTPException(status_code=409, detail="参考资产没有可用的 transparent 图")
         if str(reference.asset_id or "").upper().startswith(PORTRAIT_PREFIX):
             raise HTTPException(status_code=409, detail="生成结果不能作为标准参考资产")

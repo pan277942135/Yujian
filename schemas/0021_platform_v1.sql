@@ -31,6 +31,10 @@ CREATE TABLE IF NOT EXISTS fish_asset (
     source_image_id VARCHAR(256),
     species VARCHAR(128),
     status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+    asset_type VARCHAR(64),
+    direction VARCHAR(16),
+    asset_uri TEXT,
+    asset_object_name TEXT,
     original_uri TEXT,
     mask_uri TEXT,
     transparent_uri TEXT,
@@ -59,3 +63,5 @@ CREATE TABLE IF NOT EXISTS platform_operation_log (
 CREATE INDEX IF NOT EXISTS ix_platform_operation_log_type ON platform_operation_log (operation_type);
 CREATE INDEX IF NOT EXISTS ix_platform_operation_log_status ON platform_operation_log (status);
 CREATE INDEX IF NOT EXISTS ix_platform_operation_log_created_at ON platform_operation_log (created_at);
+
+CREATE INDEX IF NOT EXISTS ix_fish_asset_asset_type ON fish_asset(asset_type);

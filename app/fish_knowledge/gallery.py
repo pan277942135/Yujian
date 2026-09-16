@@ -10,6 +10,7 @@ from sqlalchemy.orm import relationship
 
 from app.db import Base
 from app.models import utcnow
+from app.fish_knowledge.asset_types import ALL_ASSET_TYPES, normalize_asset_type
 
 
 GALLERY_TYPES = {"standard", "side", "top", "catch", "environment", "action"}
@@ -21,7 +22,7 @@ GALLERY_MIME_SUFFIXES = {
     "image/png": ".png",
     "image/webp": ".webp",
 }
-KNOWLEDGE_ASSET_TYPES = frozenset({"COVER", "HERO", "IDENTIFICATION", "ECO", "GEAR", "SKILL"})
+KNOWLEDGE_ASSET_TYPES = frozenset({"COVER", *ALL_ASSET_TYPES})
 KNOWLEDGE_ASSET_MAX_BYTES = 10 * 1024 * 1024
 
 
@@ -87,9 +88,15 @@ def inspect_knowledge_asset(data: bytes) -> dict[str, object]:
 def knowledge_asset_object_name(species_id: str, asset_type: str) -> str:
     """Return the fixed object name for one CMS cover/card slot."""
 
-    normalized_type = asset_type.strip().upper()
+    normalized_type = normalize_asset_type(asset_type) or asset_type.strip().upper()
     if normalized_type == "COVER":
         return f"fish-assets/{species_id}/cover/cover.webp"
+    if normalized_type == "COVER_CARD":
+        return f"fish-assets/{species_id}/cover-card/cover_card.webp"
+    if normalized_type == "COVER_CARD_TRANSPARENT_LEFT":
+        return f"fish-assets/{species_id}/cover-card/transparent_left.webp"
+    if normalized_type == "COVER_CARD_TRANSPARENT_RIGHT":
+        return f"fish-assets/{species_id}/cover-card/transparent_right.webp"
     return f"fish-assets/{species_id}/cards/{normalized_type.lower()}.webp"
 
 
@@ -114,9 +121,17 @@ def managed_knowledge_asset_url(species_id: str, asset_type: str, image_url: str
     if value.startswith("/api/v1/fish/knowledge-media/"):
         return value
 
-    normalized_type = "cover" if str(asset_type).strip().upper() == "COVER" else str(asset_type).strip().lower()
-    fixed_asset_key = "cover.webp" if normalized_type == "cover" else f"{normalized_type}.webp"
-    fixed_asset_directory = "cover" if normalized_type == "cover" else "cards"
+    canonical_type = normalize_asset_type(str(asset_type), None) or str(asset_type).strip().upper()
+    normalized_type = "cover" if canonical_type == "COVER" else canonical_type.lower()
+    fixed_asset_key = {
+        "cover": "cover.webp",
+        "cover_card": "cover_card.webp",
+        "cover_card_transparent_left": "transparent_left.webp",
+        "cover_card_transparent_right": "transparent_right.webp",
+    }.get(normalized_type, f"{normalized_type}.webp")
+    fixed_asset_directory = "cover" if normalized_type == "cover" else (
+        "cover-card" if normalized_type.startswith("cover_card") else "cards"
+    )
     parsed = urlsplit(value)
     parts = [part for part in parsed.path.split("/") if part]
     try:

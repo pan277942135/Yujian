@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_db
 from app.factory import DOWNLOAD_RETRY, get_bucket_name
+from app.fish_knowledge.asset_types import ALL_ASSET_TYPES, COVER_ASSET_TYPES, asset_slot_key, normalize_asset_type
 from app.fish_knowledge.cards import FishCard, normalize_card_type
 from app.fish_knowledge.cover import FishSpeciesCover
 from app.fish_knowledge.content import card_display_description, parse_card_content
@@ -22,12 +23,14 @@ from app.fish_knowledge.similarity import FishSimilarity
 from app.fish_knowledge.species import SPECIES_ID_ALIASES, FishSpecies
 from app.fish_knowledge.video import FishVideo
 from app.models import SpeciesCatalog
+from app.platform.models import FishAsset
 
 
 router = APIRouter(prefix="/api/v1/fish", tags=["fish-knowledge"])
 
 
 class SpeciesListItem(BaseModel):
+    model_config = {"extra": "allow"}
     id: str
     name_cn: str
     category: str
@@ -133,6 +136,8 @@ class SpeciesFullDetailOut(SpeciesDetailOut):
     cards: list[CardOut]
     knowledge: dict[str, Any]
     dynamic: dict[str, Any]
+    cover_assets: dict[str, str | None]
+    knowledge_assets: dict[str, str | None]
 
 
 def _string_list(value: Any) -> list[str]:
@@ -197,6 +202,50 @@ def _cover_dict(row: FishSpeciesCover | None, *, active_only: bool = True) -> di
         "title": row.title,
         "status": row.status,
     }
+
+
+def _knowledge_asset_maps(db: Session | None, species: FishSpecies) -> tuple[dict[str, str | None], dict[str, str | None]]:
+    """Build the additive 3+5 response without removing v1 fields."""
+
+    cover_assets = {
+        "cover_card": None,
+        "transparent_left": None,
+        "transparent_right": None,
+    }
+    knowledge_assets = {
+        "hero": None,
+        "identification": None,
+        "eco": None,
+        "gear": None,
+        "skill": None,
+    }
+    allowed_statuses = {"ACTIVE", "PUBLISHED", "READY"}
+    if db is not None:
+        rows = db.scalars(
+            select(FishAsset)
+            .where(
+                FishAsset.species.in_({species.id, species.name_cn}),
+                FishAsset.asset_type.in_(ALL_ASSET_TYPES),
+                FishAsset.status.in_(allowed_statuses),
+            )
+            .order_by(FishAsset.created_at.desc(), FishAsset.asset_id.desc())
+        ).all()
+        for row in rows:
+            key = asset_slot_key(row.asset_type, row.direction)
+            url = (row.asset_uri or "").strip()
+            if key in cover_assets and url and cover_assets[key] is None:
+                cover_assets[key] = url
+            if key in knowledge_assets and url and knowledge_assets[key] is None:
+                knowledge_assets[key] = url
+
+    if cover_assets["cover_card"] is None and species.cover is not None and species.cover.status in allowed_statuses:
+        cover_assets["cover_card"] = managed_knowledge_asset_url(species.id, "COVER", species.cover.image_url)
+    for card in species.cards:
+        card_type = normalize_card_type(card.card_type)
+        key = asset_slot_key(card_type)
+        if key in knowledge_assets and knowledge_assets[key] is None and card.status in allowed_statuses:
+            knowledge_assets[key] = managed_knowledge_asset_url(species.id, card_type, card.image_url)
+    return cover_assets, knowledge_assets
 
 
 def _cover_image(species: FishSpecies) -> str | None:
@@ -303,8 +352,9 @@ def build_species_detail(
     )
 
 
-def build_species_full_detail(row: FishSpecies) -> SpeciesFullDetailOut:
+def build_species_full_detail(row: FishSpecies, db: Session | None = None) -> SpeciesFullDetailOut:
     base = build_species_detail(row)
+    cover_assets, knowledge_assets = _knowledge_asset_maps(db, row)
     active_card_rows = [item for item in row.cards if item.status == "ACTIVE"]
     cards = [_card(item) for item in active_card_rows]
     profile = base.profile
@@ -359,22 +409,34 @@ def build_species_full_detail(row: FishSpecies) -> SpeciesFullDetailOut:
         # Dynamic user catches/rankings are intentionally a stable placeholder
         # until their separate content domain is implemented.
         dynamic={},
+        cover_assets=cover_assets,
+        knowledge_assets=knowledge_assets,
     )
 
 
 @router.get("/species", response_model=list[SpeciesListItem])
 def list_fish_species(db: Session = Depends(get_db)) -> list[SpeciesListItem]:
     rows = db.scalars(_active_species_query()).all()
-    return [
-        SpeciesListItem(
-            id=row.id,
-            name_cn=row.name_cn,
-            category=row.category,
-            cover_image=_cover_image(row),
-            summary=row.summary,
-        )
-        for row in rows
-    ]
+    result = []
+    for row in rows:
+        cover_assets, _ = _knowledge_asset_maps(db, row)
+        has_indexed_cover = db.scalar(
+            select(FishAsset.asset_id).where(
+                FishAsset.species.in_({row.id, row.name_cn}),
+                FishAsset.asset_type.in_(COVER_ASSET_TYPES),
+            ).limit(1)
+        ) is not None
+        values = {
+            "id": row.id,
+            "name_cn": row.name_cn,
+            "category": row.category,
+            "cover_image": _cover_image(row),
+            "summary": row.summary,
+        }
+        if has_indexed_cover:
+            values["cover_assets"] = cover_assets
+        result.append(SpeciesListItem(**values))
+    return result
 
 
 @router.get("/species/{species_id}/detail", response_model=SpeciesFullDetailOut)
@@ -382,7 +444,7 @@ def get_fish_species_full_detail(species_id: str, db: Session = Depends(get_db))
     row = load_species_with_knowledge(db, species_id, active_only=True)
     if row is None:
         raise HTTPException(status_code=404, detail="fish species not found")
-    return build_species_full_detail(row)
+    return build_species_full_detail(row, db=db)
 
 
 @router.get("/species/{species_id}", response_model=SpeciesDetailOut)
@@ -430,41 +492,65 @@ def get_gallery_media(image_id: int, db: Session = Depends(get_db)):
 
 @router.get("/knowledge-media/{species_id}/{asset_type}/{asset_key}")
 def get_knowledge_media(species_id: str, asset_type: str, asset_key: str, db: Session = Depends(get_db)):
-    """Serve a managed cover/card image without adding a media table."""
+    """Serve a managed cover/card image, including canonical 3+5 slots."""
 
-    normalized_type = normalize_card_type(asset_type) if asset_type.upper() != "COVER" else "cover"
-    if normalized_type != "cover" and normalized_type not in {"HERO", "IDENTIFICATION", "ECO", "GEAR", "SKILL"}:
+    canonical_type = "COVER" if asset_type.strip().upper() == "COVER" else normalize_asset_type(asset_type)
+    if canonical_type is None or canonical_type not in {"COVER", *ALL_ASSET_TYPES}:
         raise HTTPException(status_code=404, detail="knowledge asset not found")
+    storage_type = "cover" if canonical_type == "COVER" else canonical_type.lower()
+    fixed_asset_key = {
+        "cover": "cover.webp",
+        "cover_card": "cover_card.webp",
+        "cover_card_transparent_left": "transparent_left.webp",
+        "cover_card_transparent_right": "transparent_right.webp",
+    }.get(storage_type, f"{storage_type}.webp")
     is_hashed_asset = bool(re.fullmatch(r"[a-f0-9]{64}\.(?:jpg|png|webp)", asset_key))
     is_version_asset = bool(re.fullmatch(r"v\d+\.webp", asset_key))
-    fixed_asset_key = "cover.webp" if normalized_type == "cover" else f"{normalized_type.lower()}.webp"
     if not is_hashed_asset and not is_version_asset and asset_key != fixed_asset_key:
         raise HTTPException(status_code=404, detail="knowledge asset not found")
+
     row = load_species_with_knowledge(db, species_id, active_only=False)
     if row is None:
         raise HTTPException(status_code=404, detail="fish species not found")
-    storage_type = "cover" if normalized_type == "cover" else normalized_type.lower()
     expected_url = f"/api/v1/fish/knowledge-media/{row.id}/{storage_type}/{asset_key}"
+    indexed = db.scalar(
+        select(FishAsset).where(
+            FishAsset.species.in_({row.id, row.name_cn}),
+            FishAsset.asset_type == canonical_type if canonical_type in ALL_ASSET_TYPES else FishAsset.asset_type == "COVER_CARD",
+            FishAsset.asset_uri == expected_url,
+        )
+    )
     version = None
     if is_version_asset:
         from app.fish_knowledge.import_batch import FishKnowledgeAssetVersion
 
-        version = db.scalar(select(FishKnowledgeAssetVersion).where(
-            FishKnowledgeAssetVersion.species_id == row.id,
-            FishKnowledgeAssetVersion.asset_type == ("COVER" if normalized_type == "cover" else normalized_type),
-            FishKnowledgeAssetVersion.image_url == expected_url,
-            FishKnowledgeAssetVersion.status == "ACTIVE",
-        ))
-        is_referenced = version is not None
-    elif normalized_type == "cover":
+        version = db.scalar(
+            select(FishKnowledgeAssetVersion).where(
+                FishKnowledgeAssetVersion.species_id == row.id,
+                FishKnowledgeAssetVersion.asset_type == canonical_type,
+                FishKnowledgeAssetVersion.image_url == expected_url,
+                FishKnowledgeAssetVersion.status.in_({"ACTIVE", "DRAFT"}),
+            )
+        )
+        is_referenced = version is not None and (
+            version.status == "ACTIVE" or indexed is not None
+        )
+    elif indexed is not None:
+        is_referenced = True
+    elif canonical_type == "COVER":
         is_referenced = (
             row.cover is not None
             and managed_knowledge_asset_url(row.id, "COVER", row.cover.image_url) == expected_url
         )
+    elif canonical_type == "COVER_CARD":
+        is_referenced = (
+            row.cover is not None
+            and managed_knowledge_asset_url(row.id, "COVER_CARD", row.cover.image_url) == expected_url
+        )
     else:
         is_referenced = any(
-            normalize_card_type(card.card_type) == normalized_type
-            and managed_knowledge_asset_url(row.id, normalized_type, card.image_url) == expected_url
+            normalize_card_type(card.card_type) == canonical_type
+            and managed_knowledge_asset_url(row.id, canonical_type, card.image_url) == expected_url
             for card in row.cards
         )
     if not is_referenced:
@@ -476,8 +562,17 @@ def get_knowledge_media(species_id: str, asset_type: str, asset_key: str, db: Se
             blob = client.bucket(get_bucket_name()).blob(version.object_name)
         else:
             object_prefix = "fish_knowledge" if is_hashed_asset else "fish-assets"
-            object_directory = storage_type if is_hashed_asset else ("cover" if storage_type == "cover" else "cards")
-            blob = client.bucket(get_bucket_name()).blob(f"{object_prefix}/{row.id}/{object_directory}/{asset_key}")
+            if is_hashed_asset:
+                object_directory = storage_type
+            elif canonical_type == "COVER":
+                object_directory = "cover"
+            elif canonical_type in COVER_ASSET_TYPES:
+                object_directory = "cover-card"
+            else:
+                object_directory = "cards"
+            blob = client.bucket(get_bucket_name()).blob(
+                f"{object_prefix}/{row.id}/{object_directory}/{asset_key}"
+            )
         if not blob.exists(client):
             raise HTTPException(status_code=404, detail="knowledge asset not found")
         content = blob.download_as_bytes(timeout=120, retry=DOWNLOAD_RETRY)
@@ -490,7 +585,5 @@ def get_knowledge_media(species_id: str, asset_type: str, asset_key: str, db: Se
     return Response(
         content=content,
         media_type=media_type,
-        # Cover/Card slots are replaceable. Do not let a browser keep an old
-        # image after an operator uploads a replacement to the same slot URL.
         headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
     )

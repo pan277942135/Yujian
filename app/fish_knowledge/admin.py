@@ -14,6 +14,14 @@ from sqlalchemy.orm import Session, selectinload
 from app.db import get_db
 from app.factory import get_bucket_name
 from app.fish_knowledge.api import build_species_detail, load_species_with_knowledge
+from app.fish_knowledge.asset_types import (
+    ALL_ASSET_TYPES,
+    COVER_ASSET_TYPES,
+    asset_direction,
+    asset_slot_key,
+    normalize_asset_type,
+    upsert_fish_asset_index,
+)
 from app.fish_knowledge.cards import (
     CARD_TYPE_ORDER,
     CARD_TYPES,
@@ -44,6 +52,7 @@ from app.fish_knowledge.similarity import FishSimilarity
 from app.fish_knowledge.species import FishSpecies
 from app.fish_knowledge.video import FishVideo
 from app.models import SpeciesCatalog
+from app.platform.models import FishAsset
 
 
 router = APIRouter(prefix="/api/v1/admin/fish", tags=["fish-knowledge-admin"])
@@ -497,6 +506,73 @@ def _require_species(
 def _get_species_cover(db: Session, species_id: str) -> FishSpeciesCover | None:
     return db.scalar(select(FishSpeciesCover).where(FishSpeciesCover.species_id == species_id))
 
+def _fish_asset_rows(db: Session, species_id: str, *, include_inactive: bool = True) -> list[FishAsset]:
+    statement = select(FishAsset).where(
+        FishAsset.species == species_id,
+        FishAsset.asset_type.in_(ALL_ASSET_TYPES),
+    ).order_by(FishAsset.created_at.desc(), FishAsset.asset_id.desc())
+    if not include_inactive:
+        statement = statement.where(FishAsset.status.in_({"ACTIVE", "PUBLISHED", "READY"}))
+    return db.scalars(statement).all()
+
+
+def _asset_dict(row: FishAsset) -> dict[str, Any]:
+    asset_type = normalize_asset_type(row.asset_type, row.direction) or row.asset_type
+    return {
+        "asset_id": row.asset_id,
+        "asset_type": asset_type,
+        "direction": row.direction or asset_direction(asset_type),
+        "url": row.asset_uri,
+        "status": row.status,
+        "version": row.version,
+        "object_name": row.asset_object_name,
+    }
+
+
+def _fish_asset_slots(db: Session, species_id: str, *, include_inactive: bool = True) -> dict[str, dict[str, Any]]:
+    slots: dict[str, dict[str, Any]] = {
+        key: {"asset_type": asset_type, "direction": asset_direction(asset_type), "url": None, "status": None}
+        for asset_type in ALL_ASSET_TYPES
+        for key in [asset_slot_key(asset_type)]
+    }
+    for row in _fish_asset_rows(db, species_id, include_inactive=include_inactive):
+        key = asset_slot_key(row.asset_type, row.direction)
+        if key in slots and not slots[key]["url"] and row.asset_uri:
+            slots[key] = _asset_dict(row)
+    cover = _get_species_cover(db, species_id)
+    if cover is not None and (cover.image_url or "").strip() and not slots["cover_card"]["url"]:
+        slots["cover_card"] = {
+            "asset_type": "COVER_CARD",
+            "direction": "NONE",
+            "url": managed_knowledge_asset_url(species_id, "COVER", cover.image_url),
+            "status": cover.status,
+        }
+    cards = db.scalars(select(FishCard).where(FishCard.species_id == species_id)).all()
+    for card in cards:
+        card_type = normalize_card_type(card.card_type)
+        key = asset_slot_key(card_type)
+        if key in slots and not slots[key]["url"] and (card.image_url or "").strip():
+            slots[key] = {
+                "asset_type": card_type,
+                "direction": "NONE",
+                "url": managed_knowledge_asset_url(species_id, card_type, card.image_url),
+                "status": card.status,
+            }
+    return slots
+
+
+def _asset_completion(db: Session, species_id: str) -> dict[str, Any]:
+    slots = _fish_asset_slots(db, species_id)
+    cover_keys = ("cover_card", "transparent_left", "transparent_right")
+    knowledge_keys = ("hero", "identification", "eco", "gear", "skill")
+    cover = {key: bool(slots[key]["url"]) for key in cover_keys}
+    knowledge = {key: bool(slots[key]["url"]) for key in knowledge_keys}
+    return {
+        "cover_assets": {"completed": sum(cover.values()), "total": 3, **cover},
+        "knowledge_assets": {"completed": sum(knowledge.values()), "total": 5, **knowledge},
+        "assets": {"completed": sum(cover.values()) + sum(knowledge.values()), "total": 8},
+    }
+
 
 def _gallery_dict(row: FishGalleryImage) -> dict:
     return {
@@ -759,8 +835,10 @@ def list_admin_species(db: Session = Depends(get_db)) -> list[dict]:
         )
         .order_by(SpeciesCatalog.catalog_order, FishSpecies.id)
     ).all()
-    return [
-        {
+    result = []
+    for row in rows:
+        completion = _asset_completion(db, row.id)
+        result.append({
             "id": row.id,
             "name_cn": row.name_cn,
             "status": row.status,
@@ -774,6 +852,12 @@ def list_admin_species(db: Session = Depends(get_db)) -> list[dict]:
                 if card.status == "ACTIVE" and card.image_url.strip()
             }),
             "cards_total": len(CARD_TYPE_ORDER),
+            "cover_assets_ready": completion["cover_assets"]["completed"],
+            "cover_assets_total": 3,
+            "knowledge_assets_ready": completion["knowledge_assets"]["completed"],
+            "knowledge_assets_total": 5,
+            "assets_completed": completion["assets"]["completed"],
+            "assets_total": 8,
             "video_count": len(row.videos),
             "profile_ready": row.profile is not None,
             "fishing_ready": row.fishing is not None,
@@ -789,9 +873,8 @@ def list_admin_species(db: Session = Depends(get_db)) -> list[dict]:
                     if card.status == "ACTIVE" and card.image_url.strip()
                 }) == len(CARD_TYPE_ORDER)
             ),
-        }
-        for row in rows
-    ]
+        })
+    return result
 
 
 @router.get("/species/{species_id}")
@@ -799,7 +882,13 @@ def get_admin_species(species_id: str, db: Session = Depends(get_db)):
     row = load_species_with_knowledge(db, species_id, active_only=False)
     if row is None or row.status == "DELETED":
         raise HTTPException(status_code=404, detail="fish species not found")
-    return build_species_detail(row, include_inactive_similarity=True)
+    payload = build_species_detail(row, include_inactive_similarity=True).model_dump()
+    payload["assets"] = {
+        "cover_assets": _fish_asset_slots(db, row.id),
+        "knowledge_assets": {key: _fish_asset_slots(db, row.id)[key] for key in ("hero", "identification", "eco", "gear", "skill")},
+    }
+    payload["completion"] = _asset_completion(db, row.id)
+    return payload
 
 
 @router.post("/species", status_code=201)
@@ -893,6 +982,9 @@ def _publish_species(species_id: str, db: Session) -> dict:
         active = next((card for card in candidates if card.status == "ACTIVE"), None)
         if active is None and candidates:
             candidates[0].status = "ACTIVE"
+    for asset in _fish_asset_rows(db, row.id):
+        if asset.status == "DRAFT":
+            asset.status = "ACTIVE"
     row.status = "ACTIVE"
     _commit(db)
     return {"success": True, "id": row.id, "species_id": row.id, "status": row.status, "missing": []}
@@ -1026,6 +1118,18 @@ def delete_species_card(card_id: int, db: Session = Depends(get_db)) -> dict:
     return {"deleted": True, "id": card_id, "species_id": species_id}
 
 
+@router.get("/species/{species_id}/assets")
+def list_species_assets(species_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    species = _require_species(db, species_id)
+    slots = _fish_asset_slots(db, species.id)
+    return {
+        "species_id": species.id,
+        "cover_assets": {key: slots[key] for key in ("cover_card", "transparent_left", "transparent_right")},
+        "knowledge_assets": {key: slots[key] for key in ("hero", "identification", "eco", "gear", "skill")},
+        "completion": _asset_completion(db, species.id),
+    }
+
+
 @router.get("/species/{species_id}/completion")
 def species_completion(species_id: str, db: Session = Depends(get_db)) -> dict:
     species = _require_species(db, species_id)
@@ -1066,8 +1170,8 @@ def species_completion(species_id: str, db: Session = Depends(get_db)) -> dict:
         "gallery": {"completed": min(gallery_count, MAX_GALLERY_IMAGES), "total": MAX_GALLERY_IMAGES},
         "video": video_count > 0,
         "knowledge": knowledge_ready,
+        **_asset_completion(db, species.id),
     }
-
 
 @router.put("/species/{species_id}/profile")
 def upsert_profile(species_id: str, payload: ProfileUpsert, db: Session = Depends(get_db)) -> dict:
@@ -1192,12 +1296,18 @@ async def upload_fish_asset(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Upload a real cover/card asset and bind it to the existing row."""
+    """Upload a v1-compatible Fish Knowledge asset and index 3+5 slots."""
 
     species = _require_species(db, species_id)
-    normalized_type = "cover" if asset_type.strip().lower() == "cover" else normalize_card_type(asset_type)
-    if normalized_type != "cover" and normalized_type not in CARD_TYPE_ORDER:
-        raise HTTPException(status_code=400, detail="asset_type 必须是 cover 或五种鱼鉴卡类型")
+    raw_type = str(asset_type or "").strip()
+    legacy_cover = raw_type.upper() == "COVER"
+    normalized_type = "COVER" if legacy_cover else (
+        normalize_card_type(raw_type)
+        if raw_type.upper() in {"HERO", "IDENTIFICATION", "ECO", "GEAR", "SKILL"}
+        else normalize_asset_type(raw_type)
+    )
+    if normalized_type is None or normalized_type not in {"COVER", *ALL_ASSET_TYPES}:
+        raise HTTPException(status_code=400, detail="asset_type 必须是 cover、3种 Cover Card 或五种鱼鉴卡类型")
 
     data = await file.read(MAX_GALLERY_IMAGE_BYTES + 1)
     try:
@@ -1208,18 +1318,19 @@ async def upload_fish_asset(
     try:
         client = storage.Client()
         bucket = client.bucket(get_bucket_name())
+        storage_type = "cover" if normalized_type == "COVER" else normalized_type
         object_name, storage_status = store_knowledge_asset(
             client=client,
             bucket=bucket,
             species_id=species.id,
-            asset_type=normalized_type,
+            asset_type=storage_type,
             data=data,
             metadata=metadata,
         )
         asset_key = object_name.rsplit("/", 1)[-1]
-        managed_url = f"/api/v1/fish/knowledge-media/{species.id}/{normalized_type.lower()}/{asset_key}"
+        managed_url = f"/api/v1/fish/knowledge-media/{species.id}/{storage_type.lower()}/{asset_key}"
 
-        if normalized_type == "cover":
+        if normalized_type == "COVER":
             row = _get_species_cover(db, species.id)
             if row is None:
                 row = FishSpeciesCover(
@@ -1232,6 +1343,33 @@ async def upload_fish_asset(
                 db.add(row)
             else:
                 row.image_url = managed_url
+            upsert_fish_asset_index(
+                db, species_id=species.id, asset_type="COVER_CARD", url=managed_url,
+                object_name=object_name, status="DRAFT", version="v1",
+            )
+            result = _cover_dict(row, db)
+            response_type = "cover"
+        elif normalized_type in COVER_ASSET_TYPES:
+            if normalized_type == "COVER_CARD":
+                cover = _get_species_cover(db, species.id)
+                if cover is None:
+                    cover = FishSpeciesCover(
+                        species_id=species.id,
+                        image_url=managed_url,
+                        style="ANIME_CARD",
+                        title=f"{species.name_cn}图鉴卡",
+                        status="DRAFT",
+                    )
+                    db.add(cover)
+                else:
+                    cover.image_url = managed_url
+            indexed = upsert_fish_asset_index(
+                db, species_id=species.id, asset_type=normalized_type, url=managed_url,
+                object_name=object_name, direction=asset_direction(normalized_type),
+                status="DRAFT", version="v1",
+            )
+            result = _asset_dict(indexed)
+            response_type = normalized_type
         else:
             row = next(
                 (
@@ -1254,21 +1392,27 @@ async def upload_fish_asset(
                 db.add(row)
             else:
                 row.image_url = managed_url
+            upsert_fish_asset_index(
+                db, species_id=species.id, asset_type=normalized_type, url=managed_url,
+                object_name=object_name, status=row.status, version="v1",
+            )
+            result = _card_dict(row, db)
+            response_type = normalized_type
         _commit(db)
-        db.refresh(row)
+        db.refresh(row if "row" in locals() else indexed)
     except HTTPException:
         raise
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=503, detail="鱼鉴素材存储失败") from exc
 
-    result = _cover_dict(row, db) if normalized_type == "cover" else _card_dict(row, db)
     return {
         **result,
-        "asset_type": normalized_type,
+        "asset_type": response_type,
         "storage": storage_status,
         "image": {"width": metadata["width"], "height": metadata["height"]},
     }
+
 
 
 def _cms_asset_error(
@@ -1297,13 +1441,14 @@ async def upload_cms_fish_asset(
     file: UploadFile,
     db: Session,
 ) -> dict[str, Any] | JSONResponse:
-    """Upload and bind one Cover/Card image for the short CMS contract."""
+    """Upload and bind one legacy or canonical 3+5 asset slot."""
 
     normalized_type = str(asset_type or "").strip().upper()
     if normalized_type not in KNOWLEDGE_ASSET_TYPES:
         return _cms_asset_error(
             "invalid_asset_type",
-            "asset_type 必须是 COVER、HERO、IDENTIFICATION、ECO、GEAR 或 SKILL",
+            "asset_type 必须是 COVER、COVER_CARD、COVER_CARD_TRANSPARENT_LEFT、"
+            "COVER_CARD_TRANSPARENT_RIGHT 或五种鱼鉴卡类型",
             status_code=400,
         )
 
@@ -1348,10 +1493,6 @@ async def upload_cms_fish_asset(
             image_metadata=image_metadata,
         )
         asset_written = True
-        # The runtime service account can read the bucket, but the bucket is
-        # intentionally not public. Persist a same-origin managed URL so the
-        # CMS preview and the App can read the image through YuJian's public
-        # Fish Knowledge media endpoint.
         asset_key = object_name.rsplit("/", 1)[-1]
         image_url = f"/api/v1/fish/knowledge-media/{species.id}/{normalized_type.lower()}/{asset_key}"
 
@@ -1368,7 +1509,34 @@ async def upload_cms_fish_asset(
                 db.add(row)
             else:
                 row.image_url = image_url
+            upsert_fish_asset_index(
+                db, species_id=species.id, asset_type="COVER_CARD", url=image_url,
+                object_name=object_name, status="DRAFT", version="v1",
+            )
             binding = "cover.image_url"
+            result = _cover_dict(row, db)
+        elif normalized_type in COVER_ASSET_TYPES:
+            if normalized_type == "COVER_CARD":
+                cover = _get_species_cover(db, species.id)
+                if cover is None:
+                    cover = FishSpeciesCover(
+                        species_id=species.id,
+                        image_url=image_url,
+                        style="ANIME_CARD",
+                        title=f"{species.name_cn}图鉴卡",
+                        status="DRAFT",
+                    )
+                    db.add(cover)
+                else:
+                    cover.image_url = image_url
+            indexed = upsert_fish_asset_index(
+                db, species_id=species.id, asset_type=normalized_type, url=image_url,
+                object_name=object_name, direction=asset_direction(normalized_type),
+                status="DRAFT", version="v1",
+            )
+            row = indexed
+            binding = "fish_asset.asset_uri"
+            result = _asset_dict(row)
         else:
             row = next(
                 (
@@ -1395,9 +1563,20 @@ async def upload_cms_fish_asset(
                 db.add(row)
             else:
                 row.image_url = image_url
+            upsert_fish_asset_index(
+                db, species_id=species.id, asset_type=normalized_type, url=image_url,
+                object_name=object_name, status=row.status, version="v1",
+            )
             binding = "card.image_url"
+            result = _card_dict(row, db)
         _commit(db)
         db.refresh(row)
+        if normalized_type == "COVER":
+            result = _cover_dict(row, db)
+        elif normalized_type in COVER_ASSET_TYPES:
+            result = _asset_dict(row)
+        else:
+            result = _card_dict(row, db)
     except HTTPException as exc:
         db.rollback()
         if asset_written:
@@ -1429,7 +1608,6 @@ async def upload_cms_fish_asset(
             )
         return _cms_asset_error("storage_error", "鱼鉴图片上传失败", status_code=503)
 
-    result = _cover_dict(row, db) if normalized_type == "COVER" else _card_dict(row, db)
     return {
         "success": True,
         "url": image_url,
@@ -1452,7 +1630,6 @@ async def upload_cms_fish_asset(
         "binding": binding,
         **result,
     }
-
 
 @router.patch("/species/{species_id}/gallery/{image_id}")
 def update_gallery_item(

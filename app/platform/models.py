@@ -52,6 +52,12 @@ class FishAsset(Base):
     source_image_id = Column(String(256), index=True)
     species = Column(String(128), index=True)
     status = Column(String(32), nullable=False, default="ACTIVE", index=True)
+    # Optional Fish Knowledge 3+5 slot metadata. Legacy platform output rows
+    # keep these fields NULL and continue using the URI columns below.
+    asset_type = Column(String(64), nullable=True, index=True)
+    direction = Column(String(16), nullable=True)
+    asset_uri = Column(Text)
+    asset_object_name = Column(Text)
     original_uri = Column(Text)
     mask_uri = Column(Text)
     transparent_uri = Column(Text)

@@ -35,6 +35,10 @@ def test_fish_asset_batch_import_api_and_page_are_registered():
         "closeBtn",
         "closeModalOnBackdrop",
         ".modal[hidden]{display:none!important}",
+        "UPLOADABLE_BATCH_STATUSES",
+        "uploadOneFile",
+        "可再次点击“上传文件夹”继续上传",
+        "BATCH_BUSY",
     ):
         assert marker in source
     templates.env.from_string(source)

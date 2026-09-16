@@ -22,7 +22,7 @@ input,button{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:10p
   <div class="field"><label for="folderInput">本地资产文件夹</label><div class="folder-picker"><input id="folderInput" type="file" webkitdirectory directory multiple><button type="button" id="chooseFolderBtn">选择文件夹</button><span id="folderName" class="folder-name">未选择文件夹</span></div></div>
 </div>
 <div class="actions"><button class="primary" id="uploadBtn" disabled>上传文件夹</button><button class="primary" id="scanBtn" disabled>扫描并预检</button><span id="uploadProgress" class="muted progress"></span></div>
-<p class="help">先选择本地文件夹并上传，上传完成后再点击“扫描并预检”。系统不会上传 ZIP；文件会按原目录结构逐个写入批次暂存目录。</p>
+<p class="help">先选择本地文件夹并上传，上传完成后再点击“扫描并预检”。系统不会上传 ZIP；文件会按原目录结构逐个写入批次暂存目录。网络中断或部分失败时，可再次点击“上传文件夹”继续上传。</p>
 <details class="legacy"><summary>已有 GCS Import Folder（兼容方式）</summary><div class="inline"><input id="source" placeholder="gs://yujian-model-factory-571785698442/fish-assets/imports/FK_ASSET_UAT_001/"><button id="legacyScanBtn">使用此 GCS 目录并扫描</button></div><p class="help">只允许当前配置的 GCS bucket 下的 fish-assets/imports/ 目录。</p></details>
 </section>
 <section class="section">
@@ -30,7 +30,9 @@ input,button{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:10p
 <div class="format-grid">
   <div class="format-card"><h3>推荐格式（canonical species_id）</h3><pre class="format-code">FK_ASSET_20260913_001/
   sharpbelly/
-    00_cover.png
+    00_cover_list.png
+    01_transparent_main.png
+    02_transparent_alt.png
     01_hero.png
     02_identification.png
     03_ecology.png
@@ -46,9 +48,9 @@ input,button{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:10p
     ...</pre></div>
 </div>
 <ul class="help requirements">
-  <li>每个鱼种目录下最多 6 个槽位：00_cover、01_hero、02_identification、03_ecology（或 03_eco）、04_gear、05_skill（或 05_fishing）。</li>
+  <li>每个鱼种目录下最多 8 个槽位：00_cover_list、01_transparent_main、02_transparent_alt、01_hero、02_identification、03_ecology（或 03_eco）、04_gear、05_skill（或 05_fishing）。</li>
   <li>支持 PNG/JPG/JPEG/WEBP；单个图片不超过 10MB。建议尺寸至少 1024×1024、接近 1:1；预检会将比例或分辨率问题标记为 WARNING/INVALID。</li>
-  <li>允许只上传部分槽位，预检会按鱼种显示完成度 x/6；README.txt、manifest.csv、asset_manifest.csv 可作为辅助文件。</li>
+  <li>允许只上传部分槽位，预检会按鱼种显示完成度 x/8；README.txt、manifest.csv、asset_manifest.csv、ASSET_MANIFEST.csv 可作为 Manifest V2 映射文件。</li>
   <li>编号/中文目录会通过已有鱼种别名解析到 canonical species_id，不会自动创建新鱼种。</li>
 </ul>
 </section>
@@ -56,32 +58,37 @@ input,button{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:10p
 <div class="top"><div><h2>Batch Preview</h2><div id="batchMeta" class="muted"></div></div><div class="actions"><button id="rescanBtn">重新扫描</button><button id="retryBtn">Retry Failed</button><button id="syncBtn">同步到鱼鉴内容</button><button class="primary" id="executeBtn">执行导入</button><button class="danger" id="cancelBtn">取消批次</button></div></div>
 <div class="summary" id="summary"></div>
 <div class="confirm"><input type="checkbox" id="allowWarnings"><label for="allowWarnings">我确认继续导入 WARNING 图片（INVALID 仍会阻止执行）</label></div>
-<div class="table-wrap"><table><thead><tr><th>鱼种</th><th>Cover</th><th>Hero</th><th>Identification</th><th>Eco</th><th>Gear</th><th>Skill</th><th>完成度</th></tr></thead><tbody id="matrix"></tbody></table></div>
+<div class="table-wrap"><table><thead><tr><th>鱼种</th><th>Cover Card</th><th>透明左向</th><th>透明右向</th><th>Hero</th><th>Identification</th><th>Eco</th><th>Gear</th><th>Skill</th><th>完成度</th></tr></thead><tbody id="matrix"></tbody></table></div>
 <div class="help">点击每个槽位的 Preview 可查看真实源图、尺寸、SHA-256、校验信息和目标 GCS 路径。执行后所有新版本保持 DRAFT。</div>
 </section>
 <section class="section history"><h2>导入历史</h2><div class="table-wrap"><table><thead><tr><th>Batch</th><th>状态</th><th>鱼种</th><th>图片</th><th>Valid</th><th>Warning</th><th>Invalid</th><th>时间</th></tr></thead><tbody id="historyRows"></tbody></table></div></section>
 <div id="modal" class="modal" hidden><div><h3 id="modalTitle">素材详情</h3><div id="modalBody"></div><div class="actions"><button id="activateBtn" class="primary" hidden>将此版本设为 ACTIVE</button><button id="closeBtn" type="button">关闭</button></div></div></div>
 </main>
 <script>
-const TYPES=['COVER','HERO','IDENTIFICATION','ECO','GEAR','SKILL'];
-let currentBatch=null,currentItem=null,selectedFiles=[],uploading=false;
+const TYPES=['COVER_CARD','COVER_CARD_TRANSPARENT_LEFT','COVER_CARD_TRANSPARENT_RIGHT','HERO','IDENTIFICATION','ECO','GEAR','SKILL'];
+let currentBatch=null,currentItem=null,selectedFiles=[],uploading=false,uploadReady=false;
+const UPLOADABLE_BATCH_STATUSES=new Set(['CREATED','READY']);
 const $=id=>document.getElementById(id);
 function show(message,error=false){$('banner').textContent=message;$('banner').className='banner'+(error?' error':'');$('banner').style.display='block'}
 function esc(v){return String(v??'').replace(/[&<>"']/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x]))}
-async function api(url,options={}){const r=await fetch(url,options);let data={};try{data=await r.json()}catch{}if(!r.ok){const d=data.detail||data;const e=new Error(typeof d==='string'?d:(d.message||JSON.stringify(d)));e.payload=d;e.code=d.code;throw e}return data}
+async function api(url,options={}){const r=await fetch(url,options);let data={};try{data=await r.json()}catch{}if(!r.ok){const d=data.detail||data;const e=new Error(typeof d==='string'?d:(d.message||JSON.stringify(d)));e.payload=d;e.code=d.code;e.status=r.status;throw e}return data}
 function metric(label,value,cls=''){return '<div class="metric"><span class="muted">'+esc(label)+'</span><b class="'+cls+'">'+esc(value)+'</b></div>'}
 function statusBadge(s){return '<span class="badge '+esc(s)+'">'+esc(s)+'</span>'}
 function renderSummary(s){$('summary').innerHTML=metric('鱼种',s.species_count)+metric('图片',s.total_files)+metric('VALID',s.valid,'good')+metric('WARNING',s.warning,'warn')+metric('INVALID',s.invalid,'bad')+metric('状态',currentBatch.status)}
 function renderSlot(items,type){const values=Array.isArray(items)?items:(items&&typeof items==='object'?[items]:[]);const found=values.filter(x=>x.asset_type===type);if(!found.length)return '<td class="slot"><span class="muted">—</span></td>';return '<td class="slot">'+found.map(item=>'<div>'+statusBadge(item.validation_status)+(item.source_preview_url?'<br><a href="#" onclick="openItem('+item.id+');return false">Preview</a>':'')+(item.width?'<br><span class="help">'+item.width+'×'+item.height+'</span>':'')+'</div>').join('<hr>')+'</td>'}
-function renderMatrix(data){$('matrix').innerHTML=(data.species||[]).map(row=>{const items=TYPES.flatMap(t=>row.assets[t]||[]);return '<tr><td><b>'+esc(row.species_id)+'</b></td>'+TYPES.map(t=>renderSlot(row.assets[t],t)).join('')+'<td>'+esc(row.completion)+'</td></tr>'}).join('')||'<tr><td colspan="8" class="muted">暂无可识别图片</td></tr>'}
-function renderCurrent(data){currentBatch=data;$('current').hidden=false;$('batchMeta').innerHTML='Batch: '+esc(data.batch_id)+' · '+esc(data.source_gcs_uri)+' · '+statusBadge(data.status);renderSummary(data.summary);renderMatrix(data)}
+function renderMatrix(data){$('matrix').innerHTML=(data.species||[]).map(row=>{const items=TYPES.flatMap(t=>row.assets[t]||[]);return '<tr><td><b>'+esc(row.species_id)+'</b></td>'+TYPES.map(t=>renderSlot(row.assets[t],t)).join('')+'<td>'+esc(row.completion)+'</td></tr>'}).join('')||'<tr><td colspan="10" class="muted">暂无可识别图片</td></tr>'}
+function renderCurrent(data){currentBatch=data;uploadReady=false;$('current').hidden=false;$('batchMeta').innerHTML='Batch: '+esc(data.batch_id)+' · '+esc(data.source_gcs_uri)+' · '+statusBadge(data.status);renderSummary(data.summary);renderMatrix(data)}
 async function loadBatch(id){try{const data=await api('/api/v1/admin/fish/assets/import-batches/'+encodeURIComponent(id));renderCurrent(data);history()}catch(e){show(e.message,true)}}
 function validBatchId(value){return /^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/.test(value)}
 function makeBatchId(){const d=new Date();const pad=n=>String(n).padStart(2,'0');return 'FK_LOCAL_'+d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+'_'+pad(d.getHours())+pad(d.getMinutes())+pad(d.getSeconds())}
-function setFolderSummary(){selectedFiles=Array.from($('folderInput').files||[]);$('folderName').textContent=selectedFiles.length?(selectedFiles[0].webkitRelativePath||selectedFiles[0].name).split('/')[0]+' · '+selectedFiles.length+' 个文件':'未选择文件夹';$('uploadBtn').disabled=!selectedFiles.length||uploading;$('scanBtn').disabled=!currentBatch||uploading}
-function uploadError(e){return (e.code?e.code+'：':'')+e.message}
-async function uploadLocalFolder(){const batchId=$('batchId').value.trim();if(!validBatchId(batchId))return show('请输入合法批次 ID（3-128 位，仅字母、数字、下划线和连字符）',true);if(!selectedFiles.length)return show('请先选择本地资产文件夹',true);if(uploading)return;uploading=true;$('uploadBtn').disabled=true;$('scanBtn').disabled=true;let cursor=0,completed=0;const failures=[];try{const created=currentBatch&&currentBatch.batch_id===batchId?currentBatch:await api('/api/v1/admin/fish/assets/import-batches/local',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({batch_id:batchId})});currentBatch={batch_id:created.batch_id,status:created.status,source_gcs_uri:created.source_gcs_uri};const worker=async()=>{while(cursor<selectedFiles.length){const file=selectedFiles[cursor++];const form=new FormData();form.append('relative_path',file.webkitRelativePath||file.name);form.append('file',file,file.name);try{await api('/api/v1/admin/fish/assets/import-batches/'+encodeURIComponent(batchId)+'/upload',{method:'POST',body:form});completed++;$('uploadProgress').textContent='已上传 '+completed+' / '+selectedFiles.length}catch(e){failures.push(file.name+'：'+uploadError(e))}}};await Promise.all(Array.from({length:Math.min(3,selectedFiles.length)},worker));if(failures.length)throw new Error('上传失败 '+failures.length+' 个文件：\n'+failures.join('\n'));$('scanBtn').disabled=false;show('已上传 '+completed+' 个文件，请点击“扫描并预检”')}catch(e){show(uploadError(e),true)}finally{uploading=false;$('uploadBtn').disabled=!selectedFiles.length;$('scanBtn').disabled=!currentBatch}}
-async function scanUploadedBatch(){if(!currentBatch)return show('请先上传文件夹',true);try{$('scanBtn').disabled=true;await api('/api/v1/admin/fish/assets/import-batches/'+encodeURIComponent(currentBatch.batch_id)+'/scan',{method:'POST'});await loadBatch(currentBatch.batch_id);show('扫描完成，请检查 Preview 和 WARNING')}catch(e){show(uploadError(e),true)}finally{$('scanBtn').disabled=false}}
+function setFolderSummary(){selectedFiles=Array.from($('folderInput').files||[]);uploadReady=false;$('folderName').textContent=selectedFiles.length?(selectedFiles[0].webkitRelativePath||selectedFiles[0].name).split('/')[0]+' · '+selectedFiles.length+' 个文件':'未选择文件夹';$('uploadBtn').disabled=!selectedFiles.length||uploading;$('scanBtn').disabled=!currentBatch||uploading||!uploadReady}
+function uploadError(e){return (e.code?e.code+'：':'')+(e.message||'文件上传失败')}
+function isRetryableUploadError(e){return !e.code||e.status===408||e.status===425||e.status===429||e.status>=500}
+function sleep(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
+async function uploadOneFile(file,batchId){let lastError=null;for(let attempt=1;attempt<=3;attempt++){const form=new FormData();form.append('relative_path',file.webkitRelativePath||file.name);form.append('file',file,file.name);try{return await api('/api/v1/admin/fish/assets/import-batches/'+encodeURIComponent(batchId)+'/upload',{method:'POST',body:form})}catch(e){lastError=e;if(!isRetryableUploadError(e)||attempt===3)break;await sleep(800*attempt)}}throw lastError||new Error('文件上传失败')}
+async function getOrCreateLocalBatch(batchId){if(currentBatch&&currentBatch.batch_id===batchId)return currentBatch;try{return await api('/api/v1/admin/fish/assets/import-batches/local',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({batch_id:batchId})})}catch(e){if(e.code!=='BATCH_EXISTS')throw e;return await api('/api/v1/admin/fish/assets/import-batches/'+encodeURIComponent(batchId))}}
+async function uploadLocalFolder(){const batchId=$('batchId').value.trim();if(!validBatchId(batchId))return show('请输入合法批次 ID（3-128 位，仅字母、数字、下划线和连字符）',true);if(!selectedFiles.length)return show('请先选择本地资产文件夹',true);if(uploading)return;uploading=true;uploadReady=false;$('uploadBtn').disabled=true;$('scanBtn').disabled=true;let completed=0;const failures=[];try{const created=await getOrCreateLocalBatch(batchId);if(!UPLOADABLE_BATCH_STATUSES.has(created.status)){const error=new Error(created.status==='SCANNING'?'批次正在扫描，请等待完成后再继续上传':'批次 '+created.status+' 已关闭，请新建批次后再上传');error.code=created.status==='SCANNING'?'BATCH_BUSY':'BATCH_NOT_UPLOADABLE';throw error}currentBatch={...currentBatch,batch_id:created.batch_id,status:created.status,source_gcs_uri:created.source_gcs_uri};for(const file of selectedFiles){try{await uploadOneFile(file,batchId);completed++;$('uploadProgress').textContent='已上传 '+completed+' / '+selectedFiles.length}catch(e){failures.push((file.webkitRelativePath||file.name)+'：'+uploadError(e));$('uploadProgress').textContent='已上传 '+completed+' / '+selectedFiles.length+' · 失败 '+failures.length;if(e.code==='BATCH_NOT_UPLOADABLE'||e.code==='BATCH_BUSY')break}}if(failures.length){show('已上传 '+completed+' / '+selectedFiles.length+'，失败 '+failures.length+' 个。可再次点击“上传文件夹”继续上传。\n'+failures.join('\n'),true);return}uploadReady=true;$('scanBtn').disabled=false;show('已上传 '+completed+' 个文件，请点击“扫描并预检”')}catch(e){show(uploadError(e),true)}finally{uploading=false;$('uploadBtn').disabled=!selectedFiles.length;$('scanBtn').disabled=!currentBatch||uploading||!uploadReady}}
+async function scanUploadedBatch(){if(!currentBatch)return show('请先上传文件夹',true);if(!uploadReady)return show('文件尚未全部上传成功，请先完成上传',true);try{$('scanBtn').disabled=true;uploadReady=false;await api('/api/v1/admin/fish/assets/import-batches/'+encodeURIComponent(currentBatch.batch_id)+'/scan',{method:'POST'});await loadBatch(currentBatch.batch_id);show('扫描完成，请检查 Preview 和 WARNING')}catch(e){show(uploadError(e),true)}finally{$('scanBtn').disabled=!currentBatch||uploading||!uploadReady}}
 async function createAndScanLegacy(){const source=$('source').value.trim();if(!source)return show('请填写 GCS Import Folder',true);try{const created=await api('/api/v1/admin/fish/assets/import-batches',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_gcs_uri:source})});currentBatch={batch_id:created.batch_id,status:created.status,source_gcs_uri:created.source_gcs_uri};await api('/api/v1/admin/fish/assets/import-batches/'+encodeURIComponent(created.batch_id)+'/scan',{method:'POST'});await loadBatch(created.batch_id);show('扫描完成，请检查 Preview 和 WARNING')}catch(e){show(uploadError(e),true)}}
 async function rescan(){if(!currentBatch)return;try{await api('/api/v1/admin/fish/assets/import-batches/'+encodeURIComponent(currentBatch.batch_id)+'/scan',{method:'POST'});await loadBatch(currentBatch.batch_id);show('重新扫描完成')}catch(e){show(e.message,true)}}
 async function execute(){if(!currentBatch)return;const s=currentBatch.summary;if(s.invalid>0)return show('存在 INVALID 图片，不能执行。请修复 GCS 源目录后重新扫描。',true);if(s.warning>0&&!$('allowWarnings').checked)return show('存在 WARNING 图片，请勾选确认后执行。',true);if(!confirm('即将导入 '+s.species_count+' 个鱼种、'+s.total_files+' 张图片。所有图片将进入 DRAFT，不会自动发布到公共 Detail API。确认导入？'))return;try{const data=await api('/api/v1/admin/fish/assets/import-batches/'+encodeURIComponent(currentBatch.batch_id)+'/execute',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({allow_warnings:$('allowWarnings').checked})});renderCurrent(data);show('导入完成：'+JSON.stringify(data.result))}catch(e){show((e.code?e.code+'：':'')+e.message,true)}}
