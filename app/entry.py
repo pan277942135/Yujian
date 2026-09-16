@@ -87,6 +87,7 @@ def seed_target_species_catalog() -> None:
 def deployment_health() -> dict:
     feedback_ingest_key_configured = bool(os.getenv("FEEDBACK_INGEST_KEY", "").strip())
     model_publish_configured = bool(os.getenv("YUJIAN_GITHUB_RELEASE_TOKEN", "").strip())
+    portrait_worker_configured = bool(os.getenv("FISH_PORTRAIT_WORKER_URL", "").strip())
     return {
         "status": "ok",
         "version": app.version,
@@ -100,6 +101,8 @@ def deployment_health() -> dict:
         "feedback_ingest_key_configured": feedback_ingest_key_configured,
         "model_publish_path": "/api/models/{model_id}/publish",
         "model_publish_configured": model_publish_configured,
+        "portrait_worker_path": "/api/platform/portrait/jobs",
+        "portrait_worker_configured": portrait_worker_configured,
     }
 
 
