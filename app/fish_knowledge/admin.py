@@ -1571,6 +1571,12 @@ async def upload_cms_fish_asset(
             result = _card_dict(row, db)
         _commit(db)
         db.refresh(row)
+        if normalized_type == "COVER":
+            result = _cover_dict(row, db)
+        elif normalized_type in COVER_ASSET_TYPES:
+            result = _asset_dict(row)
+        else:
+            result = _card_dict(row, db)
     except HTTPException as exc:
         db.rollback()
         if asset_written:

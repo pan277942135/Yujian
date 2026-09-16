@@ -745,6 +745,7 @@ def fish_reference_assets(
     context = _species_context(species_id)
     return {
         "species_id": context["species_id"],
+        "species": context["species_name"],
         "species_name": context["species_name"],
         "assets": [_reference_dto(row, context["species_id"], index) for index, row in enumerate(rows)],
         "references": [_reference_dto(row, context["species_id"], index) for index, row in enumerate(rows)],

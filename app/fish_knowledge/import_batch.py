@@ -472,9 +472,9 @@ def _scan_item(
         else filename_asset_type
     )
     direction = (
-        asset_direction(asset_type, manifest.get("direction"))
+        asset_direction(asset_type, (manifest or {}).get("direction"))
         if asset_type
-        else (manifest.get("direction") or "NONE")
+        else ((manifest or {}).get("direction") or "NONE")
     )
     suffix = "." + _image_extension(filename) if "." in filename else ""
     errors: list[dict[str, str]] = []
