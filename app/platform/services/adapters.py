@@ -1101,6 +1101,11 @@ def _asset_item(row: FishAsset) -> dict[str, Any]:
         "version": row.version,
         "created_at": _iso(row.created_at),
         "pipeline_run_id": row.pipeline_run_id,
+        # Fish Knowledge 3+5 rows use the same table with these additive fields.
+        "asset_type": row.asset_type,
+        "direction": row.direction,
+        "asset_url": row.asset_uri,
+        "has_asset": bool(row.asset_uri),
         "has_original": bool(row.original_uri),
         "has_mask": bool(row.mask_uri),
         "has_transparent": bool(row.transparent_uri),
@@ -1131,6 +1136,7 @@ def asset_uri(db: Session, asset_id: str, kind: str) -> str | None:
         "mask": row.mask_uri,
         "transparent": row.transparent_uri,
         "sticker": row.sticker_uri,
+        "asset": row.asset_uri,
     }.get(kind)
 
 
