@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import json
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.dataset_models import DatasetItem
 from app.db import Base
-from app.models import Batch, DatasetVersion, ImageAsset
+from app.fish_knowledge.import_batch import FishKnowledgeAssetVersion
+from app.fish_knowledge.species import FishSpecies
+from app.models import Batch, DatasetVersion, ImageAsset, SpeciesCatalog
 from app.platform.models import FishAsset, PipelineRun
 from app.platform.routes.portrait import (
     PortraitJobCreate,
@@ -101,6 +105,58 @@ def test_portrait_reuses_dataset_items_and_reference_assets(tmp_path):
 
         matched = portrait_reference("crucian_carp", db)
         assert matched["reference_asset"]["asset_id"] == "REF_CRUCIAN"
+    finally:
+        db.close()
+
+
+def test_portrait_uses_cover_package_when_transparent_asset_is_missing(tmp_path):
+    db = _session(tmp_path)
+    try:
+        catalog = SpeciesCatalog(
+            species_key="crucian_carp",
+            catalog_order=1,
+            common_name_zh="鲫鱼",
+            status="active",
+            is_other=False,
+        )
+        db.add(catalog)
+        db.flush()
+        db.add(
+            FishSpecies(
+                id="crucian_carp",
+                name_cn="鲫鱼",
+                alias=[],
+                category="淡水鱼",
+                summary="",
+                status="ACTIVE",
+            )
+        )
+        db.add(
+            FishKnowledgeAssetVersion(
+                species_id="crucian_carp",
+                asset_type="COVER",
+                version=7,
+                object_name="fish-assets/fish-knowledge/crucian_carp/cover/v7.webp",
+                image_url="/api/v1/fish/knowledge-media/crucian_carp/cover/v7.webp",
+                status="ACTIVE",
+                sha256="a" * 64,
+                metadata_json=json.dumps(
+                    {
+                        "source_filename": "02_transparent_alt.png",
+                        "cover_variant": "COVER_CARD_TRANSPARENT_RIGHT",
+                    }
+                ),
+            )
+        )
+        db.commit()
+
+        references = fish_reference_assets("crucian_carp", "transparent", db)
+        assert references["assets"][0]["type"] == "COVER_CARD_TRANSPARENT_RIGHT"
+        assert references["assets"][0]["source_kind"] == "knowledge_cover"
+        assert references["assets"][0]["url"].endswith("/crucian_carp/cover/v7.webp")
+
+        matched = portrait_reference("crucian_carp", db)
+        assert matched["reference_asset"]["asset_id"].startswith("KNOWLEDGE_COVER_crucian_carp_")
     finally:
         db.close()
 
