@@ -11,7 +11,12 @@ from app.data_policy import UNCONFIRMED_TRUTH, human_approval_overrides, normali
 from app.dedupe import ImageFingerprint
 from app.models import BatchCropReview, ImageAsset, SpeciesCatalog
 from app.presence import FishPresenceResult, effective_status
-from app.species_policy import ensure_target_species, training_eligibility, training_thresholds
+from app.species_policy import (
+    ensure_target_species,
+    is_training_excluded_species,
+    training_eligibility,
+    training_thresholds,
+)
 
 SPLITS = ("train", "val", "test")
 SPLIT_STRATEGY = "DETERMINISTIC_STRATIFIED_GROUP_V1"
@@ -259,7 +264,13 @@ def _training_gate(
                     "target": {"train": 0, "val": 0, "test": 0},
                 },
             )
-            enabled, reasons = training_eligibility(counts, is_other=bool(row.is_other))
+            excluded_from_training = is_training_excluded_species(
+                species_key=row.species_key,
+                common_name_zh=row.common_name_zh,
+                common_name_en=row.common_name_en,
+                is_other=bool(row.is_other),
+            )
+            enabled, reasons = training_eligibility(counts, is_other=excluded_from_training)
             if enabled:
                 eligible_keys.add(row.species_key)
             else:
