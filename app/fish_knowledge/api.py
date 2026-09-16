@@ -35,6 +35,9 @@ class SpeciesListItem(BaseModel):
     category: str
     cover_image: str | None
     summary: str
+    # Omitted for legacy-only rows; present when the new fish_asset index has
+    # a canonical Cover Card slot.
+    cover_assets: dict[str, str | None] | None = None
 
 
 class SpeciesOut(BaseModel):
@@ -413,19 +416,29 @@ def build_species_full_detail(row: FishSpecies, db: Session | None = None) -> Sp
     )
 
 
-@router.get("/species", response_model=list[SpeciesListItem])
+@router.get("/species", response_model=list[SpeciesListItem], response_model_exclude_none=True)
 def list_fish_species(db: Session = Depends(get_db)) -> list[SpeciesListItem]:
     rows = db.scalars(_active_species_query()).all()
-    return [
-        SpeciesListItem(
-            id=row.id,
-            name_cn=row.name_cn,
-            category=row.category,
-            cover_image=_cover_image(row),
-            summary=row.summary,
+    result = []
+    for row in rows:
+        cover_assets, _ = _knowledge_asset_maps(db, row)
+        has_indexed_cover = db.scalar(
+            select(FishAsset.asset_id).where(
+                FishAsset.species.in_({row.id, row.name_cn}),
+                FishAsset.asset_type.in_(COVER_ASSET_TYPES),
+            ).limit(1)
+        ) is not None
+        result.append(
+            SpeciesListItem(
+                id=row.id,
+                name_cn=row.name_cn,
+                category=row.category,
+                cover_image=_cover_image(row),
+                summary=row.summary,
+                cover_assets=cover_assets if has_indexed_cover else None,
+            )
         )
-        for row in rows
-    ]
+    return result
 
 
 @router.get("/species/{species_id}/detail", response_model=SpeciesFullDetailOut)

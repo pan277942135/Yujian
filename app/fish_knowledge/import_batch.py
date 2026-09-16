@@ -295,12 +295,31 @@ def _manifest_entries(blobs: list[Any], prefix: str) -> dict[str, dict[str, str]
         }
         keys = {value["file_name"].lower(), value["file_name"].rsplit("/", 1)[-1].lower()}
         for key in keys:
-            entries[key] = value
+            if key in entries:
+                entries[f"{key}#manifest{len(entries)}"] = value
+            else:
+                entries[key] = value
     return entries
 
 
 def _manifest_entry(entries: dict[str, dict[str, str]], relative: str, filename: str) -> dict[str, str] | None:
-    return entries.get(relative.lower()) or entries.get(filename.lower())
+    exact = entries.get(relative.lower())
+    if exact is not None:
+        return exact
+    candidates = [
+        value for value in entries.values()
+        if value.get("file_name", "").rsplit("/", 1)[-1].lower() == filename.lower()
+    ]
+    if len(candidates) <= 1:
+        return candidates[0] if candidates else None
+    folder_hint = relative.rsplit("/", 1)[0].lower()
+    for value in candidates:
+        if any(
+            hint and hint.lower() in folder_hint
+            for hint in (value.get("species_id"), value.get("species_name"))
+        ):
+            return value
+    return candidates[0]
 
 
 def _image_extension(filename: str) -> str:
@@ -472,9 +491,9 @@ def _scan_item(
         else filename_asset_type
     )
     direction = (
-        asset_direction(asset_type, (manifest or {}).get("direction"))
+        asset_direction(asset_type, manifest.get("direction"))
         if asset_type
-        else ((manifest or {}).get("direction") or "NONE")
+        else (manifest.get("direction") or "NONE")
     )
     suffix = "." + _image_extension(filename) if "." in filename else ""
     errors: list[dict[str, str]] = []
