@@ -494,6 +494,7 @@ def _execute_portrait_job(run_id: str) -> None:
         if not source_uri:
             raise PortraitWorkerError("PORTRAIT_SOURCE_URI_INVALID", "source image URI is empty")
         _stage(state, active_stage, "DONE")
+        _set_state(run, state)
         db.commit()
 
         active_stage = "load_reference"
@@ -504,6 +505,7 @@ def _execute_portrait_job(run_id: str) -> None:
         if not reference_uri:
             raise PortraitWorkerError("PORTRAIT_REFERENCE_URI_INVALID", "reference asset URI is empty")
         _stage(state, active_stage, "DONE")
+        _set_state(run, state)
         db.commit()
 
         active_stage = "sdxl_generate"
@@ -542,6 +544,7 @@ def _execute_portrait_job(run_id: str) -> None:
             }
         )
         _stage(state, active_stage, "DONE")
+        _set_state(run, state)
         db.commit()
 
         active_stage = "persist_result"
