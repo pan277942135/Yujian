@@ -30,14 +30,12 @@ router = APIRouter(prefix="/api/v1/fish", tags=["fish-knowledge"])
 
 
 class SpeciesListItem(BaseModel):
+    model_config = {"extra": "allow"}
     id: str
     name_cn: str
     category: str
     cover_image: str | None
     summary: str
-    # Omitted for legacy-only rows; present when the new fish_asset index has
-    # a canonical Cover Card slot.
-    cover_assets: dict[str, str | None] | None = None
 
 
 class SpeciesOut(BaseModel):
@@ -416,7 +414,7 @@ def build_species_full_detail(row: FishSpecies, db: Session | None = None) -> Sp
     )
 
 
-@router.get("/species", response_model=list[SpeciesListItem], response_model_exclude_none=True)
+@router.get("/species", response_model=list[SpeciesListItem])
 def list_fish_species(db: Session = Depends(get_db)) -> list[SpeciesListItem]:
     rows = db.scalars(_active_species_query()).all()
     result = []
@@ -428,16 +426,16 @@ def list_fish_species(db: Session = Depends(get_db)) -> list[SpeciesListItem]:
                 FishAsset.asset_type.in_(COVER_ASSET_TYPES),
             ).limit(1)
         ) is not None
-        result.append(
-            SpeciesListItem(
-                id=row.id,
-                name_cn=row.name_cn,
-                category=row.category,
-                cover_image=_cover_image(row),
-                summary=row.summary,
-                cover_assets=cover_assets if has_indexed_cover else None,
-            )
-        )
+        values = {
+            "id": row.id,
+            "name_cn": row.name_cn,
+            "category": row.category,
+            "cover_image": _cover_image(row),
+            "summary": row.summary,
+        }
+        if has_indexed_cover:
+            values["cover_assets"] = cover_assets
+        result.append(SpeciesListItem(**values))
     return result
 
 
