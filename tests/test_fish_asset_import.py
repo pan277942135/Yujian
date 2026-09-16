@@ -9,6 +9,7 @@ from app.db import Base
 from app.fish_knowledge.import_batch import (
     _asset_type_for_filename,
     _bind_imported_version,
+    _cover_variant_for_filename,
     _normalize_upload_path,
     _parse_source_uri,
     _resolve_species_name,
@@ -75,6 +76,12 @@ def test_parse_source_uri_requires_configured_import_prefix(monkeypatch):
 
 def test_asset_mapping_contract():
     assert _asset_type_for_filename("00_cover.png") == "COVER"
+    assert _asset_type_for_filename("00_cover_list.png") == "COVER"
+    assert _asset_type_for_filename("01_transparent_main.png") == "COVER"
+    assert _asset_type_for_filename("02_transparent_alt.png") == "COVER"
+    assert _cover_variant_for_filename("00_cover_list.png") == "COVER_CARD"
+    assert _cover_variant_for_filename("01_transparent_main.png") == "COVER_CARD_TRANSPARENT_LEFT"
+    assert _cover_variant_for_filename("02_transparent_alt.png") == "COVER_CARD_TRANSPARENT_RIGHT"
     assert _asset_type_for_filename("01_hero.jpeg") == "HERO"
     assert _asset_type_for_filename("02_identification.webp") == "IDENTIFICATION"
     assert _asset_type_for_filename("03_ecology.png") == "ECO"
@@ -222,6 +229,27 @@ def test_imported_version_keeps_active_card_and_creates_draft(tmp_path):
     assert len(drafts) == 1
     assert drafts[0].image_url == version.image_url
     assert drafts[0].description == active.description
+
+
+def test_imported_transparent_cover_is_reference_only(tmp_path):
+    db = _session(tmp_path)
+    _add_species(db)
+    version = FishKnowledgeAssetVersion(
+        species_id="sharpbelly",
+        asset_type="COVER",
+        version=2,
+        object_name="fish-assets/fish-knowledge/sharpbelly/cover/v2.webp",
+        image_url="/api/v1/fish/knowledge-media/sharpbelly/cover/v2.webp",
+        status="DRAFT",
+        sha256="d" * 64,
+        batch_id="FK_004",
+        metadata_json='{"source_filename":"01_transparent_main.png","cover_variant":"COVER_CARD_TRANSPARENT_LEFT"}',
+    )
+    db.add(version)
+    db.flush()
+
+    assert _bind_imported_version(db, version) == "REFERENCE_ONLY"
+    assert db.query(FishSpeciesCover).filter(FishSpeciesCover.species_id == "sharpbelly").count() == 0
 
 
 def test_imported_version_binds_existing_draft_cover(tmp_path):
