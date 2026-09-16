@@ -45,6 +45,11 @@
   .portrait-meta .stat{min-width:0}
   .portrait-meta strong{overflow-wrap:anywhere}
   .portrait-output{margin-top:14px}
+  .portrait-worker{display:grid;gap:4px;justify-items:end;min-width:210px}
+  .portrait-worker .status-tag{white-space:nowrap}
+  .portrait-worker-detail{font-size:11px;text-align:right;overflow-wrap:anywhere;max-width:260px}
+  .portrait-step.skipped{opacity:.72;background:#f6f9f7}
+  .portrait-step.skipped .portrait-step-dot{background:#aebdb6}
   @media(max-width:960px){.portrait-layout{grid-template-columns:1fr}.portrait-form{grid-template-columns:1fr 1fr}.portrait-form > .panel-heading,.portrait-form > .portrait-action,.portrait-form > .notice{grid-column:1/-1}}
   @media(max-width:640px){.portrait-form{grid-template-columns:1fr}.portrait-form > *{grid-column:auto!important}.portrait-images{grid-template-columns:1fr 1fr}.portrait-images .portrait-image-card:last-child{grid-column:1/-1}.portrait-meta{grid-template-columns:1fr 1fr}}
 </style>
@@ -59,6 +64,10 @@
   <div class="page-actions">
     <a class="button" href="/platform/pipeline">查看智能流水线</a>
     <button class="button" type="button" id="portraitRefresh">刷新</button>
+    <div class="portrait-worker" aria-live="polite">
+      <span id="portraitWorkerStatus" class="status-tag status-queued"><span class="status-dot"></span>检查中</span>
+      <span id="portraitWorkerDetail" class="portrait-worker-detail portrait-hint">正在检查 SDXL + IP-Adapter Worker…</span>
+    </div>
   </div>
 </div>
 
@@ -112,7 +121,7 @@
         <label class="portrait-field"><span class="portrait-hint">宽度</span><input id="portraitWidth" type="number" min="256" max="1536" step="8" value="768"></label>
         <label class="portrait-field"><span class="portrait-hint">高度</span><input id="portraitHeight" type="number" min="256" max="1536" step="8" value="768"></label>
       </div>
-      <div class="portrait-hint">模型固定为 SDXL + IP-Adapter；本次 POC 不提供 ControlNet、批量生成或 B 图上传。</div>
+      <div class="portrait-hint">模型固定为 SDXL + IP-Adapter；提交时会把 A 真实照片和 B Cover 参考图以 multipart 发送到 GPU Worker。本次 POC 不提供 ControlNet、批量生成或用户上传 B 图。</div>
     </div>
 
     <div class="portrait-action">
