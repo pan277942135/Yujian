@@ -1,3 +1,4 @@
+import logging
 import os
 
 from fastapi import HTTPException
@@ -48,6 +49,9 @@ from app.species_policy import ensure_target_species
 from app.platform.routes.pages import router as platform_pages_router
 
 
+logger = logging.getLogger(__name__)
+
+
 for template_engine in (
     main_templates,
     bulk_review_templates,
@@ -73,6 +77,12 @@ install_feedback_automation(app)
 
 @app.on_event("startup")
 def seed_target_species_catalog() -> None:
+    portrait_worker_url = os.getenv("FISH_PORTRAIT_WORKER_URL", "").strip().rstrip("/")
+    logger.info(
+        "Fish Portrait Worker Config configured=%s url=%s",
+        bool(portrait_worker_url),
+        portrait_worker_url or "<not-configured>",
+    )
     initialize_segmentation_model()
     db = SessionLocal()
     try:
@@ -87,7 +97,8 @@ def seed_target_species_catalog() -> None:
 def deployment_health() -> dict:
     feedback_ingest_key_configured = bool(os.getenv("FEEDBACK_INGEST_KEY", "").strip())
     model_publish_configured = bool(os.getenv("YUJIAN_GITHUB_RELEASE_TOKEN", "").strip())
-    portrait_worker_configured = bool(os.getenv("FISH_PORTRAIT_WORKER_URL", "").strip())
+    portrait_worker_url = os.getenv("FISH_PORTRAIT_WORKER_URL", "").strip().rstrip("/")
+    portrait_worker_configured = bool(portrait_worker_url)
     return {
         "status": "ok",
         "version": app.version,
@@ -103,6 +114,7 @@ def deployment_health() -> dict:
         "model_publish_configured": model_publish_configured,
         "portrait_worker_path": "/api/platform/portrait/jobs",
         "portrait_worker_configured": portrait_worker_configured,
+        "portrait_worker_url": portrait_worker_url or None,
     }
 
 

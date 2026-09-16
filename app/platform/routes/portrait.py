@@ -547,6 +547,7 @@ def _public_run(run: PipelineRun, state: dict[str, Any]) -> dict[str, Any]:
         else None,
         "worker": state.get("worker") if isinstance(state, dict) else None,
         "error_code": (state.get("error") or {}).get("code") if isinstance(state, dict) else None,
+        "error_stage": run.error_stage,
         "error_message": run.error_message,
         "created_at": _iso(run.created_at),
         "started_at": _iso(run.started_at),
@@ -566,6 +567,12 @@ def _fail_job(
 ) -> None:
     safe_message = str(message or error_code)[:3000]
     _stage(state, stage, "FAILED", error=f"{error_code}: {safe_message}")
+    try:
+        failed_index = STAGES.index(stage)
+    except ValueError:
+        failed_index = len(STAGES) - 1
+    for skipped_stage in STAGES[failed_index + 1:]:
+        _stage(state, skipped_stage, "SKIPPED", error=f"未执行：前置阶段 {stage} 失败")
     state["error"] = {"code": error_code, "message": safe_message}
     run.status = "FAILED"
     run.current_stage = stage
@@ -690,6 +697,7 @@ def _execute_portrait_job(run_id: str) -> None:
         state["worker"] = {
             "health_status": health.get("status"),
             "endpoint_configured": bool(health.get("endpoint_configured")),
+            "worker_url": health.get("worker_url"),
         }
         if health.get("status") != "READY":
             code = (
@@ -699,6 +707,20 @@ def _execute_portrait_job(run_id: str) -> None:
             )
             raise PortraitWorkerError(code, str(health.get("reason") or "Portrait worker is not ready"))
         request = state.get("request") or {}
+        worker_url = str(health.get("worker_url") or "").strip()
+        logger.info(
+            "fish_portrait_generate task=fish_portrait_generate run_id=%s source_image_id=%s reference_asset_id=%s worker_url=%s",
+            run_id,
+            (state.get("source") or {}).get("image_id"),
+            request.get("reference_asset_id"),
+            worker_url or "<not-configured>",
+        )
+        logger.info(
+            "fish_portrait_worker_request run_id=%s method=POST path=%s content_type=multipart/form-data source_field=image reference_field=reference_image params=%s",
+            run_id,
+            os.getenv("FISH_PORTRAIT_WORKER_PATH", "/portrait"),
+            json.dumps(request.get("params") or DEFAULT_PARAMS, separators=(",", ":")),
+        )
         worker_result = invoke_portrait_worker(
             source_image_uri=source_uri,
             reference_image_uri=reference_uri,
@@ -714,6 +736,8 @@ def _execute_portrait_job(run_id: str) -> None:
                 "model_version": worker_result.get("model_version"),
                 "inference_time_ms": worker_result.get("inference_time_ms"),
                 "request_id": worker_result.get("request_id"),
+                "worker_http_status": worker_result.get("worker_http_status"),
+                "worker_protocol": worker_result.get("worker_protocol"),
             }
         )
         _stage(state, active_stage, "DONE")
@@ -879,6 +903,46 @@ def fish_reference_assets(
         "species_id": context["species_id"],
         "species_name": context["species_name"],
         "assets": [_reference_dto(row, context["species_id"], index) for index, row in enumerate(rows)],
+    }
+
+
+@router.get("/portrait/worker-health")
+def portrait_worker_health() -> dict[str, Any]:
+    """Expose non-secret Worker connectivity for the POC page and smoke tests."""
+
+    configured_url = str(os.getenv("FISH_PORTRAIT_WORKER_URL", "") or "").strip().rstrip("/")
+    if not configured_url:
+        return {
+            "status": "NOT_CONFIGURED",
+            "configured": False,
+            "worker_url": None,
+            "error_code": "PORTRAIT_WORKER_NOT_CONFIGURED",
+            "message": "FISH_PORTRAIT_WORKER_URL is not configured",
+        }
+    try:
+        health = check_portrait_worker()
+    except PortraitWorkerError as exc:
+        return {
+            "status": "UNAVAILABLE",
+            "configured": True,
+            "worker_url": configured_url,
+            "error_code": exc.error_code,
+            "message": "Fish Portrait Worker unavailable",
+            "detail": str(exc),
+        }
+    if health.get("status") != "READY":
+        return {
+            "status": "UNAVAILABLE",
+            "configured": True,
+            "worker_url": configured_url,
+            "error_code": "PORTRAIT_WORKER_NOT_READY",
+            "message": "Fish Portrait Worker unavailable",
+        }
+    return {
+        "status": "CONNECTED",
+        "configured": True,
+        "worker_url": configured_url,
+        "health": health.get("health") or {},
     }
 
 

@@ -18,6 +18,7 @@
     'portraitRefresh', 'portraitProgress', 'portraitRunTitle',
     'portraitRunStatus', 'portraitSourceImage', 'portraitReferenceResultImage',
     'portraitGeneratedImage', 'portraitOutputEmpty', 'portraitMeta',
+    'portraitWorkerStatus', 'portraitWorkerDetail',
   ];
   const el = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
 
@@ -35,6 +36,7 @@
     DONE: '已完成',
     SUCCESS: '成功',
     FAILED: '失败',
+    SKIPPED: '未执行',
   };
   const referenceTypeLabels = {
     transparent_main: 'transparent 主图',
@@ -202,13 +204,37 @@
         ];
     el.portraitProgress.innerHTML = steps.map(step => {
       const status = String(step.status || 'PENDING').toUpperCase();
-      const cls = status === 'RUNNING' ? 'running' : (status === 'DONE' || status === 'SUCCESS' ? 'done' : (status === 'FAILED' ? 'failed' : ''));
+      const cls = status === 'RUNNING' ? 'running' : (status === 'DONE' || status === 'SUCCESS' ? 'done' : (status === 'FAILED' ? 'failed' : (status === 'SKIPPED' ? 'skipped' : '')));
       const detail = step.error || step.error_message || (step.duration_ms != null ? step.duration_ms + ' ms' : statusLabels[status] || status);
       return '<div class="portrait-step ' + cls + '"><span class="portrait-step-dot"></span><div><strong>' +
         esc(stageLabels[step.name] || step.name || '实验步骤') + '</strong><small>' + esc(detail) + '</small></div></div>';
     }).join('');
     if (data.error_message) {
       el.portraitProgress.insertAdjacentHTML('beforeend', '<div class="error-state">' + esc(data.error_stage || '失败阶段') + '：' + esc(data.error_message) + '</div>');
+    }
+  }
+
+  function renderWorkerHealth(data) {
+    const status = String(data && data.status || 'UNAVAILABLE').toUpperCase();
+    const labels = {CONNECTED: '已连接', READY: '已连接', NOT_CONFIGURED: '未配置', UNAVAILABLE: '不可用'};
+    if (el.portraitWorkerStatus) {
+      el.portraitWorkerStatus.className = 'status-tag status-' + status.toLowerCase();
+      el.portraitWorkerStatus.innerHTML = '<span class="status-dot"></span>' + esc(labels[status] || status);
+    }
+    if (el.portraitWorkerDetail) {
+      const endpoint = data && data.worker_url ? ' · ' + data.worker_url : '';
+      const detail = data && data.detail ? data.detail : (data && data.message ? data.message : '');
+      el.portraitWorkerDetail.textContent = (labels[status] || status) + endpoint + (detail ? ' · ' + detail : '');
+      el.portraitWorkerDetail.className = 'portrait-hint ' + (status === 'CONNECTED' || status === 'READY' ? '' : 'error-state');
+    }
+  }
+
+  async function loadWorkerHealth() {
+    try {
+      const data = await platformFetch('/api/platform/portrait/worker-health');
+      renderWorkerHealth(data);
+    } catch (error) {
+      renderWorkerHealth({status: 'UNAVAILABLE', message: platformError(error)});
     }
   }
 
@@ -368,5 +394,6 @@
   el.portraitSubmit.addEventListener('click', submit);
   el.portraitRefresh.addEventListener('click', loadDatasets);
 
+  loadWorkerHealth();
   loadDatasets();
 })();
