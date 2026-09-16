@@ -5,7 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>模型训练 · 渔见 AI</title>
   <style>
-    body{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f6f7f8;color:#171717}header{background:#fff;border-bottom:1px solid #e5e7eb;padding:14px 24px;display:flex;gap:22px;align-items:center;position:sticky;top:0;z-index:3}header a{text-decoration:none;color:#111827;font-weight:650}main{max-width:1180px;margin:0 auto;padding:24px}.muted{color:#6b7280}.section{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin-top:18px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.row{display:grid;grid-template-columns:170px 1fr;gap:10px;align-items:center;margin:10px 0}input,select,button{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:9px;background:#fff}button{cursor:pointer;font-weight:650}.primary{background:#111827;color:#fff;border-color:#111827}.primary:disabled{opacity:.45;cursor:not-allowed}.banner{display:none;white-space:pre-wrap;padding:12px;border-radius:10px;background:#eef2ff;margin-top:12px}.pill{display:inline-block;padding:3px 8px;border-radius:999px;background:#f3f4f6;font-size:12px}.good{background:#ecfdf5}.warn{background:#fff7ed}.bad{background:#fff1f2}.metrics{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-top:12px}.metric{background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:12px}.metric b{display:block;font-size:22px;margin-top:3px}.rule{border-left:4px solid #111827;padding:10px 12px;background:#f9fafb;border-radius:0 8px 8px 0;margin-top:14px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid #eee;font-size:13px}th{color:#6b7280}.uri{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;word-break:break-all;max-width:360px}.spinner{opacity:.6;pointer-events:none}.result{display:none;margin-top:18px;border:1px solid #d1fae5;background:#fff;border-radius:14px;padding:18px}.diagMeta{margin:6px 0 12px}.warningBox{margin-top:14px;padding:12px;border-radius:10px;background:#f9fafb;border:1px solid #e5e7eb}.warningItem{padding:7px 9px;border-radius:8px;margin-top:7px;font-size:13px}.warningItem.critical{background:#fff1f2}.warningItem.warning{background:#fff7ed}.diagnosticSection{margin-top:22px}.diagnosticSection h3{margin-bottom:6px}.diagnosticTable tr.low td{background:#fff7ed}.diagnosticTable tr.zero td{background:#fff1f2}.metricBar{height:6px;border-radius:999px;background:#e5e7eb;overflow:hidden;min-width:90px}.metricBar span{display:block;height:100%;background:#111827}.matrixWrap{overflow:auto;border:1px solid #e5e7eb;border-radius:10px;margin-top:10px}.matrix{border-collapse:separate;border-spacing:0;min-width:820px}.matrix th,.matrix td{text-align:center;min-width:66px;padding:9px 7px;border-right:1px solid #eee;border-bottom:1px solid #eee}.matrix th:first-child{position:sticky;left:0;background:#fff;z-index:2;min-width:90px}.matrix thead th{position:sticky;top:0;background:#fff;z-index:1}.matrix thead th:first-child{z-index:3}.matrixCell{font-weight:650}.matrixCell.diagonal{outline:2px solid rgba(5,150,105,.28);outline-offset:-2px}.note{font-size:12px;color:#6b7280;margin-top:8px}.empty{padding:16px;color:#6b7280;text-align:center}.score{font-variant-numeric:tabular-nums}.badge{display:inline-block;font-size:11px;padding:2px 6px;border-radius:999px;background:#f3f4f6;margin-left:5px}@media(max-width:850px){.grid{grid-template-columns:1fr}.metrics{grid-template-columns:1fr 1fr}.section{overflow:auto}.row{grid-template-columns:1fr}.result{overflow:hidden}}
+    body{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f6f7f8;color:#171717}header{background:#fff;border-bottom:1px solid #e5e7eb;padding:14px 24px;display:flex;gap:22px;align-items:center;position:sticky;top:0;z-index:3}header a{text-decoration:none;color:#111827;font-weight:650}main{max-width:1180px;margin:0 auto;padding:24px}.muted{color:#6b7280}.section{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin-top:18px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.row{display:grid;grid-template-columns:170px 1fr;gap:10px;align-items:center;margin:10px 0}input,select,button{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:9px;background:#fff}button{cursor:pointer;font-weight:650}.primary{background:#111827;color:#fff;border-color:#111827}.primary:disabled{opacity:.45;cursor:not-allowed}.banner{display:none;white-space:pre-wrap;padding:12px;border-radius:10px;background:#eef2ff;margin-top:12px}.pill{display:inline-block;padding:3px 8px;border-radius:999px;background:#f3f4f6;font-size:12px}.good{background:#ecfdf5}.warn{background:#fff7ed}.bad{background:#fff1f2}.metrics{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-top:12px}.metric{background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:12px}.metric b{display:block;font-size:22px;margin-top:3px}.rule{border-left:4px solid #111827;padding:10px 12px;background:#f9fafb;border-radius:0 8px 8px 0;margin-top:14px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid #eee;font-size:13px}th{color:#6b7280}.uri{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;word-break:break-all;max-width:360px}.spinner{opacity:.6;pointer-events:none}.result{display:none;margin-top:18px;border:1px solid #d1fae5;background:#fff;border-radius:14px;padding:18px}.diagMeta{margin:6px 0 12px}.warningBox{margin-top:14px;padding:12px;border-radius:10px;background:#f9fafb;border:1px solid #e5e7eb}.warningItem{padding:7px 9px;border-radius:8px;margin-top:7px;font-size:13px}.warningItem.critical{background:#fff1f2}.warningItem.warning{background:#fff7ed}.diagnosticSection{margin-top:22px}.diagnosticSection h3{margin-bottom:6px}.diagnosticTable tr.low td{background:#fff7ed}.diagnosticTable tr.zero td{background:#fff1f2}.metricBar{height:6px;border-radius:999px;background:#e5e7eb;overflow:hidden;min-width:90px}.metricBar span{display:block;height:100%;background:#111827}.matrixWrap{overflow:auto;border:1px solid #e5e7eb;border-radius:10px;margin-top:10px}.matrix{border-collapse:separate;border-spacing:0;min-width:820px}.matrix th,.matrix td{text-align:center;min-width:66px;padding:9px 7px;border-right:1px solid #eee;border-bottom:1px solid #eee}.matrix th:first-child{position:sticky;left:0;background:#fff;z-index:2;min-width:90px}.matrix thead th{position:sticky;top:0;background:#fff;z-index:1}.matrix thead th:first-child{z-index:3}.matrixCell{font-weight:650}.matrixCell.diagonal{outline:2px solid rgba(5,150,105,.28);outline-offset:-2px}.note{font-size:12px;color:#6b7280;margin-top:8px}.empty{padding:16px;color:#6b7280;text-align:center}.score{font-variant-numeric:tabular-nums}.badge{display:inline-block;font-size:11px;padding:2px 6px;border-radius:999px;background:#f3f4f6;margin-left:5px}
+.publishCell{display:flex;gap:6px;align-items:center;flex-wrap:wrap;min-width:150px}.publishCell .pill{white-space:nowrap}.publishBtn{padding:7px 9px;font-size:12px;background:#fff7ed;border-color:#f59e0b}.publishBtn:disabled{opacity:.5;cursor:not-allowed}.operationCell{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.publishModal{position:fixed;inset:0;z-index:20;display:grid;place-items:center;padding:18px;background:rgba(17,24,39,.45)}.publishModal[hidden]{display:none}.publishModalCard{width:min(520px,100%);background:#fff;border-radius:14px;padding:20px;box-shadow:0 20px 50px rgba(17,24,39,.25)}.publishModalHead{display:flex;justify-content:space-between;align-items:center}.publishModalHead h2{margin:0}.publishClose{border:0;padding:4px 8px;font-size:24px;line-height:1;background:transparent}.publishSummary{margin-top:12px;padding:10px 12px;background:#f9fafb;border-radius:10px;white-space:pre-wrap}.publishSteps{padding-left:24px;color:#4b5563;font-size:13px;line-height:1.7}.publishProgress{margin-top:12px;padding:10px 12px;border-radius:10px;background:#eef2ff;white-space:pre-wrap}.publishProgress.good{background:#ecfdf5}.publishProgress.bad{background:#fff1f2}
+@media(max-width:850px){.grid{grid-template-columns:1fr}.metrics{grid-template-columns:1fr 1fr}.section{overflow:auto}.row{grid-template-columns:1fr}.result{overflow:hidden}}
   </style>
 </head>
 <body>
@@ -92,10 +94,19 @@
     <table data-card-labels="Run|Dataset|模型|状态|开始 / 结束|产物|操作"><thead><tr><th>Run</th><th>Dataset</th><th>模型</th><th>状态</th><th>开始 / 结束</th><th>产物</th><th>操作</th></tr></thead><tbody id="runs"></tbody></table>
   </div>
 </main>
+<div id="publishModal" class="publishModal" hidden aria-hidden="true" onclick="if(event.target===this)closeLegacyPublish()">
+  <div class="publishModalCard" role="dialog" aria-modal="true" aria-labelledby="publishModalTitle">
+    <div class="publishModalHead"><h2 id="publishModalTitle">发布模型</h2><button type="button" class="publishClose" onclick="closeLegacyPublish()" aria-label="关闭">×</button></div>
+    <div id="publishSummary" class="publishSummary"></div>
+    <ol class="publishSteps"><li>读取训练完成的 PT 模型</li><li>自动转换为 TensorFlow Lite</li><li>校验模型并更新 GitHub Release</li></ol>
+    <div id="publishProgress" class="publishProgress">等待确认</div>
+    <div class="actions"><button type="button" onclick="closeLegacyPublish()">取消</button><button id="confirmPublishBtn" type="button" class="primary" onclick="confirmLegacyPublish()">确认发布</button></div>
+  </div>
+</div>
 <script>
 function esc(v){return (v??'').toString().replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function msg(t,err=false){const b=document.getElementById('banner');b.style.display='block';b.style.background=err?'#fff1f2':'#eef2ff';b.textContent=t}
-async function api(url,opts){const r=await fetch(url,opts);const text=await r.text();let d;try{d=JSON.parse(text)}catch{d=text}if(!r.ok)throw new Error(d.detail||text);return d}
+async function api(url,opts){const r=await fetch(url,opts);const text=await r.text();let d;try{d=JSON.parse(text)}catch{d=text}if(!r.ok){const detail=d&&typeof d==='object'?d.detail:null;const message=detail&&typeof detail==='object'?(detail.message||detail.error||JSON.stringify(detail)):detail||text;throw new Error(message||('请求失败：HTTP '+r.status))}return d}
 function statusPill(status){const cls=status==='COMPLETED'?'good':status==='FAILED'?'bad':'warn';const zh=({QUEUED:'排队中',RUNNING:'训练中',COMPLETED:'已完成',FAILED:'失败'})[status]||status;return `<span class="pill ${cls}">${esc(zh)}</span>`}
 let datasetMeta={};
 function suggestedNames(ds,pipeline){if(ds==='DS_CROP_M1_v0.1'||pipeline==='CROP_CLASSIFIER_V1')return ['RUN_CROP_M1_v0.1_001','MODEL_CROP_M1_v0.1'];if(ds==='DS_M1_v0.1')return ['RUN_M1_v0.1_001','MODEL_M1_v0.1'];const suffix=ds.replace(/^DS_/,'');return [`RUN_${suffix}_001`,`MODEL_${suffix}`]}
@@ -122,7 +133,157 @@ function renderErrorPairs(d){const matrix=d.test?.confusion_matrix||[];const cla
 
 async function showMetrics(runId){try{const d=await api('/api/training/runs/'+encodeURIComponent(runId)+'/metrics');const t=d.test||{};document.getElementById('mAcc').textContent=pct(t.accuracy);document.getElementById('mTop3').textContent=pct(t.top3_accuracy);document.getElementById('mPrecision').textContent=pct(t.macro_precision);document.getElementById('mRecall').textContent=pct(t.macro_recall);document.getElementById('mF1').textContent=pct(t.macro_f1);document.getElementById('mCount').textContent=t.count??'-';const p=d.params||{};const best=(d.history||[]).reduce((m,x)=>Math.max(m,Number(x.val_macro_f1||0)),0);document.getElementById('metricMeta').textContent=`${d.run_id||runId} · ${d.dataset_version||'-'} · ${d.model_version||'-'} · Epoch ${p.epochs_completed??'-'}/${p.epochs_requested??'-'} · Best Val Macro F1 ${pct(best)}`;renderWarnings(d);renderPerClass(d);renderMatrix(d);renderErrorPairs(d);document.getElementById('result').style.display='block';document.getElementById('result').scrollIntoView({behavior:'smooth',block:'start'})}catch(e){msg(e.message,true)}}
 
-async function loadRuns(){try{const rows=await api('/api/training/runs');document.getElementById('runs').innerHTML=rows.map(x=>{const model=x.params?.model_version||'-';const time=`${x.started_at?new Date(x.started_at).toLocaleString():'-'}<br>${x.finished_at?new Date(x.finished_at).toLocaleString():'-'}`;const action=x.status==='COMPLETED'?`<button onclick="showMetrics('${esc(x.run_id)}')">看指标</button>`:'';return `<tr><td><b>${esc(x.run_id)}</b></td><td>${esc(x.dataset_version)}</td><td>${esc(model)}<div class="muted">${esc(x.model_family)}</div></td><td>${statusPill(x.status)}</td><td>${time}</td><td><div class="uri">${esc(x.artifact_uri||x.metrics_uri||'-')}</div></td><td>${action}</td></tr>`}).join('')||'<tr><td colspan="7" class="muted">还没有训练记录</td></tr>';const active=rows.some(x=>x.status==='QUEUED'||x.status==='RUNNING');if(active)setTimeout(loadRuns,10000)}catch(e){msg(e.message,true)}}
+const PUBLISH_ACTIVE_STATUSES=new Set(['CONVERTING','VALIDATING','PUBLISHING']);
+const PUBLISH_STATUS_LABELS={NOT_PUBLISHED:'未发布',CONVERTING:'转换中',VALIDATING:'校验中',PUBLISHING:'发布中',PUBLISHED:'已发布',FAILED:'发布失败'};
+const PUBLISH_STAGE_LABELS={WORKFLOW_DISPATCH:'准备发布',EXPORT_TFLITE:'转换 TFLite',VALIDATE_TFLITE:'校验 TFLite',TFLITE_SMOKE_TEST:'TFLite 冒烟测试',UPLOAD_GITHUB_RELEASE:'上传 GitHub Release',VERIFY_GITHUB_ASSET:'校验 Release 文件',COMPLETE:'发布完成'};
+let legacyRunRows={};
+let legacyPublishState={};
+let legacyPublishContext=null;
+let legacyPublishPoll=null;
+
+function publishStatusPill(status){
+  const normalized=String(status||'NOT_PUBLISHED').toUpperCase();
+  const cls=normalized==='PUBLISHED'?'good':normalized==='FAILED'?'bad':PUBLISH_ACTIVE_STATUSES.has(normalized)?'warn':'';
+  return '<span class="pill '+cls+' publishStatus">'+esc(PUBLISH_STATUS_LABELS[normalized]||normalized)+'</span>';
+}
+function publishEligible(row){
+  const model=String(row.params?.model_version||'').trim();
+  return row.status==='COMPLETED'&&Boolean(row.artifact_uri)&&Boolean(model)&&model!=='-';
+}
+function publishAction(row){
+  const model=String(row.params?.model_version||'').trim();
+  if(!publishEligible(row)){
+    const reason=row.status==='COMPLETED'?'未找到模型 Artifact':'训练尚未完成';
+    return '<span class="muted" title="'+esc(reason)+'">'+esc(reason)+'</span>';
+  }
+  const state=legacyPublishState[model]||{status:'NOT_PUBLISHED'};
+  const status=String(state.status||'NOT_PUBLISHED').toUpperCase();
+  const active=PUBLISH_ACTIVE_STATUSES.has(status);
+  const label=status==='NOT_PUBLISHED'?'发布模型':active?'发布中…':'重新发布';
+  const disabled=active?' disabled':'';
+  const title=active?(PUBLISH_STAGE_LABELS[state.stage]||'发布任务进行中'):'点击后自动转换并更新 GitHub Release';
+  return '<div class="publishCell" data-publish-model="'+esc(model)+'" data-publish-run="'+esc(row.run_id)+'">'+publishStatusPill(status)+'<button type="button" class="publishBtn"'+disabled+' title="'+esc(title)+'" onclick="openLegacyPublish(\\''+esc(row.run_id)+'\\')">'+esc(label)+'</button></div>';
+}
+function updateLegacyPublishCells(model){
+  document.querySelectorAll('.publishCell').forEach(cell=>{
+    if(cell.dataset.publishModel!==model)return;
+    const row=legacyRunRows[cell.dataset.publishRun];
+    if(row)cell.outerHTML=publishAction(row);
+  });
+}
+async function refreshLegacyPublishStatuses(rows){
+  const models=[...new Set(rows.filter(publishEligible).map(x=>String(x.params.model_version).trim()))];
+  await Promise.all(models.map(async model=>{
+    try{
+      const data=await api('/api/models/'+encodeURIComponent(model)+'/publish/status');
+      legacyPublishState[model]=data;
+      updateLegacyPublishCells(model);
+    }catch(_e){}
+  }));
+}
+function setLegacyPublishProgress(data){
+  const progress=document.getElementById('publishProgress');
+  if(!progress)return;
+  const status=String(data?.status||'NOT_PUBLISHED').toUpperCase();
+  progress.className='publishProgress '+(status==='PUBLISHED'?'good':status==='FAILED'?'bad':'');
+  if(status==='FAILED'){
+    progress.textContent='发布失败：'+(data.error_code||'PUBLISH_FAILED')+(data.error_message?'\\n'+data.error_message:'');
+  }else if(status==='PUBLISHED'){
+    progress.textContent='发布完成\\nfish_classifier_v0_2.tflite 已更新到 GitHub Release。';
+  }else{
+    progress.textContent=(PUBLISH_STAGE_LABELS[data.stage]||PUBLISH_STATUS_LABELS[status]||'发布处理中')+'…';
+  }
+}
+function openLegacyPublish(runId){
+  const row=legacyRunRows[runId];
+  if(!row||!publishEligible(row)){msg('该训练记录当前不可发布。',true);return}
+  const model=String(row.params.model_version).trim();
+  const state=legacyPublishState[model]||{status:'NOT_PUBLISHED'};
+  if(PUBLISH_ACTIVE_STATUSES.has(String(state.status||'').toUpperCase())){msg('该模型已有发布任务正在执行，请稍候。',true);return}
+  legacyPublishContext={runId,model};
+  document.getElementById('publishSummary').textContent='模型：'+model+'\\nRun：'+runId+'\\nDataset：'+(row.dataset_version||'-')+'\\n发布文件：fish_classifier_v0_2.tflite';
+  document.getElementById('publishProgress').className='publishProgress';
+  document.getElementById('publishProgress').textContent=String(state.status||'').toUpperCase()==='PUBLISHED'?'当前已发布，再次确认将重新生成并替换 Release 文件。':'等待确认';
+  const button=document.getElementById('confirmPublishBtn');
+  button.disabled=false;
+  button.textContent='确认发布';
+  const modal=document.getElementById('publishModal');
+  modal.hidden=false;
+  modal.setAttribute('aria-hidden','false');
+  document.body.style.overflow='hidden';
+}
+function closeLegacyPublish(){
+  const modal=document.getElementById('publishModal');
+  if(!modal)return;
+  modal.hidden=true;
+  modal.setAttribute('aria-hidden','true');
+  document.body.style.overflow='';
+  legacyPublishContext=null;
+}
+async function confirmLegacyPublish(){
+  const context=legacyPublishContext;
+  if(!context)return;
+  const button=document.getElementById('confirmPublishBtn');
+  button.disabled=true;
+  button.textContent='提交中…';
+  setLegacyPublishProgress({status:'CONVERTING',stage:'WORKFLOW_DISPATCH'});
+  try{
+    const data=await api('/api/models/'+encodeURIComponent(context.model)+'/publish',{method:'POST'});
+    legacyPublishState[context.model]=data;
+    updateLegacyPublishCells(context.model);
+    setLegacyPublishProgress(data);
+    msg('模型 '+context.model+' 已进入自动转换发布流程。');
+    const status=String(data.status||'').toUpperCase();
+    if(PUBLISH_ACTIVE_STATUSES.has(status)){
+      if(legacyPublishPoll)clearTimeout(legacyPublishPoll);
+      pollLegacyPublish(context.model,context.runId);
+    }else{
+      button.disabled=false;
+      button.textContent='确认发布';
+    }
+  }catch(e){
+    button.disabled=false;
+    button.textContent='确认发布';
+    setLegacyPublishProgress({status:'FAILED',error_code:'PUBLISH_REQUEST_FAILED',error_message:e.message});
+    msg(e.message,true);
+  }
+}
+async function pollLegacyPublish(model,runId){
+  try{
+    const data=await api('/api/models/'+encodeURIComponent(model)+'/publish/status');
+    legacyPublishState[model]=data;
+    updateLegacyPublishCells(model);
+    if(legacyPublishContext&&legacyPublishContext.model===model)setLegacyPublishProgress(data);
+    const status=String(data.status||'').toUpperCase();
+    if(PUBLISH_ACTIVE_STATUSES.has(status)){
+      legacyPublishPoll=setTimeout(()=>pollLegacyPublish(model,runId),5000);
+    }else if(status==='PUBLISHED'){
+      msg('模型 '+model+' 发布完成，GitHub Release 已更新。');
+    }else if(status==='FAILED'){
+      msg('模型 '+model+' 发布失败：'+(data.error_message||data.error_code||'请查看失败详情'),true);
+    }
+  }catch(e){
+    if(legacyPublishContext&&legacyPublishContext.model===model)setLegacyPublishProgress({status:'FAILED',error_code:'PUBLISH_STATUS_READ_FAILED',error_message:e.message});
+    legacyPublishPoll=setTimeout(()=>pollLegacyPublish(model,runId),8000);
+  }
+}
+
+async function loadRuns(){
+  try{
+    const rows=await api('/api/training/runs');
+    legacyRunRows=Object.fromEntries(rows.map(x=>[x.run_id,x]));
+    document.getElementById('runs').innerHTML=rows.map(x=>{
+      const model=x.params?.model_version||'-';
+      const time=(x.started_at?new Date(x.started_at).toLocaleString():'-')+'<br>'+(x.finished_at?new Date(x.finished_at).toLocaleString():'-');
+      const metricAction=x.status==='COMPLETED'?'<button type="button" onclick="showMetrics(\\''+esc(x.run_id)+'\\')">看指标</button>':'';
+      const action='<div class="operationCell">'+metricAction+publishAction(x)+'</div>';
+      return '<tr><td><b>'+esc(x.run_id)+'</b></td><td>'+esc(x.dataset_version)+'</td><td>'+esc(model)+'<div class="muted">'+esc(x.model_family)+'</div></td><td>'+statusPill(x.status)+'</td><td>'+time+'</td><td><div class="uri">'+esc(x.artifact_uri||x.metrics_uri||'-')+'</div></td><td>'+action+'</td></tr>';
+    }).join('')||'<tr><td colspan="7" class="muted">还没有训练记录</td></tr>';
+    void refreshLegacyPublishStatuses(rows);
+    const active=rows.some(x=>x.status==='QUEUED'||x.status==='RUNNING');
+    if(active)setTimeout(loadRuns,10000);
+  }catch(e){msg(e.message,true)}
+}
 
 Promise.all([loadDatasets(),loadRuns()]).catch(e=>msg(e.message,true));
 </script>
