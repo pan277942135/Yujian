@@ -27,6 +27,7 @@ from app.models import SpeciesCatalog, utcnow
 
 
 BATCH_STATUSES = ("CREATED", "SCANNING", "READY", "IMPORTING", "COMPLETED", "FAILED", "CANCELLED")
+UPLOADABLE_BATCH_STATUSES = {"CREATED", "READY"}
 ITEM_STATUSES = ("VALID", "WARNING", "INVALID", "IMPORTED", "FAILED")
 ASSET_TYPES = (
     "COVER",
@@ -852,8 +853,16 @@ async def upload_batch_file(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     batch = _batch_or_404(db, batch_id)
-    if batch.status != "CREATED":
-        raise HTTPException(status_code=409, detail={"code": "BATCH_NOT_UPLOADABLE", "message": "只有 CREATED 批次可以继续上传文件"})
+    if batch.status not in UPLOADABLE_BATCH_STATUSES:
+        if batch.status == "SCANNING":
+            raise HTTPException(status_code=409, detail={"code": "BATCH_BUSY", "message": "批次正在扫描，请等待扫描完成后再继续上传"})
+        raise HTTPException(status_code=409, detail={"code": "BATCH_NOT_UPLOADABLE", "message": "只有 CREATED 或 READY 批次可以继续上传文件"})
+    # A READY batch may be resumed after a user scanned a partial upload.
+    # New files invalidate the previous scan; the next scan rebuilds its items.
+    if batch.status == "READY":
+        batch.status = "CREATED"
+        batch.error_summary = "{}"
+        db.commit()
     normalized_path = _normalize_upload_path(relative_path)
     size = getattr(file, "size", None)
     if size is not None and size > 10 * 1024 * 1024:
