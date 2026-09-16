@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS fish_asset_import_items (
     batch_id VARCHAR(128) NOT NULL REFERENCES fish_asset_import_batches(batch_id) ON DELETE CASCADE,
     species_id VARCHAR(128) REFERENCES fish_species(id) ON DELETE RESTRICT,
     source_object TEXT NOT NULL,
-    asset_type VARCHAR(32),
+    asset_type VARCHAR(64),
+    direction VARCHAR(16),
     source_filename VARCHAR(512) NOT NULL,
     mime_type VARCHAR(128),
     width INTEGER,
@@ -43,7 +44,8 @@ CREATE TABLE IF NOT EXISTS fish_asset_import_items (
 CREATE TABLE IF NOT EXISTS fish_knowledge_asset_versions (
     id BIGSERIAL PRIMARY KEY,
     species_id VARCHAR(128) NOT NULL REFERENCES fish_species(id) ON DELETE CASCADE,
-    asset_type VARCHAR(32) NOT NULL,
+    asset_type VARCHAR(64) NOT NULL,
+    direction VARCHAR(16),
     version INTEGER NOT NULL,
     object_name TEXT NOT NULL UNIQUE,
     image_url TEXT NOT NULL UNIQUE,
@@ -55,6 +57,6 @@ CREATE TABLE IF NOT EXISTS fish_knowledge_asset_versions (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_fish_knowledge_asset_version_slot UNIQUE (species_id, asset_type, version),
-    CONSTRAINT ck_fish_knowledge_asset_version_type CHECK (asset_type IN ('COVER','HERO','IDENTIFICATION','ECO','GEAR','SKILL')),
+    CONSTRAINT ck_fish_knowledge_asset_version_type CHECK (asset_type IN ('COVER','COVER_CARD','COVER_CARD_TRANSPARENT_LEFT','COVER_CARD_TRANSPARENT_RIGHT','HERO','IDENTIFICATION','ECO','GEAR','SKILL')),
     CONSTRAINT ck_fish_knowledge_asset_version_status CHECK (status IN ('DRAFT','ACTIVE','ARCHIVED'))
 );

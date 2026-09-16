@@ -30,7 +30,9 @@ input,button{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:10p
 <div class="format-grid">
   <div class="format-card"><h3>推荐格式（canonical species_id）</h3><pre class="format-code">FK_ASSET_20260913_001/
   sharpbelly/
-    00_cover.png
+    00_cover_list.png
+    01_transparent_main.png
+    02_transparent_alt.png
     01_hero.png
     02_identification.png
     03_ecology.png
@@ -46,9 +48,9 @@ input,button{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:10p
     ...</pre></div>
 </div>
 <ul class="help requirements">
-  <li>每个鱼种目录下最多 6 个槽位：00_cover、01_hero、02_identification、03_ecology（或 03_eco）、04_gear、05_skill（或 05_fishing）。</li>
+  <li>每个鱼种目录下最多 8 个槽位：00_cover_list、01_transparent_main、02_transparent_alt、01_hero、02_identification、03_ecology（或 03_eco）、04_gear、05_skill（或 05_fishing）。</li>
   <li>支持 PNG/JPG/JPEG/WEBP；单个图片不超过 10MB。建议尺寸至少 1024×1024、接近 1:1；预检会将比例或分辨率问题标记为 WARNING/INVALID。</li>
-  <li>允许只上传部分槽位，预检会按鱼种显示完成度 x/6；README.txt、manifest.csv、asset_manifest.csv 可作为辅助文件。</li>
+  <li>允许只上传部分槽位，预检会按鱼种显示完成度 x/8；README.txt、manifest.csv、asset_manifest.csv、ASSET_MANIFEST.csv 可作为 Manifest V2 映射文件。</li>
   <li>编号/中文目录会通过已有鱼种别名解析到 canonical species_id，不会自动创建新鱼种。</li>
 </ul>
 </section>
@@ -56,14 +58,14 @@ input,button{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:10p
 <div class="top"><div><h2>Batch Preview</h2><div id="batchMeta" class="muted"></div></div><div class="actions"><button id="rescanBtn">重新扫描</button><button id="retryBtn">Retry Failed</button><button id="syncBtn">同步到鱼鉴内容</button><button class="primary" id="executeBtn">执行导入</button><button class="danger" id="cancelBtn">取消批次</button></div></div>
 <div class="summary" id="summary"></div>
 <div class="confirm"><input type="checkbox" id="allowWarnings"><label for="allowWarnings">我确认继续导入 WARNING 图片（INVALID 仍会阻止执行）</label></div>
-<div class="table-wrap"><table><thead><tr><th>鱼种</th><th>Cover</th><th>Hero</th><th>Identification</th><th>Eco</th><th>Gear</th><th>Skill</th><th>完成度</th></tr></thead><tbody id="matrix"></tbody></table></div>
+<div class="table-wrap"><table><thead><tr><th>鱼种</th><th>Cover Card</th><th>透明左向</th><th>透明右向</th><th>Hero</th><th>Identification</th><th>Eco</th><th>Gear</th><th>Skill</th><th>完成度</th></tr></thead><tbody id="matrix"></tbody></table></div>
 <div class="help">点击每个槽位的 Preview 可查看真实源图、尺寸、SHA-256、校验信息和目标 GCS 路径。执行后所有新版本保持 DRAFT。</div>
 </section>
 <section class="section history"><h2>导入历史</h2><div class="table-wrap"><table><thead><tr><th>Batch</th><th>状态</th><th>鱼种</th><th>图片</th><th>Valid</th><th>Warning</th><th>Invalid</th><th>时间</th></tr></thead><tbody id="historyRows"></tbody></table></div></section>
 <div id="modal" class="modal" hidden><div><h3 id="modalTitle">素材详情</h3><div id="modalBody"></div><div class="actions"><button id="activateBtn" class="primary" hidden>将此版本设为 ACTIVE</button><button id="closeBtn" type="button">关闭</button></div></div></div>
 </main>
 <script>
-const TYPES=['COVER','HERO','IDENTIFICATION','ECO','GEAR','SKILL'];
+const TYPES=['COVER_CARD','COVER_CARD_TRANSPARENT_LEFT','COVER_CARD_TRANSPARENT_RIGHT','HERO','IDENTIFICATION','ECO','GEAR','SKILL'];
 let currentBatch=null,currentItem=null,selectedFiles=[],uploading=false;
 const $=id=>document.getElementById(id);
 function show(message,error=false){$('banner').textContent=message;$('banner').className='banner'+(error?' error':'');$('banner').style.display='block'}
@@ -73,7 +75,7 @@ function metric(label,value,cls=''){return '<div class="metric"><span class="mut
 function statusBadge(s){return '<span class="badge '+esc(s)+'">'+esc(s)+'</span>'}
 function renderSummary(s){$('summary').innerHTML=metric('鱼种',s.species_count)+metric('图片',s.total_files)+metric('VALID',s.valid,'good')+metric('WARNING',s.warning,'warn')+metric('INVALID',s.invalid,'bad')+metric('状态',currentBatch.status)}
 function renderSlot(items,type){const values=Array.isArray(items)?items:(items&&typeof items==='object'?[items]:[]);const found=values.filter(x=>x.asset_type===type);if(!found.length)return '<td class="slot"><span class="muted">—</span></td>';return '<td class="slot">'+found.map(item=>'<div>'+statusBadge(item.validation_status)+(item.source_preview_url?'<br><a href="#" onclick="openItem('+item.id+');return false">Preview</a>':'')+(item.width?'<br><span class="help">'+item.width+'×'+item.height+'</span>':'')+'</div>').join('<hr>')+'</td>'}
-function renderMatrix(data){$('matrix').innerHTML=(data.species||[]).map(row=>{const items=TYPES.flatMap(t=>row.assets[t]||[]);return '<tr><td><b>'+esc(row.species_id)+'</b></td>'+TYPES.map(t=>renderSlot(row.assets[t],t)).join('')+'<td>'+esc(row.completion)+'</td></tr>'}).join('')||'<tr><td colspan="8" class="muted">暂无可识别图片</td></tr>'}
+function renderMatrix(data){$('matrix').innerHTML=(data.species||[]).map(row=>{const items=TYPES.flatMap(t=>row.assets[t]||[]);return '<tr><td><b>'+esc(row.species_id)+'</b></td>'+TYPES.map(t=>renderSlot(row.assets[t],t)).join('')+'<td>'+esc(row.completion)+'</td></tr>'}).join('')||'<tr><td colspan="10" class="muted">暂无可识别图片</td></tr>'}
 function renderCurrent(data){currentBatch=data;$('current').hidden=false;$('batchMeta').innerHTML='Batch: '+esc(data.batch_id)+' · '+esc(data.source_gcs_uri)+' · '+statusBadge(data.status);renderSummary(data.summary);renderMatrix(data)}
 async function loadBatch(id){try{const data=await api('/api/v1/admin/fish/assets/import-batches/'+encodeURIComponent(id));renderCurrent(data);history()}catch(e){show(e.message,true)}}
 function validBatchId(value){return /^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/.test(value)}

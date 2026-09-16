@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 import io
 import json
@@ -17,6 +18,7 @@ from sqlalchemy.orm import Session, relationship
 
 from app.db import Base, get_db
 from app.factory import get_bucket_name
+from app.fish_knowledge.asset_types import asset_direction, normalize_asset_type, upsert_fish_asset_index
 from app.fish_knowledge.cards import CARD_TYPE_ORDER, FishCard, normalize_card_type
 from app.fish_knowledge.cover import FishSpeciesCover
 from app.fish_knowledge.gallery import GalleryUploadError, inspect_knowledge_asset
@@ -26,11 +28,24 @@ from app.models import SpeciesCatalog, utcnow
 
 BATCH_STATUSES = ("CREATED", "SCANNING", "READY", "IMPORTING", "COMPLETED", "FAILED", "CANCELLED")
 ITEM_STATUSES = ("VALID", "WARNING", "INVALID", "IMPORTED", "FAILED")
-ASSET_TYPES = ("COVER", "HERO", "IDENTIFICATION", "ECO", "GEAR", "SKILL")
+ASSET_TYPES = (
+    "COVER",
+    "COVER_CARD",
+    "COVER_CARD_TRANSPARENT_LEFT",
+    "COVER_CARD_TRANSPARENT_RIGHT",
+    "HERO",
+    "IDENTIFICATION",
+    "ECO",
+    "GEAR",
+    "SKILL",
+)
 SOURCE_PREFIX = "fish-assets/imports/"
 TARGET_ROOT = "fish-assets/fish-knowledge/"
 ASSET_DIR = {
     "COVER": "cover",
+    "COVER_CARD": "cover-card",
+    "COVER_CARD_TRANSPARENT_LEFT": "cover-card/transparent-left",
+    "COVER_CARD_TRANSPARENT_RIGHT": "cover-card/transparent-right",
     "HERO": "hero",
     "IDENTIFICATION": "identification",
     "ECO": "ecology",
@@ -40,7 +55,14 @@ ASSET_DIR = {
 EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 IGNORED_FILES = {"readme.txt", "asset_manifest.csv", "manifest.csv"}
 ASSET_PATTERNS = (
+    (re.compile(r"^00_cover_list(?:_.*)?$", re.I), "COVER_CARD"),
+    (re.compile(r"^00_cover_card(?:_.*)?$", re.I), "COVER_CARD"),
     (re.compile(r"^00_cover(?:_.*)?$", re.I), "COVER"),
+    (re.compile(r"^01_transparent_main(?:_.*)?$", re.I), "COVER_CARD_TRANSPARENT_LEFT"),
+    (re.compile(r"^02_transparent_alt(?:_.*)?$", re.I), "COVER_CARD_TRANSPARENT_RIGHT"),
+    (re.compile(r"^cover_card(?:_.*)?$", re.I), "COVER_CARD"),
+    (re.compile(r"^cover_card_left(?:_.*)?$", re.I), "COVER_CARD_TRANSPARENT_LEFT"),
+    (re.compile(r"^cover_card_right(?:_.*)?$", re.I), "COVER_CARD_TRANSPARENT_RIGHT"),
     (re.compile(r"^01_hero(?:_.*)?$", re.I), "HERO"),
     (re.compile(r"^02_identification(?:_.*)?$", re.I), "IDENTIFICATION"),
     (re.compile(r"^03_(?:ecology|eco)(?:_.*)?$", re.I), "ECO"),
@@ -80,7 +102,7 @@ class FishAssetImportBatch(Base):
 class FishAssetImportItem(Base):
     __tablename__ = "fish_asset_import_items"
     __table_args__ = (
-        CheckConstraint("asset_type IN ('COVER','HERO','IDENTIFICATION','ECO','GEAR','SKILL')", name="ck_fish_asset_import_item_type"),
+        CheckConstraint("asset_type IN ('COVER','COVER_CARD','COVER_CARD_TRANSPARENT_LEFT','COVER_CARD_TRANSPARENT_RIGHT','HERO','IDENTIFICATION','ECO','GEAR','SKILL')", name="ck_fish_asset_import_item_type"),
         CheckConstraint("validation_status IN ('VALID','WARNING','INVALID','IMPORTED','FAILED')", name="ck_fish_asset_import_item_status"),
         Index("ix_fish_asset_import_item_batch_species_type", "batch_id", "species_id", "asset_type"),
     )
@@ -89,7 +111,8 @@ class FishAssetImportItem(Base):
     batch_id = Column(String(128), ForeignKey("fish_asset_import_batches.batch_id", ondelete="CASCADE"), nullable=False, index=True)
     species_id = Column(String(128), ForeignKey("fish_species.id", ondelete="RESTRICT"), nullable=True, index=True)
     source_object = Column(Text, nullable=False)
-    asset_type = Column(String(32), nullable=True)
+    asset_type = Column(String(64), nullable=True)
+    direction = Column(String(16))
     source_filename = Column(String(512), nullable=False)
     mime_type = Column(String(128))
     width = Column(Integer)
@@ -109,14 +132,15 @@ class FishAssetImportItem(Base):
 class FishKnowledgeAssetVersion(Base):
     __tablename__ = "fish_knowledge_asset_versions"
     __table_args__ = (
-        CheckConstraint("asset_type IN ('COVER','HERO','IDENTIFICATION','ECO','GEAR','SKILL')", name="ck_fish_knowledge_asset_version_type"),
+        CheckConstraint("asset_type IN ('COVER','COVER_CARD','COVER_CARD_TRANSPARENT_LEFT','COVER_CARD_TRANSPARENT_RIGHT','HERO','IDENTIFICATION','ECO','GEAR','SKILL')", name="ck_fish_knowledge_asset_version_type"),
         CheckConstraint("status IN ('DRAFT','ACTIVE','ARCHIVED')", name="ck_fish_knowledge_asset_version_status"),
         Index("uq_fish_knowledge_asset_version_slot", "species_id", "asset_type", "version", unique=True),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     species_id = Column(String(128), ForeignKey("fish_species.id", ondelete="CASCADE"), nullable=False, index=True)
-    asset_type = Column(String(32), nullable=False)
+    asset_type = Column(String(64), nullable=False)
+    direction = Column(String(16))
     version = Column(Integer, nullable=False)
     object_name = Column(Text, nullable=False, unique=True)
     image_url = Column(Text, nullable=False, unique=True)
@@ -235,6 +259,50 @@ def _asset_type_for_filename(filename: str) -> str | None:
     return None
 
 
+def _asset_direction_for_filename(filename: str, asset_type: str | None) -> str:
+    return asset_direction(asset_type)
+
+
+def _manifest_entries(blobs: list[Any], prefix: str) -> dict[str, dict[str, str]]:
+    """Read optional Manifest V2 rows keyed by relative path and basename."""
+
+    manifest_blob = next(
+        (
+            blob for blob in blobs
+            if blob.name.startswith(prefix)
+            and blob.name.rsplit("/", 1)[-1].lower() in {"asset_manifest.csv", "manifest.csv"}
+        ),
+        None,
+    )
+    if manifest_blob is None:
+        return {}
+    raw = manifest_blob.download_as_bytes(timeout=120).decode("utf-8-sig")
+    entries: dict[str, dict[str, str]] = {}
+    for row in csv.DictReader(io.StringIO(raw)):
+        normalized = {
+            str(key or "").strip().lower(): str(value or "").strip()
+            for key, value in row.items()
+        }
+        file_name = normalized.get("file_name") or normalized.get("file") or normalized.get("filename")
+        if not file_name:
+            continue
+        value = {
+            "species_id": normalized.get("species_id", ""),
+            "species_name": normalized.get("species_name", ""),
+            "file_name": file_name.replace("\\", "/").lstrip("/"),
+            "asset_type": normalized.get("asset_type", ""),
+            "direction": normalized.get("direction", ""),
+        }
+        keys = {value["file_name"].lower(), value["file_name"].rsplit("/", 1)[-1].lower()}
+        for key in keys:
+            entries[key] = value
+    return entries
+
+
+def _manifest_entry(entries: dict[str, dict[str, str]], relative: str, filename: str) -> dict[str, str] | None:
+    return entries.get(relative.lower()) or entries.get(filename.lower())
+
+
 def _image_extension(filename: str) -> str:
     return filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
@@ -283,6 +351,7 @@ def _item_dict(item: FishAssetImportItem, *, base: str) -> dict[str, Any]:
         "id": item.id,
         "species_id": item.species_id,
         "asset_type": item.asset_type,
+        "direction": item.direction or asset_direction(item.asset_type),
         "source_object": item.source_object,
         "source_filename": item.source_filename,
         "mime_type": item.mime_type,
@@ -320,7 +389,7 @@ def _batch_dict(batch: FishAssetImportBatch, *, include_items: bool = False) -> 
         key = item.get("asset_type") or f"INVALID_{item['id']}"
         row["assets"].setdefault(key, []).append(item)
     for row in by_species.values():
-        row["completion"] = f"{sum(1 for values in row['assets'].values() if any(x['validation_status'] in {'VALID','WARNING','IMPORTED'} for x in values))}/6"
+        row["completion"] = f"{sum(1 for values in row['assets'].values() if any(x['validation_status'] in {'VALID','WARNING','IMPORTED'} for x in values))}/8"
     payload = {
         "batch_id": batch.batch_id,
         "source_gcs_uri": batch.source_gcs_uri,
@@ -359,7 +428,15 @@ def _commit(db: Session) -> None:
         raise HTTPException(status_code=500, detail={"code": "DB_WRITE_FAILED", "message": str(exc)}) from exc
 
 
-def _scan_item(db: Session, client: Any, bucket: Any, batch: FishAssetImportBatch, name: str) -> FishAssetImportItem | None:
+def _scan_item(
+    db: Session,
+    client: Any,
+    bucket: Any,
+    batch: FishAssetImportBatch,
+    name: str,
+    *,
+    manifest_entries: dict[str, dict[str, str]] | None = None,
+) -> FishAssetImportItem | None:
     relative = name[len(_source_parts(batch.source_gcs_uri)[1]):].lstrip("/")
     parts = relative.split("/")
     filename = parts[-1]
@@ -368,16 +445,40 @@ def _scan_item(db: Session, client: Any, bucket: Any, batch: FishAssetImportBatc
     lowered = filename.lower()
     if lowered in IGNORED_FILES:
         return None
+
+    manifest = _manifest_entry(manifest_entries or {}, relative, filename)
     folder = parts[0] if parts else ""
     for candidate in parts[:-1]:
         if _resolve_species(db, candidate) is not None:
             folder = candidate
             break
-    asset_type = _asset_type_for_filename(filename)
+    if manifest:
+        manifest_folder = manifest.get("species_id") or manifest.get("species_name") or ""
+        if manifest_folder:
+            folder = manifest_folder
+    species = None
+    if manifest:
+        for candidate in (manifest.get("species_id", ""), manifest.get("species_name", ""), folder):
+            if candidate and (species := _resolve_species(db, candidate)) is not None:
+                break
+    else:
+        species = _resolve_species(db, folder) if folder else None
+
+    filename_asset_type = _asset_type_for_filename(filename)
+    raw_manifest_type = manifest.get("asset_type", "") if manifest else ""
+    asset_type = (
+        normalize_asset_type(raw_manifest_type, manifest.get("direction"))
+        if raw_manifest_type
+        else filename_asset_type
+    )
+    direction = (
+        asset_direction(asset_type, manifest.get("direction"))
+        if asset_type
+        else (manifest.get("direction") or "NONE")
+    )
     suffix = "." + _image_extension(filename) if "." in filename else ""
     errors: list[dict[str, str]] = []
     warnings: list[dict[str, str]] = []
-    species = _resolve_species(db, folder) if folder else None
     if species is None:
         errors.append(_validation("SPECIES_NOT_FOUND", f"Unknown species folder: {folder or relative}"))
     if asset_type is None:
@@ -434,6 +535,7 @@ def _scan_item(db: Session, client: Any, bucket: Any, batch: FishAssetImportBatc
         species_id=species.id if species else None,
         source_object=name,
         asset_type=asset_type,
+        direction=direction,
         source_filename=filename,
         mime_type=str(metadata.get("original_content_type") or ""),
         width=width or None,
@@ -446,7 +548,6 @@ def _scan_item(db: Session, client: Any, bucket: Any, batch: FishAssetImportBatc
         validation_warnings=_json(warnings),
         target_object=target_object,
     )
-
 
 def _mark_duplicate_slots(items: list[FishAssetImportItem]) -> None:
     slots: dict[tuple[str | None, str | None], list[FishAssetImportItem]] = {}
@@ -506,19 +607,26 @@ def _next_version_row(db: Session, species_id: str, asset_type: str) -> int:
 
 
 def _bind_imported_version(db: Session, version: FishKnowledgeAssetVersion) -> str:
-    """Bind an imported DRAFT image to the editable Fish Knowledge slot.
-
-    Existing ACTIVE content is never replaced.  For cards we can keep the
-    ACTIVE row and create a new DRAFT row; the cover schema has one row per
-    species, so an existing ACTIVE cover remains the live slot until the
-    operator explicitly activates the imported version.
-    """
+    """Bind an imported version while indexing the same slot in fish_asset."""
 
     species = db.get(FishSpecies, version.species_id)
     if species is None:
         raise RuntimeError(f"species {version.species_id} not found while binding imported asset")
 
-    if version.asset_type == "COVER":
+    indexed_type = "COVER_CARD" if version.asset_type == "COVER" else version.asset_type
+    upsert_fish_asset_index(
+        db,
+        species_id=species.id,
+        asset_type=indexed_type,
+        direction=version.direction,
+        url=version.image_url,
+        object_name=version.object_name,
+        status=version.status,
+        version=f"v{version.version}",
+        source_batch_id=version.batch_id,
+    )
+
+    if version.asset_type in {"COVER", "COVER_CARD"}:
         current = db.scalar(select(FishSpeciesCover).where(FishSpeciesCover.species_id == species.id))
         if current is None:
             db.add(
@@ -537,6 +645,9 @@ def _bind_imported_version(db: Session, version: FishKnowledgeAssetVersion) -> s
         current.status = "DRAFT"
         if not (current.title or "").strip():
             current.title = f"{species.name_cn}图鉴卡"
+        return "BOUND"
+
+    if version.asset_type in {"COVER_CARD_TRANSPARENT_LEFT", "COVER_CARD_TRANSPARENT_RIGHT"}:
         return "BOUND"
 
     rows = db.scalars(
@@ -578,7 +689,6 @@ def _bind_imported_version(db: Session, version: FishKnowledgeAssetVersion) -> s
         candidate.status = "DRAFT"
     return "BOUND"
 
-
 def _import_item(db: Session, client: Any, bucket: Any, batch: FishAssetImportBatch, item: FishAssetImportItem) -> str:
     if item.validation_status == "IMPORTED":
         return "SKIP_IMPORTED"
@@ -608,6 +718,7 @@ def _import_item(db: Session, client: Any, bucket: Any, batch: FishAssetImportBa
                 "source_object": item.source_object,
                 "batch_id": batch.batch_id,
                 "asset_type": item.asset_type,
+                "direction": item.direction or "NONE",
             }
             target.upload_from_string(stored, content_type="image/webp", if_generation_match=0)
         version = _next_version_row(db, item.species_id, item.asset_type)
@@ -616,6 +727,7 @@ def _import_item(db: Session, client: Any, bucket: Any, batch: FishAssetImportBa
             version_row = FishKnowledgeAssetVersion(
                 species_id=item.species_id,
                 asset_type=item.asset_type,
+                direction=item.direction,
                 version=version,
                 object_name=item.target_object,
                 image_url=_version_url(item.species_id, item.asset_type, version),
@@ -635,6 +747,8 @@ def _import_item(db: Session, client: Any, bucket: Any, batch: FishAssetImportBa
             item.version_id = version_row.id
         else:
             version_row = existing_version
+            if not version_row.direction:
+                version_row.direction = item.direction
             item.version_id = existing_version.id
 
         binding = _bind_imported_version(db, version_row)
@@ -759,8 +873,9 @@ def scan_batch(batch_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     items: list[FishAssetImportItem] = []
     try:
         blobs = list(client.list_blobs(bucket, prefix=prefix))
+        manifest_entries = _manifest_entries(blobs, prefix)
         for blob in blobs:
-            item = _scan_item(db, client, bucket, batch, blob.name)
+            item = _scan_item(db, client, bucket, batch, blob.name, manifest_entries=manifest_entries)
             if item is not None:
                 items.append(item)
         _mark_duplicate_slots(items)
