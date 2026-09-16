@@ -129,18 +129,18 @@ jobs:
           test -n "$PORTRAIT_WORKER_URL"
           WORKER_HEALTH="$(curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 30 -fsS "$PORTRAIT_WORKER_URL/health")"
           printf '%s' "$WORKER_HEALTH" | python -c '
-import json,sys
-payload=json.load(sys.stdin)
-assert payload.get("status") == "ok", payload
-assert payload.get("service") == "fish-portrait-worker", payload
-'
+          import json,sys
+          payload=json.load(sys.stdin)
+          assert payload.get("status") == "ok", payload
+          assert payload.get("service") == "fish-portrait-worker", payload
+          '
           DEPLOY_HEALTH="$(curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 30 -fsS "$SERVICE_URL/health/deploy")"
           printf '%s' "$DEPLOY_HEALTH" | python -c '
-import json,sys
-payload=json.load(sys.stdin)
-assert payload.get("portrait_worker_configured") is True, payload
-assert payload.get("portrait_worker_url") == "http://34.69.75.199:8000", payload
-'
+          import json,sys
+          payload=json.load(sys.stdin)
+          assert payload.get("portrait_worker_configured") is True, payload
+          assert payload.get("portrait_worker_url") == "http://34.69.75.199:8000", payload
+          '
           {
             echo "### Fish Portrait Worker smoke"
             echo "- Worker health: **PASS**"
