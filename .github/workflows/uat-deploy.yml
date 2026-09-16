@@ -110,37 +110,6 @@ jobs:
           project_id: ${{ env.PROJECT_ID }}
           version: '>= 416.0.0'
 
-      - name: Audit Fish Portrait Worker source (read-only)
-        id: audit_worker
-        continue-on-error: true
-        timeout-minutes: 3
-        env:
-          WORKER_PROJECT: gen-lang-client-0224022273
-          WORKER_ZONE: us-central1-a
-        shell: bash
-        run: |
-          set -u
-          gcloud compute ssh fish-completion-worker \
-            --project="$WORKER_PROJECT" \
-            --zone="$WORKER_ZONE" \
-            --quiet \
-            --command='
-              set -eu
-              echo "WORKER_HOST=\$(hostname)"
-              echo "WORKER_PROJECT=\${WORKER_PROJECT:-unknown}"
-              echo "WORKER_PWD=\$(pwd)"
-              echo "SYSTEMD=\$(sudo systemctl is-active fish-portrait-worker.service || true)"
-              sudo systemctl cat fish-portrait-worker.service || true
-              echo "--- worker.py ---"
-              sed -n "1,320p" /opt/fish-portrait-worker/worker.py
-              echo "--- pipeline.py ---"
-              sed -n "1,420p" /opt/fish-portrait-worker/pipeline.py
-              echo "--- config.py ---"
-              sed -n "1,260p" /opt/fish-portrait-worker/config.py
-            '
-          echo "read-only worker audit completed"
-          echo "If SSH is unavailable, inspect the step log; deployment continues intentionally."
-
       - name: Deploy Console runtime and smoke feedback backend
         id: deploy
         env:
