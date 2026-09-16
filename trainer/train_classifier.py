@@ -30,6 +30,7 @@ from app.pipeline_contract import CROP_CLASSIFIER_V1, WHOLE_IMAGE_V1, validate_p
 from evaluation.artifact_builder import build_evaluation_artifacts
 from evaluation.model_compare import compare_model_artifacts, write_model_compare_report
 from trainer.crop_dataset_validator import validate_crop_rows
+from app.species_policy import is_training_excluded_species
 
 
 def load_preprocess_contract() -> dict:
@@ -641,6 +642,37 @@ def execute() -> dict:
         manifest = download_manifest(storage_client, dataset.manifest_uri)
         class_map_doc = download_json(storage_client, dataset.class_map_uri)
         class_rows = sorted(list(class_map_doc.get("classes") or []), key=lambda x: int(x.get("class_index", 0)))
+        excluded_classes = [
+            row
+            for row in class_rows
+            if is_training_excluded_species(
+                species_key=row.get("species_key"),
+                common_name_zh=row.get("common_name_zh") or row.get("species"),
+                common_name_en=row.get("common_name_en"),
+                is_other=bool(row.get("is_other", False)),
+            )
+        ]
+        if excluded_classes:
+            labels = ", ".join(
+                str(row.get("common_name_zh") or row.get("species_key") or "unknown")
+                for row in excluded_classes
+            )
+            raise ValueError(f"TRAINING_EXCLUDED_SPECIES: class map contains non-training label(s): {labels}")
+        excluded_manifest_rows = [
+            row
+            for row in manifest
+            if is_training_excluded_species(
+                species_key=row.get("species_key"),
+                common_name_zh=row.get("species") or row.get("truth_species") or row.get("claimed_species"),
+                common_name_en=row.get("common_name_en"),
+                is_other=bool(row.get("is_other", False)),
+            )
+        ]
+        if excluded_manifest_rows:
+            raise ValueError(
+                "TRAINING_EXCLUDED_SPECIES: dataset manifest contains "
+                f"{len(excluded_manifest_rows)} non-training row(s)"
+            )
         if not manifest:
             raise ValueError("dataset manifest is empty")
         if not class_rows:
