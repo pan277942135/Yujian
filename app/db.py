@@ -58,6 +58,7 @@ def init_db():
 
     Base.metadata.create_all(bind=engine)
     _ensure_production_pipeline_columns()
+    _ensure_fish_asset_3_plus_5_columns()
     _ensure_fish_knowledge_crud_constraints()
     _ensure_user_catch_columns()
 
@@ -119,6 +120,46 @@ def _ensure_production_pipeline_columns() -> None:
             for name, definition in columns.items():
                 if name not in existing:
                     connection.exec_driver_sql(f'ALTER TABLE "{table}" ADD COLUMN "{name}" {definition}')
+
+
+def _ensure_fish_asset_3_plus_5_columns() -> None:
+    """Add 3+5 slot metadata without changing legacy FishAsset rows."""
+
+    inspector = inspect(engine)
+    additions = {
+        "fish_asset": {
+            "asset_type": "VARCHAR(64)",
+            "direction": "VARCHAR(16)",
+            "asset_uri": "TEXT",
+            "asset_object_name": "TEXT",
+        },
+        "fish_asset_import_items": {"direction": "VARCHAR(16)"},
+        "fish_knowledge_asset_versions": {"direction": "VARCHAR(16)"},
+    }
+    with engine.begin() as connection:
+        for table, columns in additions.items():
+            if not inspector.has_table(table):
+                continue
+            existing = {column["name"] for column in inspect(connection).get_columns(table)}
+            for name, definition in columns.items():
+                if name not in existing:
+                    connection.exec_driver_sql(
+                        f'ALTER TABLE "{table}" ADD COLUMN "{name}" {definition}'
+                    )
+        if engine.dialect.name == "postgresql":
+            for table, constraint in (
+                ("fish_asset_import_items", "ck_fish_asset_import_item_type"),
+                ("fish_knowledge_asset_versions", "ck_fish_knowledge_asset_version_type"),
+            ):
+                if inspector.has_table(table):
+                    connection.exec_driver_sql(
+                        f'ALTER TABLE "{table}" DROP CONSTRAINT IF EXISTS "{constraint}"'
+                    )
+                    connection.exec_driver_sql(
+                        f'ALTER TABLE "{table}" ADD CONSTRAINT "{constraint}" '
+                        "CHECK (asset_type IN ('COVER','COVER_CARD','COVER_CARD_TRANSPARENT_LEFT',"
+                        "'COVER_CARD_TRANSPARENT_RIGHT','HERO','IDENTIFICATION','ECO','GEAR','SKILL'))"
+                    )
 
 
 def _ensure_fish_knowledge_crud_constraints() -> None:
