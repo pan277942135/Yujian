@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from starlette.requests import Request
@@ -67,6 +68,40 @@ def _request() -> Request:
             "headers": [(b"host", b"console.example")],
         }
     )
+
+
+
+def test_publish_accepts_classifier_from_training_lineage(monkeypatch, tmp_path):
+    db = _session(tmp_path)
+    _model(db)
+    model = db.get(ModelVersion, "MODEL_CROP_M1_v0.1")
+    model.pipeline_type = "WHOLE_IMAGE_V1"
+    db.commit()
+    monkeypatch.setattr("app.model_publish_api._gcs_exists", lambda _uri: True)
+    monkeypatch.setattr("app.model_publish_api._github_dispatch", lambda _inputs: None)
+
+    result = publish_model("MODEL_CROP_M1_v0.1", _request(), db)
+
+    assert result["status"] == "CONVERTING"
+
+
+def test_publish_rejects_non_classifier_lineage(monkeypatch, tmp_path):
+    db = _session(tmp_path)
+    _model(db)
+    model = db.get(ModelVersion, "MODEL_CROP_M1_v0.1")
+    run = db.get(TrainingRun, "RUN_CROP_M1_v0.1")
+    dataset = db.get(DatasetVersion, "DS_CROP_M1_v0.1")
+    model.pipeline_type = "WHOLE_IMAGE_V1"
+    run.pipeline_type = "WHOLE_IMAGE_V1"
+    run.params_json = '{"model_version":"MODEL_CROP_M1_v0.1","pipeline_type":"WHOLE_IMAGE_V1"}'
+    dataset.pipeline_type = "WHOLE_IMAGE_V1"
+    db.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        publish_model("MODEL_CROP_M1_v0.1", _request(), db)
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["error"] == "MODEL_TYPE_NOT_SUPPORTED"
 
 
 def test_publish_dispatch_is_idempotent(monkeypatch, tmp_path):
