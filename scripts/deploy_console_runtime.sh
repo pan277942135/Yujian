@@ -43,6 +43,7 @@ FISH_WORKER_URL=""
 FISH_WORKER_TOKEN=""
 FISH_PORTRAIT_URL=""
 FISH_PORTRAIT_TOKEN=""
+FISH_PORTRAIT_PATH="/portrait"
 if [[ -n "$PREVIOUS_SERVICE_JSON" ]]; then
   FEEDBACK_ENV_PRESENT="$(printf '%s' "$PREVIOUS_SERVICE_JSON" | python -c '
 import json,sys
@@ -100,6 +101,13 @@ containers=((d.get("spec") or {}).get("template") or {}).get("spec",{}).get("con
 env=(containers[0].get("env") if containers else []) or []
 print(next((x.get("value","") for x in env if x.get("name")=="FISH_PORTRAIT_WORKER_TOKEN"), ""))
 ')"
+  FISH_PORTRAIT_PATH="$(printf '%s' "$PREVIOUS_SERVICE_JSON" | python -c '
+import json,sys
+d=json.load(sys.stdin)
+containers=((d.get("spec") or {}).get("template") or {}).get("spec",{}).get("containers") or []
+env=(containers[0].get("env") if containers else []) or []
+print(next((x.get("value","") for x in env if x.get("name")=="FISH_PORTRAIT_WORKER_PATH"), "/portrait"))
+')"
 fi
 
 DEPLOY_ENV_VARS="APP_GIT_COMMIT=${GIT_SHA}"
@@ -116,8 +124,9 @@ if [[ -n "$FISH_WORKER_TOKEN" ]]; then
 fi
 if [[ -n "${FISH_PORTRAIT_WORKER_URL:-}" ]]; then FISH_PORTRAIT_URL="${FISH_PORTRAIT_WORKER_URL}"; fi
 if [[ -n "${FISH_PORTRAIT_WORKER_TOKEN:-}" ]]; then FISH_PORTRAIT_TOKEN="${FISH_PORTRAIT_WORKER_TOKEN}"; fi
+if [[ -n "${FISH_PORTRAIT_WORKER_PATH:-}" ]]; then FISH_PORTRAIT_PATH="${FISH_PORTRAIT_WORKER_PATH}"; fi
 if [[ -n "$FISH_PORTRAIT_URL" ]]; then
-  DEPLOY_ENV_VARS="${DEPLOY_ENV_VARS},FISH_PORTRAIT_WORKER_URL=${FISH_PORTRAIT_URL}"
+  DEPLOY_ENV_VARS="${DEPLOY_ENV_VARS},FISH_PORTRAIT_WORKER_URL=${FISH_PORTRAIT_URL},FISH_PORTRAIT_WORKER_PATH=${FISH_PORTRAIT_PATH:-/portrait}"
 fi
 if [[ -n "$FISH_PORTRAIT_TOKEN" ]]; then
   DEPLOY_ENV_VARS="${DEPLOY_ENV_VARS},FISH_PORTRAIT_WORKER_TOKEN=${FISH_PORTRAIT_TOKEN}"
