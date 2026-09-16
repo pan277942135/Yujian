@@ -20,7 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import ModelPublishJob, ModelVersion, TrainingRun
+from app.models import DatasetVersion, ModelPublishJob, ModelVersion, TrainingRun
 
 
 router = APIRouter(tags=["model-publish"])
@@ -196,6 +196,37 @@ def _reconcile_manifest(db: Session, job: ModelPublishJob) -> None:
         db.commit()
 
 
+def _is_classifier_pipeline(value: Any) -> bool:
+    return "CLASSIFIER" in str(value or "").strip().upper()
+
+
+def _supports_classifier_publish(db: Session, model: ModelVersion, run: TrainingRun) -> bool:
+    """Accept a classifier when any persisted lineage field identifies it.
+
+    Older ModelVersion rows were created before pipeline_type was copied from
+    the TrainingRun and therefore carry the default WHOLE_IMAGE_V1. The source
+    run, DatasetVersion, or serialized training parameters still carry the
+    authoritative crop-classifier contract. Detector/whole-image rows remain
+    blocked when the complete lineage has no classifier marker.
+    """
+
+    pipeline_values: list[Any] = [
+        getattr(model, "pipeline_type", None),
+        getattr(run, "pipeline_type", None),
+    ]
+    dataset_version = getattr(model, "dataset_version", None) or getattr(run, "dataset_version", None)
+    if dataset_version:
+        dataset = db.get(DatasetVersion, dataset_version)
+        if dataset is not None:
+            pipeline_values.append(getattr(dataset, "pipeline_type", None))
+    try:
+        params = json.loads(getattr(run, "params_json", "") or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        params = {}
+    if isinstance(params, dict):
+        pipeline_values.append(params.get("pipeline_type"))
+    return any(_is_classifier_pipeline(value) for value in pipeline_values)
+
 @router.post("/api/models/{model_id}/publish")
 def publish_model(model_id: str, request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     if not MODEL_ID_RE.fullmatch(model_id):
@@ -206,7 +237,7 @@ def publish_model(model_id: str, request: Request, db: Session = Depends(get_db)
     run = db.get(TrainingRun, model.run_id)
     if run is None or str(run.status).upper() not in {"COMPLETED", "SUCCESS"}:
         raise HTTPException(status_code=409, detail={"error": "TRAINING_NOT_COMPLETED", "message": "训练尚未完成"})
-    if "CLASSIFIER" not in str(getattr(model, "pipeline_type", "")).upper():
+    if not _supports_classifier_publish(db, model, run):
         raise HTTPException(status_code=409, detail={"error": "MODEL_TYPE_NOT_SUPPORTED", "message": "当前仅支持发布分类模型"})
 
     _expire_stale_jobs(db)
