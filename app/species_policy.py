@@ -13,6 +13,15 @@ TRAINING_MIN_TEST = 3
 TRAINING_MIN_GROUPS = 3
 
 # Collection Contract V1. species_key is the stable machine identity; common_name_zh
+#
+# Catch-all labels are retained for historical review/traceability but are never
+# valid classifier classes. Keep this policy independent of the catalog's mutable
+# ``status``/``is_other`` fields so a hand-created or legacy row cannot bypass it.
+NON_TRAINING_SPECIES_KEYS = frozenset({"other_freshwater_fish"})
+NON_TRAINING_SPECIES_NAMES = frozenset(
+    {"其他淡水", "其他淡水鱼", "Other freshwater", "Other freshwater fish"}
+)
+
 # is the label shown in review / Dataset class maps. Search aliases are retained as
 # catalog notes for collectors and future alias-normalization work.
 TARGET_SPECIES_PRESETS = [
@@ -126,6 +135,23 @@ def training_thresholds() -> dict[str, int]:
         "test": TRAINING_MIN_TEST,
         "group_count": TRAINING_MIN_GROUPS,
     }
+
+
+def is_training_excluded_species(
+    *,
+    species_key: str | None = None,
+    common_name_zh: str | None = None,
+    common_name_en: str | None = None,
+    is_other: bool = False,
+) -> bool:
+    """Return whether a catalog/manifest label is forbidden in classifier training."""
+
+    return bool(
+        is_other
+        or (species_key or "").strip() in NON_TRAINING_SPECIES_KEYS
+        or (common_name_zh or "").strip() in NON_TRAINING_SPECIES_NAMES
+        or (common_name_en or "").strip() in NON_TRAINING_SPECIES_NAMES
+    )
 
 
 def training_eligibility(counts: dict, *, is_other: bool = False) -> tuple[bool, list[str]]:
