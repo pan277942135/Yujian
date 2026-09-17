@@ -8,6 +8,7 @@ import pytest
 
 from app.portrait_worker_client import (
     PortraitWorkerError,
+    _knowledge_media_object_name,
     _multipart_body,
     _read_image_uri,
     _result_uri,
@@ -38,7 +39,16 @@ def test_multipart_body_contains_source_reference_and_params():
     assert b'{"steps":25}' in body
 
 
-def test_result_path_is_promoted_to_worker_url():
+def test_managed_cover_uri_maps_to_canonical_gcs_object():
+    assert _knowledge_media_object_name(
+        "/api/v1/fish/knowledge-media/grass_carp/cover/cover.webp"
+    ) == "fish-assets/grass_carp/cover/cover.webp"
+
+
+def test_result_uri_is_promoted_to_worker_url():
+    assert _result_uri({"result_uri": "/output/result.png"}, "http://34.69.75.199:8000") == (
+        "http://34.69.75.199:8000/output/result.png"
+    )
     assert _result_uri({"result_path": "/output/result.png"}, "http://34.69.75.199:8000") == (
         "http://34.69.75.199:8000/output/result.png"
     )

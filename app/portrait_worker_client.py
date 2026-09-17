@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import mimetypes
 import os
+import re
 import urllib.error
 import urllib.request
 import uuid
@@ -18,6 +20,8 @@ from typing import Any
 
 
 MAX_IMAGE_BYTES = 50 * 1024 * 1024
+
+logger = logging.getLogger(__name__)
 
 
 class PortraitWorkerError(RuntimeError):
@@ -139,6 +143,53 @@ def _guard_image_size(data: bytes, *, label: str) -> bytes:
     return data
 
 
+def _download_gcs_object(
+    bucket_name: str,
+    object_name: str,
+    *,
+    label: str,
+) -> tuple[bytes, str]:
+    """Read one managed object directly so relative media URLs stay internal."""
+
+    from google.cloud import storage
+
+    data = (
+        storage.Client()
+        .bucket(bucket_name)
+        .blob(object_name)
+        .download_as_bytes(timeout=120)
+    )
+    media_type = mimetypes.guess_type(object_name)[0] or "application/octet-stream"
+    return _guard_image_size(data, label=label), media_type
+
+
+def _knowledge_media_object_name(uri: str) -> str:
+    """Map a managed Fish Knowledge media path to its canonical GCS object."""
+
+    prefix = "/api/v1/fish/knowledge-media/"
+    parts = uri[len(prefix):].strip("/").split("/")
+    if len(parts) != 3 or not all(parts):
+        raise ValueError("invalid managed knowledge media URI")
+    species_id, asset_type, asset_key = parts
+    normalized_type = asset_type.strip().lower()
+    hashed = bool(re.fullmatch(r"[a-f0-9]{64}\.(?:jpg|png|webp)", asset_key))
+
+    if normalized_type == "cover":
+        if asset_key == "cover.webp":
+            return f"fish-assets/{species_id}/cover/cover.webp"
+        if hashed:
+            return f"fish_knowledge/{species_id}/cover/{asset_key}"
+    elif normalized_type in {"hero", "identification", "eco", "gear", "skill"}:
+        if asset_key == f"{normalized_type}.webp":
+            return f"fish-assets/{species_id}/cards/{normalized_type}.webp"
+        if hashed:
+            return f"fish_knowledge/{species_id}/{normalized_type}/{asset_key}"
+
+    # Versioned media paths are normally converted to gs:// by the route
+    # because their DB row carries the exact object_name. Do not guess them.
+    raise ValueError("versioned managed media URI has no object mapping")
+
+
 def _read_image_uri(uri: str, *, label: str) -> tuple[bytes, str]:
     """Read a source/reference URI into bytes for the multipart Worker API."""
 
@@ -158,10 +209,20 @@ def _read_image_uri(uri: str, *, label: str) -> tuple[bytes, str]:
             bucket_name, object_name = object_path.split("/", 1)
             if not bucket_name or not object_name:
                 raise ValueError("invalid gs URI")
-            from google.cloud import storage
-
-            data = storage.Client().bucket(bucket_name).blob(object_name).download_as_bytes()
-            media_type = mimetypes.guess_type(object_name)[0] or "application/octet-stream"
+            data, media_type = _download_gcs_object(
+                bucket_name,
+                object_name,
+                label=label,
+            )
+        elif value.startswith("/api/v1/fish/knowledge-media/"):
+            bucket_name = os.getenv("GCS_BUCKET", "").strip()
+            if not bucket_name:
+                raise ValueError("GCS_BUCKET is not configured")
+            data, media_type = _download_gcs_object(
+                bucket_name,
+                _knowledge_media_object_name(value),
+                label=label,
+            )
         elif value.startswith(("http://", "https://")):
             request = urllib.request.Request(value, method="GET", headers={"Accept": "image/*"})
             with urllib.request.urlopen(request, timeout=min(_timeout(120.0), 120.0)) as response:
@@ -237,7 +298,12 @@ def _result_uri(result: dict[str, Any], base_url: str) -> str | None:
         or result.get("image_url")
     )
     if value:
-        return str(value).strip()
+        value = str(value).strip()
+        if value.startswith(("/", "./")):
+            return f"{base_url}/{value.lstrip('/')}"
+        if not value.startswith(("data:", "gs://", "http://", "https://")):
+            return f"{base_url}/{value.lstrip('/')}"
+        return value
     path_value = result.get("result_path") or result.get("output_path") or result.get("path")
     if not path_value:
         return None
@@ -261,10 +327,9 @@ def invoke_portrait_worker(
 ) -> dict[str, Any]:
     """Invoke the Worker with A/B multipart compatibility fields.
 
-    The deployed VM currently documents a required "image" file. We keep
-    that field as the source photo A, and attach "reference_image" plus
-    semantic metadata so the same request is forwards-compatible with the
-    A+B Worker contract.
+    The deployed VM receives both images as real multipart file parts. URI
+    values are used only by Cloud Run to materialize bytes; they are not sent
+    as image fields to the Worker.
     """
 
     base_url = _base_url()
@@ -282,10 +347,6 @@ def invoke_portrait_worker(
         ("dataset_id", dataset_id),
         ("source_item_id", source_item_id),
         ("reference_asset_id", reference_asset_id),
-        ("source_image_uri", source_image_uri),
-        ("reference_image_uri", reference_image_uri),
-        ("image_uri", source_image_uri),
-        ("reference_uri", reference_image_uri),
         ("params", json.dumps(params, separators=(",", ":"))),
     ]
     body, content_type = _multipart_body(
@@ -294,6 +355,14 @@ def invoke_portrait_worker(
             ("image", "source_image", source_data, source_media_type),
             ("reference_image", "reference_image", reference_data, reference_media_type),
         ],
+    )
+    logger.info(
+        "portrait_worker_request: has_image=%s has_reference_image=%s "
+        "image_size=%d reference_size=%d",
+        str(bool(source_data)).lower(),
+        str(bool(reference_data)).lower(),
+        len(source_data),
+        len(reference_data),
     )
     headers = _headers()
     headers["Content-Type"] = content_type
