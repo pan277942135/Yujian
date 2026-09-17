@@ -7,6 +7,8 @@ import urllib.error
 import pytest
 
 from app.portrait_worker_client import (
+    INPAINT_DEFAULT_NEGATIVE_PROMPT,
+    INPAINT_DEFAULT_PROMPT,
     PortraitWorkerError,
     _knowledge_media_object_name,
     _multipart_body,
@@ -14,6 +16,7 @@ from app.portrait_worker_client import (
     _result_uri,
     _worker_error,
     invoke_portrait_worker,
+    invoke_portrait_inpaint_worker,
 )
 
 
@@ -21,6 +24,15 @@ def test_read_image_uri_supports_data_url():
     encoded = base64.b64encode(b"png-bytes").decode("ascii")
     data, media_type = _read_image_uri(f"data:image/png;base64,{encoded}", label="source")
     assert data == b"png-bytes"
+    assert media_type == "image/png"
+
+
+def test_read_image_uri_supports_local_lab_uri(tmp_path, monkeypatch):
+    image_path = tmp_path / "mask.png"
+    image_path.write_bytes(b"mask-bytes")
+    monkeypatch.chdir(tmp_path)
+    data, media_type = _read_image_uri("local://mask.png", label="mask")
+    assert data == b"mask-bytes"
     assert media_type == "image/png"
 
 
@@ -107,6 +119,59 @@ def test_invoke_portrait_worker_transmits_dual_adapter_scales(monkeypatch):
     assert result["result_uri"] == "http://worker/output/result.png"
 
 
+def test_invoke_portrait_inpaint_worker_transmits_json_contract(monkeypatch):
+    captured = {}
+
+    class _Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"status":"success","result_uri":"/output/inpaint.png"}'
+
+    def _urlopen(request, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return _Response()
+
+    monkeypatch.setenv("FISH_PORTRAIT_WORKER_URL", "http://worker")
+    monkeypatch.delenv("FISH_PORTRAIT_INPAINT_WORKER_PATH", raising=False)
+    monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+    result = invoke_portrait_inpaint_worker(
+        original_image_uri="gs://bucket/original.png",
+        fish_mask_uri="gs://bucket/fish-mask.png",
+        completion_mask_uri="gs://bucket/completion-mask.png",
+        species="鲫鱼",
+        prompt=None,
+        negative_prompt=None,
+        strength=0.25,
+        steps=25,
+        width=768,
+        height=768,
+        seed=12345,
+    )
+
+    body = captured["request"].data.decode("utf-8")
+    assert captured["request"].full_url == "http://worker/portrait/generate"
+    assert captured["request"].get_header("Content-type") == "application/json"
+    assert '"mode":"fish_preserve_inpaint_v2"' in body
+    assert '"fish_mask_uri":"gs://bucket/fish-mask.png"' in body
+    assert '"completion_mask_uri":"gs://bucket/completion-mask.png"' in body
+    assert '"strength":0.25' in body
+    assert '"seed":12345' in body
+    assert result["result_uri"] == "http://worker/output/inpaint.png"
+
+
+def test_inpaint_default_prompts_are_stable():
+    assert "preserve" not in INPAINT_DEFAULT_PROMPT.lower()
+    assert "different fish species" in INPAINT_DEFAULT_NEGATIVE_PROMPT
+
+
 @pytest.mark.parametrize(
     ("status_code", "error_code"),
     [
@@ -127,3 +192,4 @@ def test_worker_http_errors_are_typed(status_code, error_code):
         raise _worker_error(error)
     assert raised.value.error_code == error_code
     assert raised.value.status_code == status_code
+

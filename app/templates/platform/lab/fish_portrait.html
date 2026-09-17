@@ -2,164 +2,37 @@
 
 {% block head %}
 <style>
-  .portrait-layout{display:grid;grid-template-columns:minmax(300px,390px) minmax(0,1fr);gap:16px;align-items:start}
-  .portrait-form{display:grid;gap:16px}
-  .portrait-form h2,.portrait-results h2{margin:0;font-size:17px}
-  .portrait-form p,.portrait-results p{color:var(--muted);line-height:1.6;margin:5px 0 0}
-  .portrait-field{display:grid;gap:7px}
-  .portrait-field label{font-size:13px;font-weight:750;color:#36574d}
-  .portrait-field select,.portrait-field input{width:100%;box-sizing:border-box;border:1px solid #cddfd7;border-radius:8px;background:#fff;color:#24483d;padding:10px 11px;font:inherit}
-  .portrait-field select:focus,.portrait-field input:focus{outline:2px solid #a9d0bf;outline-offset:1px}
-  .portrait-hint{font-size:12px;color:var(--muted);line-height:1.5}
-  .portrait-source-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;max-height:330px;overflow:auto;padding:2px}
-  .portrait-source-card{border:1px solid #d5e5df;border-radius:10px;background:#fbfefd;padding:7px;text-align:left;cursor:pointer;color:inherit}
-  .portrait-source-card:hover,.portrait-source-card.selected{border-color:#2a8068;background:#eff9f4;box-shadow:0 0 0 2px rgba(42,128,104,.12)}
-  .portrait-source-card img{display:block;width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:7px;background:#edf4f1}
-  .portrait-source-card strong{display:block;font-size:12px;margin-top:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .portrait-source-card small{display:block;color:var(--muted);font-size:11px;margin-top:3px}
-  .portrait-reference{display:grid;grid-template-columns:88px minmax(0,1fr);gap:11px;align-items:center;border:1px solid #d5e5df;border-radius:10px;padding:10px;background:#fbfefd}
-  .portrait-reference img{width:88px;height:88px;object-fit:contain;border-radius:8px;background:#edf4f1}
-  .portrait-reference strong{display:block;font-size:13px}
-  .portrait-reference small{display:block;color:var(--muted);margin-top:4px;line-height:1.4}
-  .portrait-reference-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}
-  .portrait-param-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}
-  .portrait-action{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-  .portrait-action .button{min-height:40px}
-  .portrait-progress{display:grid;gap:9px}
-  .portrait-step{display:flex;gap:10px;align-items:center;border:1px solid #e0ebe6;border-radius:9px;padding:9px 11px;background:#fbfefd}
-  .portrait-step-dot{width:9px;height:9px;border-radius:50%;background:#b9c9c3;flex:0 0 auto}
-  .portrait-step.running{border-color:#a9d0bf;background:#f0faf5}
-  .portrait-step.running .portrait-step-dot{background:#2a8068;box-shadow:0 0 0 4px rgba(42,128,104,.14)}
-  .portrait-step.done .portrait-step-dot{background:#2a8068}
-  .portrait-step.failed{border-color:#e1b9b4;background:#fff5f3}
-  .portrait-step.failed .portrait-step-dot{background:#b94b42}
-  .portrait-step strong{font-size:13px}
-  .portrait-step small{display:block;color:var(--muted);margin-top:2px}
-  .portrait-images{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:11px}
-  .portrait-image-card{border:1px solid #d5e5df;border-radius:10px;background:#fbfefd;padding:9px}
-  .portrait-image-card strong{display:block;font-size:12px;margin-bottom:7px}
-  .portrait-image-card img{display:block;width:100%;aspect-ratio:1/1;object-fit:contain;border-radius:8px;background:#edf4f1}
-  .portrait-image-card img[hidden]{display:none}
-  .portrait-empty{border:1px dashed #cddfd7;border-radius:10px;padding:22px;text-align:center;color:var(--muted);line-height:1.6}
-  .portrait-meta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:12px}
-  .portrait-meta .stat{min-width:0}
-  .portrait-meta strong{overflow-wrap:anywhere}
-  .portrait-output{margin-top:14px}
-  .portrait-worker{display:grid;gap:4px;justify-items:end;min-width:210px}
-  .portrait-worker .status-tag{white-space:nowrap}
-  .portrait-worker-detail{font-size:11px;text-align:right;overflow-wrap:anywhere;max-width:260px}
-  .portrait-step.skipped{opacity:.72;background:#f6f9f7}
-  .portrait-step.skipped .portrait-step-dot{background:#aebdb6}
-  @media(max-width:960px){.portrait-layout{grid-template-columns:1fr}.portrait-form{grid-template-columns:1fr 1fr}.portrait-form > .panel-heading,.portrait-form > .portrait-action,.portrait-form > .notice{grid-column:1/-1}}
-  @media(max-width:640px){.portrait-form{grid-template-columns:1fr}.portrait-form > *{grid-column:auto!important}.portrait-images{grid-template-columns:1fr 1fr}.portrait-images .portrait-image-card:last-child{grid-column:1/-1}.portrait-meta{grid-template-columns:1fr 1fr}}
+  .portrait-layout{display:grid;grid-template-columns:minmax(300px,410px) minmax(0,1fr);gap:16px;align-items:start}
+  .portrait-form{display:grid;gap:16px}.portrait-form h2,.portrait-results h2{margin:0;font-size:17px}.portrait-form p,.portrait-results p{color:var(--muted);line-height:1.6;margin:5px 0 0}
+  .portrait-field{display:grid;gap:7px}.portrait-field label{font-size:13px;font-weight:750;color:#36574d}.portrait-field select,.portrait-field input,.portrait-field textarea{width:100%;box-sizing:border-box;border:1px solid #cddfd7;border-radius:8px;background:#fff;color:#24483d;padding:10px 11px;font:inherit}.portrait-field textarea{min-height:84px;resize:vertical}.portrait-field select:focus,.portrait-field input:focus,.portrait-field textarea:focus{outline:2px solid #a9d0bf;outline-offset:1px}.portrait-hint{font-size:12px;color:var(--muted);line-height:1.5}.portrait-mode-note{border-left:3px solid #2a8068;background:#f1faf5;border-radius:6px;padding:9px 11px;font-size:12px;color:#36574d;line-height:1.5}
+  .portrait-source-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;max-height:330px;overflow:auto;padding:2px}.portrait-source-card{border:1px solid #d5e5df;border-radius:10px;background:#fbfefd;padding:7px;text-align:left;cursor:pointer;color:inherit}.portrait-source-card:hover,.portrait-source-card.selected{border-color:#2a8068;background:#eff9f4;box-shadow:0 0 0 2px rgba(42,128,104,.12)}.portrait-source-card img{display:block;width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:7px;background:#edf4f1}.portrait-source-card strong{display:block;font-size:12px;margin-top:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.portrait-source-card small{display:block;color:var(--muted);font-size:11px;margin-top:3px}
+  .portrait-reference{display:grid;grid-template-columns:88px minmax(0,1fr);gap:11px;align-items:center;border:1px solid #d5e5df;border-radius:10px;padding:10px;background:#fbfefd}.portrait-reference img{width:88px;height:88px;object-fit:contain;border-radius:8px;background:#edf4f1}.portrait-reference strong{display:block;font-size:13px}.portrait-reference small{display:block;color:var(--muted);margin-top:4px;line-height:1.4}.portrait-reference-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}.portrait-param-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}.portrait-action{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.portrait-action .button{min-height:40px}
+  .portrait-progress{display:grid;gap:9px}.portrait-step{display:flex;gap:10px;align-items:center;border:1px solid #e0ebe6;border-radius:9px;padding:9px 11px;background:#fbfefd}.portrait-step-dot{width:9px;height:9px;border-radius:50%;background:#b9c9c3;flex:0 0 auto}.portrait-step.running{border-color:#a9d0bf;background:#f0faf5}.portrait-step.running .portrait-step-dot{background:#2a8068;box-shadow:0 0 0 4px rgba(42,128,104,.14)}.portrait-step.done .portrait-step-dot{background:#2a8068}.portrait-step.failed{border-color:#e1b9b4;background:#fff5f3}.portrait-step.failed .portrait-step-dot{background:#b94b42}.portrait-step strong{font-size:13px}.portrait-step small{display:block;color:var(--muted);margin-top:2px}.portrait-step.skipped{opacity:.72;background:#f6f9f7}.portrait-step.skipped .portrait-step-dot{background:#aebdb6}
+  .portrait-images{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px}.portrait-image-card{border:1px solid #d5e5df;border-radius:10px;background:#fbfefd;padding:9px}.portrait-image-card strong{display:block;font-size:12px;margin-bottom:7px}.portrait-image-card img{display:block;width:100%;aspect-ratio:1/1;object-fit:contain;border-radius:8px;background:#edf4f1}.portrait-image-card img[hidden]{display:none}.portrait-mask-preview{display:grid;grid-template-columns:1fr 1fr;gap:8px}.portrait-mask-preview figure{margin:0;border:1px solid #d5e5df;border-radius:9px;padding:6px;background:#fbfefd}.portrait-mask-preview img{display:block;width:100%;aspect-ratio:1/1;object-fit:contain;background:#edf4f1;border-radius:6px}.portrait-mask-preview figcaption{font-size:11px;color:var(--muted);margin-top:4px;text-align:center}
+  .portrait-empty{border:1px dashed #cddfd7;border-radius:10px;padding:22px;text-align:center;color:var(--muted);line-height:1.6}.portrait-meta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:12px}.portrait-meta .stat{min-width:0}.portrait-meta strong{overflow-wrap:anywhere}.portrait-output{margin-top:14px}.portrait-worker{display:grid;gap:4px;justify-items:end;min-width:210px}.portrait-worker .status-tag{white-space:nowrap}.portrait-worker-detail{font-size:11px;text-align:right;overflow-wrap:anywhere;max-width:260px}.portrait-sweep{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:14px}.portrait-sweep-card{border:1px solid #d5e5df;border-radius:10px;padding:8px;background:#fbfefd}.portrait-sweep-card img{display:block;width:100%;aspect-ratio:1/1;object-fit:contain;background:#edf4f1;border-radius:7px}.portrait-sweep-card strong{display:block;font-size:12px;margin-bottom:6px}
+  @media(max-width:960px){.portrait-layout{grid-template-columns:1fr}.portrait-form{grid-template-columns:1fr 1fr}.portrait-form > .panel-heading,.portrait-form > .portrait-action,.portrait-form > .notice{grid-column:1/-1}}@media(max-width:640px){.portrait-form{grid-template-columns:1fr}.portrait-form > *{grid-column:auto!important}.portrait-images{grid-template-columns:1fr 1fr}.portrait-meta{grid-template-columns:1fr 1fr}.portrait-sweep{grid-template-columns:1fr}}
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="page-heading">
-  <div>
-    <h1>Fish Portrait POC</h1>
-    <p>基于真实钓获照片 + 标准鱼体资产，验证 SDXL + IP-Adapter 鱼体数字化生成效果。</p>
-  </div>
-  <div class="page-actions">
-    <a class="button" href="/platform/pipeline">查看智能流水线</a>
-    <button class="button" type="button" id="portraitRefresh">刷新</button>
-    <div class="portrait-worker" aria-live="polite">
-      <span id="portraitWorkerStatus" class="status-tag status-queued"><span class="status-dot"></span>检查中</span>
-      <span id="portraitWorkerDetail" class="portrait-worker-detail portrait-hint">正在检查 SDXL + IP-Adapter Worker…</span>
-    </div>
-  </div>
-</div>
-
-<div class="notice" style="margin-bottom:16px">
-  本页面只创建实验 PipelineRun，不会把“其他淡水”或任何实验结果自动加入模型训练；模型训练仍以已冻结 Dataset 和现有训练门禁为准。
-</div>
-
+<div class="page-heading"><div><h1>Fish Portrait Lab</h1><p>保留真实鱼体身份，只对缺失区域、边缘、背景和光影进行实验性优化。</p></div><div class="page-actions"><a class="button" href="/platform/pipeline">查看智能流水线</a><button class="button" type="button" id="portraitRefresh">刷新</button><div class="portrait-worker" aria-live="polite"><span id="portraitWorkerStatus" class="status-tag status-queued"><span class="status-dot"></span>检查中</span><span id="portraitWorkerDetail" class="portrait-worker-detail portrait-hint">正在检查 Fish Portrait Worker…</span></div></div></div>
+<div class="notice" style="margin-bottom:16px">本页面只创建实验 PipelineRun，不会把实验结果或“其他淡水”自动加入模型训练；训练仍以已冻结 Dataset 和现有训练门禁为准。</div>
 <div class="portrait-layout">
   <section class="panel portrait-form" aria-label="Fish Portrait 输入">
-    <div class="panel-heading">
-      <div>
-        <h2>实验输入</h2>
-        <p>选择真实照片 A，系统按鱼种匹配标准鱼体 B。</p>
-      </div>
-    </div>
-
-    <div class="portrait-field">
-      <label for="portraitDataset">数据集</label>
-      <select id="portraitDataset">
-        <option value="">加载中…</option>
-      </select>
-      <div id="portraitDatasetHint" class="portrait-hint">仅允许从已冻结 Dataset 选择图片。</div>
-    </div>
-
-    <div class="portrait-field">
-      <label>真实照片 A</label>
-      <div id="portraitSourceState" class="portrait-empty">请先选择数据集。</div>
-      <div id="portraitSourceGrid" class="portrait-source-grid" hidden></div>
-    </div>
-
-    <div class="portrait-field">
-      <label>标准鱼体参考 B</label>
-      <div id="portraitReferenceState" class="portrait-empty">选择 A 图后自动匹配。</div>
-      <div id="portraitReference" class="portrait-reference" hidden>
-        <img id="portraitReferenceImage" alt="标准鱼体参考图">
-        <div>
-          <strong id="portraitReferenceTitle">—</strong>
-          <small id="portraitReferenceMeta">—</small>
-          <div class="portrait-reference-actions">
-            <button class="button" type="button" id="portraitReferenceSwitch">更换参考图</button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="portrait-field">
-      <label>生成参数</label>
-      <div class="portrait-param-grid">
-        <label class="portrait-field"><span class="portrait-hint">A · 真实照片权重</span><input id="portraitSourceScale" type="number" min="0" max="1.5" step="0.05" value="0.8" aria-label="A 真实照片权重"></label>
-        <label class="portrait-field"><span class="portrait-hint">B · 标准参考权重</span><input id="portraitReferenceScale" type="number" min="0" max="1.5" step="0.05" value="0.35" aria-label="B 标准参考权重"></label>
-        <label class="portrait-field"><span class="portrait-hint">Steps</span><input id="portraitSteps" type="number" min="1" max="100" step="1" value="25"></label>
-        <label class="portrait-field"><span class="portrait-hint">宽度</span><input id="portraitWidth" type="number" min="256" max="1536" step="8" value="768"></label>
-        <label class="portrait-field"><span class="portrait-hint">高度</span><input id="portraitHeight" type="number" min="256" max="1536" step="8" value="768"></label>
-      </div>
-      <div class="portrait-hint">A 控制真实鱼获照片对主体身份保持的影响；B 控制标准鱼体参考对姿态、构图和展示效果的影响。取值范围 0–1.5，步长 0.05。</div>
-      <div class="portrait-hint">模型固定为 SDXL + IP-Adapter；提交时会把 A 真实照片和 B Cover 参考图以 multipart 发送到 GPU Worker。本次 POC 不提供 ControlNet、批量生成或用户上传 B 图。</div>
-    </div>
-
-    <div class="portrait-action">
-      <button class="button primary" type="button" id="portraitSubmit" disabled>开始 Fish Portrait 生成</button>
-      <button class="button" type="button" id="portraitABTest">运行 A/B 对照测试</button>
-      <span id="portraitSubmitHint" class="portrait-hint">请选择 A 图和标准参考图。</span>
-      <span id="portraitABTestHint" class="portrait-hint">A/B 对照测试预留。</span>
-    </div>
+    <div class="panel-heading"><div><h2>实验输入</h2><p>V2 默认保护真实鱼体；V1 仅保留为历史 Dual IP-Adapter 对照。</p></div></div>
+    <div class="portrait-field"><label for="portraitMode">生成模式</label><select id="portraitMode"><option value="fish_preserve_inpaint_v2" selected>Fish Preserve Inpaint V2</option><option value="dual_ip_adapter_v1">Dual IP-Adapter V1（历史实验）</option></select><div id="portraitModeNote" class="portrait-mode-note">真实鱼照片是主体来源；AI 只处理 Completion Mask 区域。</div></div>
+    <div class="portrait-field"><label for="portraitDataset">数据集（可选）</label><select id="portraitDataset"><option value="">加载中…</option></select><div id="portraitDatasetHint" class="portrait-hint">V2 可从已冻结 Dataset 选择，也可直接上传原始照片。</div></div>
+    <div class="portrait-field"><label for="portraitSpecies">鱼种（可选）</label><input id="portraitSpecies" type="text" maxlength="128" placeholder="例如：鲫鱼"><div class="portrait-hint">默认从 Dataset / 分类结果带入；可在生成前修改。仅作为文字提示，不重构鱼体。</div></div>
+    <div class="portrait-field"><label>真实鱼照片 A</label><div id="portraitSourceState" class="portrait-empty">请先选择 Dataset 或上传图片。</div><div id="portraitSourceGrid" class="portrait-source-grid" hidden></div><input id="portraitOriginalUpload" type="file" accept="image/jpeg,image/png,image/webp"><div class="portrait-action"><button class="button" type="button" id="portraitPrepare" disabled>生成 Fish Mask + Completion Mask</button><span id="portraitPrepareHint" class="portrait-hint">V2 生成前需要先完成 Detector + SAM。</span></div></div>
+    <div id="portraitInpaintMasks" class="portrait-field"><label>遮罩预览</label><div class="portrait-mask-preview"><figure><img id="portraitFishMaskPreview" alt="Fish Mask" hidden><figcaption>Fish Mask</figcaption></figure><figure><img id="portraitCompletionMaskPreview" alt="Completion Mask" hidden><figcaption>Completion Mask</figcaption></figure></div></div>
+    <div id="portraitReferenceField" class="portrait-field" hidden><label>标准鱼体参考 B（V1）</label><div id="portraitReferenceState" class="portrait-empty">选择 A 图后自动匹配。</div><div id="portraitReference" class="portrait-reference" hidden><img id="portraitReferenceImage" alt="标准鱼体参考图"><div><strong id="portraitReferenceTitle">—</strong><small id="portraitReferenceMeta">—</small><div class="portrait-reference-actions"><button class="button" type="button" id="portraitReferenceSwitch">更换参考图</button></div></div></div></div>
+    <div id="portraitV1Params" class="portrait-field" hidden><label>Dual IP-Adapter 参数</label><div class="portrait-param-grid"><label class="portrait-field"><span class="portrait-hint">A · 真实照片权重</span><input id="portraitSourceScale" type="number" min="0" max="1.5" step="0.05" value="0.8"></label><label class="portrait-field"><span class="portrait-hint">B · 标准参考权重</span><input id="portraitReferenceScale" type="number" min="0" max="1.5" step="0.05" value="0.35"></label></div></div>
+    <div class="portrait-field"><label>生成参数</label><div class="portrait-param-grid"><label class="portrait-field"><span class="portrait-hint">Strength（V2）</span><input id="portraitStrength" type="number" min="0.10" max="0.50" step="0.05" value="0.25"></label><label class="portrait-field"><span class="portrait-hint">Steps</span><input id="portraitSteps" type="number" min="1" max="100" step="1" value="25"></label><label class="portrait-field"><span class="portrait-hint">Seed（可选）</span><input id="portraitSeed" type="number" min="0" max="4294967295" step="1" placeholder="随机"></label><label class="portrait-field"><span class="portrait-hint">宽度</span><input id="portraitWidth" type="number" min="256" max="1536" step="8" value="768"></label><label class="portrait-field"><span class="portrait-hint">高度</span><input id="portraitHeight" type="number" min="256" max="1536" step="8" value="768"></label></div><div class="portrait-hint">V2 第一轮只建议比较 Strength：0.15、0.25、0.35；固定同一张照片、遮罩、Prompt、Seed、Steps。</div></div>
+    <details id="portraitAdvanced"><summary>Advanced：Prompt / Negative Prompt</summary><div class="portrait-field" style="margin-top:9px"><label for="portraitPrompt">Prompt</label><textarea id="portraitPrompt">professional wildlife fish portrait, realistic photography, natural fish texture, detailed scales, clean natural background, soft lighting, high resolution</textarea><label for="portraitNegativePrompt">Negative Prompt</label><textarea id="portraitNegativePrompt">different fish species, changed body shape, wrong fish anatomy, extra fins, missing fins, deformed fish, cartoon, illustration, fake texture, duplicate fish</textarea></div></details>
+    <div class="portrait-action"><button class="button primary" type="button" id="portraitSubmit" disabled>开始生成</button><button class="button" type="button" id="portraitABTest">运行 Strength 对照测试</button><span id="portraitSubmitHint" class="portrait-hint">请先准备输入。</span><span id="portraitABTestHint" class="portrait-hint">固定输入比较 0.15 / 0.25 / 0.35。</span></div>
   </section>
-
-  <section class="panel portrait-results" aria-label="Fish Portrait 结果">
-    <div class="panel-heading">
-      <div>
-        <h2>实验结果</h2>
-        <p id="portraitRunTitle">等待创建实验任务。</p>
-      </div>
-      <span id="portraitRunStatus" class="status-tag status-queued"><span class="status-dot"></span>未开始</span>
-    </div>
-
-    <div id="portraitProgress" class="portrait-progress">
-      <div class="portrait-empty">提交后将显示 load_source → load_reference → SDXL 生成 → 保存结果。</div>
-    </div>
-
-    <div class="portrait-output">
-      <div class="portrait-images">
-        <div class="portrait-image-card"><strong>A · 真实照片</strong><img id="portraitSourceImage" alt="真实鱼照片" hidden></div>
-        <div class="portrait-image-card"><strong>B · 标准参考</strong><img id="portraitReferenceResultImage" alt="标准鱼体参考图" hidden></div>
-        <div class="portrait-image-card"><strong>生成结果</strong><img id="portraitGeneratedImage" alt="Fish Portrait 生成结果" hidden></div>
-      </div>
-      <div id="portraitOutputEmpty" class="portrait-empty" style="margin-top:11px">生成成功后显示结果图片和参数记录。</div>
-      <div id="portraitMeta" class="portrait-meta" hidden></div>
-    </div>
-  </section>
+  <section class="panel portrait-results" aria-label="Fish Portrait 结果"><div class="panel-heading"><div><h2>实验结果</h2><p id="portraitRunTitle">等待创建实验任务。</p></div><span id="portraitRunStatus" class="status-tag status-queued"><span class="status-dot"></span>未开始</span></div><div id="portraitProgress" class="portrait-progress"><div class="portrait-empty">提交后将显示每个阶段的执行状态。</div></div><div class="portrait-output"><div class="portrait-images"><div class="portrait-image-card"><strong id="portraitOriginalLabel">Original</strong><img id="portraitSourceImage" alt="原始鱼照片" hidden></div><div class="portrait-image-card"><strong id="portraitFishMaskLabel">Fish Mask</strong><img id="portraitFishMaskResultImage" alt="Fish Mask" hidden></div><div class="portrait-image-card"><strong id="portraitCompletionMaskLabel">Completion Mask</strong><img id="portraitCompletionMaskResultImage" alt="Completion Mask" hidden></div><div class="portrait-image-card"><strong id="portraitGeneratedLabel">Generated Result</strong><img id="portraitGeneratedImage" alt="生成结果" hidden></div><div id="portraitV1ReferenceCard" class="portrait-image-card" hidden><strong>B · 标准参考</strong><img id="portraitReferenceResultImage" alt="标准鱼体参考图" hidden></div></div><div id="portraitOutputEmpty" class="portrait-empty" style="margin-top:11px">生成成功后显示结果图片和参数记录。</div><div id="portraitMeta" class="portrait-meta" hidden></div><div id="portraitSweepResults" class="portrait-sweep" hidden></div></div></section>
 </div>
 {% endblock %}
+{% block scripts %}<script src="/static/js/fish_portrait.js"></script>{% endblock %}
 
-{% block scripts %}
-<script src="/static/js/fish_portrait.js"></script>
-{% endblock %}
