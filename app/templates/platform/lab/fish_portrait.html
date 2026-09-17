@@ -41,7 +41,7 @@
   .portrait-image-card img{display:block;width:100%;aspect-ratio:1/1;object-fit:contain;border-radius:8px;background:#edf4f1}
   .portrait-image-card img[hidden]{display:none}
   .portrait-empty{border:1px dashed #cddfd7;border-radius:10px;padding:22px;text-align:center;color:var(--muted);line-height:1.6}
-  .portrait-meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:12px}
+  .portrait-meta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:12px}
   .portrait-meta .stat{min-width:0}
   .portrait-meta strong{overflow-wrap:anywhere}
   .portrait-output{margin-top:14px}
@@ -116,17 +116,21 @@
     <div class="portrait-field">
       <label>生成参数</label>
       <div class="portrait-param-grid">
-        <label class="portrait-field"><span class="portrait-hint">IP Scale</span><input id="portraitIpScale" type="number" min="0" max="1.5" step="0.05" value="0.8"></label>
+        <label class="portrait-field"><span class="portrait-hint">A · 真实照片权重</span><input id="portraitSourceScale" type="number" min="0" max="1.5" step="0.05" value="0.8" aria-label="A 真实照片权重"></label>
+        <label class="portrait-field"><span class="portrait-hint">B · 标准参考权重</span><input id="portraitReferenceScale" type="number" min="0" max="1.5" step="0.05" value="0.35" aria-label="B 标准参考权重"></label>
         <label class="portrait-field"><span class="portrait-hint">Steps</span><input id="portraitSteps" type="number" min="1" max="100" step="1" value="25"></label>
         <label class="portrait-field"><span class="portrait-hint">宽度</span><input id="portraitWidth" type="number" min="256" max="1536" step="8" value="768"></label>
         <label class="portrait-field"><span class="portrait-hint">高度</span><input id="portraitHeight" type="number" min="256" max="1536" step="8" value="768"></label>
       </div>
+      <div class="portrait-hint">A 控制真实鱼获照片对主体身份保持的影响；B 控制标准鱼体参考对姿态、构图和展示效果的影响。取值范围 0–1.5，步长 0.05。</div>
       <div class="portrait-hint">模型固定为 SDXL + IP-Adapter；提交时会把 A 真实照片和 B Cover 参考图以 multipart 发送到 GPU Worker。本次 POC 不提供 ControlNet、批量生成或用户上传 B 图。</div>
     </div>
 
     <div class="portrait-action">
       <button class="button primary" type="button" id="portraitSubmit" disabled>开始 Fish Portrait 生成</button>
+      <button class="button" type="button" id="portraitABTest">运行 A/B 对照测试</button>
       <span id="portraitSubmitHint" class="portrait-hint">请选择 A 图和标准参考图。</span>
+      <span id="portraitABTestHint" class="portrait-hint">A/B 对照测试预留。</span>
     </div>
   </section>
 
