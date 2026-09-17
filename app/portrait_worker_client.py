@@ -298,7 +298,12 @@ def _result_uri(result: dict[str, Any], base_url: str) -> str | None:
         or result.get("image_url")
     )
     if value:
-        return str(value).strip()
+        value = str(value).strip()
+        if value.startswith(("/", "./")):
+            return f"{base_url}/{value.lstrip('/')}"
+        if not value.startswith(("data:", "gs://", "http://", "https://")):
+            return f"{base_url}/{value.lstrip('/')}"
+        return value
     path_value = result.get("result_path") or result.get("output_path") or result.get("path")
     if not path_value:
         return None
