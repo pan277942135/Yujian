@@ -15,6 +15,7 @@
     'portraitSourceGrid', 'portraitReferenceState', 'portraitReference',
     'portraitReferenceImage', 'portraitReferenceTitle', 'portraitReferenceMeta',
     'portraitReferenceSwitch', 'portraitSubmit', 'portraitSubmitHint',
+    'portraitABTest', 'portraitABTestHint',
     'portraitRefresh', 'portraitProgress', 'portraitRunTitle',
     'portraitRunStatus', 'portraitSourceImage', 'portraitReferenceResultImage',
     'portraitGeneratedImage', 'portraitOutputEmpty', 'portraitMeta',
@@ -240,10 +241,21 @@
 
   function renderMeta(metadata) {
     const params = metadata && metadata.params ? metadata.params : {};
+    const adapterConfig = metadata && metadata.adapter_config ? metadata.adapter_config : {};
+    const generation = metadata && metadata.generation ? metadata.generation : {};
+    const sourceScale = adapterConfig.source_scale ?? params.source_scale;
+    const referenceScale = adapterConfig.reference_scale ?? params.reference_scale;
+    const steps = generation.steps ?? params.steps;
+    const width = generation.width ?? params.width;
+    const height = generation.height ?? params.height;
+    const scaleLabel = value => Number.isFinite(Number(value)) ? Number(value).toFixed(2) : '—';
     el.portraitMeta.innerHTML = [
       '<div class="stat"><strong>' + esc(metadata && metadata.run_id || state.runId || '—') + '</strong><span>Run ID</span></div>',
       '<div class="stat"><strong>' + esc(metadata && metadata.model || 'SDXL + IP-Adapter') + '</strong><span>模型</span></div>',
-      '<div class="stat"><strong>' + esc(params.ip_scale ?? '—') + ' · ' + esc(params.steps ?? '—') + ' steps</strong><span>参数</span></div>',
+      '<div class="stat"><strong>A ' + esc(scaleLabel(sourceScale)) + '</strong><span>真实照片权重</span></div>',
+      '<div class="stat"><strong>B ' + esc(scaleLabel(referenceScale)) + '</strong><span>标准参考权重</span></div>',
+      '<div class="stat"><strong>' + esc(steps ?? '—') + ' steps</strong><span>采样步数</span></div>',
+      '<div class="stat"><strong>' + esc(width ?? '—') + ' × ' + esc(height ?? '—') + '</strong><span>输出尺寸</span></div>',
     ].join('');
     el.portraitMeta.hidden = false;
   }
@@ -327,7 +339,8 @@
           reference_asset_id: reference.asset_id,
           model: 'sdxl_ip_adapter',
           params: {
-            ip_scale: numberValue('portraitIpScale', 0.8),
+            source_scale: numberValue('portraitSourceScale', 0.8),
+            reference_scale: numberValue('portraitReferenceScale', 0.35),
             steps: Math.round(numberValue('portraitSteps', 25)),
             width: Math.round(numberValue('portraitWidth', 768)),
             height: Math.round(numberValue('portraitHeight', 768)),
@@ -390,6 +403,9 @@
     if (state.references.length < 2) return;
     state.referenceIndex = (state.referenceIndex + 1) % state.references.length;
     renderReference();
+  });
+  el.portraitABTest.addEventListener('click', () => {
+    el.portraitABTestHint.textContent = 'A/B 对照测试已预留：后续将使用固定 Seed 自动运行多组 A/B 权重。';
   });
   el.portraitSubmit.addEventListener('click', submit);
   el.portraitRefresh.addEventListener('click', loadDatasets);

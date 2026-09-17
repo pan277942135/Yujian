@@ -47,7 +47,8 @@ PIPELINE_TYPE = "FISH_PORTRAIT_POC"
 MODEL_ID = "sdxl_ip_adapter"
 MODEL_LABEL = "SDXL + IP-Adapter"
 DEFAULT_PARAMS = {
-    "ip_scale": 0.8,
+    "source_scale": 0.8,
+    "reference_scale": 0.35,
     "steps": 25,
     "width": 768,
     "height": 768,
@@ -65,7 +66,8 @@ REFERENCE_VARIANT_ORDER = (
 
 
 class PortraitParams(BaseModel):
-    ip_scale: float = Field(default=0.8, ge=0.0, le=1.5)
+    source_scale: float = Field(default=0.8, ge=0.0, le=1.5)
+    reference_scale: float = Field(default=0.35, ge=0.0, le=1.5)
     steps: int = Field(default=25, ge=1, le=100)
     width: int = Field(default=768, ge=256, le=1536)
     height: int = Field(default=768, ge=256, le=1536)
@@ -102,6 +104,29 @@ def _params_dict(params: PortraitParams) -> dict[str, Any]:
     if hasattr(params, "model_dump"):
         return params.model_dump()
     return params.dict()
+
+
+def _experiment_metadata(params: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the stable parameter shape stored with every PipelineRun.
+
+    The request params remain in the state for replay/debugging. This separate
+    shape is intentionally small and presentation-friendly so result pages and
+    later A/B analysis do not need to infer which values belong to which
+    adapter.
+    """
+
+    values = params if isinstance(params, dict) else {}
+    return {
+        "adapter_config": {
+            "source_scale": float(values.get("source_scale", DEFAULT_PARAMS["source_scale"])),
+            "reference_scale": float(values.get("reference_scale", DEFAULT_PARAMS["reference_scale"])),
+        },
+        "generation": {
+            "steps": int(values.get("steps", DEFAULT_PARAMS["steps"])),
+            "width": int(values.get("width", DEFAULT_PARAMS["width"])),
+            "height": int(values.get("height", DEFAULT_PARAMS["height"])),
+        },
+    }
 
 
 def _normalize(value: Any) -> str:
@@ -439,6 +464,7 @@ def _initial_state(
     reference: dict[str, Any],
     params: dict[str, Any],
 ) -> dict[str, Any]:
+    experiment = _experiment_metadata(params)
     return {
         "request": {
             "dataset_id": dataset_id,
@@ -459,6 +485,7 @@ def _initial_state(
             "cover_variant": reference.get("cover_variant"),
             "url": reference.get("url"),
         },
+        "experiment": experiment,
         "stages": [{"name": stage, "status": "PENDING"} for stage in STAGES],
         "worker": None,
         "result": None,
@@ -537,11 +564,13 @@ def _public_run(run: PipelineRun, state: dict[str, Any]) -> dict[str, Any]:
         "stages": state.get("stages", []) if isinstance(state, dict) else [],
         "source": _public_source(state.get("source", {})) if isinstance(state, dict) else None,
         "reference": _public_reference(state.get("reference")) if isinstance(state, dict) else None,
+        "experiment": state.get("experiment") if isinstance(state, dict) else None,
         "result": {
             "asset_id": result.get("asset_id"),
             "generated_image": _asset_media_url(str(result["asset_id"]))
             if result and result.get("asset_id")
             else None,
+            "metadata": result.get("metadata") if isinstance(result, dict) else None,
         }
         if isinstance(result, dict)
         else None,
@@ -768,6 +797,7 @@ def _execute_portrait_job(run_id: str) -> None:
             "generated_uri": generated_uri,
             "model": MODEL_LABEL,
             "params": request.get("params") or DEFAULT_PARAMS,
+            "metadata": state.get("experiment") or _experiment_metadata(request.get("params")),
             "reference_asset_id": request.get("reference_asset_id"),
         }
         _stage(state, active_stage, "DONE")
@@ -1093,10 +1123,15 @@ def portrait_result(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any
     result = state.get("result") if isinstance(state.get("result"), dict) else {}
     source = state.get("source") if isinstance(state.get("source"), dict) else {}
     reference = state.get("reference") if isinstance(state.get("reference"), dict) else {}
+    experiment = state.get("experiment")
+    if not isinstance(experiment, dict):
+        experiment = _experiment_metadata(state.get("request", {}).get("params"))
     metadata = {
         "model": MODEL_LABEL,
         "model_id": MODEL_ID,
         "params": state.get("request", {}).get("params") or DEFAULT_PARAMS,
+        "adapter_config": experiment.get("adapter_config", {}),
+        "generation": experiment.get("generation", {}),
         "run_id": run.run_id,
         "species_id": source.get("species_id"),
         "species_name": source.get("species_name"),

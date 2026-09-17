@@ -13,6 +13,7 @@ from app.portrait_worker_client import (
     _read_image_uri,
     _result_uri,
     _worker_error,
+    invoke_portrait_worker,
 )
 
 
@@ -55,6 +56,55 @@ def test_result_uri_is_promoted_to_worker_url():
     assert _result_uri({"image_url": "https://cdn.example/result.png"}, "http://worker") == (
         "https://cdn.example/result.png"
     )
+
+
+def test_invoke_portrait_worker_transmits_dual_adapter_scales(monkeypatch):
+    captured = {}
+
+    class _Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"status":"success","result_uri":"/output/result.png"}'
+
+    def _urlopen(request, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return _Response()
+
+    monkeypatch.setenv("FISH_PORTRAIT_WORKER_URL", "http://worker")
+    monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+    source = "data:image/png;base64," + base64.b64encode(b"A_BYTES").decode("ascii")
+    reference = "data:image/png;base64," + base64.b64encode(b"B_BYTES").decode("ascii")
+
+    result = invoke_portrait_worker(
+        source_image_uri=source,
+        reference_image_uri=reference,
+        dataset_id="DS_PORTRAIT",
+        source_item_id="1",
+        reference_asset_id="REF_CRUCIAN",
+        model="sdxl_ip_adapter",
+        params={
+            "source_scale": 0.9,
+            "reference_scale": 0.15,
+            "steps": 25,
+            "width": 768,
+            "height": 768,
+        },
+    )
+
+    body = captured["request"].data
+    assert b'"source_scale":0.9' in body
+    assert b'"reference_scale":0.15' in body
+    assert b'name="image"' in body
+    assert b'name="reference_image"' in body
+    assert result["result_uri"] == "http://worker/output/result.png"
 
 
 @pytest.mark.parametrize(
