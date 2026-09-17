@@ -12,7 +12,9 @@ from app.fish_knowledge.species import FishSpecies
 from app.models import Batch, DatasetVersion, ImageAsset, SpeciesCatalog
 from app.platform.models import FishAsset, PipelineRun
 from app.platform.routes.portrait import (
+    INPAINT_MODE,
     PortraitJobCreate,
+    PortraitInpaintParams,
     PortraitParams,
     fish_reference_assets,
     portrait_dataset_items,
@@ -192,8 +194,73 @@ def test_portrait_job_creation_is_idempotent_for_active_request(tmp_path):
             "height": 768,
         }
         assert state["experiment"] == {
+            "mode": "dual_ip_adapter_v1",
             "adapter_config": {"source_scale": 0.9, "reference_scale": 0.15},
             "generation": {"steps": 25, "width": 768, "height": 768},
         }
     finally:
         db.close()
+
+
+def test_preserve_inpaint_job_persists_mode_masks_and_experiment_params(tmp_path):
+    db = _session(tmp_path)
+    try:
+        request = PortraitJobCreate(
+            mode=INPAINT_MODE,
+            original_image_uri="gs://private/original.png",
+            fish_mask_uri="gs://private/fish-mask.png",
+            completion_mask_uri="gs://private/completion-mask.png",
+            species="鲫鱼",
+            prompt="stable fish portrait",
+            negative_prompt="changed fish",
+            inpaint=PortraitInpaintParams(strength=0.35, steps=25, width=768, height=768, seed=12345),
+        )
+        first = create_portrait_job(request, BackgroundTasks(), db)
+        assert first["mode"] == INPAINT_MODE
+        assert first["steps"][1]["name"] == "load_masks"
+        state = json.loads(db.get(PipelineRun, first["run_id"]).stage_json)
+        assert state["request"]["mode"] == INPAINT_MODE
+        assert state["request"]["original_image_uri"] == "gs://private/original.png"
+        assert state["request"]["fish_mask_uri"] == "gs://private/fish-mask.png"
+        assert state["request"]["completion_mask_uri"] == "gs://private/completion-mask.png"
+        assert state["request"]["inpaint"] == {
+            "strength": 0.35,
+            "steps": 25,
+            "width": 768,
+            "height": 768,
+            "seed": 12345,
+        }
+        assert state["experiment"]["mode"] == INPAINT_MODE
+        assert state["experiment"]["mask_type"] == "completion_mask"
+        assert state["experiment"]["strength"] == 0.35
+        assert state["experiment"]["seed"] == 12345
+    finally:
+        db.close()
+
+
+def test_preserve_inpaint_accepts_flat_worker_contract_fields(tmp_path):
+    db = _session(tmp_path)
+    try:
+        request = PortraitJobCreate(
+            mode=INPAINT_MODE,
+            original_image_uri="gs://private/original.png",
+            fish_mask_uri="gs://private/fish-mask.png",
+            completion_mask_uri="gs://private/completion-mask.png",
+            strength=0.15,
+            steps=25,
+            width=768,
+            height=768,
+            seed=7,
+        )
+        created = create_portrait_job(request, BackgroundTasks(), db)
+        state = json.loads(db.get(PipelineRun, created["run_id"]).stage_json)
+        assert state["request"]["inpaint"] == {
+            "strength": 0.15,
+            "steps": 25,
+            "width": 768,
+            "height": 768,
+            "seed": 7,
+        }
+    finally:
+        db.close()
+
