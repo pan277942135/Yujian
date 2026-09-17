@@ -19,7 +19,7 @@ from typing import Any
 
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from google.cloud import storage
 from PIL import Image
@@ -513,7 +513,26 @@ async def prepare(file: UploadFile | None = File(default=None), case_label: str 
         state["timings"]["prepare_total_ms"] = round((time.perf_counter() - prepare_started) * 1000, 2)
         state["progress"] = _progress(state)
         _save_state(test_id, state)
-        return {**state, "test_id": test_id, "statistics": statistics, "progress": state["progress"], "original": _data_url(original, "image/png"), "sam_raw_mask": _data_url(_mask_bytes(raw_mask), "image/png"), "sam_transparent": _data_url(raw_transparent, "image/png"), "refined_visible": _data_url(refined_fish, "image/png"), "structural_envelope": _data_url(_mask_bytes(decision.estimated_full_fish_mask), "image/png"), "auto_completion_mask": _data_url(_mask_bytes(decision.completion_mask), "image/png")}
+        return {
+            **state,
+            "test_id": test_id,
+            "statistics": statistics,
+            "progress": state["progress"],
+            # The data URLs remain for API compatibility.  The page uses the
+            # same-origin media URLs below so Cloud Run never has to put a
+            # browser-facing GCS/local URI in an <img> tag.
+            "preview_urls": {
+                "original": f"/api/debug/fish-completion-lab/media/{test_id}/original",
+                "fish_mask": f"/api/debug/fish-completion-lab/media/{test_id}/fish-mask",
+                "completion_mask": f"/api/debug/fish-completion-lab/media/{test_id}/completion-mask",
+            },
+            "original": _data_url(original, "image/png"),
+            "sam_raw_mask": _data_url(_mask_bytes(raw_mask), "image/png"),
+            "sam_transparent": _data_url(raw_transparent, "image/png"),
+            "refined_visible": _data_url(refined_fish, "image/png"),
+            "structural_envelope": _data_url(_mask_bytes(decision.estimated_full_fish_mask), "image/png"),
+            "auto_completion_mask": _data_url(_mask_bytes(decision.completion_mask), "image/png"),
+        }
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
         return JSONResponse(status_code=exc.status_code, content={
@@ -548,6 +567,35 @@ async def save_masks(payload: MaskPayload):
     state["progress"] = _progress(state)
     _save_state(payload.test_id, state)
     return {"test_id": payload.test_id, "statistics": statistics, "timings": state["timings"], "progress": state["progress"], "refined_visible": _data_url(refined_fish, "image/png")}
+
+
+@router.get("/api/debug/fish-completion-lab/media/{test_id}/{kind}")
+def completion_media(test_id: str, kind: str) -> Response:
+    """Serve prepared images/masks through the authenticated console origin."""
+
+    asset_key = {
+        "original": "original",
+        "fish-mask": "refined_visible_mask",
+        "completion-mask": "completion_mask",
+    }.get(kind)
+    if asset_key is None:
+        raise HTTPException(status_code=404, detail="资源不存在")
+    state = _load_state(test_id)
+    uri = str((state.get("assets") or {}).get(asset_key) or "").strip()
+    if not uri:
+        raise HTTPException(status_code=404, detail="资源不存在")
+    try:
+        content = _read_persist(uri)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="资源不存在") from exc
+    except Exception as exc:
+        logger.exception("Fish Completion Lab media read failed; test_id=%s kind=%s", test_id, kind)
+        raise HTTPException(status_code=503, detail="资源暂时不可用") from exc
+    return Response(
+        content=content,
+        media_type="image/png",
+        headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"},
+    )
 
 
 
