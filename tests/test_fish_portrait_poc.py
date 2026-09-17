@@ -13,6 +13,7 @@ from app.models import Batch, DatasetVersion, ImageAsset, SpeciesCatalog
 from app.platform.models import FishAsset, PipelineRun
 from app.platform.routes.portrait import (
     PortraitJobCreate,
+    PortraitParams,
     fish_reference_assets,
     portrait_dataset_items,
     portrait_reference,
@@ -169,11 +170,30 @@ def test_portrait_job_creation_is_idempotent_for_active_request(tmp_path):
             dataset_id="DS_PORTRAIT",
             source_item_id=1,
             reference_asset_id="REF_CRUCIAN",
+            params=PortraitParams(
+                source_scale=0.9,
+                reference_scale=0.15,
+                steps=25,
+                width=768,
+                height=768,
+            ),
         )
         first = create_portrait_job(request, BackgroundTasks(), db)
         second = create_portrait_job(request, BackgroundTasks(), db)
         assert first["run_id"] == second["run_id"]
         assert second["already_running"] is True
         assert db.query(PipelineRun).filter(PipelineRun.pipeline_type == "FISH_PORTRAIT_POC").count() == 1
+        state = json.loads(db.get(PipelineRun, first["run_id"]).stage_json)
+        assert state["request"]["params"] == {
+            "source_scale": 0.9,
+            "reference_scale": 0.15,
+            "steps": 25,
+            "width": 768,
+            "height": 768,
+        }
+        assert state["experiment"] == {
+            "adapter_config": {"source_scale": 0.9, "reference_scale": 0.15},
+            "generation": {"steps": 25, "width": 768, "height": 768},
+        }
     finally:
         db.close()
