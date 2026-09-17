@@ -172,7 +172,7 @@ def _knowledge_media_object_name(uri: str) -> str:
         raise ValueError("invalid managed knowledge media URI")
     species_id, asset_type, asset_key = parts
     normalized_type = asset_type.strip().lower()
-    hashed = bool(re.fullmatch(r"[a-f0-9]{64}\\.(?:jpg|png|webp)", asset_key))
+    hashed = bool(re.fullmatch(r"[a-f0-9]{64}\.(?:jpg|png|webp)", asset_key))
 
     if normalized_type == "cover":
         if asset_key == "cover.webp":
