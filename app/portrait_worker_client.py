@@ -21,6 +21,15 @@ from typing import Any
 
 MAX_IMAGE_BYTES = 50 * 1024 * 1024
 
+INPAINT_DEFAULT_PROMPT = (
+    "professional wildlife fish portrait, realistic photography, natural fish texture, "
+    "detailed scales, clean natural background, soft lighting, high resolution"
+)
+INPAINT_DEFAULT_NEGATIVE_PROMPT = (
+    "different fish species, changed body shape, wrong fish anatomy, extra fins, "
+    "missing fins, deformed fish, cartoon, illustration, fake texture, duplicate fish"
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -37,8 +46,8 @@ def _base_url() -> str:
     return os.getenv("FISH_PORTRAIT_WORKER_URL", "").strip().rstrip("/")
 
 
-def _worker_path() -> str:
-    path = os.getenv("FISH_PORTRAIT_WORKER_PATH", "/portrait").strip() or "/portrait"
+def _worker_path(default: str = "/portrait", env_name: str = "FISH_PORTRAIT_WORKER_PATH") -> str:
+    path = os.getenv(env_name, default).strip() or default
     return path if path.startswith("/") else "/" + path
 
 
@@ -190,6 +199,17 @@ def _knowledge_media_object_name(uri: str) -> str:
     raise ValueError("versioned managed media URI has no object mapping")
 
 
+def _local_uri_path(uri: str) -> Path:
+    """Resolve the debug lab's local:// URI without allowing path escape."""
+
+    relative = str(uri or "")[len("local://") :].lstrip("/")
+    root = Path.cwd().resolve()
+    path = (root / relative).resolve()
+    if path != root and root not in path.parents:
+        raise ValueError("local image URI escapes the application workspace")
+    return path
+
+
 def _read_image_uri(uri: str, *, label: str) -> tuple[bytes, str]:
     """Read a source/reference URI into bytes for the multipart Worker API."""
 
@@ -223,6 +243,12 @@ def _read_image_uri(uri: str, *, label: str) -> tuple[bytes, str]:
                 _knowledge_media_object_name(value),
                 label=label,
             )
+        elif value.startswith("local://"):
+            path = _local_uri_path(value)
+            if not path.is_file():
+                raise FileNotFoundError(value)
+            data = path.read_bytes()
+            media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         elif value.startswith(("http://", "https://")):
             request = urllib.request.Request(value, method="GET", headers={"Accept": "image/*"})
             with urllib.request.urlopen(request, timeout=min(_timeout(120.0), 120.0)) as response:
@@ -410,8 +436,109 @@ def invoke_portrait_worker(
     return result
 
 
+def invoke_portrait_inpaint_worker(
+    *,
+    original_image_uri: str,
+    fish_mask_uri: str | None,
+    completion_mask_uri: str | None,
+    species: str | None,
+    prompt: str | None,
+    negative_prompt: str | None,
+    strength: float,
+    steps: int,
+    width: int,
+    height: int,
+    seed: int | None,
+) -> dict[str, Any]:
+    """Invoke the preserve-inpaint worker with managed image/mask URIs."""
+
+    base_url = _base_url()
+    if not base_url:
+        raise PortraitWorkerError(
+            "PORTRAIT_WORKER_NOT_CONFIGURED",
+            "FISH_PORTRAIT_WORKER_URL is not configured",
+        )
+    payload = {
+        "mode": "fish_preserve_inpaint_v2",
+        "original_image_uri": str(original_image_uri or "").strip(),
+        "fish_mask_uri": str(fish_mask_uri or "").strip() or None,
+        "completion_mask_uri": str(completion_mask_uri or "").strip() or None,
+        "species": str(species or "").strip() or None,
+        "prompt": str(prompt or INPAINT_DEFAULT_PROMPT).strip(),
+        "negative_prompt": str(negative_prompt or INPAINT_DEFAULT_NEGATIVE_PROMPT).strip(),
+        "strength": float(strength),
+        "steps": int(steps),
+        "width": int(width),
+        "height": int(height),
+        "seed": int(seed) if seed is not None else None,
+    }
+    if not payload["original_image_uri"]:
+        raise PortraitWorkerError("PORTRAIT_ORIGINAL_IMAGE_URI_MISSING", "original_image_uri is required")
+    headers = _headers()
+    headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(
+        f"{base_url}{_worker_path('/portrait/generate', 'FISH_PORTRAIT_INPAINT_WORKER_PATH')}",
+        data=json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+        method="POST",
+        headers=headers,
+    )
+    logger.info(
+        "portrait_inpaint_worker_request: mode=%s has_original=%s has_fish_mask=%s "
+        "has_completion_mask=%s strength=%.2f steps=%d size=%sx%s seed=%s",
+        payload["mode"],
+        str(bool(payload["original_image_uri"])).lower(),
+        str(bool(payload["fish_mask_uri"])).lower(),
+        str(bool(payload["completion_mask_uri"])).lower(),
+        payload["strength"],
+        payload["steps"],
+        payload["width"],
+        payload["height"],
+        payload["seed"],
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=_timeout()) as response:
+            status_code, result = _json_response(response)
+    except urllib.error.HTTPError as exc:
+        raise _worker_error(exc) from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise PortraitWorkerError("PORTRAIT_WORKER_CONNECTION_FAILED", str(exc)) from exc
+
+    generated_image = (
+        _decode_data_url(result.get("generated_image"))
+        or _decode_data_url(result.get("generated"))
+        or _decode_data_url(result.get("image"))
+    )
+    result_uri = _result_uri(result, base_url)
+    if not result_uri and not generated_image:
+        raise PortraitWorkerError(
+            "PORTRAIT_WORKER_INVALID_RESPONSE",
+            "Portrait inpaint worker response is missing generated_image_uri/result_uri/image_url",
+            status_code=status_code,
+        )
+    result["result_uri"] = result_uri
+    result["generated_image"] = (
+        "data:" + generated_image[1] + ";base64," + base64.b64encode(generated_image[0]).decode("ascii")
+        if generated_image
+        else None
+    )
+    result["worker_status"] = "WORKER_EXECUTED"
+    result["worker_http_status"] = status_code
+    result["worker_protocol"] = {
+        "request": "application/json",
+        "mode": payload["mode"],
+        "original_image_uri": bool(payload["original_image_uri"]),
+        "fish_mask_uri": bool(payload["fish_mask_uri"]),
+        "completion_mask_uri": bool(payload["completion_mask_uri"]),
+    }
+    return result
+
+
 __all__ = [
     "PortraitWorkerError",
     "check_portrait_worker",
     "invoke_portrait_worker",
+    "invoke_portrait_inpaint_worker",
+    "INPAINT_DEFAULT_PROMPT",
+    "INPAINT_DEFAULT_NEGATIVE_PROMPT",
 ]
+
