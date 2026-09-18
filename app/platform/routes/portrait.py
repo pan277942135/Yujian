@@ -1410,6 +1410,8 @@ def create_portrait_job(
         if not payload.completion_mask_uri:
             raise HTTPException(status_code=422, detail="completion_mask_uri 不能为空")
     else:
+        if not payload.original_image_uri and not source.get("uri"):
+            raise HTTPException(status_code=422, detail="original_image_uri 不能为空")
         if not payload.sam_visible_uri:
             raise HTTPException(status_code=422, detail="sam_visible_uri 不能为空")
 
