@@ -13,8 +13,10 @@ from app.models import Batch, DatasetVersion, ImageAsset, SpeciesCatalog
 from app.platform.models import FishAsset, PipelineRun
 from app.platform.routes.portrait import (
     INPAINT_MODE,
+    REFINE_MODE,
     PortraitJobCreate,
     PortraitInpaintParams,
+    PortraitRefineParams,
     PortraitParams,
     fish_reference_assets,
     portrait_dataset_items,
@@ -264,3 +266,58 @@ def test_preserve_inpaint_accepts_flat_worker_contract_fields(tmp_path):
     finally:
         db.close()
 
+
+def test_preserve_refine_reuses_sam_visible_and_persists_experiment_params(tmp_path):
+    db = _session(tmp_path)
+    try:
+        _seed(db)
+        request = PortraitJobCreate(
+            mode=REFINE_MODE,
+            dataset_id="DS_PORTRAIT",
+            source_item_id=1,
+            original_image_uri="gs://private/direct/PPD_1/original.png",
+            sam_visible_uri="gs://private/direct/PPD_1/sam_transparent.png",
+            source_run_id="PPD_1",
+            species="鲫鱼",
+            refine=PortraitRefineParams(
+                preserve_strength=0.8,
+                refine_strength=0.2,
+                auto_straighten=True,
+                steps=25,
+                seed=12345,
+            ),
+        )
+        created = create_portrait_job(request, BackgroundTasks(), db)
+        assert created["mode"] == REFINE_MODE
+        assert [step["name"] for step in created["steps"]] == [
+            "load_source",
+            "load_sam_visible",
+            "refine_generate",
+            "straighten",
+            "persist_result",
+        ]
+        state = json.loads(db.get(PipelineRun, created["run_id"]).stage_json)
+        assert state["request"]["mode"] == REFINE_MODE
+        assert state["request"]["source_run_id"] == "PPD_1"
+        assert state["request"]["original_image_uri"].endswith("/original.png")
+        assert state["request"]["sam_visible_uri"].endswith("/sam_transparent.png")
+        assert state["request"]["refine"] == {
+            "preserve_strength": 0.8,
+            "refine_strength": 0.2,
+            "auto_straighten": True,
+            "steps": 25,
+            "seed": 12345,
+        }
+        assert state["experiment"] == {
+            "mode": REFINE_MODE,
+            "preserve_strength": 0.8,
+            "refine_strength": 0.2,
+            "auto_straighten": True,
+            "steps": 25,
+            "seed": 12345,
+            "input_source": "sam_visible",
+            "model": "Fish Preserve Refine V2",
+            "species": "鲫鱼",
+        }
+    finally:
+        db.close()
