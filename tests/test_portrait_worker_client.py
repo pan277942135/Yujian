@@ -17,6 +17,7 @@ from app.portrait_worker_client import (
     _worker_error,
     invoke_portrait_worker,
     invoke_portrait_inpaint_worker,
+    invoke_portrait_refine_worker,
 )
 
 
@@ -167,6 +168,56 @@ def test_invoke_portrait_inpaint_worker_transmits_json_contract(monkeypatch):
     assert result["result_uri"] == "http://worker/output/inpaint.png"
 
 
+def test_invoke_portrait_refine_worker_transmits_sam_visible_only(monkeypatch):
+    captured = {}
+
+    class _Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"status":"success","refine_result_uri":"/output/refined.png","final_asset_uri":"/output/final.png"}'
+
+    def _urlopen(request, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return _Response()
+
+    monkeypatch.setenv("FISH_PORTRAIT_WORKER_URL", "http://worker")
+    monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+    source = "data:image/png;base64," + base64.b64encode(b"SAM_VISIBLE").decode("ascii")
+    result = invoke_portrait_refine_worker(
+        sam_visible_image_uri=source,
+        original_image_uri="gs://bucket/original.png",
+        source_run_id="PPD_1",
+        species="鲫鱼",
+        prompt=None,
+        negative_prompt=None,
+        preserve_strength=0.75,
+        refine_strength=0.28,
+        auto_straighten=True,
+        steps=25,
+        seed=12345,
+    )
+
+    body = captured["request"].data
+    assert captured["request"].full_url == "http://worker/portrait"
+    assert b'name="image"; filename="sam_visible.png"' in body
+    assert b"SAM_VISIBLE" in body
+    assert b'name="reference_image"' not in body
+    assert b'fish_preserve_refine_v2' in body
+    assert b'"preserve_strength":0.75' in body
+    assert b'"refine_strength":0.28' in body
+    assert b'"seed":12345' in body
+    assert result["refine_result_uri"] == "http://worker/output/refined.png"
+    assert result["final_asset_uri"] == "http://worker/output/final.png"
+
+
 def test_inpaint_default_prompts_are_stable():
     assert "preserve" not in INPAINT_DEFAULT_PROMPT.lower()
     assert "different fish species" in INPAINT_DEFAULT_NEGATIVE_PROMPT
@@ -192,4 +243,3 @@ def test_worker_http_errors_are_typed(status_code, error_code):
         raise _worker_error(error)
     assert raised.value.error_code == error_code
     assert raised.value.status_code == status_code
-
