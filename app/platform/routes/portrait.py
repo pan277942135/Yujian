@@ -35,9 +35,12 @@ from app.platform.services import adapters
 from app.portrait_worker_client import (
     INPAINT_DEFAULT_NEGATIVE_PROMPT,
     INPAINT_DEFAULT_PROMPT,
+    REFINE_DEFAULT_NEGATIVE_PROMPT,
+    REFINE_DEFAULT_PROMPT,
     PortraitWorkerError,
     check_portrait_worker,
     invoke_portrait_inpaint_worker,
+    invoke_portrait_refine_worker,
     invoke_portrait_worker,
 )
 from app.species_policy import TARGET_SPECIES_PRESETS
@@ -50,9 +53,12 @@ PIPELINE_TYPE = "FISH_PORTRAIT_POC"
 MODEL_ID = "sdxl_ip_adapter"
 MODEL_LABEL = "SDXL + IP-Adapter"
 INPAINT_MODE = "fish_preserve_inpaint_v2"
+REFINE_MODE = "fish_preserve_refine_v2"
 DUAL_IP_MODE = "dual_ip_adapter_v1"
 INPAINT_MODEL_ID = "sdxl_inpaint"
 INPAINT_MODEL_LABEL = "SDXL Inpaint"
+REFINE_MODEL_ID = "fish_preserve_refine_v2"
+REFINE_MODEL_LABEL = "Fish Preserve Refine V2"
 DEFAULT_PARAMS = {
     "source_scale": 0.8,
     "reference_scale": 0.35,
@@ -62,6 +68,7 @@ DEFAULT_PARAMS = {
 }
 STAGES = ("load_source", "load_reference", "sdxl_generate", "persist_result")
 INPAINT_STAGES = ("load_source", "load_masks", "sdxl_inpaint", "persist_result")
+REFINE_STAGES = ("load_source", "load_sam_visible", "refine_generate", "straighten", "persist_result")
 ACTIVE_JOB_STATUSES = {"PENDING", "RUNNING"}
 REFERENCE_STATUSES = {"ACTIVE", "READY", "PUBLISHED"}
 PORTRAIT_PREFIX = "PORTRAIT_"
@@ -89,11 +96,18 @@ class PortraitInpaintParams(BaseModel):
     seed: int | None = Field(default=None, ge=0, le=2**32 - 1)
 
 
+class PortraitRefineParams(BaseModel):
+    preserve_strength: float = Field(default=0.75, ge=0.6, le=0.9)
+    refine_strength: float = Field(default=0.28, ge=0.15, le=0.45)
+    auto_straighten: bool = True
+    steps: int = Field(default=25, ge=1, le=100)
+    seed: int | None = Field(default=None, ge=0, le=2**32 - 1)
+
+
 class PortraitJobCreate(BaseModel):
-    # New UI requests default to the preserve-inpaint pipeline.  The route
-    # keeps a small compatibility fallback for older V1 clients that still
-    # send reference_asset_id without an explicit mode.
-    mode: str = Field(default=INPAINT_MODE, max_length=64)
+    # New UI requests default to the SAM Visible -> Refine pipeline. Keep
+    # compatibility with historical inpaint and Dual IP-Adapter requests.
+    mode: str = Field(default=REFINE_MODE, max_length=64)
     dataset_id: str | None = Field(default=None, max_length=128)
     dataset_version: str | None = Field(default=None, max_length=128)
     source_item_id: int | str | None = None
@@ -103,10 +117,13 @@ class PortraitJobCreate(BaseModel):
     original_image_uri: str | None = Field(default=None, max_length=4096)
     fish_mask_uri: str | None = Field(default=None, max_length=4096)
     completion_mask_uri: str | None = Field(default=None, max_length=4096)
+    sam_visible_uri: str | None = Field(default=None, max_length=4096)
+    source_run_id: str | None = Field(default=None, max_length=128)
     species: str | None = Field(default=None, max_length=128)
     prompt: str | None = Field(default=None, max_length=2000)
     negative_prompt: str | None = Field(default=None, max_length=2000)
     inpaint: PortraitInpaintParams = Field(default_factory=PortraitInpaintParams)
+    refine: PortraitRefineParams = Field(default_factory=PortraitRefineParams)
     # Accept the worker contract's flat V2 fields as well as the nested UI
     # object.  Flat values win when both forms are supplied.
     strength: float | None = Field(default=None, ge=0.1, le=0.5)
@@ -114,6 +131,9 @@ class PortraitJobCreate(BaseModel):
     width: int | None = Field(default=None, ge=256, le=1536)
     height: int | None = Field(default=None, ge=256, le=1536)
     seed: int | None = Field(default=None, ge=0, le=2**32 - 1)
+    preserve_strength: float | None = Field(default=None, ge=0.6, le=0.9)
+    refine_strength: float | None = Field(default=None, ge=0.15, le=0.45)
+    auto_straighten: bool | None = None
 
 
 def _utcnow() -> datetime:
@@ -146,9 +166,24 @@ def _inpaint_params_dict(params: PortraitInpaintParams) -> dict[str, Any]:
     return params.dict()
 
 
+def _refine_params_dict(params: PortraitRefineParams) -> dict[str, Any]:
+    if hasattr(params, "model_dump"):
+        return params.model_dump()
+    return params.dict()
+
+
 def _request_inpaint_params(payload: PortraitJobCreate) -> dict[str, Any]:
     values = _inpaint_params_dict(payload.inpaint)
     for name in ("strength", "steps", "width", "height", "seed"):
+        value = getattr(payload, name, None)
+        if value is not None:
+            values[name] = value
+    return values
+
+
+def _request_refine_params(payload: PortraitJobCreate) -> dict[str, Any]:
+    values = _refine_params_dict(payload.refine)
+    for name in ("preserve_strength", "refine_strength", "auto_straighten", "steps", "seed"):
         value = getattr(payload, name, None)
         if value is not None:
             values[name] = value
@@ -159,6 +194,17 @@ def _normalize_mode(value: Any, payload: PortraitJobCreate | None = None) -> str
     mode = _normalize(value).replace("-", "_").replace("+", "_").replace(" ", "_")
     if mode in {"dual_ip_adapter_v1", "sdxl_ip_adapter", "sdxl_ipadapter", "ip_adapter"}:
         return DUAL_IP_MODE
+    if mode in {"fish_preserve_refine_v2", "fish_preserve_refine", "preserve_refine", "refine"}:
+        # Historical V1 callers may omit mode while still sending a standard
+        # reference asset. Keep those requests on the old pipeline.
+        if (
+            payload is not None
+            and payload.reference_asset_id
+            and not payload.sam_visible_uri
+            and not payload.original_image_uri
+        ):
+            return DUAL_IP_MODE
+        return REFINE_MODE
     if mode in {"fish_preserve_inpaint_v2", "fish_preserve_inpaint", "sdxl_inpaint", "inpaint"}:
         # Older callers did not send mode but did send a reference asset.  Do
         # not break those historical V1 experiments after the V2 default.
@@ -176,17 +222,25 @@ def _normalize_mode(value: Any, payload: PortraitJobCreate | None = None) -> str
         status_code=422,
         detail={
             "error_code": "PORTRAIT_MODE_UNSUPPORTED",
-            "message": "mode 必须是 dual_ip_adapter_v1 或 fish_preserve_inpaint_v2",
+            "message": "mode 必须是 fish_preserve_refine_v2、fish_preserve_inpaint_v2 或 dual_ip_adapter_v1",
         },
     )
 
 
 def _stages_for_mode(mode: str) -> tuple[str, ...]:
-    return INPAINT_STAGES if mode == INPAINT_MODE else STAGES
+    if mode == INPAINT_MODE:
+        return INPAINT_STAGES
+    if mode == REFINE_MODE:
+        return REFINE_STAGES
+    return STAGES
 
 
 def _model_for_mode(mode: str) -> tuple[str, str]:
-    return (INPAINT_MODEL_ID, INPAINT_MODEL_LABEL) if mode == INPAINT_MODE else (MODEL_ID, MODEL_LABEL)
+    if mode == INPAINT_MODE:
+        return INPAINT_MODEL_ID, INPAINT_MODEL_LABEL
+    if mode == REFINE_MODE:
+        return REFINE_MODEL_ID, REFINE_MODEL_LABEL
+    return MODEL_ID, MODEL_LABEL
 
 
 def _experiment_metadata(
@@ -214,6 +268,20 @@ def _experiment_metadata(
             "seed": values.get("seed"),
             "mask_type": "completion_mask",
             "model": INPAINT_MODEL_LABEL,
+        }
+        if species:
+            result["species"] = species
+        return result
+    if mode == REFINE_MODE:
+        result = {
+            "mode": REFINE_MODE,
+            "preserve_strength": float(values.get("preserve_strength", 0.75)),
+            "refine_strength": float(values.get("refine_strength", 0.28)),
+            "auto_straighten": bool(values.get("auto_straighten", True)),
+            "steps": int(values.get("steps", 25)),
+            "seed": values.get("seed"),
+            "input_source": "sam_visible",
+            "model": REFINE_MODEL_LABEL,
         }
         if species:
             result["species"] = species
@@ -674,6 +742,8 @@ def _set_state(run: PipelineRun, state: dict[str, Any]) -> None:
 def _public_run(run: PipelineRun, state: dict[str, Any]) -> dict[str, Any]:
     result = state.get("result") if isinstance(state, dict) else None
     request = state.get("request", {}) if isinstance(state, dict) and isinstance(state.get("request"), dict) else {}
+    mode = request.get("mode") or DUAL_IP_MODE
+    result_media_base = f"/api/platform/portrait/results/{run.run_id}/media"
     return {
         "run_id": run.run_id,
         "id": run.run_id,
@@ -682,7 +752,7 @@ def _public_run(run: PipelineRun, state: dict[str, Any]) -> dict[str, Any]:
         "status": _status(run.status),
         "stage": run.current_stage,
         "current_stage": run.current_stage,
-        "mode": request.get("mode") or DUAL_IP_MODE,
+        "mode": mode,
         "steps": state.get("stages", []) if isinstance(state, dict) else [],
         "stages": state.get("stages", []) if isinstance(state, dict) else [],
         "source": _public_source(state.get("source", {})) if isinstance(state, dict) else None,
@@ -692,6 +762,12 @@ def _public_run(run: PipelineRun, state: dict[str, Any]) -> dict[str, Any]:
             "asset_id": result.get("asset_id"),
             "generated_image": _asset_media_url(str(result["asset_id"]))
             if result and result.get("asset_id")
+            else None,
+            "refine_result_uri": f"{result_media_base}/refined"
+            if isinstance(result, dict) and result.get("refine_result_uri")
+            else None,
+            "final_asset_uri": f"{result_media_base}/final"
+            if isinstance(result, dict) and result.get("final_asset_uri")
             else None,
             "metadata": result.get("metadata") if isinstance(result, dict) else None,
         }
@@ -844,7 +920,7 @@ def _execute_portrait_job(run_id: str) -> None:
             state = {}
         request = state.get("request") if isinstance(state.get("request"), dict) else {}
         mode = str(request.get("mode") or DUAL_IP_MODE)
-        if mode not in {DUAL_IP_MODE, INPAINT_MODE}:
+        if mode not in {DUAL_IP_MODE, INPAINT_MODE, REFINE_MODE}:
             raise PortraitWorkerError("PORTRAIT_MODE_UNSUPPORTED", "unsupported portrait mode")
         model_id, model_label = _model_for_mode(mode)
         run.status = "RUNNING"
@@ -856,10 +932,11 @@ def _execute_portrait_job(run_id: str) -> None:
 
         source_value = (
             request.get("original_image_uri") or (state.get("source") or {}).get("uri")
-            if mode == INPAINT_MODE
+            if mode in {INPAINT_MODE, REFINE_MODE}
             else (state.get("source") or {}).get("uri")
         )
         source_uri = str(source_value or "").strip()
+        sam_visible_uri = str(request.get("sam_visible_uri") or "").strip()
         reference_uri = str((state.get("reference") or {}).get("uri") or "").strip()
         if not source_uri:
             raise PortraitWorkerError("PORTRAIT_SOURCE_URI_INVALID", "source image URI is empty")
@@ -867,7 +944,13 @@ def _execute_portrait_job(run_id: str) -> None:
         _set_state(run, state)
         db.commit()
 
-        active_stage = "load_masks" if mode == INPAINT_MODE else "load_reference"
+        active_stage = (
+            "load_masks"
+            if mode == INPAINT_MODE
+            else "load_sam_visible"
+            if mode == REFINE_MODE
+            else "load_reference"
+        )
         run.current_stage = active_stage
         _stage(state, active_stage, "RUNNING")
         _set_state(run, state)
@@ -879,13 +962,21 @@ def _execute_portrait_job(run_id: str) -> None:
                 raise PortraitWorkerError("PORTRAIT_FISH_MASK_URI_INVALID", "fish_mask_uri is empty")
             if not completion_mask_uri:
                 raise PortraitWorkerError("PORTRAIT_COMPLETION_MASK_URI_INVALID", "completion_mask_uri is empty")
-        elif not reference_uri:
+        elif mode == REFINE_MODE and not sam_visible_uri:
+            raise PortraitWorkerError("PORTRAIT_SAM_VISIBLE_URI_INVALID", "sam_visible_uri is empty")
+        elif mode == DUAL_IP_MODE and not reference_uri:
             raise PortraitWorkerError("PORTRAIT_REFERENCE_URI_INVALID", "reference asset URI is empty")
         _stage(state, active_stage, "DONE")
         _set_state(run, state)
         db.commit()
 
-        active_stage = "sdxl_inpaint" if mode == INPAINT_MODE else "sdxl_generate"
+        active_stage = (
+            "sdxl_inpaint"
+            if mode == INPAINT_MODE
+            else "refine_generate"
+            if mode == REFINE_MODE
+            else "sdxl_generate"
+        )
         run.current_stage = active_stage
         _stage(state, active_stage, "RUNNING")
         _set_state(run, state)
@@ -927,6 +1018,21 @@ def _execute_portrait_job(run_id: str) -> None:
                 height=int(inpaint.get("height", 768)),
                 seed=inpaint.get("seed"),
             )
+        elif mode == REFINE_MODE:
+            refine = dict(request.get("refine") or {})
+            worker_result = invoke_portrait_refine_worker(
+                sam_visible_image_uri=sam_visible_uri,
+                original_image_uri=str(request.get("original_image_uri") or source_uri),
+                source_run_id=str(request.get("source_run_id") or "") or None,
+                species=str(request.get("species") or (state.get("source") or {}).get("species_name") or ""),
+                prompt=request.get("prompt"),
+                negative_prompt=request.get("negative_prompt"),
+                preserve_strength=float(refine.get("preserve_strength", 0.75)),
+                refine_strength=float(refine.get("refine_strength", 0.28)),
+                auto_straighten=bool(refine.get("auto_straighten", True)),
+                steps=int(refine.get("steps", 25)),
+                seed=refine.get("seed"),
+            )
         else:
             logger.info(
                 "fish_portrait_worker_request run_id=%s method=POST path=%s content_type=multipart/form-data source_field=image reference_field=reference_image params=%s",
@@ -957,12 +1063,38 @@ def _execute_portrait_job(run_id: str) -> None:
         _set_state(run, state)
         db.commit()
 
+        if mode == REFINE_MODE:
+            active_stage = "straighten"
+            run.current_stage = active_stage
+            _stage(state, active_stage, "RUNNING")
+            _set_state(run, state)
+            db.commit()
+            if not worker_result.get("final_asset_uri"):
+                raise PortraitWorkerError("PORTRAIT_FINAL_ASSET_MISSING", "Refine worker did not return final_asset_uri")
+            _stage(state, active_stage, "DONE")
+            _set_state(run, state)
+            db.commit()
+
         active_stage = "persist_result"
         run.current_stage = active_stage
         _stage(state, active_stage, "RUNNING")
         _set_state(run, state)
         db.commit()
         generated_uri = _materialize_output(worker_result, run_id, source_uri)
+        refined_uri = None
+        final_uri = generated_uri
+        if mode == REFINE_MODE:
+            refined_uri = _materialize_output(
+                {"result_uri": worker_result.get("refine_result_uri")},
+                run_id + "_refined",
+                source_uri,
+            )
+            final_uri = _materialize_output(
+                {"result_uri": worker_result.get("final_asset_uri")},
+                run_id,
+                source_uri,
+            )
+            generated_uri = final_uri
         asset_id = PORTRAIT_PREFIX + run_id
         asset = db.get(FishAsset, asset_id)
         if asset is None:
@@ -973,23 +1105,50 @@ def _execute_portrait_job(run_id: str) -> None:
         asset.source_image_id = (state.get("source") or {}).get("image_id")
         asset.species = request.get("species") or (state.get("source") or {}).get("species_id") or (state.get("source") or {}).get("species_name")
         asset.status = "ACTIVE"
-        asset.original_uri = source_uri
-        asset.mask_uri = request.get("completion_mask_uri") if mode == INPAINT_MODE else None
+        asset.original_uri = str(request.get("original_image_uri") or source_uri)
+        asset.mask_uri = (
+            request.get("completion_mask_uri")
+            if mode == INPAINT_MODE
+            else request.get("sam_visible_uri")
+            if mode == REFINE_MODE
+            else None
+        )
         asset.transparent_uri = generated_uri
-        asset.version = "fish-preserve-inpaint-v2" if mode == INPAINT_MODE else "portrait-poc-v1"
+        asset.version = (
+            "fish-preserve-inpaint-v2"
+            if mode == INPAINT_MODE
+            else "fish-preserve-refine-v2"
+            if mode == REFINE_MODE
+            else "portrait-poc-v1"
+        )
         state["result"] = {
             "asset_id": asset_id,
             "generated_uri": generated_uri,
             "mode": mode,
             "model": model_label,
-            "params": request.get("inpaint") if mode == INPAINT_MODE else request.get("params") or DEFAULT_PARAMS,
+            "params": (
+                request.get("inpaint")
+                if mode == INPAINT_MODE
+                else request.get("refine")
+                if mode == REFINE_MODE
+                else request.get("params") or DEFAULT_PARAMS
+            ),
             "metadata": state.get("experiment") or _experiment_metadata(
-                request.get("inpaint") if mode == INPAINT_MODE else request.get("params"),
+                request.get("inpaint")
+                if mode == INPAINT_MODE
+                else request.get("refine")
+                if mode == REFINE_MODE
+                else request.get("params"),
                 mode=mode,
+                species=str(request.get("species") or "").strip() or None,
             ),
             "reference_asset_id": request.get("reference_asset_id"),
             "fish_mask_uri": request.get("fish_mask_uri") if mode == INPAINT_MODE else None,
             "completion_mask_uri": request.get("completion_mask_uri") if mode == INPAINT_MODE else None,
+            "sam_visible_uri": request.get("sam_visible_uri") if mode == REFINE_MODE else None,
+            "refine_result_uri": refined_uri if mode == REFINE_MODE else None,
+            "final_asset_uri": final_uri if mode == REFINE_MODE else None,
+            "straighten_angle": worker_result.get("straighten_angle") if mode == REFINE_MODE else None,
         }
         _stage(state, active_stage, "DONE")
         run.status = "SUCCESS"
@@ -1220,7 +1379,7 @@ def create_portrait_job(
             }
         else:
             raise HTTPException(status_code=422, detail="source_item_id 不能为空")
-    elif mode == INPAINT_MODE and payload.original_image_uri:
+    elif mode in {INPAINT_MODE, REFINE_MODE} and (payload.original_image_uri or payload.sam_visible_uri):
         source = {
             "item_id": None,
             "image_id": None,
@@ -1243,13 +1402,16 @@ def create_portrait_job(
                 status_code=422,
                 detail={"error_code": "MODEL_NOT_SUPPORTED", "message": "当前仅支持 SDXL + IP-Adapter"},
             )
-    else:
+    elif mode == INPAINT_MODE:
         if not payload.original_image_uri and not source.get("uri"):
             raise HTTPException(status_code=422, detail="original_image_uri 不能为空")
         if not payload.fish_mask_uri:
             raise HTTPException(status_code=422, detail="fish_mask_uri 不能为空")
         if not payload.completion_mask_uri:
             raise HTTPException(status_code=422, detail="completion_mask_uri 不能为空")
+    else:
+        if not payload.sam_visible_uri:
+            raise HTTPException(status_code=422, detail="sam_visible_uri 不能为空")
 
     wanted_species = _species_context(
         payload.species or source.get("species_id") or source.get("species_name")
@@ -1297,6 +1459,17 @@ def create_portrait_job(
             "prompt": str(payload.prompt or INPAINT_DEFAULT_PROMPT).strip(),
             "negative_prompt": str(payload.negative_prompt or INPAINT_DEFAULT_NEGATIVE_PROMPT).strip(),
             "inpaint": params,
+        }
+    elif mode == REFINE_MODE:
+        params = _request_refine_params(payload)
+        input_state = {
+            "original_image_uri": str(payload.original_image_uri or source.get("uri") or "").strip(),
+            "sam_visible_uri": str(payload.sam_visible_uri or "").strip(),
+            "source_run_id": str(payload.source_run_id or "").strip() or None,
+            "species": str(payload.species or source.get("species_name") or "").strip() or None,
+            "prompt": str(payload.prompt or REFINE_DEFAULT_PROMPT).strip(),
+            "negative_prompt": str(payload.negative_prompt or REFINE_DEFAULT_NEGATIVE_PROMPT).strip(),
+            "refine": params,
         }
     else:
         params = _params_dict(payload.params)
@@ -1381,7 +1554,11 @@ def portrait_result(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any
     experiment = state.get("experiment")
     if not isinstance(experiment, dict):
         experiment = _experiment_metadata(
-            request.get("inpaint") if mode == INPAINT_MODE else request.get("params"),
+            request.get("inpaint")
+            if mode == INPAINT_MODE
+            else request.get("refine")
+            if mode == REFINE_MODE
+            else request.get("params"),
             mode=mode,
         )
     model_id, model_label = _model_for_mode(mode)
@@ -1390,15 +1567,26 @@ def portrait_result(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any
         "mode": mode,
         "model": model_label,
         "model_id": model_id,
-        "params": request.get("inpaint") if mode == INPAINT_MODE else request.get("params") or DEFAULT_PARAMS,
+        "params": (
+            request.get("inpaint")
+            if mode == INPAINT_MODE
+            else request.get("refine")
+            if mode == REFINE_MODE
+            else request.get("params") or DEFAULT_PARAMS
+        ),
         "adapter_config": experiment.get("adapter_config", {}),
         "generation": experiment.get("generation", {}),
         "strength": experiment.get("strength"),
+        "preserve_strength": experiment.get("preserve_strength"),
+        "refine_strength": experiment.get("refine_strength"),
+        "auto_straighten": experiment.get("auto_straighten"),
         "steps": experiment.get("steps"),
         "seed": experiment.get("seed"),
         "mask_type": experiment.get("mask_type"),
-        "prompt": request.get("prompt") if mode == INPAINT_MODE else None,
-        "negative_prompt": request.get("negative_prompt") if mode == INPAINT_MODE else None,
+        "input_source": experiment.get("input_source"),
+        "source_run_id": request.get("source_run_id") if mode == REFINE_MODE else None,
+        "prompt": request.get("prompt") if mode in {INPAINT_MODE, REFINE_MODE} else None,
+        "negative_prompt": request.get("negative_prompt") if mode in {INPAINT_MODE, REFINE_MODE} else None,
         "run_id": run.run_id,
         "species_id": source.get("species_id"),
         "species_name": result_species,
@@ -1408,13 +1596,12 @@ def portrait_result(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any
     return {
         "run_id": run.run_id,
         "status": _status(run.status),
-        "source_image": (
-            f"/api/platform/portrait/results/{run.run_id}/media/original"
-            if mode == INPAINT_MODE
-            else _public_source(source).get("image_url")
-        ),
+        "source_image": _public_source(source).get("image_url") if mode == DUAL_IP_MODE else f"/api/platform/portrait/results/{run.run_id}/media/original",
+        "sam_visible_image": f"/api/platform/portrait/results/{run.run_id}/media/sam-visible" if mode == REFINE_MODE else None,
         "reference_image": _public_reference(reference).get("url") if reference else None,
         "generated_image": _asset_media_url(str(result["asset_id"])) if result.get("asset_id") else None,
+        "refined_image": f"/api/platform/portrait/results/{run.run_id}/media/refined" if mode == REFINE_MODE else None,
+        "final_image": f"/api/platform/portrait/results/{run.run_id}/media/final" if mode == REFINE_MODE else None,
         "fish_mask_image": f"/api/platform/portrait/results/{run.run_id}/media/fish-mask" if mode == INPAINT_MODE else None,
         "completion_mask_image": f"/api/platform/portrait/results/{run.run_id}/media/completion-mask" if mode == INPAINT_MODE else None,
         "metadata": metadata,
@@ -1425,7 +1612,15 @@ def portrait_result(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any
 def portrait_result_media(run_id: str, kind: str, db: Session = Depends(get_db)) -> Response:
     """Serve the private V2 source/mask artifacts through the console API."""
 
-    if kind not in {"original", "fish-mask", "completion-mask", "generated"}:
+    if kind not in {
+        "original",
+        "sam-visible",
+        "fish-mask",
+        "completion-mask",
+        "refined",
+        "final",
+        "generated",
+    }:
         raise HTTPException(status_code=404, detail="资源不存在")
     run = db.get(PipelineRun, run_id)
     if run is None or run.pipeline_type != PIPELINE_TYPE:
@@ -1436,8 +1631,11 @@ def portrait_result_media(run_id: str, kind: str, db: Session = Depends(get_db))
     result = state.get("result") if isinstance(state.get("result"), dict) else {}
     uri = {
         "original": request.get("original_image_uri") or (state.get("source") or {}).get("uri"),
+        "sam-visible": request.get("sam_visible_uri"),
         "fish-mask": request.get("fish_mask_uri"),
         "completion-mask": request.get("completion_mask_uri"),
+        "refined": result.get("refine_result_uri"),
+        "final": result.get("final_asset_uri") or result.get("generated_uri"),
         "generated": result.get("generated_uri"),
     }.get(kind)
     if not uri:
@@ -1460,9 +1658,11 @@ __all__ = [
     "PortraitJobCreate",
     "PortraitParams",
     "PortraitInpaintParams",
+    "PortraitRefineParams",
     "INPAINT_MODE",
+    "REFINE_MODE",
+    "DUAL_IP_MODE",
     "PIPELINE_TYPE",
     "_execute_portrait_job",
     "router",
 ]
-
