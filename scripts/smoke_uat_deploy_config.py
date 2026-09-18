@@ -31,6 +31,8 @@ def main() -> None:
     assert payload["service"] == "yujian-model-factory-console", payload
     assert payload["feedback_ingest_path"] == "/api/feedback/ingest", payload
     assert payload["feedback_ingest_key_configured"] is False, payload
+    assert payload["qwen_refine_worker_configured"] is False, payload
+    assert payload["qwen_refine_worker_url"] is None, payload
     assert "/health/deploy" in PUBLIC_PATHS
     assert "/health/deploy" in app.openapi()["paths"]
     assert "/health/detector" in PUBLIC_PATHS
@@ -43,6 +45,8 @@ def main() -> None:
             "workflow_run:",
             "branches:\n      - main",
             "YUJIAN_UAT_DEPLOY_ENABLED",
+            "FISH_QWEN_REFINE_WORKER_URL: http://136.111.134.128:8002",
+            "FISH_QWEN_REFINE_WORKER_PATH: /refine",
             "id-token: write",
             "google-github-actions/auth@v3.0.0",
             "google-github-actions/setup-gcloud@v3.0.1",

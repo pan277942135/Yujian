@@ -44,6 +44,9 @@ FISH_WORKER_TOKEN=""
 FISH_PORTRAIT_URL=""
 FISH_PORTRAIT_TOKEN=""
 FISH_PORTRAIT_PATH="/portrait"
+FISH_QWEN_URL=""
+FISH_QWEN_TOKEN=""
+FISH_QWEN_PATH="/refine"
 if [[ -n "$PREVIOUS_SERVICE_JSON" ]]; then
   FEEDBACK_ENV_PRESENT="$(printf '%s' "$PREVIOUS_SERVICE_JSON" | python -c '
 import json,sys
@@ -108,6 +111,27 @@ containers=((d.get("spec") or {}).get("template") or {}).get("spec",{}).get("con
 env=(containers[0].get("env") if containers else []) or []
 print(next((x.get("value","") for x in env if x.get("name")=="FISH_PORTRAIT_WORKER_PATH"), "/portrait"))
 ')"
+  FISH_QWEN_URL="$(printf '%s' "$PREVIOUS_SERVICE_JSON" | python -c '
+import json,sys
+d=json.load(sys.stdin)
+containers=((d.get("spec") or {}).get("template") or {}).get("spec",{}).get("containers") or []
+env=(containers[0].get("env") if containers else []) or []
+print(next((x.get("value","") for x in env if x.get("name")=="FISH_QWEN_REFINE_WORKER_URL"), ""))
+')"
+  FISH_QWEN_TOKEN="$(printf '%s' "$PREVIOUS_SERVICE_JSON" | python -c '
+import json,sys
+d=json.load(sys.stdin)
+containers=((d.get("spec") or {}).get("template") or {}).get("spec",{}).get("containers") or []
+env=(containers[0].get("env") if containers else []) or []
+print(next((x.get("value","") for x in env if x.get("name")=="FISH_QWEN_REFINE_WORKER_TOKEN"), ""))
+')"
+  FISH_QWEN_PATH="$(printf '%s' "$PREVIOUS_SERVICE_JSON" | python -c '
+import json,sys
+d=json.load(sys.stdin)
+containers=((d.get("spec") or {}).get("template") or {}).get("spec",{}).get("containers") or []
+env=(containers[0].get("env") if containers else []) or []
+print(next((x.get("value","") for x in env if x.get("name")=="FISH_QWEN_REFINE_WORKER_PATH"), "/refine"))
+')"
 fi
 
 DEPLOY_ENV_VARS="APP_GIT_COMMIT=${GIT_SHA}"
@@ -125,6 +149,9 @@ fi
 if [[ -n "${FISH_PORTRAIT_WORKER_URL:-}" ]]; then FISH_PORTRAIT_URL="${FISH_PORTRAIT_WORKER_URL}"; fi
 if [[ -n "${FISH_PORTRAIT_WORKER_TOKEN:-}" ]]; then FISH_PORTRAIT_TOKEN="${FISH_PORTRAIT_WORKER_TOKEN}"; fi
 if [[ -n "${FISH_PORTRAIT_WORKER_PATH:-}" ]]; then FISH_PORTRAIT_PATH="${FISH_PORTRAIT_WORKER_PATH}"; fi
+if [[ -n "$FISH_QWEN_REFINE_WORKER_URL" ]]; then FISH_QWEN_URL="$FISH_QWEN_REFINE_WORKER_URL"; fi
+if [[ -n "$FISH_QWEN_REFINE_WORKER_TOKEN" ]]; then FISH_QWEN_TOKEN="$FISH_QWEN_REFINE_WORKER_TOKEN"; fi
+if [[ -n "$FISH_QWEN_REFINE_WORKER_PATH" ]]; then FISH_QWEN_PATH="$FISH_QWEN_REFINE_WORKER_PATH"; fi
 if [[ -n "$FISH_PORTRAIT_URL" ]]; then
   DEPLOY_ENV_VARS="${DEPLOY_ENV_VARS},FISH_PORTRAIT_WORKER_URL=${FISH_PORTRAIT_URL},FISH_PORTRAIT_WORKER_PATH=${FISH_PORTRAIT_PATH:-/portrait}"
 fi
@@ -133,6 +160,15 @@ if [[ -n "$FISH_PORTRAIT_TOKEN" ]]; then
   if [[ -n "${GITHUB_ACTIONS:-}" ]]; then printf '::add-mask::%s
 ' "$FISH_PORTRAIT_TOKEN"; fi
 fi
+if [[ -n "$FISH_QWEN_URL" ]]; then
+  DEPLOY_ENV_VARS="$DEPLOY_ENV_VARS,FISH_QWEN_REFINE_WORKER_URL=$FISH_QWEN_URL,FISH_QWEN_REFINE_WORKER_PATH=${FISH_QWEN_PATH:-/refine}"
+fi
+if [[ -n "$FISH_QWEN_TOKEN" ]]; then
+  DEPLOY_ENV_VARS="$DEPLOY_ENV_VARS,FISH_QWEN_REFINE_WORKER_TOKEN=$FISH_QWEN_TOKEN"
+  if [[ -n "$GITHUB_ACTIONS" ]]; then printf '::add-mask::%s
+' "$FISH_QWEN_TOKEN"; fi
+fi
+
 if [[ "$FEEDBACK_ENV_PRESENT" == "0" ]]; then
   FEEDBACK_INGEST_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
   DEPLOY_ENV_VARS="${DEPLOY_ENV_VARS},FEEDBACK_INGEST_KEY=${FEEDBACK_INGEST_KEY}"

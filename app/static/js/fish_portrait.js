@@ -1,9 +1,10 @@
 (() => {
   const REFINE_MODE = 'fish_preserve_refine_v2';
+  const QWEN_MODE = 'fish_preserve_refine_qwen_v1';
   const INPAINT_MODE = 'fish_preserve_inpaint_v2';
   const V1_MODE = 'dual_ip_adapter_v1';
   const state = {
-    mode: REFINE_MODE,
+    mode: QWEN_MODE,
     datasetId: '',
     sourceItems: [],
     source: null,
@@ -11,6 +12,7 @@
     referenceIndex: 0,
     inpaint: null,
     refine: null,
+    qwen: null,
     runId: null,
     busy: false,
   };
@@ -20,22 +22,25 @@
   const COMPLETION_LAB_PREPARE_ENDPOINT = '/api/debug/fish-completion-lab/prepare';
   const REFINE_PROMPT = 'professional wildlife fish portrait, realistic photography, preserve original fish identity, preserve original fish species characteristics, preserve original body proportions, preserve original head shape, preserve original fin structure, preserve original color and texture, complete fish body, natural fish anatomy, clean natural background, soft lighting, premium realistic fishing asset';
   const REFINE_NEGATIVE = 'different fish species, different fish identity, changed body shape, changed head shape, changed body proportions, wrong fish anatomy, extra fins, missing fins, deformed fins, mutated fish, duplicate fish, cartoon, illustration, fake texture, obvious AI artifacts';
+  const QWEN_PROMPT = 'Restore and refine this fish into a clean, complete, realistic fish portrait. Keep the exact same fish identity, species traits, body proportions, head shape, fin structure, scale texture, and natural color pattern. Use the visible fish as the only identity reference. Complete the missing or occluded fish body parts naturally. Remove all non-fish objects and do not keep any human hand, fingers, tools, nets, hooks, ropes, buckets, or other foreign objects. The result should be a single complete fish, realistic, clean, natural, and high-detail.';
+  const QWEN_NEGATIVE = 'human hand, fingers, arm, person, tool, fishing net, hook, rope, bucket, extra fish, duplicated fish, changed species, wrong anatomy, deformed body, cartoon, painting, fake texture, unrealistic fins, broken tail';
   const INPAINT_PROMPT = 'professional wildlife fish portrait, realistic photography, natural fish texture, detailed scales, clean natural background, soft lighting, high resolution';
   const INPAINT_NEGATIVE = 'different fish species, changed body shape, wrong fish anatomy, extra fins, missing fins, deformed fish, cartoon, illustration, fake texture, duplicate fish';
   const ids = [
     'portraitMode', 'portraitModeNote', 'portraitDataset', 'portraitDatasetHint', 'portraitSpecies',
     'portraitSourceState', 'portraitSourceGrid', 'portraitOriginalUpload', 'portraitPrepare',
-    'portraitPrepareHint', 'portraitDirectLabLink', 'portraitCompletionLabLink', 'portraitRefineField',
+    'portraitPrepareHint', 'portraitDirectLabLink', 'portraitCompletionLabLink', 'portraitRefineField', 'portraitQwenField',
     'portraitPreserveStrength', 'portraitRefineStrength', 'portraitAutoStraighten', 'portraitInpaintMasks',
     'portraitFishMaskPreview', 'portraitCompletionMaskPreview', 'portraitReferenceField',
     'portraitReferenceState', 'portraitReference', 'portraitReferenceImage', 'portraitReferenceTitle',
     'portraitReferenceMeta', 'portraitReferenceSwitch', 'portraitV1Params', 'portraitSourceScale',
-    'portraitReferenceScale', 'portraitInpaintStrengthField', 'portraitStrength', 'portraitSteps',
-    'portraitSeed', 'portraitWidthField', 'portraitWidth', 'portraitHeightField', 'portraitHeight',
+    'portraitReferenceScale', 'portraitInpaintStrengthField', 'portraitStrength', 'portraitSteps', 'portraitQwenSteps',
+    'portraitSeed', 'portraitQwenSeed', 'portraitQwenAutoStraighten', 'portraitGeneralStepsField', 'portraitGeneralSeedField', 'portraitWidthField', 'portraitWidth', 'portraitHeightField', 'portraitHeight',
     'portraitParamHint', 'portraitPrompt', 'portraitNegativePrompt', 'portraitSubmit', 'portraitSubmitHint',
     'portraitABTest', 'portraitABTestHint', 'portraitRefresh', 'portraitProgress', 'portraitRunTitle',
     'portraitRunStatus', 'portraitSourceImage', 'portraitSamVisibleCard', 'portraitSamVisibleResultImage',
     'portraitRefinedCard', 'portraitRefinedResultImage', 'portraitFinalCard', 'portraitFinalResultImage',
+    'portraitRefinedLabel', 'portraitFinalLabel',
     'portraitFishMaskCard', 'portraitFishMaskResultImage', 'portraitCompletionMaskCard',
     'portraitCompletionMaskResultImage', 'portraitGeneratedCard', 'portraitGeneratedImage',
     'portraitOutputEmpty', 'portraitMeta', 'portraitSweepResults', 'portraitV1ReferenceCard',
@@ -51,6 +56,7 @@
     sdxl_generate: 'SDXL + Dual IP-Adapter',
     sdxl_inpaint: 'SDXL Inpaint V2',
     refine_generate: 'Fish Preserve Refine',
+    qwen_refine: 'Qwen-Image-Edit-2511 补全',
     straighten: '确定性水平归一化',
     persist_result: '保存实验结果',
     complete: '完成',
@@ -59,6 +65,7 @@
   const referenceTypeLabels = { transparent_main: 'transparent 主图', transparent_alt: 'transparent 备选', COVER_CARD: 'Cover 列表图', COVER_CARD_TRANSPARENT_LEFT: 'Cover 透明左图', COVER_CARD_TRANSPARENT_RIGHT: 'Cover 透明右图' };
 
   const modeIsRefine = () => state.mode === REFINE_MODE;
+  const modeIsQwen = () => state.mode === QWEN_MODE;
   const modeIsInpaint = () => state.mode === INPAINT_MODE;
   const modeIsV1 = () => state.mode === V1_MODE;
   const numberValue = (id, fallback) => {
@@ -104,11 +111,14 @@
   function clearPrepared() {
     state.inpaint = null;
     state.refine = null;
+    state.qwen = null;
     el.portraitPrepareHint.className = 'portrait-hint';
     [el.portraitFishMaskPreview, el.portraitCompletionMaskPreview].forEach((node) => { if (node) node.hidden = true; });
-    el.portraitPrepareHint.textContent = modeIsRefine()
-      ? 'Detector、SAM 和 Visible 提取沿用现有 Direct Lab，本页不重写。'
-      : '这里复用现有 Fish Completion Lab 的 Detector + SAM，不在本页重写。';
+    el.portraitPrepareHint.textContent = modeIsQwen()
+      ? '复用 Fish Completion Lab 生成 SAM Visible，作为 Qwen 的唯一身份输入。'
+      : modeIsRefine()
+        ? 'Detector、SAM 和 Visible 提取沿用现有 Direct Lab，本页不重写。'
+        : '这里复用现有 Fish Completion Lab 的 Detector + SAM，不在本页重写。';
     updateSubmit();
   }
 
@@ -193,45 +203,66 @@
   function updateModeUI() {
     state.mode = el.portraitMode.value;
     const refine = modeIsRefine();
+    const qwen = modeIsQwen();
     const inpaint = modeIsInpaint();
     const v1 = modeIsV1();
+    el.portraitRefinedLabel.textContent = qwen ? 'Qwen Refined Result' : 'Refined Fish';
+    el.portraitFinalLabel.textContent = qwen ? 'Final Asset' : 'Final Fish Asset';
     if (refine && state.source && !state.source.item_id) {
       state.source = null;
       el.portraitOriginalUpload.value = '';
     }
-    el.portraitModeNote.textContent = refine
-      ? '复用 PowerPaint Direct Lab 的 SAM Visible；只修复鱼体并做确定性水平归一化，不引入标准鱼模板。'
-      : inpaint
-        ? '真实鱼照片是主体来源；AI 只处理 Completion Mask 区域。'
-        : '历史对照模式：A/B 两张图共同进入 Dual IP-Adapter，不用于替代真实鱼体。';
+    el.portraitModeNote.textContent = qwen
+      ? '先复用 Fish Completion Lab 的 Detector + SAM + SAM Visible，再把 SAM Visible 交给独立 Qwen Worker；不直接操作 ComfyUI。'
+      : refine
+        ? '复用 PowerPaint Direct Lab 的 SAM Visible；只修复鱼体并做确定性水平归一化，不引入标准鱼模板。'
+        : inpaint
+          ? '真实鱼照片是主体来源；AI 只处理 Completion Mask 区域。'
+          : '历史对照模式：A/B 两张图共同进入 Dual IP-Adapter，不用于替代真实鱼体。';
     el.portraitReferenceField.hidden = !v1;
     el.portraitV1Params.hidden = !v1;
     el.portraitRefineField.hidden = !refine;
+    el.portraitQwenField.hidden = !qwen;
     el.portraitInpaintMasks.hidden = !inpaint;
-    el.portraitOriginalUpload.hidden = !inpaint;
-    el.portraitPrepare.hidden = !(refine || inpaint);
+    el.portraitOriginalUpload.hidden = !(inpaint || qwen);
+    el.portraitPrepare.hidden = !(refine || inpaint || qwen);
     el.portraitDirectLabLink.hidden = !refine;
-    el.portraitCompletionLabLink.hidden = !inpaint;
+    el.portraitCompletionLabLink.hidden = !(inpaint || qwen);
     el.portraitInpaintStrengthField.hidden = !inpaint;
-    el.portraitWidthField.hidden = refine;
-    el.portraitHeightField.hidden = refine;
-    el.portraitParamHint.textContent = refine
-      ? 'Refine V2 固定同一张 SAM Visible、Prompt、Seed、Steps，优先比较保真/修复强度。'
-      : inpaint
-        ? 'Inpaint V2 第一轮建议比较 Strength：0.15、0.25、0.35。'
-        : 'V1 使用 A/B 两个 IP-Adapter conditioning scale。';
-    if (refine) {
+    el.portraitWidthField.hidden = refine || qwen;
+    el.portraitHeightField.hidden = refine || qwen;
+    el.portraitGeneralStepsField.hidden = qwen;
+    el.portraitGeneralSeedField.hidden = qwen;
+    el.portraitABTest.hidden = qwen;
+    el.portraitParamHint.textContent = qwen
+      ? 'Qwen V1 默认 20 steps；Seed 留空时随机。Auto Straighten 当前只透传参数，后续可接确定性后处理。'
+      : refine
+        ? 'Refine V2 固定同一张 SAM Visible、Prompt、Seed、Steps，优先比较保真/修复强度。'
+        : inpaint
+          ? 'Inpaint V2 第一轮建议比较 Strength：0.15、0.25、0.35。'
+          : 'V1 使用 A/B 两个 IP-Adapter conditioning scale。';
+    if (qwen) {
+      el.portraitPrompt.value = QWEN_PROMPT;
+      el.portraitNegativePrompt.value = QWEN_NEGATIVE;
+      el.portraitSourceState.textContent = state.source
+        ? '已选择真实照片，请点击 Prepare 生成 Original / SAM Visible。'
+        : '请上传真实鱼照片，或选择 Dataset 图片后点击 Prepare。';
+      el.portraitABTestHint.textContent = 'Qwen V1 当前只执行单次生成，保留实验记录。';
+    } else if (refine) {
       el.portraitPrompt.value = REFINE_PROMPT;
       el.portraitNegativePrompt.value = REFINE_NEGATIVE;
       el.portraitSourceState.textContent = state.source ? '已选择真实照片，请复用 Direct Lab 生成 SAM Visible。' : '请先选择已冻结 Dataset 图片。';
+      el.portraitABTestHint.textContent = 'Refine V2：A .80/.20 · B .75/.28 · C .70/.35。';
     } else if (inpaint) {
       el.portraitPrompt.value = INPAINT_PROMPT;
       el.portraitNegativePrompt.value = INPAINT_NEGATIVE;
       el.portraitSourceState.textContent = state.source ? '已选择真实照片，请生成 Fish Mask + Completion Mask。' : '请先选择 Dataset 或上传图片。';
+      el.portraitABTestHint.textContent = 'Inpaint V2：Strength 0.15 / 0.25 / 0.35。';
     } else {
       el.portraitPrompt.value = '';
       el.portraitNegativePrompt.value = '';
       el.portraitSourceState.textContent = '请选择一张真实照片 A。';
+      el.portraitABTestHint.textContent = 'V1 先运行单次历史对照。';
       if (state.source) loadReferences(state.source.species_id || state.source.species_name);
     }
     clearPrepared();
@@ -240,15 +271,27 @@
 
   function updateSubmit() {
     const fileSelected = Boolean(el.portraitOriginalUpload?.files?.[0]);
-    const sourceReady = Boolean(state.source) || (modeIsInpaint() && fileSelected);
+    const sourceReady = Boolean(state.source) || ((modeIsInpaint() || modeIsQwen()) && fileSelected);
     const ready = modeIsRefine()
       ? Boolean(state.refine?.original_image_uri && state.refine?.sam_visible_uri)
-      : modeIsInpaint()
-        ? Boolean(state.inpaint?.original_image_uri && state.inpaint?.fish_mask_uri && state.inpaint?.completion_mask_uri)
-        : Boolean(state.source && state.references[state.referenceIndex]);
-    el.portraitPrepare.disabled = !(modeIsRefine() || modeIsInpaint()) || !sourceReady || state.busy;
+      : modeIsQwen()
+        ? Boolean(state.qwen?.original_image_uri && state.qwen?.sam_visible_uri)
+        : modeIsInpaint()
+          ? Boolean(state.inpaint?.original_image_uri && state.inpaint?.fish_mask_uri && state.inpaint?.completion_mask_uri)
+          : Boolean(state.source && state.references[state.referenceIndex]);
+    el.portraitPrepare.disabled = !(modeIsRefine() || modeIsInpaint() || modeIsQwen()) || !sourceReady || state.busy;
     el.portraitSubmit.disabled = !ready || state.busy;
-    el.portraitSubmitHint.textContent = state.busy ? '任务运行中，请等待结果。' : ready ? '输入已就绪，可以创建 PipelineRun。' : modeIsRefine() ? '请选择 Dataset 图片并先生成 SAM Visible。' : modeIsInpaint() ? '请选择图片并先生成遮罩。' : '请选择 A 图和标准参考图。';
+    el.portraitSubmitHint.textContent = state.busy
+      ? '任务运行中，请等待结果。'
+      : ready
+        ? '输入已就绪，可以创建 PipelineRun。'
+        : modeIsQwen()
+          ? '请上传或选择原图后先点击 Prepare，生成 SAM Visible。'
+          : modeIsRefine()
+            ? '请选择 Dataset 图片并先生成 SAM Visible。'
+            : modeIsInpaint()
+              ? '请选择图片并先生成遮罩。'
+              : '请选择 A 图和标准参考图。';
   }
 
   async function parsePrepareResponse(response) {
@@ -335,10 +378,56 @@
     } finally { updateSubmit(); }
   }
 
-  async function prepareInput() { return modeIsRefine() ? prepareRefine() : modeIsInpaint() ? prepareInpaint() : null; }
+  async function prepareQwen() {
+    if (!modeIsQwen() || state.busy) return;
+    const file = el.portraitOriginalUpload.files?.[0];
+    if (!file && (!state.source || !state.datasetId)) {
+      el.portraitPrepareHint.textContent = '请先上传原图，或选择已冻结 Dataset 图片。';
+      updateSubmit();
+      return;
+    }
+    el.portraitPrepare.disabled = true;
+    el.portraitPrepareHint.textContent = '正在复用 Fish Completion Lab：Detector + SAM + SAM Visible…';
+    try {
+      let response;
+      if (file) {
+        const form = new FormData();
+        form.append('file', file, file.name);
+        form.append('source_type', 'local_upload');
+        response = await fetch(COMPLETION_LAB_PREPARE_ENDPOINT, { method: 'POST', credentials: 'include', body: form });
+      } else {
+        const form = new URLSearchParams({ source_type: 'dataset_freeze', dataset_version: state.datasetId, dataset_item_id: String(state.source.item_id || '') });
+        response = await fetch(COMPLETION_LAB_PREPARE_ENDPOINT, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: form });
+      }
+      const data = await parsePrepareResponse(response);
+      const assets = data.assets || {};
+      const previewUrls = data.preview_urls || {};
+      const originalUri = assets.original;
+      const samVisibleUri = assets.refined_visible || assets.sam_visible || assets.sam_transparent;
+      if (!originalUri || !samVisibleUri) throw new Error('Fish Completion Lab 未返回 original / SAM Visible 资源');
+      const originalPreview = previewUrls.original || state.source?.image_url || state.source?.preview_url || null;
+      const samPreview = previewUrls.sam_visible || previewUrls.refined_visible || data.refined_visible || data.sam_transparent || null;
+      const species = el.portraitSpecies.value.trim() || state.source?.species_name || state.source?.species_id || '';
+      state.qwen = { source_run_id: data.test_id || null, original_image_uri: originalUri, sam_visible_uri: samVisibleUri, originalPreview, samPreview, species };
+      if (originalPreview) { el.portraitSourceImage.src = originalPreview; el.portraitSourceImage.hidden = false; }
+      if (samPreview) {
+        el.portraitSamVisibleResultImage.src = samPreview;
+        el.portraitSamVisibleResultImage.hidden = false;
+        setCardVisible(el.portraitSamVisibleCard, true);
+      }
+      el.portraitPrepareHint.textContent = '已复用 Fish Completion Lab，Original / SAM Visible 准备完成，可以开始 Qwen 补全。';
+      updateSubmit();
+    } catch (error) {
+      state.qwen = null;
+      el.portraitPrepareHint.textContent = platformError(error);
+      updateSubmit();
+    } finally { updateSubmit(); }
+  }
+
+  async function prepareInput() { return modeIsRefine() ? prepareRefine() : modeIsQwen() ? prepareQwen() : modeIsInpaint() ? prepareInpaint() : null; }
 
   function renderSteps(data) {
-    const fallback = modeIsRefine() ? ['load_source', 'load_sam_visible', 'refine_generate', 'straighten', 'persist_result'] : modeIsInpaint() ? ['load_source', 'load_masks', 'sdxl_inpaint', 'persist_result'] : ['load_source', 'load_reference', 'sdxl_generate', 'persist_result'];
+    const fallback = modeIsQwen() ? ['load_source', 'load_sam_visible', 'qwen_refine', 'persist_result'] : modeIsRefine() ? ['load_source', 'load_sam_visible', 'refine_generate', 'straighten', 'persist_result'] : modeIsInpaint() ? ['load_source', 'load_masks', 'sdxl_inpaint', 'persist_result'] : ['load_source', 'load_reference', 'sdxl_generate', 'persist_result'];
     const steps = Array.isArray(data.steps) && data.steps.length ? data.steps : fallback.map((name) => ({ name, status: 'PENDING' }));
     el.portraitProgress.innerHTML = steps.map((step) => {
       const status = String(step.status || 'PENDING').toUpperCase();
@@ -359,7 +448,7 @@
     el.portraitWorkerDetail.className = `portrait-hint ${status === 'CONNECTED' || status === 'READY' ? '' : 'error-state'}`;
   }
 
-  async function loadWorkerHealth() { try { renderWorkerHealth(await platformFetch('/api/platform/portrait/worker-health')); } catch (error) { renderWorkerHealth({ status: 'UNAVAILABLE', message: platformError(error) }); } }
+  async function loadWorkerHealth() { try { renderWorkerHealth(await platformFetch('/api/platform/portrait/worker-health?mode=' + encodeURIComponent(state.mode))); } catch (error) { renderWorkerHealth({ status: 'UNAVAILABLE', message: platformError(error) }); } }
 
   function renderMeta(metadata) {
     const mode = metadata?.mode || state.mode;
@@ -368,10 +457,25 @@
     const generation = metadata?.generation || {};
     const stat = (value, dash = '—') => value === null || value === undefined || value === '' ? dash : value;
     let items;
-    if (mode === REFINE_MODE) items = [['Run ID', metadata.run_id || state.runId], ['模式', 'Fish Preserve Refine V2'], ['保真强度', Number(metadata.preserve_strength ?? params.preserve_strength ?? 0.75).toFixed(2)], ['修复强度', Number(metadata.refine_strength ?? params.refine_strength ?? 0.28).toFixed(2)], ['水平归一化', metadata.auto_straighten === false ? '关闭' : '开启'], ['Steps', stat(metadata.steps ?? params.steps)], ['Seed', stat(metadata.seed ?? params.seed, '随机')]];
-    else if (mode === INPAINT_MODE) items = [['Run ID', metadata.run_id || state.runId], ['模式', 'Fish Preserve Inpaint V2'], ['Strength', Number(metadata.strength ?? params.strength ?? 0.25).toFixed(2)], ['Steps', stat(metadata.steps ?? params.steps)], ['Seed', stat(metadata.seed ?? params.seed, '随机')], ['Mask', metadata.mask_type || 'completion_mask']];
-    else items = [['Run ID', metadata.run_id || state.runId], ['模式', 'Dual IP-Adapter V1'], ['A 权重', Number(adapter.source_scale ?? params.source_scale ?? 0.8).toFixed(2)], ['B 权重', Number(adapter.reference_scale ?? params.reference_scale ?? 0.35).toFixed(2)], ['Steps', stat(generation.steps ?? params.steps)], ['尺寸', `${generation.width ?? params.width ?? 768} × ${generation.height ?? params.height ?? 768}`]];
-    el.portraitMeta.innerHTML = items.map((item) => `<div class="stat"><strong>${esc(item[1])}</strong><span>${esc(item[0])}</span></div>`).join('');
+    if (mode === QWEN_MODE) {
+      items = [
+        ['Run ID', metadata.run_id || state.runId],
+        ['模式', '鱼体保真补全（Qwen V1）'],
+        ['Steps', stat(metadata.steps ?? params.steps, '20')],
+        ['Seed', stat(metadata.seed ?? params.seed, '随机')],
+        ['Auto Straighten', metadata.auto_straighten === true ? '开启' : '关闭'],
+        ['Source Run ID', stat(metadata.source_run_id || metadata.input_source_run_id)],
+        ['Worker Model', stat(metadata.worker_model || metadata.model, 'Qwen-Image-Edit-2511')],
+        ['Worker Result URI', stat(metadata.worker_result_uri || metadata.refine_result_uri || metadata.final_asset_uri)],
+      ];
+    } else if (mode === REFINE_MODE) {
+      items = [['Run ID', metadata.run_id || state.runId], ['模式', 'Fish Preserve Refine V2'], ['保真强度', Number(metadata.preserve_strength ?? params.preserve_strength ?? 0.75).toFixed(2)], ['修复强度', Number(metadata.refine_strength ?? params.refine_strength ?? 0.28).toFixed(2)], ['水平归一化', metadata.auto_straighten === false ? '关闭' : '开启'], ['Steps', stat(metadata.steps ?? params.steps)], ['Seed', stat(metadata.seed ?? params.seed, '随机')]];
+    } else if (mode === INPAINT_MODE) {
+      items = [['Run ID', metadata.run_id || state.runId], ['模式', 'Fish Preserve Inpaint V2'], ['Strength', Number(metadata.strength ?? params.strength ?? 0.25).toFixed(2)], ['Steps', stat(metadata.steps ?? params.steps)], ['Seed', stat(metadata.seed ?? params.seed, '随机')], ['Mask', metadata.mask_type || 'completion_mask']];
+    } else {
+      items = [['Run ID', metadata.run_id || state.runId], ['模式', 'Dual IP-Adapter V1'], ['A 权重', Number(adapter.source_scale ?? params.source_scale ?? 0.8).toFixed(2)], ['B 权重', Number(adapter.reference_scale ?? params.reference_scale ?? 0.35).toFixed(2)], ['Steps', stat(generation.steps ?? params.steps)], ['尺寸', (generation.width ?? params.width ?? 768) + ' × ' + (generation.height ?? params.height ?? 768)]];
+    }
+    el.portraitMeta.innerHTML = items.map((item) => '<div class="stat"><strong>' + esc(item[1]) + '</strong><span>' + esc(item[0]) + '</span></div>').join('');
     el.portraitMeta.hidden = false;
   }
 
@@ -389,24 +493,33 @@
   }
 
   async function loadResult(runId) {
-    const result = await platformFetch(`/api/platform/portrait/results/${encodeURIComponent(runId)}`);
-    const refine = result.metadata?.mode === REFINE_MODE;
-    const inpaint = result.metadata?.mode === INPAINT_MODE;
-    setCardVisible(el.portraitSamVisibleCard, refine);
-    setCardVisible(el.portraitRefinedCard, refine);
-    setCardVisible(el.portraitFinalCard, refine);
+    const result = await platformFetch('/api/platform/portrait/results/' + encodeURIComponent(runId));
+    const resultMode = result.metadata?.mode;
+    const qwen = resultMode === QWEN_MODE;
+    const refine = resultMode === REFINE_MODE;
+    const inpaint = resultMode === INPAINT_MODE;
+    setCardVisible(el.portraitSamVisibleCard, refine || qwen);
+    setCardVisible(el.portraitRefinedCard, refine || qwen);
+    setCardVisible(el.portraitFinalCard, refine || qwen);
+    if (qwen) {
+      el.portraitRefinedLabel.textContent = 'Qwen Refined Result';
+      el.portraitFinalLabel.textContent = 'Final Asset';
+    } else {
+      el.portraitRefinedLabel.textContent = 'Refined Fish';
+      el.portraitFinalLabel.textContent = 'Final Fish Asset';
+    }
     setCardVisible(el.portraitFishMaskCard, inpaint);
     setCardVisible(el.portraitCompletionMaskCard, inpaint);
-    setCardVisible(el.portraitGeneratedCard, !refine);
-    setCardVisible(el.portraitV1ReferenceCard, result.metadata?.mode === V1_MODE);
+    setCardVisible(el.portraitGeneratedCard, !refine && !qwen);
+    setCardVisible(el.portraitV1ReferenceCard, resultMode === V1_MODE);
     if (result.source_image) { el.portraitSourceImage.src = result.source_image; el.portraitSourceImage.hidden = false; }
     if (result.sam_visible_image) { el.portraitSamVisibleResultImage.src = result.sam_visible_image; el.portraitSamVisibleResultImage.hidden = false; }
     if (result.refined_image) { el.portraitRefinedResultImage.src = result.refined_image; el.portraitRefinedResultImage.hidden = false; }
     if (result.final_image) { el.portraitFinalResultImage.src = result.final_image; el.portraitFinalResultImage.hidden = false; }
-    if (result.reference_image && result.metadata?.mode === V1_MODE) { el.portraitReferenceResultImage.src = result.reference_image; el.portraitReferenceResultImage.hidden = false; }
+    if (result.reference_image && resultMode === V1_MODE) { el.portraitReferenceResultImage.src = result.reference_image; el.portraitReferenceResultImage.hidden = false; }
     if (result.fish_mask_image) { el.portraitFishMaskResultImage.src = result.fish_mask_image; el.portraitFishMaskResultImage.hidden = false; }
     if (result.completion_mask_image) { el.portraitCompletionMaskResultImage.src = result.completion_mask_image; el.portraitCompletionMaskResultImage.hidden = false; }
-    if (result.generated_image && !refine) { el.portraitGeneratedImage.src = result.generated_image; el.portraitGeneratedImage.hidden = false; }
+    if (result.generated_image && !refine && !qwen) { el.portraitGeneratedImage.src = result.generated_image; el.portraitGeneratedImage.hidden = false; }
     el.portraitOutputEmpty.hidden = true;
     renderMeta(result.metadata || {});
     return result;
@@ -424,8 +537,12 @@
   }
 
   function jobPayload(overrides = {}) {
-    const steps = Math.round(numberValue('portraitSteps', 25));
-    const seed = optionalInt('portraitSeed');
+    const steps = Math.round(numberValue(modeIsQwen() ? 'portraitQwenSteps' : 'portraitSteps', 20));
+    const seed = optionalInt(modeIsQwen() ? 'portraitQwenSeed' : 'portraitSeed');
+    if (modeIsQwen()) {
+      const qwen = { steps, seed, auto_straighten: Boolean(el.portraitQwenAutoStraighten?.checked), prompt: el.portraitPrompt.value.trim() || QWEN_PROMPT, negative_prompt: el.portraitNegativePrompt.value.trim() || QWEN_NEGATIVE };
+      return { mode: QWEN_MODE, dataset_id: state.datasetId || null, source_item_id: state.source?.item_id || null, source_run_id: state.qwen.source_run_id, original_image_uri: state.qwen.original_image_uri, sam_visible_uri: state.qwen.sam_visible_uri, species: el.portraitSpecies.value.trim() || state.qwen.species || null, prompt: qwen.prompt, negative_prompt: qwen.negative_prompt, steps: qwen.steps, seed: qwen.seed, auto_straighten: qwen.auto_straighten, qwen };
+    }
     if (modeIsRefine()) {
       const refine = { preserve_strength: overrides.preserve_strength ?? numberValue('portraitPreserveStrength', 0.75), refine_strength: overrides.refine_strength ?? numberValue('portraitRefineStrength', 0.28), auto_straighten: el.portraitAutoStraighten.checked, steps, seed };
       return { mode: REFINE_MODE, dataset_id: state.datasetId || null, source_item_id: state.source?.item_id || null, source_run_id: state.refine.source_run_id, original_image_uri: state.refine.original_image_uri, sam_visible_uri: state.refine.sam_visible_uri, species: el.portraitSpecies.value.trim() || state.refine.species || null, prompt: el.portraitPrompt.value.trim() || REFINE_PROMPT, negative_prompt: el.portraitNegativePrompt.value.trim() || REFINE_NEGATIVE, preserve_strength: refine.preserve_strength, refine_strength: refine.refine_strength, auto_straighten: refine.auto_straighten, steps, seed, refine };
@@ -443,6 +560,7 @@
   async function submit() {
     if (state.busy) return;
     if (modeIsRefine() && !state.refine) return;
+    if (modeIsQwen() && !state.qwen) return;
     if (modeIsInpaint() && !state.inpaint) return;
     if (modeIsV1() && (!state.source || !state.references[state.referenceIndex])) return;
     state.busy = true;
@@ -461,14 +579,14 @@
       state.busy = false;
       setStatus('FAILED', '创建失败');
       el.portraitRunTitle.textContent = '任务创建失败';
-      el.portraitProgress.innerHTML = `<div class="error-state">${esc(platformError(error))}</div>`;
+      el.portraitProgress.innerHTML = '<div class="error-state">' + esc(platformError(error)) + '</div>';
       updateSubmit();
     } finally { if (!state.busy) updateSubmit(); }
   }
 
   async function runSweep() {
-    if (state.busy || (modeIsRefine() && !state.refine) || (modeIsInpaint() && !state.inpaint) || modeIsV1()) {
-      el.portraitABTestHint.textContent = modeIsV1() ? 'V1 先运行单次历史对照。' : '请先准备输入。';
+    if (state.busy || modeIsQwen() || (modeIsRefine() && !state.refine) || (modeIsInpaint() && !state.inpaint) || modeIsV1()) {
+      el.portraitABTestHint.textContent = modeIsQwen() ? 'Qwen V1 当前 P0 只执行单次生成。' : modeIsV1() ? 'V1 先运行单次历史对照。' : '请先准备输入。';
       return;
     }
     state.busy = true;
@@ -479,14 +597,14 @@
     const cases = modeIsRefine() ? [{ label: 'A', preserve_strength: 0.80, refine_strength: 0.20 }, { label: 'B', preserve_strength: 0.75, refine_strength: 0.28 }, { label: 'C', preserve_strength: 0.70, refine_strength: 0.35 }] : [{ label: 'A', strength: 0.15 }, { label: 'B', strength: 0.25 }, { label: 'C', strength: 0.35 }];
     try {
       for (const experiment of cases) {
-        el.portraitABTestHint.textContent = `${experiment.label} 对照生成中…`;
+        el.portraitABTestHint.textContent = experiment.label + ' 对照生成中…';
         const data = await createJob(experiment);
         const runId = data.run_id || data.pipeline_run_id;
         if (!runId) throw new Error('A/B 任务未返回 run_id');
         const result = await waitForRun(runId);
         const image = modeIsRefine() ? result.final_image : result.generated_image;
-        const label = modeIsRefine() ? `A ${experiment.preserve_strength.toFixed(2)} / B ${experiment.refine_strength.toFixed(2)}` : `Strength ${experiment.strength.toFixed(2)}`;
-        el.portraitSweepResults.insertAdjacentHTML('beforeend', `<div class="portrait-sweep-card"><strong>${esc(label)}</strong>${image ? `<img src="${esc(image)}" alt="${esc(label)} 结果">` : '<div class="portrait-empty">无结果</div>'}</div>`);
+        const label = modeIsRefine() ? 'A ' + experiment.preserve_strength.toFixed(2) + ' / B ' + experiment.refine_strength.toFixed(2) : 'Strength ' + experiment.strength.toFixed(2);
+        el.portraitSweepResults.insertAdjacentHTML('beforeend', '<div class="portrait-sweep-card"><strong>' + esc(label) + '</strong>' + (image ? '<img src="' + esc(image) + '" alt="' + esc(label) + ' 结果">' : '<div class="portrait-empty">无结果</div>') + '</div>');
       }
       el.portraitABTestHint.textContent = modeIsRefine() ? 'A/B 对照完成：.80/.20 · .75/.28 · .70/.35。' : 'Strength 对照完成：0.15 / 0.25 / 0.35。';
     } catch (error) { el.portraitABTestHint.textContent = platformError(error); }
@@ -523,8 +641,8 @@
 
   el.portraitMode.addEventListener('change', updateModeUI);
   el.portraitDataset.addEventListener('change', async (event) => { state.datasetId = event.target.value; el.portraitDatasetHint.textContent = state.datasetId ? `正在读取 ${state.datasetId}…` : '请选择已冻结 Dataset。'; await loadItems(); });
-  el.portraitSpecies.addEventListener('input', () => { if (state.inpaint) state.inpaint.species = el.portraitSpecies.value.trim(); if (state.refine) state.refine.species = el.portraitSpecies.value.trim(); updateSubmit(); });
-  el.portraitOriginalUpload.addEventListener('change', () => { if (el.portraitOriginalUpload.files?.[0]) { state.source = { item_id: null, image_id: el.portraitOriginalUpload.files[0].name, species_name: '' }; el.portraitSpecies.value = ''; clearPrepared(); el.portraitSourceState.textContent = `已选择上传文件：${el.portraitOriginalUpload.files[0].name}`; updateSubmit(); } });
+  el.portraitSpecies.addEventListener('input', () => { if (state.inpaint) state.inpaint.species = el.portraitSpecies.value.trim(); if (state.refine) state.refine.species = el.portraitSpecies.value.trim(); if (state.qwen) state.qwen.species = el.portraitSpecies.value.trim(); updateSubmit(); });
+  el.portraitOriginalUpload.addEventListener('change', () => { if (el.portraitOriginalUpload.files?.[0]) { state.source = { item_id: null, image_id: el.portraitOriginalUpload.files[0].name, species_name: '' }; el.portraitSpecies.value = ''; clearPrepared(); el.portraitSourceState.textContent = '已选择上传文件：' + el.portraitOriginalUpload.files[0].name; updateSubmit(); } });
   el.portraitPrepare.addEventListener('click', prepareInput);
   el.portraitReferenceSwitch.addEventListener('click', () => { if (state.references.length < 2) return; state.referenceIndex = (state.referenceIndex + 1) % state.references.length; renderReference(); });
   el.portraitSubmit.addEventListener('click', submit);

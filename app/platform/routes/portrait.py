@@ -43,6 +43,16 @@ from app.portrait_worker_client import (
     invoke_portrait_refine_worker,
     invoke_portrait_worker,
 )
+from app.qwen_refine_worker_client import (
+    DEFAULT_NEGATIVE_PROMPT as QWEN_DEFAULT_NEGATIVE_PROMPT,
+    DEFAULT_PROMPT as QWEN_DEFAULT_PROMPT,
+    DEFAULT_STEPS as QWEN_DEFAULT_STEPS,
+    QWEN_MODE,
+    QWEN_MODEL_ID as QWEN_WORKER_MODEL_ID,
+    QWEN_MODEL_LABEL as QWEN_WORKER_MODEL_LABEL,
+    check_qwen_refine_worker,
+    invoke_qwen_refine_worker,
+)
 from app.species_policy import TARGET_SPECIES_PRESETS
 
 logger = logging.getLogger(__name__)
@@ -55,6 +65,8 @@ MODEL_LABEL = "SDXL + IP-Adapter"
 INPAINT_MODE = "fish_preserve_inpaint_v2"
 REFINE_MODE = "fish_preserve_refine_v2"
 DUAL_IP_MODE = "dual_ip_adapter_v1"
+QWEN_MODEL_ID = QWEN_WORKER_MODEL_ID
+QWEN_MODEL_LABEL = QWEN_WORKER_MODEL_LABEL
 INPAINT_MODEL_ID = "sdxl_inpaint"
 INPAINT_MODEL_LABEL = "SDXL Inpaint"
 REFINE_MODEL_ID = "fish_preserve_refine_v2"
@@ -69,6 +81,7 @@ DEFAULT_PARAMS = {
 STAGES = ("load_source", "load_reference", "sdxl_generate", "persist_result")
 INPAINT_STAGES = ("load_source", "load_masks", "sdxl_inpaint", "persist_result")
 REFINE_STAGES = ("load_source", "load_sam_visible", "refine_generate", "straighten", "persist_result")
+QWEN_STAGES = ("load_source", "load_sam_visible", "qwen_refine", "persist_result")
 ACTIVE_JOB_STATUSES = {"PENDING", "RUNNING"}
 REFERENCE_STATUSES = {"ACTIVE", "READY", "PUBLISHED"}
 PORTRAIT_PREFIX = "PORTRAIT_"
@@ -104,6 +117,12 @@ class PortraitRefineParams(BaseModel):
     seed: int | None = Field(default=None, ge=0, le=2**32 - 1)
 
 
+class PortraitQwenParams(BaseModel):
+    steps: int = Field(default=QWEN_DEFAULT_STEPS, ge=1, le=100)
+    seed: int | None = Field(default=None, ge=0, le=2**63 - 1)
+    auto_straighten: bool = False
+
+
 class PortraitJobCreate(BaseModel):
     # New UI requests default to the SAM Visible -> Refine pipeline. Keep
     # compatibility with historical inpaint and Dual IP-Adapter requests.
@@ -124,13 +143,14 @@ class PortraitJobCreate(BaseModel):
     negative_prompt: str | None = Field(default=None, max_length=2000)
     inpaint: PortraitInpaintParams = Field(default_factory=PortraitInpaintParams)
     refine: PortraitRefineParams = Field(default_factory=PortraitRefineParams)
+    qwen: PortraitQwenParams = Field(default_factory=PortraitQwenParams)
     # Accept the worker contract's flat V2 fields as well as the nested UI
     # object.  Flat values win when both forms are supplied.
     strength: float | None = Field(default=None, ge=0.1, le=0.5)
     steps: int | None = Field(default=None, ge=1, le=100)
     width: int | None = Field(default=None, ge=256, le=1536)
     height: int | None = Field(default=None, ge=256, le=1536)
-    seed: int | None = Field(default=None, ge=0, le=2**32 - 1)
+    seed: int | None = Field(default=None, ge=0, le=2**63 - 1)
     preserve_strength: float | None = Field(default=None, ge=0.6, le=0.9)
     refine_strength: float | None = Field(default=None, ge=0.15, le=0.45)
     auto_straighten: bool | None = None
@@ -190,10 +210,27 @@ def _request_refine_params(payload: PortraitJobCreate) -> dict[str, Any]:
     return values
 
 
+def _qwen_params_dict(params: PortraitQwenParams) -> dict[str, Any]:
+    if hasattr(params, "model_dump"):
+        return params.model_dump()
+    return params.dict()
+
+
+def _request_qwen_params(payload: PortraitJobCreate) -> dict[str, Any]:
+    values = _qwen_params_dict(payload.qwen)
+    for name in ("auto_straighten", "steps", "seed"):
+        value = getattr(payload, name, None)
+        if value is not None:
+            values[name] = value
+    return values
+
+
 def _normalize_mode(value: Any, payload: PortraitJobCreate | None = None) -> str:
     mode = _normalize(value).replace("-", "_").replace("+", "_").replace(" ", "_")
     if mode in {"dual_ip_adapter_v1", "sdxl_ip_adapter", "sdxl_ipadapter", "ip_adapter"}:
         return DUAL_IP_MODE
+    if mode in {"fish_preserve_refine_qwen_v1", "fish_preserve_refine_qwen", "qwen_refine", "qwen"}:
+        return QWEN_MODE
     if mode in {"fish_preserve_refine_v2", "fish_preserve_refine", "preserve_refine", "refine"}:
         # Historical V1 callers may omit mode while still sending a standard
         # reference asset. Keep those requests on the old pipeline.
@@ -222,7 +259,7 @@ def _normalize_mode(value: Any, payload: PortraitJobCreate | None = None) -> str
         status_code=422,
         detail={
             "error_code": "PORTRAIT_MODE_UNSUPPORTED",
-            "message": "mode 必须是 fish_preserve_refine_v2、fish_preserve_inpaint_v2 或 dual_ip_adapter_v1",
+            "message": "mode 必须是 fish_preserve_refine_qwen_v1、fish_preserve_refine_v2、fish_preserve_inpaint_v2 或 dual_ip_adapter_v1",
         },
     )
 
@@ -232,6 +269,8 @@ def _stages_for_mode(mode: str) -> tuple[str, ...]:
         return INPAINT_STAGES
     if mode == REFINE_MODE:
         return REFINE_STAGES
+    if mode == QWEN_MODE:
+        return QWEN_STAGES
     return STAGES
 
 
@@ -240,6 +279,8 @@ def _model_for_mode(mode: str) -> tuple[str, str]:
         return INPAINT_MODEL_ID, INPAINT_MODEL_LABEL
     if mode == REFINE_MODE:
         return REFINE_MODEL_ID, REFINE_MODEL_LABEL
+    if mode == QWEN_MODE:
+        return QWEN_MODEL_ID, QWEN_MODEL_LABEL
     return MODEL_ID, MODEL_LABEL
 
 
@@ -282,6 +323,18 @@ def _experiment_metadata(
             "seed": values.get("seed"),
             "input_source": "sam_visible",
             "model": REFINE_MODEL_LABEL,
+        }
+        if species:
+            result["species"] = species
+        return result
+    if mode == QWEN_MODE:
+        result = {
+            "mode": QWEN_MODE,
+            "steps": int(values.get("steps", QWEN_DEFAULT_STEPS)),
+            "seed": values.get("seed"),
+            "auto_straighten": bool(values.get("auto_straighten", False)),
+            "input_source": "sam_visible",
+            "model": QWEN_MODEL_LABEL,
         }
         if species:
             result["species"] = species
@@ -920,7 +973,7 @@ def _execute_portrait_job(run_id: str) -> None:
             state = {}
         request = state.get("request") if isinstance(state.get("request"), dict) else {}
         mode = str(request.get("mode") or DUAL_IP_MODE)
-        if mode not in {DUAL_IP_MODE, INPAINT_MODE, REFINE_MODE}:
+        if mode not in {DUAL_IP_MODE, INPAINT_MODE, REFINE_MODE, QWEN_MODE}:
             raise PortraitWorkerError("PORTRAIT_MODE_UNSUPPORTED", "unsupported portrait mode")
         model_id, model_label = _model_for_mode(mode)
         run.status = "RUNNING"
@@ -932,7 +985,7 @@ def _execute_portrait_job(run_id: str) -> None:
 
         source_value = (
             request.get("original_image_uri") or (state.get("source") or {}).get("uri")
-            if mode in {INPAINT_MODE, REFINE_MODE}
+            if mode in {INPAINT_MODE, REFINE_MODE, QWEN_MODE}
             else (state.get("source") or {}).get("uri")
         )
         source_uri = str(source_value or "").strip()
@@ -948,7 +1001,7 @@ def _execute_portrait_job(run_id: str) -> None:
             "load_masks"
             if mode == INPAINT_MODE
             else "load_sam_visible"
-            if mode == REFINE_MODE
+            if mode in {REFINE_MODE, QWEN_MODE}
             else "load_reference"
         )
         run.current_stage = active_stage
@@ -962,7 +1015,7 @@ def _execute_portrait_job(run_id: str) -> None:
                 raise PortraitWorkerError("PORTRAIT_FISH_MASK_URI_INVALID", "fish_mask_uri is empty")
             if not completion_mask_uri:
                 raise PortraitWorkerError("PORTRAIT_COMPLETION_MASK_URI_INVALID", "completion_mask_uri is empty")
-        elif mode == REFINE_MODE and not sam_visible_uri:
+        elif mode in {REFINE_MODE, QWEN_MODE} and not sam_visible_uri:
             raise PortraitWorkerError("PORTRAIT_SAM_VISIBLE_URI_INVALID", "sam_visible_uri is empty")
         elif mode == DUAL_IP_MODE and not reference_uri:
             raise PortraitWorkerError("PORTRAIT_REFERENCE_URI_INVALID", "reference asset URI is empty")
@@ -975,21 +1028,28 @@ def _execute_portrait_job(run_id: str) -> None:
             if mode == INPAINT_MODE
             else "refine_generate"
             if mode == REFINE_MODE
+            else "qwen_refine"
+            if mode == QWEN_MODE
             else "sdxl_generate"
         )
         run.current_stage = active_stage
         _stage(state, active_stage, "RUNNING")
         _set_state(run, state)
         db.commit()
-        health = check_portrait_worker()
+        health = check_qwen_refine_worker() if mode == QWEN_MODE else check_portrait_worker()
         state["worker"] = {
             "health_status": health.get("status"),
             "endpoint_configured": bool(health.get("endpoint_configured")),
             "worker_url": health.get("worker_url"),
+            "worker_model": health.get("worker_model") or health.get("health", {}).get("model"),
         }
         if health.get("status") != "READY":
             code = (
-                "PORTRAIT_WORKER_NOT_CONFIGURED"
+                "QWEN_WORKER_NOT_CONFIGURED"
+                if mode == QWEN_MODE and not health.get("endpoint_configured")
+                else "QWEN_WORKER_NOT_READY"
+                if mode == QWEN_MODE
+                else "PORTRAIT_WORKER_NOT_CONFIGURED"
                 if not health.get("endpoint_configured")
                 else "PORTRAIT_WORKER_NOT_READY"
             )
@@ -1032,6 +1092,17 @@ def _execute_portrait_job(run_id: str) -> None:
                 auto_straighten=bool(refine.get("auto_straighten", True)),
                 steps=int(refine.get("steps", 25)),
                 seed=refine.get("seed"),
+            )
+        elif mode == QWEN_MODE:
+            qwen = dict(request.get("qwen") or {})
+            worker_result = invoke_qwen_refine_worker(
+                sam_visible_image_uri=sam_visible_uri,
+                source_run_id=str(request.get("source_run_id") or "") or None,
+                prompt=request.get("prompt"),
+                negative_prompt=request.get("negative_prompt"),
+                auto_straighten=bool(qwen.get("auto_straighten", False)),
+                steps=int(qwen.get("steps", QWEN_DEFAULT_STEPS)),
+                seed=qwen.get("seed"),
             )
         else:
             logger.info(
@@ -1083,7 +1154,7 @@ def _execute_portrait_job(run_id: str) -> None:
         generated_uri = _materialize_output(worker_result, run_id, source_uri)
         refined_uri = None
         final_uri = generated_uri
-        if mode == REFINE_MODE:
+        if mode in {REFINE_MODE, QWEN_MODE}:
             refined_uri = _materialize_output(
                 {"result_uri": worker_result.get("refine_result_uri")},
                 run_id + "_refined",
@@ -1119,6 +1190,8 @@ def _execute_portrait_job(run_id: str) -> None:
             if mode == INPAINT_MODE
             else "fish-preserve-refine-v2"
             if mode == REFINE_MODE
+            else "fish-preserve-refine-qwen-v1"
+            if mode == QWEN_MODE
             else "portrait-poc-v1"
         )
         state["result"] = {
@@ -1131,6 +1204,8 @@ def _execute_portrait_job(run_id: str) -> None:
                 if mode == INPAINT_MODE
                 else request.get("refine")
                 if mode == REFINE_MODE
+                else request.get("qwen")
+                if mode == QWEN_MODE
                 else request.get("params") or DEFAULT_PARAMS
             ),
             "metadata": state.get("experiment") or _experiment_metadata(
@@ -1145,9 +1220,12 @@ def _execute_portrait_job(run_id: str) -> None:
             "reference_asset_id": request.get("reference_asset_id"),
             "fish_mask_uri": request.get("fish_mask_uri") if mode == INPAINT_MODE else None,
             "completion_mask_uri": request.get("completion_mask_uri") if mode == INPAINT_MODE else None,
-            "sam_visible_uri": request.get("sam_visible_uri") if mode == REFINE_MODE else None,
-            "refine_result_uri": refined_uri if mode == REFINE_MODE else None,
-            "final_asset_uri": final_uri if mode == REFINE_MODE else None,
+            "sam_visible_uri": request.get("sam_visible_uri") if mode in {REFINE_MODE, QWEN_MODE} else None,
+            "refine_result_uri": refined_uri if mode in {REFINE_MODE, QWEN_MODE} else None,
+            "final_asset_uri": final_uri if mode in {REFINE_MODE, QWEN_MODE} else None,
+            "worker_result_uri": worker_result.get("result_uri") if mode == QWEN_MODE else None,
+            "worker_model": worker_result.get("worker_model") if mode == QWEN_MODE else None,
+            "auto_straighten_applied": bool(worker_result.get("auto_straighten_applied", False)) if mode == QWEN_MODE else None,
             "straighten_angle": worker_result.get("straighten_angle") if mode == REFINE_MODE else None,
         }
         _stage(state, active_stage, "DONE")
@@ -1287,8 +1365,49 @@ def fish_reference_assets(
 
 
 @router.get("/portrait/worker-health")
-def portrait_worker_health() -> dict[str, Any]:
-    """Expose non-secret Worker connectivity for the POC page and smoke tests."""
+def portrait_worker_health(mode: str = Query(default="", max_length=64)) -> dict[str, Any]:
+    """Expose non-secret connectivity for the selected Fish Portrait worker."""
+
+    use_qwen = _normalize_mode(mode) == QWEN_MODE if str(mode or "").strip() else False
+    if use_qwen:
+        configured_url = str(os.getenv("FISH_QWEN_REFINE_WORKER_URL", "") or "").strip().rstrip("/")
+        if not configured_url:
+            return {
+                "status": "NOT_CONFIGURED",
+                "configured": False,
+                "worker_url": None,
+                "worker_model": QWEN_MODEL_LABEL,
+                "error_code": "QWEN_WORKER_NOT_CONFIGURED",
+                "message": "FISH_QWEN_REFINE_WORKER_URL is not configured",
+            }
+        try:
+            health = check_qwen_refine_worker()
+        except PortraitWorkerError as exc:
+            return {
+                "status": "UNAVAILABLE",
+                "configured": True,
+                "worker_url": configured_url,
+                "worker_model": QWEN_MODEL_LABEL,
+                "error_code": exc.error_code,
+                "message": "Qwen Refine Worker unavailable",
+                "detail": str(exc),
+            }
+        if health.get("status") != "READY":
+            return {
+                "status": "UNAVAILABLE",
+                "configured": True,
+                "worker_url": configured_url,
+                "worker_model": health.get("worker_model") or QWEN_MODEL_LABEL,
+                "error_code": "QWEN_WORKER_NOT_READY",
+                "message": "Qwen Refine Worker unavailable",
+            }
+        return {
+            "status": "CONNECTED",
+            "configured": True,
+            "worker_url": configured_url,
+            "worker_model": health.get("worker_model") or QWEN_MODEL_LABEL,
+            "health": health.get("health") or {},
+        }
 
     configured_url = str(os.getenv("FISH_PORTRAIT_WORKER_URL", "") or "").strip().rstrip("/")
     if not configured_url:
@@ -1365,7 +1484,7 @@ def create_portrait_job(
         if payload.source_item_id is not None:
             item = _resolve_source_item(db, dataset_id, payload.source_item_id)
             source = _source_state(db, item)
-        elif mode == INPAINT_MODE and payload.original_image_uri:
+        elif mode in {INPAINT_MODE, REFINE_MODE, QWEN_MODE} and payload.original_image_uri:
             source = {
                 "item_id": None,
                 "image_id": None,
@@ -1379,7 +1498,7 @@ def create_portrait_job(
             }
         else:
             raise HTTPException(status_code=422, detail="source_item_id 不能为空")
-    elif mode in {INPAINT_MODE, REFINE_MODE} and (payload.original_image_uri or payload.sam_visible_uri):
+    elif mode in {INPAINT_MODE, REFINE_MODE, QWEN_MODE} and (payload.original_image_uri or payload.sam_visible_uri):
         source = {
             "item_id": None,
             "image_id": None,
@@ -1473,6 +1592,17 @@ def create_portrait_job(
             "negative_prompt": str(payload.negative_prompt or REFINE_DEFAULT_NEGATIVE_PROMPT).strip(),
             "refine": params,
         }
+    elif mode == QWEN_MODE:
+        params = _request_qwen_params(payload)
+        input_state = {
+            "original_image_uri": str(payload.original_image_uri or source.get("uri") or "").strip(),
+            "sam_visible_uri": str(payload.sam_visible_uri or "").strip(),
+            "source_run_id": str(payload.source_run_id or "").strip() or None,
+            "species": str(payload.species or source.get("species_name") or "").strip() or None,
+            "prompt": str(payload.prompt or QWEN_DEFAULT_PROMPT).strip(),
+            "negative_prompt": str(payload.negative_prompt or QWEN_DEFAULT_NEGATIVE_PROMPT).strip(),
+            "qwen": params,
+        }
     else:
         params = _params_dict(payload.params)
         input_state = {}
@@ -1560,6 +1690,8 @@ def portrait_result(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any
             if mode == INPAINT_MODE
             else request.get("refine")
             if mode == REFINE_MODE
+            else request.get("qwen")
+            if mode == QWEN_MODE
             else request.get("params"),
             mode=mode,
         )
@@ -1574,6 +1706,8 @@ def portrait_result(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any
             if mode == INPAINT_MODE
             else request.get("refine")
             if mode == REFINE_MODE
+            else request.get("qwen")
+            if mode == QWEN_MODE
             else request.get("params") or DEFAULT_PARAMS
         ),
         "adapter_config": experiment.get("adapter_config", {}),
@@ -1582,14 +1716,17 @@ def portrait_result(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any
         "preserve_strength": experiment.get("preserve_strength"),
         "refine_strength": experiment.get("refine_strength"),
         "auto_straighten": experiment.get("auto_straighten"),
+        "auto_straighten_applied": result.get("auto_straighten_applied"),
         "straighten_angle": result.get("straighten_angle"),
         "steps": experiment.get("steps"),
         "seed": experiment.get("seed"),
         "mask_type": experiment.get("mask_type"),
         "input_source": experiment.get("input_source"),
-        "source_run_id": request.get("source_run_id") if mode == REFINE_MODE else None,
-        "prompt": request.get("prompt") if mode in {INPAINT_MODE, REFINE_MODE} else None,
-        "negative_prompt": request.get("negative_prompt") if mode in {INPAINT_MODE, REFINE_MODE} else None,
+        "source_run_id": request.get("source_run_id") if mode in {REFINE_MODE, QWEN_MODE} else None,
+        "prompt": request.get("prompt") if mode in {INPAINT_MODE, REFINE_MODE, QWEN_MODE} else None,
+        "negative_prompt": request.get("negative_prompt") if mode in {INPAINT_MODE, REFINE_MODE, QWEN_MODE} else None,
+        "worker_model": result.get("worker_model") if mode == QWEN_MODE else None,
+        "worker_result_uri": result.get("worker_result_uri") if mode == QWEN_MODE else None,
         "run_id": run.run_id,
         "species_id": source.get("species_id"),
         "species_name": result_species,
@@ -1600,11 +1737,11 @@ def portrait_result(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any
         "run_id": run.run_id,
         "status": _status(run.status),
         "source_image": _public_source(source).get("image_url") if mode == DUAL_IP_MODE else f"/api/platform/portrait/results/{run.run_id}/media/original",
-        "sam_visible_image": f"/api/platform/portrait/results/{run.run_id}/media/sam-visible" if mode == REFINE_MODE else None,
+        "sam_visible_image": f"/api/platform/portrait/results/{run.run_id}/media/sam-visible" if mode in {REFINE_MODE, QWEN_MODE} else None,
         "reference_image": _public_reference(reference).get("url") if reference else None,
         "generated_image": _asset_media_url(str(result["asset_id"])) if result.get("asset_id") else None,
-        "refined_image": f"/api/platform/portrait/results/{run.run_id}/media/refined" if mode == REFINE_MODE else None,
-        "final_image": f"/api/platform/portrait/results/{run.run_id}/media/final" if mode == REFINE_MODE else None,
+        "refined_image": f"/api/platform/portrait/results/{run.run_id}/media/refined" if mode in {REFINE_MODE, QWEN_MODE} else None,
+        "final_image": f"/api/platform/portrait/results/{run.run_id}/media/final" if mode in {REFINE_MODE, QWEN_MODE} else None,
         "fish_mask_image": f"/api/platform/portrait/results/{run.run_id}/media/fish-mask" if mode == INPAINT_MODE else None,
         "completion_mask_image": f"/api/platform/portrait/results/{run.run_id}/media/completion-mask" if mode == INPAINT_MODE else None,
         "metadata": metadata,
@@ -1662,6 +1799,8 @@ __all__ = [
     "PortraitParams",
     "PortraitInpaintParams",
     "PortraitRefineParams",
+    "PortraitQwenParams",
+    "QWEN_MODE",
     "INPAINT_MODE",
     "REFINE_MODE",
     "DUAL_IP_MODE",

@@ -524,6 +524,7 @@ async def prepare(file: UploadFile | None = File(default=None), case_label: str 
             "preview_urls": {
                 "original": f"/api/debug/fish-completion-lab/media/{test_id}/original",
                 "fish_mask": f"/api/debug/fish-completion-lab/media/{test_id}/fish-mask",
+                "sam_visible": f"/api/debug/fish-completion-lab/media/{test_id}/sam-visible",
                 "completion_mask": f"/api/debug/fish-completion-lab/media/{test_id}/completion-mask",
             },
             "original": _data_url(original, "image/png"),
@@ -575,6 +576,7 @@ def completion_media(test_id: str, kind: str) -> Response:
 
     asset_key = {
         "original": "original",
+        "sam-visible": "refined_visible",
         "fish-mask": "refined_visible_mask",
         "completion-mask": "completion_mask",
     }.get(kind)
