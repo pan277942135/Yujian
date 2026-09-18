@@ -17,8 +17,11 @@ def test_fish_portrait_reuses_existing_completion_and_direct_lab_contracts():
     assert "fish_preserve_refine_v2" in portrait_js
     assert "fish_preserve_refine_qwen_v1" in portrait_js
     assert "fish_preserve_refine_qwen_v1" in portrait_html
-    assert "sam_visible" in completion_lab
-    assert "SAM Visible" in portrait_html
+    assert "sam_raw" in completion_lab
+    assert "visible_fish_refined" in completion_lab
+    assert "Visible Fish Refined" in portrait_html
+    assert "visible_add" in portrait_js
+    assert "remove" in portrait_js
     assert '@router.post("/api/debug/fish-completion-lab/prepare")' in completion_lab
     assert "detect(source)" in completion_lab
     assert "generate_fish_cutout(source, primary.box)" in completion_lab

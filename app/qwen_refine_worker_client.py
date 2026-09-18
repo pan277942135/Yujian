@@ -1,8 +1,8 @@
 """HTTP client for the independent Qwen-Image-Edit-2511 refine worker.
 
 The Qwen worker is intentionally separate from the legacy Fish Portrait worker.
-Cloud Run materializes the prepared SAM Visible artifact and sends exactly one
-multipart image part to the worker's /refine endpoint.
+Cloud Run materializes the prepared Visible Fish Refined artifact and sends
+exactly one multipart image part to the worker's /refine endpoint.
 """
 from __future__ import annotations
 
@@ -105,15 +105,21 @@ def check_qwen_refine_worker() -> dict[str, Any]:
 
 def invoke_qwen_refine_worker(
     *,
-    sam_visible_image_uri: str,
-    source_run_id: str | None,
-    prompt: str | None,
-    negative_prompt: str | None,
+    visible_fish_refined_image_uri: str | None = None,
+    sam_visible_image_uri: str | None = None,
+    source_run_id: str | None = None,
+    prompt: str | None = None,
+    negative_prompt: str | None = None,
     steps: int = DEFAULT_STEPS,
     seed: int | None = None,
     auto_straighten: bool = False,
 ) -> dict[str, Any]:
-    """Invoke Qwen with the existing SAM Visible artifact as its only image input."""
+    """Invoke Qwen using Visible Fish Refined, never raw SAM.
+
+    sam_visible_image_uri remains a compatibility alias for callers that have
+    already migrated their stored request; the route only supplies the new
+    visible_fish_refined_image_uri field.
+    """
 
     base_url = _base_url()
     if not base_url:
@@ -121,7 +127,13 @@ def invoke_qwen_refine_worker(
             "QWEN_WORKER_NOT_CONFIGURED",
             "FISH_QWEN_REFINE_WORKER_URL is not configured",
         )
-    sam_data, sam_media_type = _read_image_uri(sam_visible_image_uri, label="sam_visible")
+    input_uri = str(visible_fish_refined_image_uri or sam_visible_image_uri or "").strip()
+    if not input_uri:
+        raise PortraitWorkerError(
+            "QWEN_VISIBLE_FISH_REFINED_REQUIRED",
+            "Visible Fish Refined is required; raw SAM cannot be sent to Qwen",
+        )
+    sam_data, sam_media_type = _read_image_uri(input_uri, label="visible_fish_refined")
     safe_steps = max(1, min(int(steps), 100))
     safe_seed = int(seed) if seed is not None else None
     params = {
@@ -140,7 +152,7 @@ def invoke_qwen_refine_worker(
     ]
     body, content_type = _multipart_body(
         fields=fields,
-        files=[("image", "sam_visible.png", sam_data, sam_media_type)],
+        files=[("image", "visible_fish_refined.png", sam_data, sam_media_type)],
     )
     headers = _headers()
     headers["Content-Type"] = content_type
@@ -151,7 +163,7 @@ def invoke_qwen_refine_worker(
         headers=headers,
     )
     logger.info(
-        "qwen_refine_worker_request mode=%s source_run_id=%s sam_visible_bytes=%d "
+        "qwen_refine_worker_request mode=%s source_run_id=%s visible_fish_refined_bytes=%d "
         "steps=%d seed=%s auto_straighten=%s",
         QWEN_MODE,
         source_run_id,
@@ -208,10 +220,10 @@ def invoke_qwen_refine_worker(
         "request": "multipart/form-data",
         "path": _path(),
         "mode": QWEN_MODE,
-        "input_source": "sam_visible",
+        "input_source": "visible_fish_refined",
         "source_field": "image",
         "reference_field": None,
-        "sam_visible_bytes": len(sam_data),
+        "visible_fish_refined_bytes": len(sam_data),
         "steps": safe_steps,
         "seed": safe_seed,
         "auto_straighten": bool(auto_straighten),

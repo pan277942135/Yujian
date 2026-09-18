@@ -18,8 +18,15 @@ def test_qwen_page_mode_and_worker_contract_are_present():
     assert "QWEN_MODE" in javascript
     assert "鱼体保真补全（Qwen V1）" in html
     assert "COMPLETION_LAB_PREPARE_ENDPOINT = '/api/debug/fish-completion-lab/prepare'" in javascript
-    assert '"sam_visible": f"/api/debug/fish-completion-lab/media/{test_id}/sam-visible"' in completion
+    assert '"sam_raw": f"/api/debug/fish-completion-lab/media/{test_id}/sam-raw"' in completion
+    assert '"visible_fish_refined": f"/api/debug/fish-completion-lab/media/{test_id}/visible-fish-refined"' in completion
+    assert "VISIBLE_FISH_QUALITY_GATE_BLOCKED" in route
+    assert "visible_fish_refined_uri" in route
+    assert '"input_source": "visible_fish_refined"' in client
     assert "POST /refine" in worker or '@app.post("/refine"' in worker
     assert 'port=int(os.getenv("PORT", "8002"))' in worker
     assert '--port 8002' in service
     assert "/portrait/generate" not in client
+    assert "SAM Raw" in html
+    assert "Visible Fish Refined" in html
+    assert "portraitVisibleCorrection" in javascript
