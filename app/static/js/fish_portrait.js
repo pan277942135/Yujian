@@ -15,6 +15,7 @@
     qwen: null,
     runId: null,
     busy: false,
+    visibleCorrection: null,
   };
 
   // Detector + SAM + Visible extraction remain in the existing Direct Lab.
@@ -38,8 +39,12 @@
     'portraitSeed', 'portraitQwenSeed', 'portraitQwenAutoStraighten', 'portraitGeneralStepsField', 'portraitGeneralSeedField', 'portraitWidthField', 'portraitWidth', 'portraitHeightField', 'portraitHeight',
     'portraitParamHint', 'portraitPrompt', 'portraitNegativePrompt', 'portraitSubmit', 'portraitSubmitHint',
     'portraitABTest', 'portraitABTestHint', 'portraitRefresh', 'portraitProgress', 'portraitRunTitle',
-    'portraitRunStatus', 'portraitSourceImage', 'portraitSamVisibleCard', 'portraitSamVisibleResultImage',
-    'portraitRefinedCard', 'portraitRefinedResultImage', 'portraitFinalCard', 'portraitFinalResultImage',
+    'portraitRunStatus', 'portraitSourceImage', 'portraitSamRawCard', 'portraitSamRawResultImage',
+    'portraitSamVisibleCard', 'portraitSamVisibleResultImage', 'portraitVisibleQuality',
+    'portraitVisibleCorrectionEntry', 'portraitVisibleCorrectionOpen', 'portraitVisibleCorrection',
+    'portraitVisibleCorrectionCanvas', 'portraitVisibleCorrectionLayer', 'portraitVisibleCorrectionBrush',
+    'portraitVisibleCorrectionSave', 'portraitVisibleCorrectionCancel', 'portraitVisibleCorrectionHint',
+    'portraitRefinedCard', 'portraitRefinedResultImage', 'portraitFinalCard', 'portraitFinalResultImage', 'portraitFinalPlaceholder',
     'portraitRefinedLabel', 'portraitFinalLabel',
     'portraitFishMaskCard', 'portraitFishMaskResultImage', 'portraitCompletionMaskCard',
     'portraitCompletionMaskResultImage', 'portraitGeneratedCard', 'portraitGeneratedImage',
@@ -57,6 +62,7 @@
     sdxl_inpaint: 'SDXL Inpaint V2',
     refine_generate: 'Fish Preserve Refine',
     qwen_refine: 'Qwen-Image-Edit-2511 补全',
+    load_visible_fish_refined: '读取 Visible Fish Refined',
     straighten: '确定性水平归一化',
     persist_result: '保存实验结果',
     complete: '完成',
@@ -112,10 +118,13 @@
     state.inpaint = null;
     state.refine = null;
     state.qwen = null;
+    state.visibleCorrection = null;
     el.portraitPrepareHint.className = 'portrait-hint';
     [el.portraitFishMaskPreview, el.portraitCompletionMaskPreview].forEach((node) => { if (node) node.hidden = true; });
+    [el.portraitSamRawCard, el.portraitSamVisibleCard, el.portraitVisibleCorrectionEntry, el.portraitVisibleCorrection].forEach((node) => { if (node) node.hidden = true; });
+    renderVisibleQuality(null);
     el.portraitPrepareHint.textContent = modeIsQwen()
-      ? '复用 Fish Completion Lab 生成 SAM Visible，作为 Qwen 的唯一身份输入。'
+      ? '复用 Fish Completion Lab 生成 SAM Raw，并通过 visible_add/remove 修正为 Visible Fish Refined。'
       : modeIsRefine()
         ? 'Detector、SAM 和 Visible 提取沿用现有 Direct Lab，本页不重写。'
         : '这里复用现有 Fish Completion Lab 的 Detector + SAM，不在本页重写。';
@@ -213,7 +222,7 @@
       el.portraitOriginalUpload.value = '';
     }
     el.portraitModeNote.textContent = qwen
-      ? '先复用 Fish Completion Lab 的 Detector + SAM + SAM Visible，再把 SAM Visible 交给独立 Qwen Worker；不直接操作 ComfyUI。'
+      ? '先复用 Fish Completion Lab 的 Detector + SAM，修正为 Visible Fish Refined 后再交给独立 Qwen Worker；不直接操作 ComfyUI。'
       : refine
         ? '复用 PowerPaint Direct Lab 的 SAM Visible；只修复鱼体并做确定性水平归一化，不引入标准鱼模板。'
         : inpaint
@@ -245,7 +254,7 @@
       el.portraitPrompt.value = QWEN_PROMPT;
       el.portraitNegativePrompt.value = QWEN_NEGATIVE;
       el.portraitSourceState.textContent = state.source
-        ? '已选择真实照片，请点击 Prepare 生成 Original / SAM Visible。'
+        ? '已选择真实照片，请点击 Prepare 生成 Original / SAM Raw / Visible Fish Refined。'
         : '请上传真实鱼照片，或选择 Dataset 图片后点击 Prepare。';
       el.portraitABTestHint.textContent = 'Qwen V1 当前只执行单次生成，保留实验记录。';
     } else if (refine) {
@@ -269,13 +278,33 @@
     updateSubmit();
   }
 
+  function visibleQualityStatus(value) {
+    if (value && typeof value === 'object') {
+      value = value.visible_fish_quality || value.quality || value.status;
+    }
+    return String(value || 'INVALID').trim().toUpperCase();
+  }
+
+  function renderVisibleQuality(value) {
+    if (!el.portraitVisibleQuality) return;
+    const status = visibleQualityStatus(value);
+    el.portraitVisibleQuality.textContent = 'VISIBLE_FISH_QUALITY = ' + status;
+    el.portraitVisibleQuality.className = 'visible-quality visible-quality-' + status.toLowerCase();
+    if (el.portraitVisibleCorrectionHint) {
+      el.portraitVisibleCorrectionHint.textContent = status === 'GOOD'
+        ? '质量门已通过，Qwen 将只接收 Visible Fish Refined。'
+        : '质量门未通过：请点击“修正鱼体”，补回鱼体或删除手部/杂物后重新检查。';
+    }
+  }
+
   function updateSubmit() {
     const fileSelected = Boolean(el.portraitOriginalUpload?.files?.[0]);
     const sourceReady = Boolean(state.source) || ((modeIsInpaint() || modeIsQwen()) && fileSelected);
+    const qwenQuality = visibleQualityStatus(state.qwen?.visible_fish_quality);
     const ready = modeIsRefine()
       ? Boolean(state.refine?.original_image_uri && state.refine?.sam_visible_uri)
       : modeIsQwen()
-        ? Boolean(state.qwen?.original_image_uri && state.qwen?.sam_visible_uri)
+        ? Boolean(state.qwen?.original_image_uri && state.qwen?.qwen_input_uri && qwenQuality === 'GOOD')
         : modeIsInpaint()
           ? Boolean(state.inpaint?.original_image_uri && state.inpaint?.fish_mask_uri && state.inpaint?.completion_mask_uri)
           : Boolean(state.source && state.references[state.referenceIndex]);
@@ -285,13 +314,15 @@
       ? '任务运行中，请等待结果。'
       : ready
         ? '输入已就绪，可以创建 PipelineRun。'
-        : modeIsQwen()
-          ? '请上传或选择原图后先点击 Prepare，生成 SAM Visible。'
-          : modeIsRefine()
-            ? '请选择 Dataset 图片并先生成 SAM Visible。'
-            : modeIsInpaint()
-              ? '请选择图片并先生成遮罩。'
-              : '请选择 A 图和标准参考图。';
+        : modeIsQwen() && state.qwen
+          ? 'VISIBLE_FISH_QUALITY = ' + qwenQuality + '；INVALID/WARNING 时禁止送入 Qwen。请先修正鱼体。'
+          : modeIsQwen()
+            ? '请上传或选择原图后先点击 Prepare，生成 SAM Raw / Visible Fish Refined。'
+            : modeIsRefine()
+              ? '请选择 Dataset 图片并先生成 SAM Visible。'
+              : modeIsInpaint()
+                ? '请选择图片并先生成遮罩。'
+                : '请选择 A 图和标准参考图。';
   }
 
   async function parsePrepareResponse(response) {
@@ -302,6 +333,157 @@
     return data;
   }
 
+  function loadImage(source) {
+    return new Promise((resolve, reject) => {
+      if (!source) { reject(new Error('图片资源为空')); return; }
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error('图片资源读取失败'));
+      image.src = source;
+    });
+  }
+
+  function loadMask(source, width, height) {
+    return loadImage(source).then((image) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      const context = canvas.getContext('2d');
+      context.drawImage(image, 0, 0, width, height);
+      const pixels = context.getImageData(0, 0, width, height).data;
+      const mask = new Uint8Array(width * height);
+      for (let index = 0; index < mask.length; index += 1) mask[index] = pixels[index * 4] > 127 ? 1 : 0;
+      return mask;
+    });
+  }
+
+  function maskDataUrl(mask, width, height) {
+    const canvas = document.createElement('canvas');
+    canvas.width = width; canvas.height = height;
+    const context = canvas.getContext('2d');
+    const imageData = context.createImageData(width, height);
+    for (let index = 0; index < mask.length; index += 1) {
+      const value = mask[index] ? 255 : 0;
+      imageData.data[index * 4] = value;
+      imageData.data[index * 4 + 1] = value;
+      imageData.data[index * 4 + 2] = value;
+      imageData.data[index * 4 + 3] = 255;
+    }
+    context.putImageData(imageData, 0, 0);
+    return canvas.toDataURL('image/png');
+  }
+
+  function renderVisibleCorrection() {
+    const correction = state.visibleCorrection;
+    const canvas = el.portraitVisibleCorrectionCanvas;
+    if (!correction || !canvas) return;
+    const context = canvas.getContext('2d');
+    context.clearRect(0, 0, correction.width, correction.height);
+    context.globalAlpha = 0.72;
+    context.drawImage(correction.original, 0, 0, correction.width, correction.height);
+    context.globalAlpha = 1;
+    const overlay = context.createImageData(correction.width, correction.height);
+    for (let index = 0; index < correction.rawMask.length; index += 1) {
+      const raw = correction.rawMask[index] === 1;
+      const added = correction.addMask[index] === 1;
+      const removed = correction.removeMask[index] === 1;
+      const refined = (raw || added) && !removed;
+      let color = null;
+      if (refined) color = added ? [35, 120, 240, 150] : [42, 128, 104, 115];
+      if (removed) color = [210, 70, 60, 185];
+      if (!color) continue;
+      overlay.data[index * 4] = color[0];
+      overlay.data[index * 4 + 1] = color[1];
+      overlay.data[index * 4 + 2] = color[2];
+      overlay.data[index * 4 + 3] = color[3];
+    }
+    context.putImageData(overlay, 0, 0);
+  }
+
+  function paintVisibleCorrection(event) {
+    const correction = state.visibleCorrection;
+    const canvas = el.portraitVisibleCorrectionCanvas;
+    if (!correction || !canvas || (!correction.painting && event.type !== 'pointerdown')) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.floor((event.clientX - rect.left) * correction.width / rect.width);
+    const y = Math.floor((event.clientY - rect.top) * correction.height / rect.height);
+    const radius = Math.max(1, Math.round(numberValue('portraitVisibleCorrectionBrush', 28) * correction.width / Math.max(1, rect.width)));
+    const target = correction.activeLayer === 'remove' ? correction.removeMask : correction.addMask;
+    const other = correction.activeLayer === 'remove' ? correction.addMask : correction.removeMask;
+    for (let dy = -radius; dy <= radius; dy += 1) {
+      for (let dx = -radius; dx <= radius; dx += 1) {
+        if (dx * dx + dy * dy > radius * radius) continue;
+        const px = x + dx; const py = y + dy;
+        if (px < 0 || py < 0 || px >= correction.width || py >= correction.height) continue;
+        const index = py * correction.width + px;
+        target[index] = 1;
+        other[index] = 0;
+      }
+    }
+    renderVisibleCorrection();
+  }
+
+  async function initVisibleCorrection(data, originalPreview) {
+    if (!el.portraitVisibleCorrectionCanvas) return;
+    const input = data.input || {};
+    const width = Number(input.width || 0);
+    const height = Number(input.height || 0);
+    const originalSource = data.original || originalPreview || el.portraitSourceImage.src;
+    const rawSource = data.sam_raw_mask || data.preview_urls?.sam_raw;
+    if (!width || !height || !originalSource || !rawSource) return;
+    try {
+      const [original, rawMask] = await Promise.all([loadImage(originalSource), loadMask(rawSource, width, height)]);
+      const canvas = el.portraitVisibleCorrectionCanvas;
+      canvas.width = width; canvas.height = height;
+      state.visibleCorrection = { width, height, original, rawMask, addMask: new Uint8Array(width * height), removeMask: new Uint8Array(width * height), activeLayer: 'add', painting: false };
+      renderVisibleCorrection();
+      el.portraitVisibleCorrection.hidden = false;
+      el.portraitVisibleCorrectionEntry.hidden = false;
+    } catch (error) {
+      el.portraitVisibleCorrectionHint.textContent = '修正画布加载失败：' + platformError(error);
+    }
+  }
+
+  function openVisibleCorrection() {
+    if (!state.visibleCorrection) return;
+    el.portraitVisibleCorrection.hidden = false;
+    el.portraitVisibleCorrectionEntry.hidden = false;
+    renderVisibleCorrection();
+  }
+
+  function closeVisibleCorrection() {
+    if (el.portraitVisibleCorrection) el.portraitVisibleCorrection.hidden = true;
+  }
+
+  async function saveVisibleCorrection() {
+    const correction = state.visibleCorrection;
+    if (!correction || !state.qwen?.source_run_id || state.busy) return;
+    el.portraitVisibleCorrectionSave.disabled = true;
+    el.portraitVisibleCorrectionHint.textContent = '正在保存 visible_add/remove 并重算 Visible Fish Refined…';
+    try {
+      const data = await platformFetch('/api/debug/fish-completion-lab/masks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ test_id: state.qwen.source_run_id, masks: { visible_add: maskDataUrl(correction.addMask, correction.width, correction.height), remove: maskDataUrl(correction.removeMask, correction.width, correction.height) } }),
+      });
+      const assets = data.assets || {};
+      const previews = data.preview_urls || {};
+      state.qwen.visible_fish_refined_uri = assets.visible_fish_refined || assets.refined_visible || state.qwen.visible_fish_refined_uri;
+      state.qwen.qwen_input_uri = state.qwen.visible_fish_refined_uri;
+      state.qwen.sam_visible_uri = state.qwen.visible_fish_refined_uri;
+      state.qwen.visible_fish_quality = data.visible_fish_quality || data.statistics?.visible_quality || data.statistics?.visible_fish_quality;
+      state.qwen.samPreview = previews.visible_fish_refined || previews.sam_visible || data.refined_visible || state.qwen.samPreview;
+      renderVisibleQuality(state.qwen.visible_fish_quality);
+      if (state.qwen.samPreview) { el.portraitSamVisibleResultImage.src = state.qwen.samPreview; el.portraitSamVisibleResultImage.hidden = false; }
+      el.portraitVisibleCorrectionHint.textContent = 'Visible Fish Refined 已更新。' + (visibleQualityStatus(state.qwen.visible_fish_quality) === 'GOOD' ? ' 质量门已通过。' : ' 仍未通过质量门，请继续修正。');
+      closeVisibleCorrection();
+      updateSubmit();
+    } catch (error) {
+      el.portraitVisibleCorrectionHint.textContent = platformError(error);
+    } finally {
+      el.portraitVisibleCorrectionSave.disabled = false;
+      updateSubmit();
+    }
+  }
   async function prepareRefine() {
     if (!modeIsRefine() || state.busy) return;
     if (!state.source || !state.datasetId) {
@@ -387,7 +569,7 @@
       return;
     }
     el.portraitPrepare.disabled = true;
-    el.portraitPrepareHint.textContent = '正在复用 Fish Completion Lab：Detector + SAM + SAM Visible…';
+    el.portraitPrepareHint.textContent = '正在复用 Fish Completion Lab：Detector + SAM Raw + Visible Fish Refined…';
     try {
       let response;
       if (file) {
@@ -403,19 +585,24 @@
       const assets = data.assets || {};
       const previewUrls = data.preview_urls || {};
       const originalUri = assets.original;
-      const samVisibleUri = assets.refined_visible || assets.sam_visible || assets.sam_transparent;
-      if (!originalUri || !samVisibleUri) throw new Error('Fish Completion Lab 未返回 original / SAM Visible 资源');
-      const originalPreview = previewUrls.original || state.source?.image_url || state.source?.preview_url || null;
-      const samPreview = previewUrls.sam_visible || previewUrls.refined_visible || data.refined_visible || data.sam_transparent || null;
+      const samRawUri = assets.sam_raw_transparent || assets.sam_transparent || assets.sam_raw_mask;
+      const visibleFishRefinedUri = assets.visible_fish_refined || assets.refined_visible;
+      if (!originalUri || !samRawUri || !visibleFishRefinedUri) throw new Error('Fish Completion Lab 未返回 original / SAM Raw / Visible Fish Refined 资源');
+      const originalPreview = previewUrls.original || state.source?.image_url || state.source?.preview_url || data.original || null;
+      const samRawPreview = previewUrls.sam_raw || data.sam_raw || data.sam_transparent || data.sam_raw_mask || null;
+      const samPreview = previewUrls.visible_fish_refined || previewUrls.sam_visible || data.visible_fish_refined || data.refined_visible || null;
+      const quality = data.visible_fish_quality || data.statistics?.visible_quality || data.statistics?.visible_fish_quality;
       const species = el.portraitSpecies.value.trim() || state.source?.species_name || state.source?.species_id || '';
-      state.qwen = { source_run_id: data.test_id || null, original_image_uri: originalUri, sam_visible_uri: samVisibleUri, originalPreview, samPreview, species };
+      state.qwen = { source_run_id: data.test_id || null, original_image_uri: originalUri, sam_raw_uri: samRawUri, visible_fish_refined_uri: visibleFishRefinedUri, qwen_input_uri: visibleFishRefinedUri, sam_visible_uri: visibleFishRefinedUri, visible_fish_quality: quality, originalPreview, samRawPreview, samPreview, species };
       if (originalPreview) { el.portraitSourceImage.src = originalPreview; el.portraitSourceImage.hidden = false; }
-      if (samPreview) {
-        el.portraitSamVisibleResultImage.src = samPreview;
-        el.portraitSamVisibleResultImage.hidden = false;
-        setCardVisible(el.portraitSamVisibleCard, true);
-      }
-      el.portraitPrepareHint.textContent = '已复用 Fish Completion Lab，Original / SAM Visible 准备完成，可以开始 Qwen 补全。';
+      if (samRawPreview) { el.portraitSamRawResultImage.src = samRawPreview; el.portraitSamRawResultImage.hidden = false; setCardVisible(el.portraitSamRawCard, true); }
+      if (samPreview) { el.portraitSamVisibleResultImage.src = samPreview; el.portraitSamVisibleResultImage.hidden = false; setCardVisible(el.portraitSamVisibleCard, true); }
+      renderVisibleQuality(quality);
+      await initVisibleCorrection(data, originalPreview);
+      el.portraitVisibleCorrectionEntry.hidden = false;
+      el.portraitPrepareHint.textContent = visibleQualityStatus(quality) === 'GOOD'
+        ? '已生成 Visible Fish Refined，质量门通过，可以开始 Qwen。'
+        : '已生成 Visible Fish Refined，但质量门未通过；请点击“修正鱼体”后再生成。';
       updateSubmit();
     } catch (error) {
       state.qwen = null;
@@ -423,11 +610,10 @@
       updateSubmit();
     } finally { updateSubmit(); }
   }
-
   async function prepareInput() { return modeIsRefine() ? prepareRefine() : modeIsQwen() ? prepareQwen() : modeIsInpaint() ? prepareInpaint() : null; }
 
   function renderSteps(data) {
-    const fallback = modeIsQwen() ? ['load_source', 'load_sam_visible', 'qwen_refine', 'persist_result'] : modeIsRefine() ? ['load_source', 'load_sam_visible', 'refine_generate', 'straighten', 'persist_result'] : modeIsInpaint() ? ['load_source', 'load_masks', 'sdxl_inpaint', 'persist_result'] : ['load_source', 'load_reference', 'sdxl_generate', 'persist_result'];
+    const fallback = modeIsQwen() ? ['load_source', 'load_visible_fish_refined', 'qwen_refine', 'persist_result'] : modeIsRefine() ? ['load_source', 'load_sam_visible', 'refine_generate', 'straighten', 'persist_result'] : modeIsInpaint() ? ['load_source', 'load_masks', 'sdxl_inpaint', 'persist_result'] : ['load_source', 'load_reference', 'sdxl_generate', 'persist_result'];
     const steps = Array.isArray(data.steps) && data.steps.length ? data.steps : fallback.map((name) => ({ name, status: 'PENDING' }));
     el.portraitProgress.innerHTML = steps.map((step) => {
       const status = String(step.status || 'PENDING').toUpperCase();
@@ -466,7 +652,12 @@
         ['Auto Straighten', metadata.auto_straighten === true ? '开启' : '关闭'],
         ['Source Run ID', stat(metadata.source_run_id || metadata.input_source_run_id)],
         ['Worker Model', stat(metadata.worker_model || metadata.model, 'Qwen-Image-Edit-2511')],
-        ['Worker Result URI', stat(metadata.worker_result_uri || metadata.refine_result_uri || metadata.final_asset_uri)],
+        ['SAM Raw URI', stat(metadata.sam_raw_uri)],
+        ['Visible Fish Refined URI', stat(metadata.visible_fish_refined_uri)],
+        ['Visible Fish Quality', stat(metadata.visible_fish_quality)],
+        ['Qwen Input URI', stat(metadata.qwen_input_uri || metadata.visible_fish_refined_uri)],
+        ['Worker Result URI', stat(metadata.worker_result_uri || metadata.refine_result_uri)],
+        ['Final Asset', stat(metadata.protected_compose_status, '待 Protected Compose')],
       ];
     } else if (mode === REFINE_MODE) {
       items = [['Run ID', metadata.run_id || state.runId], ['模式', 'Fish Preserve Refine V2'], ['保真强度', Number(metadata.preserve_strength ?? params.preserve_strength ?? 0.75).toFixed(2)], ['修复强度', Number(metadata.refine_strength ?? params.refine_strength ?? 0.28).toFixed(2)], ['水平归一化', metadata.auto_straighten === false ? '关闭' : '开启'], ['Steps', stat(metadata.steps ?? params.steps)], ['Seed', stat(metadata.seed ?? params.seed, '随机')]];
@@ -498,12 +689,13 @@
     const qwen = resultMode === QWEN_MODE;
     const refine = resultMode === REFINE_MODE;
     const inpaint = resultMode === INPAINT_MODE;
+    setCardVisible(el.portraitSamRawCard, qwen);
     setCardVisible(el.portraitSamVisibleCard, refine || qwen);
     setCardVisible(el.portraitRefinedCard, refine || qwen);
     setCardVisible(el.portraitFinalCard, refine || qwen);
     if (qwen) {
       el.portraitRefinedLabel.textContent = 'Qwen Refined Result';
-      el.portraitFinalLabel.textContent = 'Final Asset';
+      el.portraitFinalLabel.textContent = 'Final Asset · 待 Protected Compose';
     } else {
       el.portraitRefinedLabel.textContent = 'Refined Fish';
       el.portraitFinalLabel.textContent = 'Final Fish Asset';
@@ -513,18 +705,26 @@
     setCardVisible(el.portraitGeneratedCard, !refine && !qwen);
     setCardVisible(el.portraitV1ReferenceCard, resultMode === V1_MODE);
     if (result.source_image) { el.portraitSourceImage.src = result.source_image; el.portraitSourceImage.hidden = false; }
-    if (result.sam_visible_image) { el.portraitSamVisibleResultImage.src = result.sam_visible_image; el.portraitSamVisibleResultImage.hidden = false; }
+    if (result.sam_raw_image) { el.portraitSamRawResultImage.src = result.sam_raw_image; el.portraitSamRawResultImage.hidden = false; }
+    if (result.visible_fish_refined_image || result.sam_visible_image) { el.portraitSamVisibleResultImage.src = result.visible_fish_refined_image || result.sam_visible_image; el.portraitSamVisibleResultImage.hidden = false; }
     if (result.refined_image) { el.portraitRefinedResultImage.src = result.refined_image; el.portraitRefinedResultImage.hidden = false; }
-    if (result.final_image) { el.portraitFinalResultImage.src = result.final_image; el.portraitFinalResultImage.hidden = false; }
+    if (result.final_image) {
+      el.portraitFinalResultImage.src = result.final_image;
+      el.portraitFinalResultImage.hidden = false;
+      if (el.portraitFinalPlaceholder) el.portraitFinalPlaceholder.hidden = true;
+    } else if (qwen && el.portraitFinalPlaceholder) {
+      el.portraitFinalResultImage.hidden = true;
+      el.portraitFinalPlaceholder.hidden = false;
+    }
     if (result.reference_image && resultMode === V1_MODE) { el.portraitReferenceResultImage.src = result.reference_image; el.portraitReferenceResultImage.hidden = false; }
     if (result.fish_mask_image) { el.portraitFishMaskResultImage.src = result.fish_mask_image; el.portraitFishMaskResultImage.hidden = false; }
     if (result.completion_mask_image) { el.portraitCompletionMaskResultImage.src = result.completion_mask_image; el.portraitCompletionMaskResultImage.hidden = false; }
     if (result.generated_image && !refine && !qwen) { el.portraitGeneratedImage.src = result.generated_image; el.portraitGeneratedImage.hidden = false; }
+    if (qwen) renderVisibleQuality(result.metadata?.visible_fish_quality);
     el.portraitOutputEmpty.hidden = true;
     renderMeta(result.metadata || {});
     return result;
   }
-
   async function waitForRun(runId) {
     for (;;) {
       const data = await platformFetch(`/api/platform/pipeline/${encodeURIComponent(runId)}`);
@@ -541,7 +741,7 @@
     const seed = optionalInt(modeIsQwen() ? 'portraitQwenSeed' : 'portraitSeed');
     if (modeIsQwen()) {
       const qwen = { steps, seed, auto_straighten: Boolean(el.portraitQwenAutoStraighten?.checked), prompt: el.portraitPrompt.value.trim() || QWEN_PROMPT, negative_prompt: el.portraitNegativePrompt.value.trim() || QWEN_NEGATIVE };
-      return { mode: QWEN_MODE, dataset_id: state.datasetId || null, source_item_id: state.source?.item_id || null, source_run_id: state.qwen.source_run_id, original_image_uri: state.qwen.original_image_uri, sam_visible_uri: state.qwen.sam_visible_uri, species: el.portraitSpecies.value.trim() || state.qwen.species || null, prompt: qwen.prompt, negative_prompt: qwen.negative_prompt, steps: qwen.steps, seed: qwen.seed, auto_straighten: qwen.auto_straighten, qwen };
+      return { mode: QWEN_MODE, dataset_id: state.datasetId || null, source_item_id: state.source?.item_id || null, source_run_id: state.qwen.source_run_id, original_image_uri: state.qwen.original_image_uri, sam_raw_uri: state.qwen.sam_raw_uri, visible_fish_refined_uri: state.qwen.visible_fish_refined_uri, qwen_input_uri: state.qwen.qwen_input_uri, visible_fish_quality: visibleQualityStatus(state.qwen.visible_fish_quality), sam_visible_uri: state.qwen.visible_fish_refined_uri, species: el.portraitSpecies.value.trim() || state.qwen.species || null, prompt: qwen.prompt, negative_prompt: qwen.negative_prompt, steps: qwen.steps, seed: qwen.seed, auto_straighten: qwen.auto_straighten, qwen };
     }
     if (modeIsRefine()) {
       const refine = { preserve_strength: overrides.preserve_strength ?? numberValue('portraitPreserveStrength', 0.75), refine_strength: overrides.refine_strength ?? numberValue('portraitRefineStrength', 0.28), auto_straighten: el.portraitAutoStraighten.checked, steps, seed };
@@ -640,7 +840,7 @@
   }
 
   el.portraitMode.addEventListener('change', updateModeUI);
-  el.portraitDataset.addEventListener('change', async (event) => { state.datasetId = event.target.value; el.portraitDatasetHint.textContent = state.datasetId ? `正在读取 ${state.datasetId}…` : '请选择已冻结 Dataset。'; await loadItems(); });
+  el.portraitDataset.addEventListener('change', async (event) => { state.datasetId = event.target.value; el.portraitDatasetHint.textContent = state.datasetId ? '正在读取 ' + state.datasetId + '…' : '请选择已冻结 Dataset。'; await loadItems(); });
   el.portraitSpecies.addEventListener('input', () => { if (state.inpaint) state.inpaint.species = el.portraitSpecies.value.trim(); if (state.refine) state.refine.species = el.portraitSpecies.value.trim(); if (state.qwen) state.qwen.species = el.portraitSpecies.value.trim(); updateSubmit(); });
   el.portraitOriginalUpload.addEventListener('change', () => { if (el.portraitOriginalUpload.files?.[0]) { state.source = { item_id: null, image_id: el.portraitOriginalUpload.files[0].name, species_name: '' }; el.portraitSpecies.value = ''; clearPrepared(); el.portraitSourceState.textContent = '已选择上传文件：' + el.portraitOriginalUpload.files[0].name; updateSubmit(); } });
   el.portraitPrepare.addEventListener('click', prepareInput);
@@ -648,7 +848,14 @@
   el.portraitSubmit.addEventListener('click', submit);
   el.portraitABTest.addEventListener('click', runSweep);
   el.portraitRefresh.addEventListener('click', loadDatasets);
-  updateModeUI();
+  el.portraitVisibleCorrectionOpen?.addEventListener('click', openVisibleCorrection);
+  el.portraitVisibleCorrectionSave?.addEventListener('click', saveVisibleCorrection);
+  el.portraitVisibleCorrectionCancel?.addEventListener('click', closeVisibleCorrection);
+  el.portraitVisibleCorrectionLayer?.addEventListener('change', (event) => { if (state.visibleCorrection) state.visibleCorrection.activeLayer = event.target.value; });
+  el.portraitVisibleCorrectionCanvas?.addEventListener('pointerdown', (event) => { if (!state.visibleCorrection) return; state.visibleCorrection.painting = true; el.portraitVisibleCorrectionCanvas.setPointerCapture?.(event.pointerId); paintVisibleCorrection(event); });
+  el.portraitVisibleCorrectionCanvas?.addEventListener('pointermove', paintVisibleCorrection);
+  el.portraitVisibleCorrectionCanvas?.addEventListener('pointerup', () => { if (state.visibleCorrection) state.visibleCorrection.painting = false; });
+  el.portraitVisibleCorrectionCanvas?.addEventListener('pointerleave', () => { if (state.visibleCorrection) state.visibleCorrection.painting = false; });  updateModeUI();
   loadWorkerHealth();
   loadDatasets();
 })();

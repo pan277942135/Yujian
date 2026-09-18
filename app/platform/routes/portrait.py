@@ -29,6 +29,7 @@ from app.factory import get_bucket_name
 from app.fish_knowledge.cover import FishSpeciesCover
 from app.fish_knowledge.gallery import managed_knowledge_asset_url
 from app.fish_knowledge.import_batch import FishKnowledgeAssetVersion
+from app.fish_completion_lab import get_visible_fish_artifacts
 from app.models import DatasetVersion, ImageAsset
 from app.platform.models import FishAsset, PipelineRun
 from app.platform.services import adapters
@@ -81,7 +82,7 @@ DEFAULT_PARAMS = {
 STAGES = ("load_source", "load_reference", "sdxl_generate", "persist_result")
 INPAINT_STAGES = ("load_source", "load_masks", "sdxl_inpaint", "persist_result")
 REFINE_STAGES = ("load_source", "load_sam_visible", "refine_generate", "straighten", "persist_result")
-QWEN_STAGES = ("load_source", "load_sam_visible", "qwen_refine", "persist_result")
+QWEN_STAGES = ("load_source", "load_visible_fish_refined", "qwen_refine", "persist_result")
 ACTIVE_JOB_STATUSES = {"PENDING", "RUNNING"}
 REFERENCE_STATUSES = {"ACTIVE", "READY", "PUBLISHED"}
 PORTRAIT_PREFIX = "PORTRAIT_"
@@ -137,6 +138,12 @@ class PortraitJobCreate(BaseModel):
     fish_mask_uri: str | None = Field(default=None, max_length=4096)
     completion_mask_uri: str | None = Field(default=None, max_length=4096)
     sam_visible_uri: str | None = Field(default=None, max_length=4096)
+    # Qwen must use the refined visible-fish artifact. Keep sam_visible_uri
+    # only for the historical Refine V2 contract and read-only compatibility.
+    sam_raw_uri: str | None = Field(default=None, max_length=4096)
+    visible_fish_refined_uri: str | None = Field(default=None, max_length=4096)
+    qwen_input_uri: str | None = Field(default=None, max_length=4096)
+    visible_fish_quality: str | None = Field(default=None, max_length=16)
     source_run_id: str | None = Field(default=None, max_length=128)
     species: str | None = Field(default=None, max_length=128)
     prompt: str | None = Field(default=None, max_length=2000)
@@ -333,7 +340,7 @@ def _experiment_metadata(
             "steps": int(values.get("steps", QWEN_DEFAULT_STEPS)),
             "seed": values.get("seed"),
             "auto_straighten": bool(values.get("auto_straighten", False)),
-            "input_source": "sam_visible",
+            "input_source": "visible_fish_refined",
             "model": QWEN_MODEL_LABEL,
         }
         if species:
@@ -822,6 +829,12 @@ def _public_run(run: PipelineRun, state: dict[str, Any]) -> dict[str, Any]:
             "final_asset_uri": f"{result_media_base}/final"
             if isinstance(result, dict) and result.get("final_asset_uri")
             else None,
+            "sam_raw_uri": result.get("sam_raw_uri") if isinstance(result, dict) else None,
+            "visible_fish_refined_uri": result.get("visible_fish_refined_uri") if isinstance(result, dict) else None,
+            "qwen_input_uri": result.get("qwen_input_uri") if isinstance(result, dict) else None,
+            "visible_fish_quality": result.get("visible_fish_quality") if isinstance(result, dict) else None,
+            "visible_fish_quality_report": result.get("visible_fish_quality_report") if isinstance(result, dict) else None,
+            "protected_compose_status": result.get("protected_compose_status") if isinstance(result, dict) else None,
             "metadata": result.get("metadata") if isinstance(result, dict) else None,
         }
         if isinstance(result, dict)
@@ -990,6 +1003,12 @@ def _execute_portrait_job(run_id: str) -> None:
         )
         source_uri = str(source_value or "").strip()
         sam_visible_uri = str(request.get("sam_visible_uri") or "").strip()
+        visible_fish_refined_uri = str(
+            request.get("visible_fish_refined_uri")
+            or request.get("qwen_input_uri")
+            or ""
+        ).strip()
+        visible_fish_quality = str(request.get("visible_fish_quality") or "").strip().upper()
         reference_uri = str((state.get("reference") or {}).get("uri") or "").strip()
         if not source_uri:
             raise PortraitWorkerError("PORTRAIT_SOURCE_URI_INVALID", "source image URI is empty")
@@ -1000,8 +1019,10 @@ def _execute_portrait_job(run_id: str) -> None:
         active_stage = (
             "load_masks"
             if mode == INPAINT_MODE
+            else "load_visible_fish_refined"
+            if mode == QWEN_MODE
             else "load_sam_visible"
-            if mode in {REFINE_MODE, QWEN_MODE}
+            if mode == REFINE_MODE
             else "load_reference"
         )
         run.current_stage = active_stage
@@ -1015,8 +1036,18 @@ def _execute_portrait_job(run_id: str) -> None:
                 raise PortraitWorkerError("PORTRAIT_FISH_MASK_URI_INVALID", "fish_mask_uri is empty")
             if not completion_mask_uri:
                 raise PortraitWorkerError("PORTRAIT_COMPLETION_MASK_URI_INVALID", "completion_mask_uri is empty")
-        elif mode in {REFINE_MODE, QWEN_MODE} and not sam_visible_uri:
+        elif mode == REFINE_MODE and not sam_visible_uri:
             raise PortraitWorkerError("PORTRAIT_SAM_VISIBLE_URI_INVALID", "sam_visible_uri is empty")
+        elif mode == QWEN_MODE and not visible_fish_refined_uri:
+            raise PortraitWorkerError(
+                "QWEN_VISIBLE_FISH_REFINED_URI_INVALID",
+                "visible_fish_refined_uri is empty",
+            )
+        elif mode == QWEN_MODE and visible_fish_quality != "GOOD":
+            raise PortraitWorkerError(
+                "VISIBLE_FISH_QUALITY_GATE_BLOCKED",
+                f"Visible Fish quality is {visible_fish_quality or 'INVALID'}; Qwen input rejected",
+            )
         elif mode == DUAL_IP_MODE and not reference_uri:
             raise PortraitWorkerError("PORTRAIT_REFERENCE_URI_INVALID", "reference asset URI is empty")
         _stage(state, active_stage, "DONE")
@@ -1096,7 +1127,7 @@ def _execute_portrait_job(run_id: str) -> None:
         elif mode == QWEN_MODE:
             qwen = dict(request.get("qwen") or {})
             worker_result = invoke_qwen_refine_worker(
-                sam_visible_image_uri=sam_visible_uri,
+                visible_fish_refined_image_uri=visible_fish_refined_uri,
                 source_run_id=str(request.get("source_run_id") or "") or None,
                 prompt=request.get("prompt"),
                 negative_prompt=request.get("negative_prompt"),
@@ -1154,7 +1185,7 @@ def _execute_portrait_job(run_id: str) -> None:
         generated_uri = _materialize_output(worker_result, run_id, source_uri)
         refined_uri = None
         final_uri = generated_uri
-        if mode in {REFINE_MODE, QWEN_MODE}:
+        if mode == REFINE_MODE:
             refined_uri = _materialize_output(
                 {"result_uri": worker_result.get("refine_result_uri")},
                 run_id + "_refined",
@@ -1166,6 +1197,16 @@ def _execute_portrait_job(run_id: str) -> None:
                 source_uri,
             )
             generated_uri = final_uri
+        elif mode == QWEN_MODE:
+            # Qwen output is a model candidate. Protected Compose is deliberately
+            # not faked by aliasing the candidate as Final Asset.
+            refined_uri = _materialize_output(
+                {"result_uri": worker_result.get("refine_result_uri")},
+                run_id + "_refined",
+                source_uri,
+            )
+            final_uri = None
+            generated_uri = refined_uri
         asset_id = PORTRAIT_PREFIX + run_id
         asset = db.get(FishAsset, asset_id)
         if asset is None:
@@ -1180,8 +1221,8 @@ def _execute_portrait_job(run_id: str) -> None:
         asset.mask_uri = (
             request.get("completion_mask_uri")
             if mode == INPAINT_MODE
-            else request.get("sam_visible_uri")
-            if mode == REFINE_MODE
+            else request.get("visible_fish_refined_uri")
+            if mode == QWEN_MODE
             else None
         )
         asset.transparent_uri = generated_uri
@@ -1220,9 +1261,15 @@ def _execute_portrait_job(run_id: str) -> None:
             "reference_asset_id": request.get("reference_asset_id"),
             "fish_mask_uri": request.get("fish_mask_uri") if mode == INPAINT_MODE else None,
             "completion_mask_uri": request.get("completion_mask_uri") if mode == INPAINT_MODE else None,
-            "sam_visible_uri": request.get("sam_visible_uri") if mode in {REFINE_MODE, QWEN_MODE} else None,
+            "sam_visible_uri": request.get("sam_visible_uri") if mode == REFINE_MODE else request.get("visible_fish_refined_uri") if mode == QWEN_MODE else None,
+            "sam_raw_uri": request.get("sam_raw_uri") if mode == QWEN_MODE else None,
+            "visible_fish_refined_uri": request.get("visible_fish_refined_uri") if mode == QWEN_MODE else None,
+            "qwen_input_uri": request.get("qwen_input_uri") if mode == QWEN_MODE else None,
+            "visible_fish_quality": request.get("visible_fish_quality") if mode == QWEN_MODE else None,
+            "visible_fish_quality_report": request.get("visible_fish_quality_report") if mode == QWEN_MODE else None,
             "refine_result_uri": refined_uri if mode in {REFINE_MODE, QWEN_MODE} else None,
-            "final_asset_uri": final_uri if mode in {REFINE_MODE, QWEN_MODE} else None,
+            "final_asset_uri": final_uri if mode == REFINE_MODE else None,
+            "protected_compose_status": "PENDING" if mode == QWEN_MODE else None,
             "worker_result_uri": worker_result.get("result_uri") if mode == QWEN_MODE else None,
             "worker_model": worker_result.get("worker_model") if mode == QWEN_MODE else None,
             "auto_straighten_applied": bool(worker_result.get("auto_straighten_applied", False)) if mode == QWEN_MODE else None,
@@ -1475,6 +1522,7 @@ def create_portrait_job(
     dataset_id = str(payload.dataset_id or payload.dataset_version or "").strip()
     item = None
     source: dict[str, Any]
+    qwen_artifacts: dict[str, Any] | None = None
     if dataset_id:
         dataset = db.get(DatasetVersion, dataset_id)
         if dataset is None:
@@ -1498,7 +1546,12 @@ def create_portrait_job(
             }
         else:
             raise HTTPException(status_code=422, detail="source_item_id 不能为空")
-    elif mode in {INPAINT_MODE, REFINE_MODE, QWEN_MODE} and (payload.original_image_uri or payload.sam_visible_uri):
+    elif mode in {INPAINT_MODE, REFINE_MODE, QWEN_MODE} and (
+        payload.original_image_uri
+        or payload.visible_fish_refined_uri
+        or payload.qwen_input_uri
+        or payload.sam_visible_uri
+    ):
         source = {
             "item_id": None,
             "image_id": None,
@@ -1528,11 +1581,52 @@ def create_portrait_job(
             raise HTTPException(status_code=422, detail="fish_mask_uri 不能为空")
         if not payload.completion_mask_uri:
             raise HTTPException(status_code=422, detail="completion_mask_uri 不能为空")
-    else:
+    elif mode == REFINE_MODE:
         if not payload.original_image_uri and not source.get("uri"):
             raise HTTPException(status_code=422, detail="original_image_uri 不能为空")
         if not payload.sam_visible_uri:
             raise HTTPException(status_code=422, detail="sam_visible_uri 不能为空")
+    elif mode == QWEN_MODE:
+        if not payload.original_image_uri and not source.get("uri"):
+            raise HTTPException(status_code=422, detail="original_image_uri 不能为空")
+        if not payload.source_run_id:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error_code": "VISIBLE_FISH_SOURCE_RUN_REQUIRED",
+                    "message": "Qwen 必须关联 Fish Completion Lab 的 source_run_id",
+                },
+            )
+        if not payload.visible_fish_refined_uri and not payload.qwen_input_uri:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error_code": "VISIBLE_FISH_REFINED_URI_REQUIRED",
+                    "message": "Qwen 只接受 visible_fish_refined_uri/qwen_input_uri",
+                },
+            )
+        qwen_artifacts = get_visible_fish_artifacts(str(payload.source_run_id).strip())
+        requested_input = str(
+            payload.visible_fish_refined_uri or payload.qwen_input_uri or ""
+        ).strip()
+        if requested_input != qwen_artifacts["visible_fish_refined_uri"]:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error_code": "VISIBLE_FISH_INPUT_MISMATCH",
+                    "message": "Qwen 输入必须是 source_run_id 对应的 Visible Fish Refined",
+                },
+            )
+        if qwen_artifacts["visible_fish_quality"] != "GOOD":
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error_code": "VISIBLE_FISH_QUALITY_GATE_BLOCKED",
+                    "message": "Visible Fish Refined 未通过质量门，禁止生成",
+                    "visible_fish_quality": qwen_artifacts["visible_fish_quality"],
+                    "quality": qwen_artifacts["visible_fish_quality_report"],
+                },
+            )
 
     wanted_species = _species_context(
         payload.species or source.get("species_id") or source.get("species_name")
@@ -1594,9 +1688,23 @@ def create_portrait_job(
         }
     elif mode == QWEN_MODE:
         params = _request_qwen_params(payload)
+        qwen_artifacts = qwen_artifacts or get_visible_fish_artifacts(str(payload.source_run_id).strip())
         input_state = {
-            "original_image_uri": str(payload.original_image_uri or source.get("uri") or "").strip(),
-            "sam_visible_uri": str(payload.sam_visible_uri or "").strip(),
+            "original_image_uri": str(
+                qwen_artifacts.get("original_uri")
+                or payload.original_image_uri
+                or source.get("uri")
+                or ""
+            ).strip(),
+            "sam_raw_uri": str(qwen_artifacts.get("sam_raw_uri") or "").strip(),
+            "visible_fish_refined_uri": str(
+                qwen_artifacts["visible_fish_refined_uri"]
+            ).strip(),
+            "qwen_input_uri": str(qwen_artifacts["qwen_input_uri"]).strip(),
+            # Keep the old field as a read-only alias for result consumers.
+            "sam_visible_uri": str(qwen_artifacts["visible_fish_refined_uri"]).strip(),
+            "visible_fish_quality": qwen_artifacts["visible_fish_quality"],
+            "visible_fish_quality_report": qwen_artifacts["visible_fish_quality_report"],
             "source_run_id": str(payload.source_run_id or "").strip() or None,
             "species": str(payload.species or source.get("species_name") or "").strip() or None,
             "prompt": str(payload.prompt or QWEN_DEFAULT_PROMPT).strip(),
@@ -1727,6 +1835,12 @@ def portrait_result(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any
         "negative_prompt": request.get("negative_prompt") if mode in {INPAINT_MODE, REFINE_MODE, QWEN_MODE} else None,
         "worker_model": result.get("worker_model") if mode == QWEN_MODE else None,
         "worker_result_uri": result.get("worker_result_uri") if mode == QWEN_MODE else None,
+        "sam_raw_uri": result.get("sam_raw_uri") if mode == QWEN_MODE else None,
+        "visible_fish_refined_uri": result.get("visible_fish_refined_uri") if mode == QWEN_MODE else None,
+        "qwen_input_uri": result.get("qwen_input_uri") if mode == QWEN_MODE else None,
+        "visible_fish_quality": result.get("visible_fish_quality") if mode == QWEN_MODE else None,
+        "visible_fish_quality_report": result.get("visible_fish_quality_report") if mode == QWEN_MODE else None,
+        "protected_compose_status": result.get("protected_compose_status") if mode == QWEN_MODE else None,
         "run_id": run.run_id,
         "species_id": source.get("species_id"),
         "species_name": result_species,
@@ -1737,11 +1851,15 @@ def portrait_result(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any
         "run_id": run.run_id,
         "status": _status(run.status),
         "source_image": _public_source(source).get("image_url") if mode == DUAL_IP_MODE else f"/api/platform/portrait/results/{run.run_id}/media/original",
+        "sam_raw_image": f"/api/platform/portrait/results/{run.run_id}/media/sam-raw" if mode == QWEN_MODE else None,
+        "visible_fish_refined_image": f"/api/platform/portrait/results/{run.run_id}/media/visible-fish-refined" if mode == QWEN_MODE else None,
+        # Keep sam_visible_image as a compatibility alias, with refined semantics
+        # for Qwen and historical SAM Visible semantics for Refine V2.
         "sam_visible_image": f"/api/platform/portrait/results/{run.run_id}/media/sam-visible" if mode in {REFINE_MODE, QWEN_MODE} else None,
         "reference_image": _public_reference(reference).get("url") if reference else None,
         "generated_image": _asset_media_url(str(result["asset_id"])) if result.get("asset_id") else None,
         "refined_image": f"/api/platform/portrait/results/{run.run_id}/media/refined" if mode in {REFINE_MODE, QWEN_MODE} else None,
-        "final_image": f"/api/platform/portrait/results/{run.run_id}/media/final" if mode in {REFINE_MODE, QWEN_MODE} else None,
+        "final_image": f"/api/platform/portrait/results/{run.run_id}/media/final" if result.get("final_asset_uri") else None,
         "fish_mask_image": f"/api/platform/portrait/results/{run.run_id}/media/fish-mask" if mode == INPAINT_MODE else None,
         "completion_mask_image": f"/api/platform/portrait/results/{run.run_id}/media/completion-mask" if mode == INPAINT_MODE else None,
         "metadata": metadata,
@@ -1755,6 +1873,8 @@ def portrait_result_media(run_id: str, kind: str, db: Session = Depends(get_db))
     if kind not in {
         "original",
         "sam-visible",
+        "sam-raw",
+        "visible-fish-refined",
         "fish-mask",
         "completion-mask",
         "refined",
@@ -1771,11 +1891,13 @@ def portrait_result_media(run_id: str, kind: str, db: Session = Depends(get_db))
     result = state.get("result") if isinstance(state.get("result"), dict) else {}
     uri = {
         "original": request.get("original_image_uri") or (state.get("source") or {}).get("uri"),
-        "sam-visible": request.get("sam_visible_uri"),
+        "sam-visible": result.get("visible_fish_refined_uri") if request.get("mode") == QWEN_MODE else request.get("sam_visible_uri"),
+        "sam-raw": result.get("sam_raw_uri") or request.get("sam_raw_uri"),
+        "visible-fish-refined": result.get("visible_fish_refined_uri") or request.get("visible_fish_refined_uri") or request.get("qwen_input_uri"),
         "fish-mask": request.get("fish_mask_uri"),
         "completion-mask": request.get("completion_mask_uri"),
         "refined": result.get("refine_result_uri"),
-        "final": result.get("final_asset_uri") or result.get("generated_uri"),
+        "final": result.get("final_asset_uri"),
         "generated": result.get("generated_uri"),
     }.get(kind)
     if not uri:

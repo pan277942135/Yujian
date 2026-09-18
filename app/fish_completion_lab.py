@@ -38,6 +38,7 @@ from app.completion_worker_client import (
     invoke_completion_worker,
 )
 from app.completion_decision import AUTO_COMPLETION, MANUAL_DEBUG, STRUCTURAL_THRESHOLDS, CompletionDecision, decide_completion
+from app.visible_fish_quality import analyze_visible_fish_quality
 
 router = APIRouter(tags=["fish-completion-lab"])
 templates = Jinja2Templates(directory="app/templates")
@@ -172,10 +173,17 @@ def _stats(
     mode: str = AUTO_COMPLETION,
     decision_confidence: float = 1.0,
     execution_allowed_override: bool | None = None,
+    bbox_pixels: list[int] | tuple[int, int, int, int] | None = None,
 ) -> dict[str, Any]:
     refined = (raw | add) & ~remove
     completion = np.asarray(completion, dtype=bool)
     refined = np.asarray(refined, dtype=bool)
+    visible_quality = analyze_visible_fish_quality(
+        raw,
+        refined,
+        bbox_pixels,
+        raw.shape,
+    )
     if mode == AUTO_COMPLETION:
         illegal = completion & refined
         safety_rule = "completion_mask ∩ refined_visible_mask == 0"
@@ -244,6 +252,8 @@ def _stats(
         "safety_rule": safety_rule,
         "pathological_completion_mask": pathological,
         "mode": mode,
+        "visible_quality": visible_quality,
+        **visible_quality,
     }
 
 
@@ -278,6 +288,36 @@ def _load_state(test_id: str) -> dict[str, Any]:
 
 def _save_state(test_id: str, state: dict[str, Any]) -> None:
     _save_json(test_id, "16_test_report.json", state)
+
+
+def get_visible_fish_artifacts(test_id: str) -> dict[str, Any]:
+    """Return the persisted visible-fish contract used by the Qwen route."""
+    state = _load_state(test_id)
+    assets = state.get("assets") or {}
+    quality = state.get("visible_fish_quality") or {}
+    refined_uri = str(assets.get("refined_visible") or "").strip()
+    if not refined_uri:
+        raise HTTPException(409, "Visible Fish Refined 尚未生成")
+    quality_status = str(
+        quality.get("visible_fish_quality")
+        or (state.get("mask_refinement") or {}).get("visible_fish_quality")
+        or "INVALID"
+    ).upper()
+    return {
+        "source_run_id": test_id,
+        "original_uri": str(assets.get("original") or "").strip(),
+        "sam_raw_uri": str(
+            assets.get("sam_raw_transparent")
+            or assets.get("sam_transparent")
+            or assets.get("sam_raw_mask")
+            or ""
+        ).strip(),
+        "visible_fish_refined_uri": refined_uri,
+        "qwen_input_uri": refined_uri,
+        "visible_fish_quality": quality_status,
+        "visible_fish_quality_report": quality,
+    }
+
 
 def _axis_overlay(original: Image.Image, decision: CompletionDecision) -> bytes:
     canvas = original.convert("RGBA")
@@ -320,6 +360,7 @@ def _apply_masks(
         execution_allowed_override=(
             decision.execution_allowed if decision is not None else None
         ),
+        bbox_pixels=state.get("detector", {}).get("bbox_pixels"),
     )
     if not stats["completion_mask_valid"]:
         error_code = "AUTO_COMPLETION_MASK_OVERLAPS_VISIBLE_FISH" if mode == AUTO_COMPLETION else "COMPLETION_MASK_NOT_SUBSET_OF_OCCLUDER"
@@ -350,6 +391,9 @@ def _apply_masks(
             asset_uris[name] = _persist(test_id, name, content, "image/png")
     state.setdefault("timings", {})["mask_generation_ms" if source == "AUTO" else "mask_edit_ms"] = round((time.perf_counter() - mask_started) * 1000, 2)
     state["mask_refinement"].update(stats)
+    state["visible_fish_quality"] = stats.get("visible_quality") or {
+        "visible_fish_quality": stats.get("visible_fish_quality", "INVALID"),
+    }
     state["occlusion"] = {"occluder_area_pixels": stats["occluder_area_pixels"], "occluder_region_count": stats["occluder_region_count"]}
     state["completion_mask"] = {key: stats[key] for key in (
         "completion_area_pixels", "completion_region_count", "estimated_final_fish_area_pixels", "generated_pixel_ratio",
@@ -504,7 +548,13 @@ async def prepare(file: UploadFile | None = File(default=None), case_label: str 
             "human_review": {},
             "cost": {"gpu_active_seconds": None, "estimated_compute_cost_usd": None, "cost_reason": "PRICING_NOT_CONFIGURED"},
             "errors": {},
-            "assets": {"original": test_id_uri, "detector_metadata": detector_uri, "sam_raw_mask": raw_mask_uri, "sam_transparent": raw_transparent_uri},
+            "assets": {
+                "original": test_id_uri,
+                "detector_metadata": detector_uri,
+                "sam_raw_mask": raw_mask_uri,
+                "sam_transparent": raw_transparent_uri,
+                "sam_raw_transparent": raw_transparent_uri,
+            },
             "timings": {"input_decode_ms": input_decode_ms, "detector_ms": detector_ms, "sam_ms": sam_ms, "mask_edit_ms": None, "mask_generation_ms": None, "roi_ms": None, "worker_ms": None, "compose_ms": None, "prepare_total_ms": None},
         }
         auto_masks = {"visible_add": np.zeros_like(raw_mask, dtype=bool), "remove": np.zeros_like(raw_mask, dtype=bool), "occluder": decision.occluder_mask, "completion_canonical": decision.completion_mask}
@@ -523,14 +573,20 @@ async def prepare(file: UploadFile | None = File(default=None), case_label: str 
             # browser-facing GCS/local URI in an <img> tag.
             "preview_urls": {
                 "original": f"/api/debug/fish-completion-lab/media/{test_id}/original",
+                "sam_raw": f"/api/debug/fish-completion-lab/media/{test_id}/sam-raw",
+                "visible_fish_refined": f"/api/debug/fish-completion-lab/media/{test_id}/visible-fish-refined",
+                # Backward-compatible alias; it now means the refined visible fish.
+                "sam_visible": f"/api/debug/fish-completion-lab/media/{test_id}/visible-fish-refined",
                 "fish_mask": f"/api/debug/fish-completion-lab/media/{test_id}/fish-mask",
-                "sam_visible": f"/api/debug/fish-completion-lab/media/{test_id}/sam-visible",
                 "completion_mask": f"/api/debug/fish-completion-lab/media/{test_id}/completion-mask",
             },
             "original": _data_url(original, "image/png"),
             "sam_raw_mask": _data_url(_mask_bytes(raw_mask), "image/png"),
             "sam_transparent": _data_url(raw_transparent, "image/png"),
+            "sam_raw": _data_url(raw_transparent, "image/png"),
             "refined_visible": _data_url(refined_fish, "image/png"),
+            "visible_fish_refined": _data_url(refined_fish, "image/png"),
+            "visible_fish_quality": state.get("visible_fish_quality"),
             "structural_envelope": _data_url(_mask_bytes(decision.estimated_full_fish_mask), "image/png"),
             "auto_completion_mask": _data_url(_mask_bytes(decision.completion_mask), "image/png"),
         }
@@ -548,6 +604,20 @@ async def prepare(file: UploadFile | None = File(default=None), case_label: str 
             source.close()
 
 
+def _load_existing_mask(state: dict[str, Any], keys: tuple[str, ...], width: int, height: int) -> np.ndarray:
+    for key in keys:
+        uri = str((state.get("assets") or {}).get(key) or "").strip()
+        if not uri:
+            continue
+        try:
+            image = Image.open(io.BytesIO(_read_persist(uri))).convert("L")
+            if image.size == (width, height):
+                return np.asarray(image, dtype=np.uint8) > 127
+        except Exception:
+            logger.warning("Existing mask read failed; key=%s", key, exc_info=True)
+    return np.zeros((height, width), dtype=bool)
+
+
 @router.post("/api/debug/fish-completion-lab/masks")
 async def save_masks(payload: MaskPayload):
     mask_started = time.perf_counter()
@@ -559,15 +629,35 @@ async def save_masks(payload: MaskPayload):
     masks = {
         "visible_add": _decode_mask(payload.masks.get("visible_add", ""), width, height) if payload.masks.get("visible_add") else np.zeros((height, width), dtype=bool),
         "remove": _decode_mask(payload.masks.get("remove", ""), width, height) if payload.masks.get("remove") else np.zeros((height, width), dtype=bool),
-        "occluder": _decode_mask(occluder_value, width, height) if occluder_value else np.zeros((height, width), dtype=bool),
-        "completion_canonical": _decode_mask(completion_value, width, height) if completion_value else np.zeros((height, width), dtype=bool),
+        "occluder": _decode_mask(occluder_value, width, height) if occluder_value else _load_existing_mask(state, ("occluder_mask", "occluder"), width, height),
+        "completion_canonical": _decode_mask(completion_value, width, height) if completion_value else _load_existing_mask(state, ("completion_mask_canonical", "completion_mask"), width, height),
     }
     statistics, refined_fish = _apply_masks(payload.test_id, state, masks, source="MANUAL")
     state["completion_mode"] = MANUAL_DEBUG
     state["completion_decision"] = {**state.get("completion_decision", {}), "mode": MANUAL_DEBUG, "source": "MANUAL", "status": "MASK_READY", "completion_required": bool(statistics.get("completion_area_pixels")), "mask_generated": False}
     state["progress"] = _progress(state)
     _save_state(payload.test_id, state)
-    return {"test_id": payload.test_id, "statistics": statistics, "timings": state["timings"], "progress": state["progress"], "refined_visible": _data_url(refined_fish, "image/png")}
+    assets = state.get("assets") or {}
+    return {
+        "test_id": payload.test_id,
+        "statistics": statistics,
+        "visible_fish_quality": state.get("visible_fish_quality"),
+        "timings": state["timings"],
+        "progress": state["progress"],
+        "assets": {
+            "original": assets.get("original"),
+            "sam_raw_transparent": assets.get("sam_raw_transparent") or assets.get("sam_transparent"),
+            "refined_visible": assets.get("refined_visible"),
+            "visible_fish_refined": assets.get("refined_visible"),
+        },
+        "preview_urls": {
+            "original": f"/api/debug/fish-completion-lab/media/{payload.test_id}/original",
+            "sam_raw": f"/api/debug/fish-completion-lab/media/{payload.test_id}/sam-raw",
+            "visible_fish_refined": f"/api/debug/fish-completion-lab/media/{payload.test_id}/visible-fish-refined",
+            "sam_visible": f"/api/debug/fish-completion-lab/media/{payload.test_id}/visible-fish-refined",
+        },
+        "refined_visible": _data_url(refined_fish, "image/png"),
+    }
 
 
 @router.get("/api/debug/fish-completion-lab/media/{test_id}/{kind}")
@@ -576,6 +666,9 @@ def completion_media(test_id: str, kind: str) -> Response:
 
     asset_key = {
         "original": "original",
+        "sam-raw": "sam_raw_transparent",
+        "visible-fish-refined": "refined_visible",
+        # Backward-compatible alias; it now means the refined visible fish.
         "sam-visible": "refined_visible",
         "fish-mask": "refined_visible_mask",
         "completion-mask": "completion_mask",
@@ -583,7 +676,10 @@ def completion_media(test_id: str, kind: str) -> Response:
     if asset_key is None:
         raise HTTPException(status_code=404, detail="资源不存在")
     state = _load_state(test_id)
-    uri = str((state.get("assets") or {}).get(asset_key) or "").strip()
+    assets = state.get("assets") or {}
+    uri = str(assets.get(asset_key) or "").strip()
+    if kind == "sam-raw" and not uri:
+        uri = str(assets.get("sam_transparent") or assets.get("sam_raw_mask") or "").strip()
     if not uri:
         raise HTTPException(status_code=404, detail="资源不存在")
     try:

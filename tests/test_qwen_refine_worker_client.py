@@ -51,7 +51,7 @@ def test_qwen_worker_health_and_refine_contract(monkeypatch):
 
     source = "data:image/png;base64," + base64.b64encode(b"SAM_VISIBLE").decode("ascii")
     result = invoke_qwen_refine_worker(
-        sam_visible_image_uri=source,
+        visible_fish_refined_image_uri=source,
         source_run_id="FCL_123",
         prompt=DEFAULT_PROMPT,
         negative_prompt=DEFAULT_NEGATIVE_PROMPT,
@@ -62,7 +62,7 @@ def test_qwen_worker_health_and_refine_contract(monkeypatch):
 
     request = captured[1][0]
     assert request.full_url == "http://worker/refine"
-    assert b'name="image"; filename="sam_visible.png"' in request.data
+    assert b'name="image"; filename="visible_fish_refined.png"' in request.data
     assert b'name="params"' in request.data
     assert b'"mode":"fish_preserve_refine_qwen_v1"' in request.data
     assert b'"source_run_id":"FCL_123"' in request.data
@@ -71,5 +71,5 @@ def test_qwen_worker_health_and_refine_contract(monkeypatch):
     assert b"SAM_VISIBLE" in request.data
     assert result["refine_result_uri"] == "http://worker/output/refined.png"
     assert result["final_asset_uri"] == "http://worker/output/final.png"
-    assert result["worker_protocol"]["input_source"] == "sam_visible"
+    assert result["worker_protocol"]["input_source"] == "visible_fish_refined"
     assert QWEN_MODE == "fish_preserve_refine_qwen_v1"
