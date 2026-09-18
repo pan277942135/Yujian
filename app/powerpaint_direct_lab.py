@@ -415,7 +415,17 @@ async def prepare_direct_lab(request: Request, db=Depends(get_db)):
         detector = _detector_summary(detector_run, assessment, primary, source)
         sam = {"used": True, "model": "SAM_VIT_B", "quality": segmentation.quality.value, "mask_area_pixels": int(raw_mask.sum())}
         report = _base_report(test_id, item, data, source, detector, sam, strategy)
-        report["assets"] = {"original": original_uri, "sam_mask": sam_mask_uri, "sam_transparent": sam_transparent_uri, "worker_edit_mask": worker_edit_mask_uri}
+        # ``sam_transparent`` is the existing Direct Lab artifact consumed by
+        # downstream experiments.  Keep the old key and expose the explicit
+        # ``sam_visible`` alias so callers do not need to know the historical
+        # filename while still sharing the exact same Detector/SAM result.
+        report["assets"] = {
+            "original": original_uri,
+            "sam_mask": sam_mask_uri,
+            "sam_transparent": sam_transparent_uri,
+            "sam_visible": sam_transparent_uri,
+            "worker_edit_mask": worker_edit_mask_uri,
+        }
         report["preview_original"] = _data_url(original_bytes, "image/png")
         report["preview_sam"] = _data_url(segmentation.cutout_png, "image/png")
         report["preview_worker_mask"] = _data_url(worker_mask_bytes, "image/png")
@@ -424,7 +434,20 @@ async def prepare_direct_lab(request: Request, db=Depends(get_db)):
         report["timings"].update({"input_decode_ms": input_decode_ms, "detector_ms": detector_ms, "sam_ms": sam_ms})
         report["timings"]["prepare_total_ms"] = round((time.perf_counter() - started) * 1000, 2)
         report["progress"] = _progress(report)
-        state = {"test_id": test_id, "dataset_version": dataset_version, "dataset_item_id": item.id, "image_id": item.image_id, "original_uri": original_uri, "sam_mask_uri": sam_mask_uri, "sam_transparent_uri": sam_transparent_uri, "worker_edit_mask_uri": worker_edit_mask_uri, "mask_strategy": strategy, "prompt_id": PROMPT_ID, "report": report}
+        state = {
+            "test_id": test_id,
+            "dataset_version": dataset_version,
+            "dataset_item_id": item.id,
+            "image_id": item.image_id,
+            "original_uri": original_uri,
+            "sam_mask_uri": sam_mask_uri,
+            "sam_transparent_uri": sam_transparent_uri,
+            "sam_visible_uri": sam_transparent_uri,
+            "worker_edit_mask_uri": worker_edit_mask_uri,
+            "mask_strategy": strategy,
+            "prompt_id": PROMPT_ID,
+            "report": report,
+        }
         state_uri = _persist(test_id, "prepare.json", json.dumps(state, ensure_ascii=False, indent=2).encode(), "application/json")
         report["assets"]["prepare"] = state_uri
         report_uri = _persist(test_id, "prepare_report.json", json.dumps(report, ensure_ascii=False, indent=2).encode(), "application/json")
