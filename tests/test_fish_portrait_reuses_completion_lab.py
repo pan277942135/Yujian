@@ -15,6 +15,9 @@ def test_fish_portrait_reuses_existing_completion_and_direct_lab_contracts():
     assert "/debug/fish-completion-lab" in portrait_html
     assert "/debug/powerpaint-direct-lab" in portrait_html
     assert "fish_preserve_refine_v2" in portrait_js
+    assert "fish_preserve_refine_qwen_v1" in portrait_js
+    assert "fish_preserve_refine_qwen_v1" in portrait_html
+    assert "sam_visible" in completion_lab
     assert "SAM Visible" in portrait_html
     assert '@router.post("/api/debug/fish-completion-lab/prepare")' in completion_lab
     assert "detect(source)" in completion_lab

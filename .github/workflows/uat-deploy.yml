@@ -30,6 +30,8 @@ env:
   FISH_COMPLETION_WORKER_URL: http://136.111.134.128:8080
   FISH_PORTRAIT_WORKER_URL: http://34.69.75.199:8000
   FISH_PORTRAIT_WORKER_PATH: /portrait
+  FISH_QWEN_REFINE_WORKER_URL: http://136.111.134.128:8002
+  FISH_QWEN_REFINE_WORKER_PATH: /refine
 
 jobs:
   preflight:
@@ -117,6 +119,8 @@ jobs:
           FISH_COMPLETION_WORKER_URL: ${{ env.FISH_COMPLETION_WORKER_URL }}
           FISH_PORTRAIT_WORKER_URL: ${{ env.FISH_PORTRAIT_WORKER_URL }}
           FISH_PORTRAIT_WORKER_PATH: ${{ env.FISH_PORTRAIT_WORKER_PATH }}
+          FISH_QWEN_REFINE_WORKER_URL: ${{ env.FISH_QWEN_REFINE_WORKER_URL }}
+          FISH_QWEN_REFINE_WORKER_PATH: ${{ env.FISH_QWEN_REFINE_WORKER_PATH }}
         run: bash scripts/deploy_console_runtime.sh
 
       - name: Fish Portrait Worker connectivity smoke

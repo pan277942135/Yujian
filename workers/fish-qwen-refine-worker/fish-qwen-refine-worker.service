@@ -1,0 +1,16 @@
+[Unit]
+Description=Fish Qwen Refine Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pan277942135
+WorkingDirectory=/opt/fish-qwen-refine-worker
+EnvironmentFile=-/etc/yujian/fish-qwen-refine-worker.env
+ExecStart=/opt/fish-qwen-refine-worker/.venv/bin/uvicorn worker:app --host 0.0.0.0 --port 8002 --workers 1
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
