@@ -20,6 +20,6 @@ def test_qwen_page_mode_and_worker_contract_are_present():
     assert "COMPLETION_LAB_PREPARE_ENDPOINT = '/api/debug/fish-completion-lab/prepare'" in javascript
     assert '"sam_visible": f"/api/debug/fish-completion-lab/media/{test_id}/sam-visible"' in completion
     assert "POST /refine" in worker or '@app.post("/refine"' in worker
-    assert 'port=8002' in worker
+    assert 'port=int(os.getenv("PORT", "8002"))' in worker
     assert '--port 8002' in service
     assert "/portrait/generate" not in client
