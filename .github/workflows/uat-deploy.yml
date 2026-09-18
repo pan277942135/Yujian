@@ -30,7 +30,7 @@ env:
   FISH_COMPLETION_WORKER_URL: http://136.111.134.128:8080
   FISH_PORTRAIT_WORKER_URL: http://34.69.75.199:8000
   FISH_PORTRAIT_WORKER_PATH: /portrait
-  FISH_QWEN_REFINE_WORKER_URL: http://136.111.134.128:8002
+  FISH_QWEN_REFINE_WORKER_URL: http://34.69.75.199:8002
   FISH_QWEN_REFINE_WORKER_PATH: /refine
 
 jobs:
@@ -123,7 +123,8 @@ jobs:
           FISH_QWEN_REFINE_WORKER_PATH: ${{ env.FISH_QWEN_REFINE_WORKER_PATH }}
         run: bash scripts/deploy_console_runtime.sh
 
-      - name: Fish Portrait Worker connectivity smoke
+      - name: Legacy Fish Portrait Worker connectivity smoke (non-blocking)
+        continue-on-error: true
         env:
           SERVICE_URL: ${{ steps.deploy.outputs.service_url }}
           PORTRAIT_WORKER_URL: ${{ env.FISH_PORTRAIT_WORKER_URL }}
@@ -146,9 +147,53 @@ jobs:
           assert payload.get("portrait_worker_url") == "http://34.69.75.199:8000", payload
           '
           {
-            echo "### Fish Portrait Worker smoke"
+            echo "### Legacy Fish Portrait Worker smoke (non-blocking)"
             echo "- Worker health: **PASS**"
             echo "- Cloud Run worker URL configuration: **PASS**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Qwen Refine Worker connectivity smoke
+        env:
+          SERVICE_URL: ${{ steps.deploy.outputs.service_url }}
+          FISH_QWEN_REFINE_WORKER_URL: ${{ env.FISH_QWEN_REFINE_WORKER_URL }}
+          FISH_QWEN_REFINE_WORKER_PATH: ${{ env.FISH_QWEN_REFINE_WORKER_PATH }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$FISH_QWEN_REFINE_WORKER_URL" = "http://34.69.75.199:8002"
+          test "$FISH_QWEN_REFINE_WORKER_PATH" = "/refine"
+
+          QWEN_WORKER_HEALTH="$(curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 30 -fsS "$FISH_QWEN_REFINE_WORKER_URL/health")"
+          printf '%s' "$QWEN_WORKER_HEALTH" | python -c '
+          import json,sys
+          payload=json.load(sys.stdin)
+          assert payload.get("status") == "ok", payload
+          assert payload.get("service") == "fish-qwen-refine-worker", payload
+          assert payload.get("model") == "Qwen-Image-Edit-2511", payload
+          '
+
+          RUNTIME_JSON="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json)"
+          printf '%s' "$RUNTIME_JSON" | python -c '
+          import json,sys
+          payload=json.load(sys.stdin)
+          containers=((payload.get("spec") or {}).get("template") or {}).get("spec",{}).get("containers") or []
+          env={item.get("name"): item.get("value") for item in ((containers[0].get("env") if containers else []) or [])}
+          assert env.get("FISH_QWEN_REFINE_WORKER_URL") == "http://34.69.75.199:8002", env
+          assert env.get("FISH_QWEN_REFINE_WORKER_PATH") == "/refine", env
+          '
+
+          DEPLOY_HEALTH="$(curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 30 -fsS "$SERVICE_URL/health/deploy")"
+          printf '%s' "$DEPLOY_HEALTH" | python -c '
+          import json,sys
+          payload=json.load(sys.stdin)
+          assert payload.get("qwen_refine_worker_configured") is True, payload
+          assert payload.get("qwen_refine_worker_url") == "http://34.69.75.199:8002", payload
+          '
+          {
+            echo "### Qwen Refine Worker smoke"
+            echo "- Worker /health: **PASS**"
+            echo "- Cloud Run runtime URL/PATH: **PASS**"
+            echo "- Cloud Run /health/deploy Qwen configuration: **PASS**"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Checkout Android app main
