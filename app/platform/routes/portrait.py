@@ -1580,6 +1580,7 @@ def portrait_result(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any
         "preserve_strength": experiment.get("preserve_strength"),
         "refine_strength": experiment.get("refine_strength"),
         "auto_straighten": experiment.get("auto_straighten"),
+        "straighten_angle": result.get("straighten_angle"),
         "steps": experiment.get("steps"),
         "seed": experiment.get("seed"),
         "mask_type": experiment.get("mask_type"),
