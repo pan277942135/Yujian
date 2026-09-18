@@ -29,6 +29,19 @@ INPAINT_DEFAULT_NEGATIVE_PROMPT = (
     "different fish species, changed body shape, wrong fish anatomy, extra fins, "
     "missing fins, deformed fish, cartoon, illustration, fake texture, duplicate fish"
 )
+REFINE_DEFAULT_PROMPT = (
+    "professional wildlife fish portrait, realistic photography, "
+    "preserve original fish identity, preserve original fish species characteristics, "
+    "preserve original body proportions, preserve original head shape, "
+    "preserve original fin structure, preserve original color and texture, "
+    "complete fish body, natural fish anatomy, clean natural background, "
+    "soft lighting, premium realistic fishing asset"
+)
+REFINE_DEFAULT_NEGATIVE_PROMPT = (
+    "different fish species, different fish identity, changed body shape, changed head shape, "
+    "changed body proportions, wrong fish anatomy, extra fins, missing fins, deformed fins, "
+    "mutated fish, duplicate fish, cartoon, illustration, fake texture, obvious AI artifacts"
+)
 
 logger = logging.getLogger(__name__)
 
@@ -533,12 +546,146 @@ def invoke_portrait_inpaint_worker(
     return result
 
 
+def invoke_portrait_refine_worker(
+    *,
+    sam_visible_image_uri: str,
+    original_image_uri: str | None,
+    source_run_id: str | None,
+    species: str | None,
+    prompt: str | None,
+    negative_prompt: str | None,
+    preserve_strength: float,
+    refine_strength: float,
+    auto_straighten: bool,
+    steps: int,
+    seed: int | None,
+) -> dict[str, Any]:
+    """Run Fish Preserve Refine V2 from an existing SAM Visible artifact.
+
+    The worker receives exactly one image part: the already prepared SAM
+    Visible fish.  Detector/SAM and the Original -> SAM Visible preparation
+    remain owned by PowerPaint Direct Lab V0.2.
+    """
+
+    base_url = _base_url()
+    if not base_url:
+        raise PortraitWorkerError(
+            "PORTRAIT_WORKER_NOT_CONFIGURED",
+            "FISH_PORTRAIT_WORKER_URL is not configured",
+        )
+    sam_data, sam_media_type = _read_image_uri(sam_visible_image_uri, label="sam_visible")
+    params = {
+        "preserve_strength": float(preserve_strength),
+        "refine_strength": float(refine_strength),
+        "auto_straighten": bool(auto_straighten),
+        "steps": int(steps),
+        "seed": int(seed) if seed is not None else None,
+    }
+    fields = [
+        ("task", "fish_preserve_refine"),
+        ("mode", "fish_preserve_refine_v2"),
+        ("species", str(species or "")),
+        ("source_run_id", str(source_run_id or "")),
+        ("original_image_uri", str(original_image_uri or "")),
+        ("preserve_strength", str(params["preserve_strength"])),
+        ("refine_strength", str(params["refine_strength"])),
+        ("auto_straighten", "true" if params["auto_straighten"] else "false"),
+        ("steps", str(params["steps"])),
+        ("seed", "" if params["seed"] is None else str(params["seed"])),
+        ("params", json.dumps(params, separators=(",", ":"))),
+    ]
+    body, content_type = _multipart_body(
+        fields=fields,
+        files=[("image", "sam_visible.png", sam_data, sam_media_type)],
+    )
+    logger.info(
+        "portrait_refine_worker_request: mode=fish_preserve_refine_v2 "
+        "input_source=sam_visible sam_visible_bytes=%d species=%s "
+        "preserve_strength=%.2f refine_strength=%.2f auto_straighten=%s steps=%d seed=%s",
+        len(sam_data),
+        str(species or ""),
+        params["preserve_strength"],
+        params["refine_strength"],
+        str(params["auto_straighten"]).lower(),
+        params["steps"],
+        params["seed"],
+    )
+    headers = _headers()
+    headers["Content-Type"] = content_type
+    request = urllib.request.Request(
+        f"{base_url}{_worker_path()}",
+        data=body,
+        method="POST",
+        headers=headers,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=_timeout()) as response:
+            status_code, result = _json_response(response)
+    except urllib.error.HTTPError as exc:
+        raise _worker_error(exc) from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise PortraitWorkerError("PORTRAIT_WORKER_CONNECTION_FAILED", str(exc)) from exc
+
+    refined_uri = _result_uri(
+        {
+            "result_uri": result.get("refine_result_uri")
+            or result.get("refined_fish_uri")
+            or result.get("refined_image_uri")
+            or result.get("refined_result_uri")
+            or result.get("refined_image")
+            or result.get("refined_path")
+            or result.get("refined_result_path"),
+        },
+        base_url,
+    )
+    final_uri = _result_uri(
+        {
+            "result_uri": result.get("final_asset_uri")
+            or result.get("final_result_uri")
+            or result.get("final_image_uri")
+            or result.get("final_asset_path")
+            or result.get("result_uri")
+            or result.get("generated_image_uri")
+            or result.get("image_url")
+            or result.get("result_path"),
+        },
+        base_url,
+    )
+    if not final_uri and not refined_uri:
+        raise PortraitWorkerError(
+            "PORTRAIT_WORKER_INVALID_RESPONSE",
+            "Portrait refine worker response is missing refined/final output URI",
+            status_code=status_code,
+        )
+    result["refine_result_uri"] = refined_uri or final_uri
+    result["final_asset_uri"] = final_uri or refined_uri
+    result["result_uri"] = final_uri or refined_uri
+    result["worker_status"] = "WORKER_EXECUTED"
+    result["worker_http_status"] = status_code
+    result["worker_protocol"] = {
+        "request": "multipart/form-data",
+        "mode": "fish_preserve_refine_v2",
+        "input_source": "sam_visible",
+        "source_field": "image",
+        "reference_field": None,
+        "sam_visible_bytes": len(sam_data),
+        "preserve_strength": params["preserve_strength"],
+        "refine_strength": params["refine_strength"],
+        "auto_straighten": params["auto_straighten"],
+        "steps": params["steps"],
+        "seed": params["seed"],
+    }
+    return result
+
+
 __all__ = [
     "PortraitWorkerError",
     "check_portrait_worker",
     "invoke_portrait_worker",
     "invoke_portrait_inpaint_worker",
+    "invoke_portrait_refine_worker",
     "INPAINT_DEFAULT_PROMPT",
     "INPAINT_DEFAULT_NEGATIVE_PROMPT",
+    "REFINE_DEFAULT_PROMPT",
+    "REFINE_DEFAULT_NEGATIVE_PROMPT",
 ]
-
