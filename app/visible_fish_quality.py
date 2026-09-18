@@ -122,10 +122,11 @@ def analyze_visible_fish_quality(
     refined_area = int(refined.sum())
     metric_scale = max(1, int(np.ceil(max(raw.shape) / 1024)))
     metric_refined = _downsample_mask(refined, metric_scale)
+    metric_area = int(metric_refined.sum())
     component_sizes = _components(metric_refined)
     component_count = len(component_sizes)
     largest_component = component_sizes[0] if component_sizes else 0
-    largest_component_ratio = largest_component / refined_area if refined_area else 0.0
+    largest_component_ratio = largest_component / metric_area if metric_area else 0.0
 
     original_bbox = _clamped_bbox(bbox_pixels, raw.shape)
     x1, y1, x2, y2 = (
@@ -140,7 +141,6 @@ def analyze_visible_fish_quality(
     bbox_coverage_ratio = inside_bbox / bbox_area if bbox_area else 0.0
 
     holes = _hole_pixels(metric_refined)
-    metric_area = int(metric_refined.sum())
     bbox_fill_ratio = metric_area / bbox_area if bbox_area else 0.0
     hole_ratio = holes / max(1, metric_area + holes)
 
