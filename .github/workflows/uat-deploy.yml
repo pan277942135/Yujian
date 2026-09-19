@@ -503,6 +503,313 @@ jobs:
             echo "Qwen path: $(tr -d '\n' < "$OUT/qwen_status.txt")"
           } >> "$GITHUB_STEP_SUMMARY"
 
+
+      - name: Fish Visible manual correction and GOOD Qwen E2E
+        id: fish_visible_qwen_e2e
+        env:
+          SERVICE_URL: ${{ steps.deploy.outputs.service_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="/tmp/fish-visible-e2e"
+          INITIAL_QUALITY="$(python3 - "$OUT/quality.json" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              print(json.load(handle)["visible_fish_quality"])
+          PY
+          )"
+
+          if [[ "$INITIAL_QUALITY" == "GOOD" ]]; then
+            printf '%s\n' "Initial Visible Fish quality was already GOOD; Qwen result is recorded by the preceding step." > "$OUT/qwen_e2e_status.txt"
+            exit 0
+          fi
+
+          COOKIE_JAR="$OUT/qwen-cookies.txt"
+          trap 'rm -f "$COOKIE_JAR"' EXIT
+          CONSOLE_KEY="$(gcloud secrets versions access latest --secret=yujian-console-access-key --project="$PROJECT_ID")"
+          test -n "$CONSOLE_KEY"
+          echo "::add-mask::$CONSOLE_KEY"
+          LOGIN_STATUS="$(curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 30 -sS -o /dev/null -w '%{http_code}' -c "$COOKIE_JAR" -X POST "$SERVICE_URL/login" --data-urlencode "access_key=$CONSOLE_KEY")"
+          test "$LOGIN_STATUS" = "303"
+          unset CONSOLE_KEY
+
+          python3 - "$OUT/02_sam_raw.png" "$OUT/manual_masks.json" <<'PY'
+          import base64
+          import json
+          import struct
+          import sys
+          import zlib
+          from pathlib import Path
+
+          source_path = Path(sys.argv[1])
+          output_path = Path(sys.argv[2])
+          png = source_path.read_bytes()
+          if png[:8] != b"\x89PNG\r\n\x1a\n":
+              raise SystemExit("SAM Raw evidence is not PNG")
+
+          offset = 8
+          idat = bytearray()
+          width = height = None
+          color_type = None
+          while offset < len(png):
+              length = struct.unpack(">I", png[offset:offset + 4])[0]
+              kind = png[offset + 4:offset + 8]
+              payload = png[offset + 8:offset + 8 + length]
+              offset += 12 + length
+              if kind == b"IHDR":
+                  width, height, bit_depth, color_type, compression, filtering, interlace = struct.unpack(">IIBBBBB", payload)
+                  if bit_depth != 8 or color_type != 6 or interlace != 0:
+                      raise SystemExit("expected non-interlaced 8-bit RGBA PNG")
+              elif kind == b"IDAT":
+                  idat.extend(payload)
+              elif kind == b"IEND":
+                  break
+
+          decoded = zlib.decompress(bytes(idat))
+          bytes_per_pixel = 4
+          stride = width * bytes_per_pixel
+          rows = []
+          previous = bytearray(stride)
+          cursor = 0
+
+          def paeth(a, b, c):
+              estimate = a + b - c
+              pa = abs(estimate - a)
+              pb = abs(estimate - b)
+              pc = abs(estimate - c)
+              return a if pa <= pb and pa <= pc else b if pb <= pc else c
+
+          for _ in range(height):
+              filter_type = decoded[cursor]
+              cursor += 1
+              row = bytearray(decoded[cursor:cursor + stride])
+              cursor += stride
+              for index in range(stride):
+                  left = row[index - bytes_per_pixel] if index >= bytes_per_pixel else 0
+                  up = previous[index]
+                  upper_left = previous[index - bytes_per_pixel] if index >= bytes_per_pixel else 0
+                  if filter_type == 1:
+                      row[index] = (row[index] + left) & 255
+                  elif filter_type == 2:
+                      row[index] = (row[index] + up) & 255
+                  elif filter_type == 3:
+                      row[index] = (row[index] + ((left + up) // 2)) & 255
+                  elif filter_type == 4:
+                      row[index] = (row[index] + paeth(left, up, upper_left)) & 255
+                  elif filter_type != 0:
+                      raise SystemExit(f"unsupported PNG filter {filter_type}")
+              rows.append(row)
+              previous = row
+
+          alpha = [[rows[y][x * 4 + 3] > 127 for x in range(width)] for y in range(height)]
+          visited = [[False] * width for _ in range(height)]
+          components = []
+          for y in range(height):
+              for x in range(width):
+                  if not alpha[y][x] or visited[y][x]:
+                      continue
+                  stack = [(y, x)]
+                  visited[y][x] = True
+                  points = []
+                  while stack:
+                      cy, cx = stack.pop()
+                      points.append((cy, cx))
+                      for ny in range(max(0, cy - 1), min(height, cy + 2)):
+                          for nx in range(max(0, cx - 1), min(width, cx + 2)):
+                              if alpha[ny][nx] and not visited[ny][nx]:
+                                  visited[ny][nx] = True
+                                  stack.append((ny, nx))
+                  components.append(points)
+          components.sort(key=len, reverse=True)
+          if len(components) < 2 or len(components[1]) < 100:
+              raise SystemExit(f"expected a separated visible fish fin component: {[len(x) for x in components[:5]]}")
+
+          keep = [[False] * width for _ in range(height)]
+          for component in components[:2]:
+              for y, x in component:
+                  keep[y][x] = True
+
+          distance = None
+          for y, x in components[0]:
+              for yy, xx in components[1]:
+                  current = (y - yy) ** 2 + (x - xx) ** 2
+                  if distance is None or current < distance[0]:
+                      distance = (current, y, x, yy, xx)
+          _, y1, x1, y2, x2 = distance
+          added = [[False] * width for _ in range(height)]
+          steps = max(abs(y2 - y1), abs(x2 - x1))
+          for index in range(steps + 1):
+              ratio = index / max(1, steps)
+              cy = round(y1 + (y2 - y1) * ratio)
+              cx = round(x1 + (x2 - x1) * ratio)
+              for dy in range(-3, 4):
+                  for dx in range(-3, 4):
+                      if dy * dy + dx * dx <= 9 and 0 <= cy + dy < height and 0 <= cx + dx < width:
+                          added[cy + dy][cx + dx] = True
+
+          removed = [[alpha[y][x] and not keep[y][x] for x in range(width)] for y in range(height)]
+
+          def png_chunk(kind, payload):
+              return (
+                  struct.pack(">I", len(payload))
+                  + kind
+                  + payload
+                  + struct.pack(">I", zlib.crc32(kind + payload) & 0xffffffff)
+              )
+
+          def gray_png(mask):
+              raw = b"".join(b"\x00" + bytes(255 if value else 0 for value in row) for row in mask)
+              return (
+                  b"\x89PNG\r\n\x1a\n"
+                  + png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0))
+                  + png_chunk(b"IDAT", zlib.compress(raw, 9))
+                  + png_chunk(b"IEND", b"")
+              )
+
+          payload = {
+              "masks": {
+                  "visible_add": "data:image/png;base64," + base64.b64encode(gray_png(added)).decode("ascii"),
+                  "remove": "data:image/png;base64," + base64.b64encode(gray_png(removed)).decode("ascii"),
+              },
+              "manual_correction_strategy": "keep_largest_fish_and_separated_fin; bridge_visible_fish_gap; remove_small_components",
+              "component_sizes_before": [len(component) for component in components[:8]],
+              "added_pixels": sum(sum(row) for row in added),
+              "removed_pixels": sum(sum(row) for row in removed),
+          }
+          with output_path.open("w", encoding="utf-8") as handle:
+              json.dump(payload, handle, ensure_ascii=False)
+          with (output_path.parent / "manual_correction_plan.json").open("w", encoding="utf-8") as handle:
+              json.dump({key: value for key, value in payload.items() if key != "masks"}, handle, ensure_ascii=False, indent=2)
+          PY
+
+          MASK_STATUS="$(
+            curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 120 \
+              -sS -b "$COOKIE_JAR" -o "$OUT/manual_correction.json" -w '%{http_code}' \
+              -H 'Content-Type: application/json' \
+              --data-binary "@$OUT/manual_masks.json" \
+              "$SERVICE_URL/api/debug/fish-completion-lab/masks"
+          )"
+          test "$MASK_STATUS" = "200"
+
+          MANUAL_QUALITY="$(python3 - "$OUT/manual_correction.json" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              payload = json.load(handle)
+          quality = payload.get("visible_fish_quality") or payload.get("statistics", {}).get("visible_quality") or {}
+          status = quality.get("visible_fish_quality") if isinstance(quality, dict) else quality
+          print(str(status or "INVALID").upper())
+          if str(status or "INVALID").upper() != "GOOD":
+              raise SystemExit(f"manual correction did not reach GOOD: {payload}")
+          PY
+          )"
+          printf '%s\n' "$MANUAL_QUALITY" > "$OUT/quality_after_correction.txt"
+          cp "$OUT/manual_correction.json" "$OUT/quality_after_correction.json"
+          TEST_ID="$(cat "$OUT/prepared_test_id.txt")"
+          curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 120 -fsS -b "$COOKIE_JAR" \
+            "$SERVICE_URL/api/debug/fish-completion-lab/media/$TEST_ID/visible-fish-refined" \
+            -o "$OUT/04_visible_fish_refined_corrected.png"
+
+          python3 - "$OUT/prepare.json" "$OUT/manual_correction.json" "$OUT/qwen_payload_after_correction.json" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              prepared = json.load(handle)
+          with open(sys.argv[2], encoding="utf-8") as handle:
+              corrected = json.load(handle)
+          original_assets = prepared.get("assets") or {}
+          corrected_assets = corrected.get("assets") or {}
+          quality = corrected.get("visible_fish_quality") or corrected.get("statistics", {}).get("visible_quality") or {}
+          status = str(quality.get("visible_fish_quality") if isinstance(quality, dict) else quality or "INVALID").upper()
+          if status != "GOOD":
+              raise SystemExit(f"correction quality is {status}")
+          payload = {
+              "mode": "fish_preserve_refine_qwen_v1",
+              "source_run_id": prepared["test_id"],
+              "original_image_uri": original_assets.get("original"),
+              "sam_raw_uri": original_assets.get("sam_raw_transparent") or original_assets.get("sam_transparent") or original_assets.get("sam_raw_mask"),
+              "visible_fish_refined_uri": corrected_assets.get("visible_fish_refined") or corrected_assets.get("refined_visible"),
+              "qwen_input_uri": corrected_assets.get("visible_fish_refined") or corrected_assets.get("refined_visible"),
+              "visible_fish_quality": "GOOD",
+              "steps": 20,
+              "seed": None,
+              "auto_straighten": False,
+              "prompt": "Restore and refine this fish into a clean, complete, realistic fish portrait. Keep the exact same fish identity, species traits, body proportions, head shape, fin structure, scale texture, and natural color pattern. Use the visible fish as the only identity reference. Complete the missing or occluded fish body parts naturally. Remove all non-fish objects and do not keep any human hand, fingers, tools, nets, hooks, ropes, buckets, or other foreign objects. The result should be a single complete fish, realistic, clean, natural, and high-detail.",
+              "negative_prompt": "human hand, fingers, arm, person, tool, fishing net, hook, rope, bucket, extra fish, duplicated fish, changed species, wrong anatomy, deformed body, cartoon, painting, fake texture, unrealistic fins, broken tail",
+              "qwen": {"steps": 20, "seed": None, "auto_straighten": False},
+          }
+          with open(sys.argv[3], "w", encoding="utf-8") as handle:
+              json.dump(payload, handle, ensure_ascii=False, indent=2)
+          PY
+
+          JOB_STATUS="$(
+            curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 120 \
+              -sS -b "$COOKIE_JAR" -o "$OUT/qwen_job_after_correction.json" -w '%{http_code}' \
+              -H 'Content-Type: application/json' \
+              --data-binary "@$OUT/qwen_payload_after_correction.json" \
+              "$SERVICE_URL/api/platform/portrait/jobs"
+          )"
+          test "$JOB_STATUS" = "200"
+
+          QWEN_RUN_ID="$(python3 - "$OUT/qwen_job_after_correction.json" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              payload = json.load(handle)
+          print(payload.get("run_id") or payload.get("pipeline_run_id") or "")
+          PY
+          )"
+          test -n "$QWEN_RUN_ID"
+          printf '%s\n' "$QWEN_RUN_ID" > "$OUT/qwen_run_id_after_correction.txt"
+
+          for _ in $(seq 1 120); do
+            curl --retry 2 --retry-all-errors --retry-delay 1 --connect-timeout 10 --max-time 30 -fsS -b "$COOKIE_JAR" \
+              "$SERVICE_URL/api/platform/pipeline/$QWEN_RUN_ID" -o "$OUT/qwen_pipeline_after_correction.json"
+            status="$(python3 - "$OUT/qwen_pipeline_after_correction.json" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              print(str(json.load(handle).get("status") or "").upper())
+          PY
+            )"
+            [[ "$status" == "SUCCESS" || "$status" == "FAILED" ]] && break
+            sleep 15
+          done
+          test "$status" = "SUCCESS"
+
+          curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 120 -fsS -b "$COOKIE_JAR" \
+            "$SERVICE_URL/api/platform/portrait/results/$QWEN_RUN_ID" \
+            -o "$OUT/qwen_result_after_correction.json"
+          python3 - "$OUT/qwen_result_after_correction.json" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              result = json.load(handle)
+          metadata = result.get("metadata") or {}
+          required = ("qwen_input_uri", "visible_fish_quality", "visible_fish_quality_report", "worker_model", "elapsed_ms", "refine_result_uri")
+          missing = [key for key in required if metadata.get(key) in (None, "", {})]
+          if missing:
+              raise SystemExit(f"Qwen telemetry missing: {missing}; metadata={metadata}")
+          if metadata.get("visible_fish_quality") != "GOOD":
+              raise SystemExit(f"Qwen quality mismatch: {metadata}")
+          if metadata.get("qwen_input_uri") != metadata.get("visible_fish_refined_uri"):
+              raise SystemExit(f"Qwen input mismatch: {metadata}")
+          if metadata.get("protected_compose_status") != "PENDING" or result.get("final_image") is not None:
+              raise SystemExit(f"Final Asset must remain pending: {result}")
+          PY
+          curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 120 -fsS -b "$COOKIE_JAR" \
+            "$SERVICE_URL/api/platform/portrait/results/$QWEN_RUN_ID/media/refined" \
+            -o "$OUT/06_qwen_refined_candidate.png"
+          printf '%s\n' "GOOD after visible correction; Qwen candidate SUCCESS; Final Asset remains PENDING" > "$OUT/qwen_e2e_status.txt"
+
+          {
+            echo "Manual correction quality: $MANUAL_QUALITY"
+            echo "Qwen run: $QWEN_RUN_ID"
+            echo "Qwen candidate: SUCCESS"
+            echo "Final Asset: PENDING (Protected Compose)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload Fish Visible E2E evidence
         if: always()
         uses: actions/upload-artifact@v4
