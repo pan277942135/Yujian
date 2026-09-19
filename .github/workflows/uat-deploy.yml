@@ -534,7 +534,7 @@ jobs:
           test "$LOGIN_STATUS" = "303"
           unset CONSOLE_KEY
 
-          python3 - "$OUT/02_sam_raw.png" "$OUT/manual_masks.json" <<'PY'
+          python3 - "$OUT/02_sam_raw.png" "$OUT/manual_masks.json" "$OUT/prepared_test_id.txt" <<'PY'
           import base64
           import json
           import struct
@@ -544,6 +544,9 @@ jobs:
 
           source_path = Path(sys.argv[1])
           output_path = Path(sys.argv[2])
+          test_id = Path(sys.argv[3]).read_text(encoding="utf-8").strip()
+          if not test_id:
+              raise SystemExit("prepared test_id is empty")
           png = source_path.read_bytes()
           if png[:8] != b"\x89PNG\r\n\x1a\n":
               raise SystemExit("SAM Raw evidence is not PNG")
@@ -668,6 +671,7 @@ jobs:
               )
 
           payload = {
+              "test_id": test_id,
               "masks": {
                   "visible_add": "data:image/png;base64," + base64.b64encode(gray_png(added)).decode("ascii"),
                   "remove": "data:image/png;base64," + base64.b64encode(gray_png(removed)).decode("ascii"),
