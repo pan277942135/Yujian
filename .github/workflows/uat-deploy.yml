@@ -196,6 +196,280 @@ jobs:
             echo "- Cloud Run /health/deploy Qwen configuration: **PASS**"
           } >> "$GITHUB_STEP_SUMMARY"
 
+
+      - name: Fish Visible historical failed-case E2E
+        id: fish_visible_e2e
+        env:
+          SERVICE_URL: ${{ steps.deploy.outputs.service_url }}
+          HISTORICAL_RUN_ID: FCL_20260918_145102_401f
+          FISH_VISIBLE_E2E_BUCKET: yujian-model-factory-571785698442
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="/tmp/fish-visible-e2e"
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          COOKIE_JAR="$OUT/cookies.txt"
+
+          CONSOLE_KEY="$(gcloud secrets versions access latest --secret=yujian-console-access-key --project="$PROJECT_ID")"
+          test -n "$CONSOLE_KEY"
+          echo "::add-mask::$CONSOLE_KEY"
+          LOGIN_STATUS="$(curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 30 -sS -o /dev/null -w '%{http_code}' -c "$COOKIE_JAR" -X POST "$SERVICE_URL/login" --data-urlencode "access_key=$CONSOLE_KEY")"
+          test "$LOGIN_STATUS" = "303"
+          unset CONSOLE_KEY
+
+          fetch_report() {
+            local run_id="$1"
+            local destination="$2"
+            local status
+            status="$(curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 60 -sS -b "$COOKIE_JAR" -o "$destination" -w '%{http_code}' "$SERVICE_URL/api/debug/fish-completion-lab/report/$run_id" || true)"
+            [[ "$status" == "200" ]]
+          }
+
+          report_has_required_assets() {
+            python3 - "$1" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              report = json.load(handle)
+          assets = report.get("assets") or {}
+          required = (
+              bool(assets.get("original")),
+              bool(assets.get("sam_raw_mask") or assets.get("sam_raw_transparent") or assets.get("sam_transparent")),
+              bool(assets.get("refined_visible")),
+          )
+          raise SystemExit(0 if all(required) else 1)
+          PY
+          }
+
+          SELECTED_RUN_ID=""
+          if fetch_report "$HISTORICAL_RUN_ID" "$OUT/historical_report.json" && report_has_required_assets "$OUT/historical_report.json"; then
+            SELECTED_RUN_ID="$HISTORICAL_RUN_ID"
+          else
+            mapfile -t CANDIDATES < <(
+              gcloud storage ls "gs://$FISH_VISIBLE_E2E_BUCKET/experiments/fish_completion_lab/v0.3.1/FCL_20260918_*/16_test_report.json" 2>/dev/null \
+                | sed -n 's#.*/\(FCL_[^/]*\)/16_test_report.json#\1#p' \
+                | sort -r
+            )
+            for candidate in "${CANDIDATES[@]}"; do
+              if fetch_report "$candidate" "$OUT/historical_report.json" && report_has_required_assets "$OUT/historical_report.json"; then
+                SELECTED_RUN_ID="$candidate"
+                break
+              fi
+            done
+          fi
+          test -n "$SELECTED_RUN_ID"
+          printf '%s\n' "$SELECTED_RUN_ID" > "$OUT/historical_run_id.txt"
+          cp "$OUT/historical_report.json" "$OUT/00_historical_report.json"
+
+          curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 120 -fsS -b "$COOKIE_JAR" \
+            "$SERVICE_URL/api/debug/fish-completion-lab/media/$SELECTED_RUN_ID/original" \
+            -o "$OUT/01_historical_original.png"
+
+          PREPARE_STATUS="$(
+            curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 900 \
+              -sS -b "$COOKIE_JAR" -o "$OUT/prepare.json" -w '%{http_code}' \
+              -F "file=@$OUT/01_historical_original.png;type=image/png" \
+              -F "case_label=historical_failed_case:$SELECTED_RUN_ID" \
+              -F "source_type=historical_failed_case" \
+              "$SERVICE_URL/api/debug/fish-completion-lab/prepare"
+          )"
+          test "$PREPARE_STATUS" = "200"
+
+          PREPARED_TEST_ID="$(python3 - "$OUT/prepare.json" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              payload = json.load(handle)
+          test_id = str(payload.get("test_id") or "").strip()
+          if not test_id:
+              raise SystemExit("prepare did not return test_id")
+          print(test_id)
+          PY
+          )"
+          printf '%s\n' "$PREPARED_TEST_ID" > "$OUT/prepared_test_id.txt"
+
+          curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 120 -fsS -b "$COOKIE_JAR" \
+            "$SERVICE_URL/api/debug/fish-completion-lab/media/$PREPARED_TEST_ID/sam-raw" \
+            -o "$OUT/02_sam_raw.png"
+          curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 120 -fsS -b "$COOKIE_JAR" \
+            "$SERVICE_URL/api/debug/fish-completion-lab/media/$PREPARED_TEST_ID/visible-fish-refined" \
+            -o "$OUT/03_visible_fish_refined.png"
+
+          python3 - "$OUT/prepare.json" "$OUT/quality.json" "$SELECTED_RUN_ID" "$PREPARED_TEST_ID" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              prepared = json.load(handle)
+          quality = prepared.get("visible_fish_quality")
+          report = prepared.get("visible_fish_quality_report") or prepared.get("statistics", {}).get("visible_quality") or {}
+          if isinstance(quality, dict):
+              report = quality
+              status = str(quality.get("visible_fish_quality") or "INVALID").upper()
+          else:
+              status = str(quality or report.get("visible_fish_quality") or "INVALID").upper()
+          if report.get("quality_gate_passed") is not (status == "GOOD"):
+              raise SystemExit(f"quality gate mismatch: {status} / {report}")
+          if "VISIBLE_REFINEMENT_REQUIRED" in (report.get("quality_reasons") or []):
+              raise SystemExit("manual refinement must not be a quality warning")
+          summary = {
+              "historical_source_run_id": sys.argv[3],
+              "prepared_source_run_id": sys.argv[4],
+              "visible_fish_quality": status,
+              "visible_fish_quality_report": report,
+              "qwen_allowed": status == "GOOD",
+              "qwen_input": "Visible Fish Refined",
+          }
+          with open(sys.argv[2], "w", encoding="utf-8") as handle:
+              json.dump(summary, handle, ensure_ascii=False, indent=2)
+          with open("/tmp/fish-visible-e2e/quality.txt", "w", encoding="utf-8") as handle:
+              reasons = report.get("quality_reasons") or []
+              handle.write(f"VISIBLE_FISH_QUALITY = {status}\n")
+              handle.write(f"Quality Reasons = {', '.join(reasons) if reasons else '—'}\n")
+              handle.write(f"Quality Gate = {'ALLOW QWEN' if status == 'GOOD' else 'BLOCK QWEN'}\n")
+              handle.write("Qwen Input = Visible Fish Refined\n")
+          PY
+
+          if command -v montage >/dev/null 2>&1 && command -v convert >/dev/null 2>&1; then
+            montage "$OUT/01_historical_original.png" -label "Original" \
+              "$OUT/02_sam_raw.png" -label "SAM Raw" \
+              "$OUT/03_visible_fish_refined.png" -label "Visible Fish Refined" \
+              -tile 3x1 -geometry '640x640>' -background white "$OUT/visual-row.png"
+            convert -background white -fill '#111827' -font DejaVu-Sans -pointsize 26 \
+              -size 1920x -gravity west caption:@"$OUT/quality.txt" "$OUT/quality-card.png"
+            convert "$OUT/visual-row.png" "$OUT/quality-card.png" -append "$OUT/05_failed_case_e2e_screenshot.png"
+          else
+            echo "ImageMagick montage/convert unavailable; individual evidence images are uploaded." > "$OUT/evidence_note.txt"
+          fi
+
+          QUALITY_STATUS="$(python3 - "$OUT/quality.json" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              print(json.load(handle)["visible_fish_quality"])
+          PY
+          )"
+
+          python3 - "$OUT/prepare.json" "$OUT/qwen_payload.json" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              prepared = json.load(handle)
+          assets = prepared.get("assets") or {}
+          quality = prepared.get("visible_fish_quality")
+          report = prepared.get("visible_fish_quality_report") or quality or {}
+          status = str(quality.get("visible_fish_quality") if isinstance(quality, dict) else quality or report.get("visible_fish_quality") or "INVALID").upper()
+          payload = {
+              "mode": "fish_preserve_refine_qwen_v1",
+              "source_run_id": prepared["test_id"],
+              "original_image_uri": assets.get("original"),
+              "sam_raw_uri": assets.get("sam_raw_transparent") or assets.get("sam_transparent") or assets.get("sam_raw_mask"),
+              "visible_fish_refined_uri": assets.get("refined_visible"),
+              "qwen_input_uri": assets.get("refined_visible"),
+              "visible_fish_quality": status,
+              "steps": 20,
+              "seed": None,
+              "auto_straighten": False,
+              "prompt": "Restore and refine this fish into a clean, complete, realistic fish portrait. Keep the exact same fish identity, species traits, body proportions, head shape, fin structure, scale texture, and natural color pattern. Use the visible fish as the only identity reference. Complete the missing or occluded fish body parts naturally. Remove all non-fish objects and do not keep any human hand, fingers, tools, nets, hooks, ropes, buckets, or other foreign objects. The result should be a single complete fish, realistic, clean, natural, and high-detail.",
+              "negative_prompt": "human hand, fingers, arm, person, tool, fishing net, hook, rope, bucket, extra fish, duplicated fish, changed species, wrong anatomy, deformed body, cartoon, painting, fake texture, unrealistic fins, broken tail",
+              "qwen": {"steps": 20, "seed": None, "auto_straighten": False},
+          }
+          with open(sys.argv[2], "w", encoding="utf-8") as handle:
+              json.dump(payload, handle, ensure_ascii=False, indent=2)
+          PY
+
+          if [[ "$QUALITY_STATUS" != "GOOD" ]]; then
+            BLOCKED_STATUS="$(
+              curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 120 \
+                -sS -b "$COOKIE_JAR" -o "$OUT/qwen_blocked.json" -w '%{http_code}' \
+                -H 'Content-Type: application/json' \
+                --data-binary "@$OUT/qwen_payload.json" \
+                "$SERVICE_URL/api/platform/portrait/jobs"
+            )"
+            test "$BLOCKED_STATUS" = "422"
+            python3 - "$OUT/qwen_blocked.json" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              body = json.load(handle)
+          detail = body.get("detail") if isinstance(body, dict) else {}
+          code = detail.get("error_code") if isinstance(detail, dict) else None
+          if code != "VISIBLE_FISH_QUALITY_GATE_BLOCKED":
+              raise SystemExit(f"unexpected gate response: {body}")
+          PY
+            printf '%s\n' "Qwen correctly blocked at quality=$QUALITY_STATUS" > "$OUT/qwen_status.txt"
+          else
+            JOB_STATUS="$(
+              curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 120 \
+                -sS -b "$COOKIE_JAR" -o "$OUT/qwen_job.json" -w '%{http_code}' \
+                -H 'Content-Type: application/json' \
+                --data-binary "@$OUT/qwen_payload.json" \
+                "$SERVICE_URL/api/platform/portrait/jobs"
+            )"
+            test "$JOB_STATUS" = "200"
+            QWEN_RUN_ID="$(python3 - "$OUT/qwen_job.json" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              payload = json.load(handle)
+          print(payload.get("run_id") or payload.get("pipeline_run_id") or "")
+          PY
+            )"
+            test -n "$QWEN_RUN_ID"
+            printf '%s\n' "$QWEN_RUN_ID" > "$OUT/qwen_run_id.txt"
+            for _ in $(seq 1 120); do
+              curl --retry 2 --retry-all-errors --retry-delay 1 --connect-timeout 10 --max-time 30 -fsS -b "$COOKIE_JAR" \
+                "$SERVICE_URL/api/platform/pipeline/$QWEN_RUN_ID" -o "$OUT/qwen_pipeline.json"
+              status="$(python3 - "$OUT/qwen_pipeline.json" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              print(str(json.load(handle).get("status") or "").upper())
+          PY
+              )"
+              [[ "$status" == "SUCCESS" || "$status" == "FAILED" ]] && break
+              sleep 15
+            done
+            test "$status" = "SUCCESS"
+            curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 120 -fsS -b "$COOKIE_JAR" \
+              "$SERVICE_URL/api/platform/portrait/results/$QWEN_RUN_ID" -o "$OUT/qwen_result.json"
+            python3 - "$OUT/qwen_result.json" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              result = json.load(handle)
+          metadata = result.get("metadata") or {}
+          required = ("qwen_input_uri", "visible_fish_quality", "visible_fish_quality_report", "worker_model", "elapsed_ms", "refine_result_uri")
+          missing = [key for key in required if metadata.get(key) in (None, "", {})]
+          if missing:
+              raise SystemExit(f"Qwen telemetry missing: {missing}; metadata={metadata}")
+          if metadata.get("qwen_input_uri") != metadata.get("visible_fish_refined_uri"):
+              raise SystemExit(f"Qwen input mismatch: {metadata}")
+          if metadata.get("protected_compose_status") != "PENDING" or result.get("final_image") is not None:
+              raise SystemExit(f"Final Asset must remain pending: {result}")
+          PY
+            curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 120 -fsS -b "$COOKIE_JAR" \
+              "$SERVICE_URL/api/platform/portrait/results/$QWEN_RUN_ID/media/refined" \
+              -o "$OUT/06_qwen_refined_candidate.png"
+            printf '%s\n' "Qwen candidate SUCCESS; Final Asset remains PENDING" > "$OUT/qwen_status.txt"
+          fi
+
+          {
+            echo "Fish Visible historical failed-case E2E"
+            echo "Historical source run: $SELECTED_RUN_ID"
+            echo "Prepared run: $PREPARED_TEST_ID"
+            echo "Quality gate: $QUALITY_STATUS"
+            echo "Qwen path: $(tr -d '\n' < "$OUT/qwen_status.txt")"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Fish Visible E2E evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fish-visible-failed-case-e2e-${{ github.run_id }}
+          path: /tmp/fish-visible-e2e
+          if-no-files-found: warn
+
       - name: Checkout Android app main
         uses: actions/checkout@v4
         with:
