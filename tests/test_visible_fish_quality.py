@@ -6,7 +6,7 @@ from app.visible_fish_quality import analyze_visible_fish_quality, quality_statu
 def test_visible_fish_quality_does_not_require_manual_refinement():
     raw = np.zeros((32, 48), dtype=bool)
     raw[10:16, 8:40] = True
-    report = analyze_visible_fish_quality(raw, raw, [4, 4, 44, 24], raw.shape)
+    report = analyze_visible_fish_quality(raw, raw, [8, 10, 40, 16], raw.shape)
 
     assert report["visible_fish_quality"] == "GOOD"
     assert report["quality_gate_passed"] is True
