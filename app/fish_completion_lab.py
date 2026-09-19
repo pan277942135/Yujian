@@ -587,6 +587,7 @@ async def prepare(file: UploadFile | None = File(default=None), case_label: str 
             "refined_visible": _data_url(refined_fish, "image/png"),
             "visible_fish_refined": _data_url(refined_fish, "image/png"),
             "visible_fish_quality": state.get("visible_fish_quality"),
+            "visible_fish_quality_report": state.get("visible_fish_quality"),
             "structural_envelope": _data_url(_mask_bytes(decision.estimated_full_fish_mask), "image/png"),
             "auto_completion_mask": _data_url(_mask_bytes(decision.completion_mask), "image/png"),
         }
@@ -642,6 +643,7 @@ async def save_masks(payload: MaskPayload):
         "test_id": payload.test_id,
         "statistics": statistics,
         "visible_fish_quality": state.get("visible_fish_quality"),
+        "visible_fish_quality_report": state.get("visible_fish_quality"),
         "timings": state["timings"],
         "progress": state["progress"],
         "assets": {
