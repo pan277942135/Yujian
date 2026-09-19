@@ -200,7 +200,7 @@ jobs:
       - name: Fish Visible historical failed-case E2E
         id: fish_visible_e2e
         env:
-          SERVICE_URL: \${{ steps.deploy.outputs.service_url }}
+          SERVICE_URL: ${{ steps.deploy.outputs.service_url }}
           HISTORICAL_RUN_ID: FCL_20260918_145102_401f
           FISH_VISIBLE_E2E_BUCKET: yujian-model-factory-571785698442
         shell: bash
@@ -251,7 +251,7 @@ jobs:
                 | sed -n 's#.*/\(FCL_[^/]*\)/16_test_report.json#\1#p' \
                 | sort -r
             )
-            for candidate in "\${CANDIDATES[@]}"; do
+            for candidate in "${CANDIDATES[@]}"; do
               if fetch_report "$candidate" "$OUT/historical_report.json" && report_has_required_assets "$OUT/historical_report.json"; then
                 SELECTED_RUN_ID="$candidate"
                 break
@@ -466,7 +466,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fish-visible-failed-case-e2e-\${{ github.run_id }}
+          name: fish-visible-failed-case-e2e-${{ github.run_id }}
           path: /tmp/fish-visible-e2e
           if-no-files-found: warn
 
