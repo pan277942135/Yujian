@@ -3,16 +3,18 @@ import numpy as np
 from app.visible_fish_quality import analyze_visible_fish_quality, quality_status
 
 
-def test_visible_fish_quality_requires_a_refinement_step():
+def test_visible_fish_quality_does_not_require_manual_refinement():
     raw = np.zeros((32, 48), dtype=bool)
     raw[10:16, 8:40] = True
-    report = analyze_visible_fish_quality(raw, raw, [4, 4, 44, 24], raw.shape)
+    report = analyze_visible_fish_quality(raw, raw, [8, 10, 40, 16], raw.shape)
 
-    assert report["visible_fish_quality"] == "WARNING"
-    assert report["quality_gate_passed"] is False
+    assert report["visible_fish_quality"] == "GOOD"
+    assert report["quality_gate_passed"] is True
     assert report["raw_sam_area"] == int(raw.sum())
     assert report["refined_visible_area"] == int(raw.sum())
-    assert "VISIBLE_REFINEMENT_REQUIRED" in report["quality_reasons"]
+    assert report["raw_equivalent"] is True
+    assert report["refinement_applied"] is False
+    assert "VISIBLE_REFINEMENT_REQUIRED" not in report["quality_reasons"]
 
 
 def test_visible_fish_quality_accepts_connected_refined_fish():

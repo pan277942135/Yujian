@@ -299,7 +299,7 @@ def refine(
             "worker_model": MODEL_LABEL,
             "prompt_id": str(prompt_id),
             "elapsed_ms": elapsed_ms,
-            "input_source": "sam_visible",
+            "input_source": "visible_fish_refined",
         }
         logger.info(
             "qwen_refine_success source_run_id=%s prompt_id=%s steps=%s seed=%s elapsed_ms=%s",

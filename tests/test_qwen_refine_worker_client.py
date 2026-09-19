@@ -38,7 +38,7 @@ def test_qwen_worker_health_and_refine_contract(monkeypatch):
                 b'{"status":"ok","service":"fish-qwen-refine-worker","model":"Qwen-Image-Edit-2511"}'
             )
         return _Response(
-            b'{"status":"success","refine_result_uri":"/output/refined.png","final_asset_uri":"/output/final.png","seed":12345}'
+            b'{"status":"success","refine_result_uri":"/output/refined.png","final_asset_uri":"/output/final.png","seed":12345,"elapsed_ms":1234.5}'
         )
 
     monkeypatch.setenv("FISH_QWEN_REFINE_WORKER_URL", "http://worker")
@@ -71,5 +71,6 @@ def test_qwen_worker_health_and_refine_contract(monkeypatch):
     assert b"SAM_VISIBLE" in request.data
     assert result["refine_result_uri"] == "http://worker/output/refined.png"
     assert result["final_asset_uri"] == "http://worker/output/final.png"
+    assert result["elapsed_ms"] == 1234.5
     assert result["worker_protocol"]["input_source"] == "visible_fish_refined"
     assert QWEN_MODE == "fish_preserve_refine_qwen_v1"

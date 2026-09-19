@@ -21,10 +21,15 @@ def test_qwen_page_mode_and_worker_contract_are_present():
     assert '"sam_raw": f"/api/debug/fish-completion-lab/media/{test_id}/sam-raw"' in completion
     assert '"visible_fish_refined": f"/api/debug/fish-completion-lab/media/{test_id}/visible-fish-refined"' in completion
     assert "VISIBLE_FISH_QUALITY_GATE_BLOCKED" in route
+    assert '"quality_gate_passed": quality == "GOOD"' in (ROOT / "app/visible_fish_quality.py").read_text(encoding="utf-8")
+    assert "VISIBLE_REFINEMENT_REQUIRED" not in (ROOT / "app/visible_fish_quality.py").read_text(encoding="utf-8")
+    assert "elapsed_ms" in route
     assert "visible_fish_refined_uri" in route
     assert '"input_source": "visible_fish_refined"' in client
     assert "POST /refine" in worker or '@app.post("/refine"' in worker
     assert 'port=int(os.getenv("PORT", "8002"))' in worker
+    assert '"input_source": "visible_fish_refined"' in worker
+    assert '"elapsed_ms"' in worker
     assert '--port 8002' in service
     assert "/portrait/generate" not in client
     assert "SAM Raw" in html

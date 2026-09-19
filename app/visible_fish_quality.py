@@ -194,14 +194,11 @@ def analyze_visible_fish_quality(
         invalid_reasons.append("VISIBLE_FISH_RAW_RETENTION_LOW")
     elif raw_area and visible_retention_ratio < 0.92:
         warning_reasons.append("VISIBLE_FISH_RAW_RETENTION_LOW")
-    if raw_equivalent:
-        warning_reasons.append("VISIBLE_REFINEMENT_REQUIRED")
-
     quality = "INVALID" if invalid_reasons else "WARNING" if warning_reasons else "GOOD"
     reasons = invalid_reasons + warning_reasons
     return {
         "visible_fish_quality": quality,
-        "quality_gate_passed": quality == "GOOD" and refinement_applied,
+        "quality_gate_passed": quality == "GOOD",
         "quality_reasons": reasons,
         "invalid_reasons": invalid_reasons,
         "warning_reasons": warning_reasons,

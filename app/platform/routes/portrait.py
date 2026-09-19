@@ -832,6 +832,8 @@ def _public_run(run: PipelineRun, state: dict[str, Any]) -> dict[str, Any]:
             "sam_raw_uri": result.get("sam_raw_uri") if isinstance(result, dict) else None,
             "visible_fish_refined_uri": result.get("visible_fish_refined_uri") if isinstance(result, dict) else None,
             "qwen_input_uri": result.get("qwen_input_uri") if isinstance(result, dict) else None,
+            "elapsed_ms": result.get("elapsed_ms") if isinstance(result, dict) else None,
+            "worker_model": result.get("worker_model") if isinstance(result, dict) else None,
             "visible_fish_quality": result.get("visible_fish_quality") if isinstance(result, dict) else None,
             "visible_fish_quality_report": result.get("visible_fish_quality_report") if isinstance(result, dict) else None,
             "protected_compose_status": result.get("protected_compose_status") if isinstance(result, dict) else None,
@@ -1156,6 +1158,11 @@ def _execute_portrait_job(run_id: str) -> None:
                 "status": worker_result.get("worker_status", "WORKER_EXECUTED"),
                 "model_version": worker_result.get("model_version"),
                 "inference_time_ms": worker_result.get("inference_time_ms"),
+                "elapsed_ms": (
+                    worker_result.get("elapsed_ms")
+                    if worker_result.get("elapsed_ms") is not None
+                    else worker_result.get("inference_time_ms")
+                ),
                 "request_id": worker_result.get("request_id"),
                 "worker_http_status": worker_result.get("worker_http_status"),
                 "worker_protocol": worker_result.get("worker_protocol"),
@@ -1272,6 +1279,13 @@ def _execute_portrait_job(run_id: str) -> None:
             "protected_compose_status": "PENDING" if mode == QWEN_MODE else None,
             "worker_result_uri": worker_result.get("result_uri") if mode == QWEN_MODE else None,
             "worker_model": worker_result.get("worker_model") if mode == QWEN_MODE else None,
+            "elapsed_ms": (
+                worker_result.get("elapsed_ms")
+                if mode == QWEN_MODE and worker_result.get("elapsed_ms") is not None
+                else worker_result.get("inference_time_ms")
+                if mode == QWEN_MODE
+                else None
+            ),
             "auto_straighten_applied": bool(worker_result.get("auto_straighten_applied", False)) if mode == QWEN_MODE else None,
             "straighten_angle": worker_result.get("straighten_angle") if mode == REFINE_MODE else None,
         }
@@ -1835,6 +1849,8 @@ def portrait_result(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any
         "negative_prompt": request.get("negative_prompt") if mode in {INPAINT_MODE, REFINE_MODE, QWEN_MODE} else None,
         "worker_model": result.get("worker_model") if mode == QWEN_MODE else None,
         "worker_result_uri": result.get("worker_result_uri") if mode == QWEN_MODE else None,
+        "refine_result_uri": result.get("refine_result_uri") if mode == QWEN_MODE else None,
+        "elapsed_ms": result.get("elapsed_ms") if mode == QWEN_MODE else None,
         "sam_raw_uri": result.get("sam_raw_uri") if mode == QWEN_MODE else None,
         "visible_fish_refined_uri": result.get("visible_fish_refined_uri") if mode == QWEN_MODE else None,
         "qwen_input_uri": result.get("qwen_input_uri") if mode == QWEN_MODE else None,

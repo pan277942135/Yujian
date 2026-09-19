@@ -216,6 +216,9 @@ def invoke_qwen_refine_worker(
     result["worker_model"] = result.get("worker_model") or QWEN_MODEL_LABEL
     result["worker_status"] = "WORKER_EXECUTED"
     result["worker_http_status"] = status_code
+    result["elapsed_ms"] = result.get("elapsed_ms")
+    if result["elapsed_ms"] is None:
+        result["elapsed_ms"] = result.get("inference_time_ms")
     result["worker_protocol"] = {
         "request": "multipart/form-data",
         "path": _path(),
