@@ -670,11 +670,13 @@ jobs:
                   + png_chunk(b"IEND", b"")
               )
 
+          blank = [[False] * width for _ in range(height)]
           payload = {
               "test_id": test_id,
               "masks": {
                   "visible_add": "data:image/png;base64," + base64.b64encode(gray_png(added)).decode("ascii"),
                   "remove": "data:image/png;base64," + base64.b64encode(gray_png(removed)).decode("ascii"),
+                  "completion_mask": "data:image/png;base64," + base64.b64encode(gray_png(blank)).decode("ascii"),
               },
               "manual_correction_strategy": "keep_largest_fish_and_separated_fin; bridge_visible_fish_gap; remove_small_components",
               "component_sizes_before": [len(component) for component in components[:8]],
