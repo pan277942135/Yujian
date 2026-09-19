@@ -40,7 +40,7 @@
     'portraitParamHint', 'portraitPrompt', 'portraitNegativePrompt', 'portraitSubmit', 'portraitSubmitHint',
     'portraitABTest', 'portraitABTestHint', 'portraitRefresh', 'portraitProgress', 'portraitRunTitle',
     'portraitRunStatus', 'portraitSourceImage', 'portraitSamRawCard', 'portraitSamRawResultImage',
-    'portraitSamVisibleCard', 'portraitSamVisibleResultImage', 'portraitVisibleQuality',
+    'portraitSamVisibleCard', 'portraitSamVisibleResultImage', 'portraitVisibleQuality', 'portraitVisibleQualityReasons',
     'portraitVisibleCorrectionEntry', 'portraitVisibleCorrectionOpen', 'portraitVisibleCorrection',
     'portraitVisibleCorrectionCanvas', 'portraitVisibleCorrectionLayer', 'portraitVisibleCorrectionBrush',
     'portraitVisibleCorrectionSave', 'portraitVisibleCorrectionCancel', 'portraitVisibleCorrectionHint',
@@ -285,15 +285,43 @@
     return String(value || 'INVALID').trim().toUpperCase();
   }
 
-  function renderVisibleQuality(value) {
+  const QUALITY_REASON_LABELS = {
+    VISIBLE_FISH_EMPTY: '可见鱼体为空',
+    VISIBLE_FISH_DISCONNECTED: '鱼体断裂或存在多个主体',
+    VISIBLE_FISH_MULTIPLE_COMPONENTS: '鱼体存在多个连通主体',
+    VISIBLE_FISH_BBOX_COVERAGE_LOW: '鱼体覆盖 Detector 框比例过低',
+    VISIBLE_FISH_HOLES_LARGE: '鱼体内部空洞过大',
+    VISIBLE_FISH_HOLES_PRESENT: '鱼体存在内部空洞',
+    VISIBLE_FISH_HEAD_BODY_TAIL_BREAK: '鱼头 / 鱼身 / 鱼尾结构断裂',
+    VISIBLE_FISH_EDGE_TRUNCATION: '鱼体边缘截断异常',
+    VISIBLE_FISH_RAW_RETENTION_LOW: '真实鱼体保留率过低',
+  };
+
+  function visibleQualityGateHint(status) {
+    if (status === 'GOOD') return '质量门已通过，Qwen 将只接收 Visible Fish Refined。';
+    if (status === 'WARNING') return '质量门为 WARNING，建议修正鱼体后再生成。';
+    return '质量门为 INVALID，必须修正鱼体后才能生成。';
+  }
+
+  function renderVisibleQuality(value, report) {
     if (!el.portraitVisibleQuality) return;
     const status = visibleQualityStatus(value);
+    const qualityReport = report && typeof report === 'object'
+      ? report
+      : value && typeof value === 'object'
+        ? value
+        : {};
+    const reasons = Array.isArray(qualityReport.quality_reasons) ? qualityReport.quality_reasons : [];
     el.portraitVisibleQuality.textContent = 'VISIBLE_FISH_QUALITY = ' + status;
     el.portraitVisibleQuality.className = 'visible-quality visible-quality-' + status.toLowerCase();
+    if (el.portraitVisibleQualityReasons) {
+      el.portraitVisibleQualityReasons.textContent = reasons.length
+        ? 'Quality Reasons：' + reasons.map((reason) => QUALITY_REASON_LABELS[reason] || reason).join('；')
+        : 'Quality Reasons：无';
+      el.portraitVisibleQualityReasons.hidden = false;
+    }
     if (el.portraitVisibleCorrectionHint) {
-      el.portraitVisibleCorrectionHint.textContent = status === 'GOOD'
-        ? '质量门已通过，Qwen 将只接收 Visible Fish Refined。'
-        : '质量门未通过：请点击“修正鱼体”，补回鱼体或删除手部/杂物后重新检查。';
+      el.portraitVisibleCorrectionHint.textContent = visibleQualityGateHint(status);
     }
   }
 
@@ -315,7 +343,7 @@
       : ready
         ? '输入已就绪，可以创建 PipelineRun。'
         : modeIsQwen() && state.qwen
-          ? 'VISIBLE_FISH_QUALITY = ' + qwenQuality + '；INVALID/WARNING 时禁止送入 Qwen。请先修正鱼体。'
+          ? visibleQualityGateHint(qwenQuality)
           : modeIsQwen()
             ? '请上传或选择原图后先点击 Prepare，生成 SAM Raw / Visible Fish Refined。'
             : modeIsRefine()
@@ -471,10 +499,12 @@
       state.qwen.qwen_input_uri = state.qwen.visible_fish_refined_uri;
       state.qwen.sam_visible_uri = state.qwen.visible_fish_refined_uri;
       state.qwen.visible_fish_quality = data.visible_fish_quality || data.statistics?.visible_quality || data.statistics?.visible_fish_quality;
+      state.qwen.visible_fish_quality_report = data.visible_fish_quality_report || data.statistics?.visible_quality || data.visible_fish_quality || {};
       state.qwen.samPreview = previews.visible_fish_refined || previews.sam_visible || data.refined_visible || state.qwen.samPreview;
-      renderVisibleQuality(state.qwen.visible_fish_quality);
+      renderVisibleQuality(state.qwen.visible_fish_quality, state.qwen.visible_fish_quality_report);
       if (state.qwen.samPreview) { el.portraitSamVisibleResultImage.src = state.qwen.samPreview; el.portraitSamVisibleResultImage.hidden = false; }
-      el.portraitVisibleCorrectionHint.textContent = 'Visible Fish Refined 已更新。' + (visibleQualityStatus(state.qwen.visible_fish_quality) === 'GOOD' ? ' 质量门已通过。' : ' 仍未通过质量门，请继续修正。');
+      const correctedQualityStatus = visibleQualityStatus(state.qwen.visible_fish_quality);
+      el.portraitVisibleCorrectionHint.textContent = 'Visible Fish Refined 已更新。' + (correctedQualityStatus === 'GOOD' ? ' 质量门已通过。' : ' ' + visibleQualityGateHint(correctedQualityStatus));
       closeVisibleCorrection();
       updateSubmit();
     } catch (error) {
@@ -593,16 +623,18 @@
       const samPreview = previewUrls.visible_fish_refined || previewUrls.sam_visible || data.visible_fish_refined || data.refined_visible || null;
       const quality = data.visible_fish_quality || data.statistics?.visible_quality || data.statistics?.visible_fish_quality;
       const species = el.portraitSpecies.value.trim() || state.source?.species_name || state.source?.species_id || '';
-      state.qwen = { source_run_id: data.test_id || null, original_image_uri: originalUri, sam_raw_uri: samRawUri, visible_fish_refined_uri: visibleFishRefinedUri, qwen_input_uri: visibleFishRefinedUri, sam_visible_uri: visibleFishRefinedUri, visible_fish_quality: quality, originalPreview, samRawPreview, samPreview, species };
+      const qualityReport = data.visible_fish_quality_report || data.statistics?.visible_quality || data.visible_fish_quality || {};
+      state.qwen = { source_run_id: data.test_id || null, original_image_uri: originalUri, sam_raw_uri: samRawUri, visible_fish_refined_uri: visibleFishRefinedUri, qwen_input_uri: visibleFishRefinedUri, sam_visible_uri: visibleFishRefinedUri, visible_fish_quality: quality, visible_fish_quality_report: qualityReport, originalPreview, samRawPreview, samPreview, species };
       if (originalPreview) { el.portraitSourceImage.src = originalPreview; el.portraitSourceImage.hidden = false; }
       if (samRawPreview) { el.portraitSamRawResultImage.src = samRawPreview; el.portraitSamRawResultImage.hidden = false; setCardVisible(el.portraitSamRawCard, true); }
       if (samPreview) { el.portraitSamVisibleResultImage.src = samPreview; el.portraitSamVisibleResultImage.hidden = false; setCardVisible(el.portraitSamVisibleCard, true); }
-      renderVisibleQuality(quality);
+      renderVisibleQuality(quality, qualityReport);
       await initVisibleCorrection(data, originalPreview);
       el.portraitVisibleCorrectionEntry.hidden = false;
-      el.portraitPrepareHint.textContent = visibleQualityStatus(quality) === 'GOOD'
+      const qualityStatus = visibleQualityStatus(quality);
+      el.portraitPrepareHint.textContent = qualityStatus === 'GOOD'
         ? '已生成 Visible Fish Refined，质量门通过，可以开始 Qwen。'
-        : '已生成 Visible Fish Refined，但质量门未通过；请点击“修正鱼体”后再生成。';
+        : visibleQualityGateHint(qualityStatus);
       updateSubmit();
     } catch (error) {
       state.qwen = null;
@@ -657,6 +689,7 @@
         ['Visible Fish Quality', stat(metadata.visible_fish_quality)],
         ['Qwen Input URI', stat(metadata.qwen_input_uri || metadata.visible_fish_refined_uri)],
         ['Worker Result URI', stat(metadata.worker_result_uri || metadata.refine_result_uri)],
+        ['Elapsed ms', stat(metadata.elapsed_ms)],
         ['Final Asset', stat(metadata.protected_compose_status, '待 Protected Compose')],
       ];
     } else if (mode === REFINE_MODE) {
@@ -720,7 +753,7 @@
     if (result.fish_mask_image) { el.portraitFishMaskResultImage.src = result.fish_mask_image; el.portraitFishMaskResultImage.hidden = false; }
     if (result.completion_mask_image) { el.portraitCompletionMaskResultImage.src = result.completion_mask_image; el.portraitCompletionMaskResultImage.hidden = false; }
     if (result.generated_image && !refine && !qwen) { el.portraitGeneratedImage.src = result.generated_image; el.portraitGeneratedImage.hidden = false; }
-    if (qwen) renderVisibleQuality(result.metadata?.visible_fish_quality);
+    if (qwen) renderVisibleQuality(result.metadata?.visible_fish_quality, result.metadata?.visible_fish_quality_report);
     el.portraitOutputEmpty.hidden = true;
     renderMeta(result.metadata || {});
     return result;
