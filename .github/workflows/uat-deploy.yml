@@ -330,17 +330,56 @@ jobs:
               handle.write("Qwen Input = Visible Fish Refined\n")
           PY
 
-          if command -v montage >/dev/null 2>&1 && command -v convert >/dev/null 2>&1; then
-            montage "$OUT/01_historical_original.png" -label "Original" \
-              "$OUT/02_sam_raw.png" -label "SAM Raw" \
-              "$OUT/03_visible_fish_refined.png" -label "Visible Fish Refined" \
-              -tile 3x1 -geometry '640x640>' -background white "$OUT/visual-row.png"
-            convert -background white -fill '#111827' -font DejaVu-Sans -pointsize 26 \
-              -size 1920x -gravity west caption:@"$OUT/quality.txt" "$OUT/quality-card.png"
-            convert "$OUT/visual-row.png" "$OUT/quality-card.png" -append "$OUT/05_failed_case_e2e_screenshot.png"
-          else
-            echo "ImageMagick montage/convert unavailable; individual evidence images are uploaded." > "$OUT/evidence_note.txt"
-          fi
+          python3 - "$OUT" <<'PY'
+          import base64
+          import html
+          import struct
+          import sys
+          from pathlib import Path
+
+          out = Path(sys.argv[1])
+          items = [
+              ("Original", out / "01_historical_original.png"),
+              ("SAM Raw", out / "02_sam_raw.png"),
+              ("Visible Fish Refined", out / "03_visible_fish_refined.png"),
+          ]
+
+          def png_dimensions(path):
+              header = path.read_bytes()[:24]
+              if header[:8] != b"\x89PNG\r\n\x1a\n":
+                  raise SystemExit(f"not a PNG: {path}")
+              return struct.unpack(">II", header[16:24])
+
+          def data_uri(path):
+              return "data:image/png;base64," + base64.b64encode(path.read_bytes()).decode("ascii")
+
+          cards = []
+          for index, (label, path) in enumerate(items):
+              width, height = png_dimensions(path)
+              cards.append(
+                  f'<rect x="{index * 640}" y="0" width="600" height="560" fill="#ffffff"/>'
+                  f'<image href="{data_uri(path)}" x="{index * 640 + 20}" y="20" '
+                  f'width="560" height="500" preserveAspectRatio="xMidYMid meet"/>'
+                  f'<text x="{index * 640 + 300}" y="545" text-anchor="middle" '
+                  f'font-family="sans-serif" font-size="26" fill="#111827">{html.escape(label)}</text>'
+              )
+
+          quality_lines = [html.escape(line) for line in (out / "quality.txt").read_text(encoding="utf-8").splitlines()]
+          quality_svg = "".join(
+              f'<text x="24" y="{620 + index * 38}" font-family="sans-serif" '
+              f'font-size="28" fill="#111827">{line}</text>'
+              for index, line in enumerate(quality_lines)
+          )
+          svg = (
+              '<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="820" '
+              'viewBox="0 0 1920 820">'
+              '<rect width="1920" height="820" fill="#f8fafc"/>'
+              + "".join(cards)
+              + quality_svg
+              + "</svg>"
+          )
+          (out / "05_failed_case_e2e_screenshot.svg").write_text(svg, encoding="utf-8")
+          PY
 
           QUALITY_STATUS="$(python3 - "$OUT/quality.json" <<'PY'
           import json
@@ -453,6 +492,8 @@ jobs:
               -o "$OUT/06_qwen_refined_candidate.png"
             printf '%s\n' "Qwen candidate SUCCESS; Final Asset remains PENDING" > "$OUT/qwen_status.txt"
           fi
+
+          rm -f "$COOKIE_JAR"
 
           {
             echo "Fish Visible historical failed-case E2E"
