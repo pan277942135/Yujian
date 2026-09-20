@@ -264,6 +264,7 @@
     datasetGrid.querySelectorAll('[data-dataset-index]').forEach((button) => {
       button.addEventListener('click', () => selectDatasetSource(Number(button.dataset.datasetIndex)));
     });
+    generateButton.disabled = !hasImageSource();
   }
 
   function selectDatasetSource(index) {
@@ -272,6 +273,10 @@
     if (!source) return;
     selectedDatasetSource = source;
     imageInput.value = '';
+    if (objectUrl) {
+      URL.revokeObjectURL(objectUrl);
+      objectUrl = '';
+    }
     buttons.forEach((button, buttonIndex) => button.classList.toggle('selected', buttonIndex === index));
     const previewUrl = source.image_url || source.preview_url || '';
     originalPreview.src = previewUrl;
@@ -301,6 +306,7 @@
       datasetState.hidden = false;
       datasetGrid.hidden = true;
       datasetState.textContent = error instanceof Error ? error.message : String(error);
+      generateButton.disabled = !hasImageSource();
     }
   }
 
@@ -440,17 +446,6 @@
     const form = new FormData();
     form.append('prompt', document.getElementById('qwenLabPrompt').value);
     form.append('negative_prompt', document.getElementById('qwenLabNegativePrompt').value);
-    let file = localFile;
-    if (!file && datasetSource) {
-      const sourceUrl = datasetSource.image_url || datasetSource.preview_url || '';
-      if (!sourceUrl) throw new Error('数据集图片没有可读取的地址');
-      const sourceResponse = await fetch(sourceUrl);
-      if (!sourceResponse.ok) throw new Error('数据集图片读取失败');
-      const blob = await sourceResponse.blob();
-      file = new File([blob], datasetSource.image_id || 'dataset-image.jpg', {type: blob.type || 'image/jpeg'});
-    }
-    if (!file) throw new Error('请选择本地图片或数据集图片');
-    form.append('image', file);
     const seed = document.getElementById('qwenLabSeed').value.trim();
     if (seed) form.append('seed', seed);
 
@@ -464,6 +459,18 @@
     promptMeta.hidden = true;
 
     try {
+      let file = localFile;
+      if (!file && datasetSource) {
+        const sourceUrl = datasetSource.image_url || datasetSource.preview_url || '';
+        if (!sourceUrl) throw new Error('数据集图片没有可读取的地址');
+        const sourceResponse = await fetch(sourceUrl);
+        if (!sourceResponse.ok) throw new Error('数据集图片读取失败');
+        const blob = await sourceResponse.blob();
+        file = new File([blob], datasetSource.image_id || 'dataset-image.jpg', {type: blob.type || 'image/jpeg'});
+      }
+      if (!file) throw new Error('请选择本地图片或数据集图片');
+      form.append('image', file);
+
       const response = await fetch('/api/fish-portrait/qwen-lab/generate', {
         method: 'POST',
         body: form
