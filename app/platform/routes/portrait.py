@@ -20,7 +20,7 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
 from google.cloud import storage
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.dataset_models import DatasetItem
@@ -1357,36 +1357,57 @@ def portrait_dataset_items(
         raise HTTPException(status_code=404, detail="数据集不存在")
     if _status(dataset.status) != "FROZEN":
         raise HTTPException(status_code=409, detail="只能从已冻结 Dataset 选择图片")
+
     wanted_species = _normalize(species)
     wanted_status = _normalize(status)
     wanted_keyword = _normalize(keyword)
-    rows = db.scalars(
-        select(DatasetItem)
-        .where(DatasetItem.dataset_version == dataset_id)
+    predicates = [DatasetItem.dataset_version == dataset_id]
+    if wanted_species:
+        predicates.append(
+            or_(
+                func.lower(func.coalesce(DatasetItem.species_key, "")) == wanted_species,
+                func.lower(func.coalesce(DatasetItem.species_name, "")) == wanted_species,
+            )
+        )
+    if wanted_status:
+        predicates.append(
+            or_(
+                func.lower(func.coalesce(ImageAsset.review_status, "UNKNOWN")) == wanted_status,
+                func.lower(func.coalesce(DatasetItem.presence_status, "")) == wanted_status,
+            )
+        )
+    if wanted_keyword:
+        contains = f"%{wanted_keyword}%"
+        predicates.append(
+            or_(
+                func.lower(func.coalesce(DatasetItem.image_id, "")).like(contains),
+                func.lower(func.coalesce(DatasetItem.species_key, "")).like(contains),
+                func.lower(func.coalesce(DatasetItem.species_name, "")).like(contains),
+            )
+        )
+
+    join = ImageAsset, DatasetItem.image_asset_id == ImageAsset.id
+    total = int(
+        db.scalar(
+            select(func.count())
+            .select_from(DatasetItem)
+            .outerjoin(*join)
+            .where(*predicates)
+        )
+        or 0
+    )
+    rows = db.execute(
+        select(DatasetItem, ImageAsset)
+        .outerjoin(*join)
+        .where(*predicates)
         .order_by(DatasetItem.id)
+        .offset((page - 1) * size)
+        .limit(size)
     ).all()
-    filtered: list[dict[str, Any]] = []
-    for row in rows:
-        if wanted_species and wanted_species not in {
-            _normalize(row.species_key),
-            _normalize(row.species_name),
-        }:
-            continue
-        image = db.get(ImageAsset, row.image_asset_id)
-        review_status = str(getattr(image, "review_status", "") or "UNKNOWN")
-        presence_status = str(row.presence_status or "")
-        if wanted_status and wanted_status not in {_normalize(review_status), _normalize(presence_status)}:
-            continue
-        haystack = " ".join(
-            [
-                str(row.image_id or ""),
-                str(row.species_key or ""),
-                str(row.species_name or ""),
-            ]
-        ).casefold()
-        if wanted_keyword and wanted_keyword not in haystack:
-            continue
-        filtered.append(
+
+    items: list[dict[str, Any]] = []
+    for row, image in rows:
+        items.append(
             {
                 "item_id": row.id,
                 "dataset_item_id": row.id,
@@ -1395,18 +1416,20 @@ def portrait_dataset_items(
                 "species_name": row.species_name,
                 "image_url": _source_image_url(row),
                 "preview_url": _source_image_url(row) + "?variant=thumbnail",
-                "review_status": review_status,
+                "review_status": str(getattr(image, "review_status", "") or "UNKNOWN"),
                 "source": getattr(image, "source_platform", None) or "DATASET_FREEZE",
                 "batch_id": row.batch_id,
                 "split": row.split,
             }
         )
-    start = (page - 1) * size
+    page_count = max(1, (total + size - 1) // size)
     return {
-        "items": filtered[start : start + size],
-        "total": len(filtered),
+        "items": items,
+        "total": total,
         "page": page,
         "size": size,
+        "page_count": page_count,
+        "has_next": page < page_count,
     }
 
 

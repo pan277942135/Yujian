@@ -90,12 +90,44 @@ def test_qwen_image_edit_lab_history_lists_only_lab_runs(tmp_path):
         )
         db.commit()
 
-        rows = lab.qwen_image_edit_lab_runs(limit=10, db=db)
+        payload = lab.qwen_image_edit_lab_runs(page=1, size=10, db=db)
 
-        assert [row["run_id"] for row in rows] == ["QWEN_HISTORY_1"]
-        assert rows[0]["input_image_url"].endswith("/runs/QWEN_HISTORY_1/media/input")
-        assert rows[0]["output_image_url"].endswith("/runs/QWEN_HISTORY_1/media/output")
-        assert rows[0]["time_ms"] == 321
+        assert [row["run_id"] for row in payload["items"]] == ["QWEN_HISTORY_1"]
+        assert payload["total"] == 1
+        assert payload["page"] == 1
+        assert payload["size"] == 10
+        assert payload["has_next"] is False
+        assert payload["items"][0]["input_image_url"].endswith("/runs/QWEN_HISTORY_1/media/input")
+        assert payload["items"][0]["output_image_url"].endswith("/runs/QWEN_HISTORY_1/media/output")
+        assert payload["items"][0]["time_ms"] == 321
+    finally:
+        db.close()
+
+
+def test_qwen_image_edit_lab_history_paginates(tmp_path):
+    db = _session(tmp_path)
+    try:
+        for index in range(11):
+            db.add(
+                PipelineRun(
+                    run_id=f"QWEN_PAGE_{index:02d}",
+                    pipeline_type=lab.PIPELINE_TYPE,
+                    status="SUCCESS",
+                    stage_json="{}",
+                )
+            )
+        db.commit()
+
+        first = lab.qwen_image_edit_lab_runs(page=1, size=10, db=db)
+        second = lab.qwen_image_edit_lab_runs(page=2, size=10, db=db)
+
+        assert len(first["items"]) == 10
+        assert first["total"] == 11
+        assert first["page_count"] == 2
+        assert first["has_next"] is True
+        assert len(second["items"]) == 1
+        assert second["page"] == 2
+        assert second["has_next"] is False
     finally:
         db.close()
 
@@ -113,7 +145,11 @@ def test_qwen_image_edit_lab_template_supports_dataset_selection():
     assert 'id="qwenLabDataset"' in template
     assert 'id="qwenLabDatasetGrid"' in template
     assert "/api/platform/datasets" in template
-    assert "/items?page=1&size=60" in template
+    assert "/items?page=" in template
+    assert "DATASET_PAGE_SIZE = 10" in template
+    assert "HISTORY_PAGE_SIZE = 10" in template
+    assert 'id="qwenLabDatasetPager"' in template
+    assert 'id="qwenLabHistoryPager"' in template
     assert "URLSearchParams" in template
     assert "dataset_item_id" in template
     assert "selectedDatasetSource" in template
