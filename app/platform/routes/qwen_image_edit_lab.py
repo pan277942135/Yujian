@@ -540,10 +540,13 @@ def qwen_image_edit_lab_runs(
 ) -> dict[str, Any] | list[dict[str, Any]]:
     # Keep the legacy limit query usable for existing callers while the Lab UI
     # uses the paginated response with a stable ten-row page size.
-    legacy_limit = limit is not None
-    if limit is not None:
-        page = 1
-        size = limit
+    page_value = page if isinstance(page, int) else 1
+    size_value = size if isinstance(size, int) else 10
+    limit_value = limit if isinstance(limit, int) else None
+    legacy_limit = limit_value is not None
+    if limit_value is not None:
+        page_value = 1
+        size_value = limit_value
 
     predicate = PipelineRun.pipeline_type == PIPELINE_TYPE
     total = int(
@@ -558,20 +561,20 @@ def qwen_image_edit_lab_runs(
         select(PipelineRun)
         .where(predicate)
         .order_by(PipelineRun.created_at.desc(), PipelineRun.run_id.desc())
-        .offset((page - 1) * size)
-        .limit(size)
+        .offset((page_value - 1) * size_value)
+        .limit(size_value)
     ).all()
     items = [_response(row, _state_for_run(row)) for row in rows]
     if legacy_limit:
         return items
-    page_count = max(1, (total + size - 1) // size)
+    page_count = max(1, (total + size_value - 1) // size_value)
     return {
         "items": items,
         "total": total,
-        "page": page,
-        "size": size,
+        "page": page_value,
+        "size": size_value,
         "page_count": page_count,
-        "has_next": page < page_count,
+        "has_next": page_value < page_count,
     }
 
 
