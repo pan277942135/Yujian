@@ -17,7 +17,10 @@ if str(REPO_ROOT) not in sys.path:
 from google.api_core.retry import Retry
 from google.cloud import storage
 from app.services.manifest_normalizer import (
+    IMAGE_FIELD_ALIASES,
+    SPECIES_FIELD_ALIASES,
     ManifestNormalizationError,
+    image_id_from_path,
     normalize_manifest_text,
     validate_fish_manifest_text,
 )
@@ -26,13 +29,30 @@ IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp'}
 TARGET_SPECIES = {
     '草鱼', '鳙鱼', '白鲢', '鲤鱼', '鲫鱼', '加州鲈', '黑鱼', '黄骨鱼', '青鱼'
 }
-REQUIRED_COLUMNS = {'image_id', 'claimed_species'}
-IMAGE_PATH_COLUMNS = ('image_path', 'file_name', 'filename', 'image_name')
+IMAGE_PATH_COLUMNS = IMAGE_FIELD_ALIASES
 DOWNLOAD_RETRY = Retry(initial=1.0, maximum=20.0, multiplier=2.0, deadline=600.0)
 
 
 def norm_path(value: str) -> str:
     return str(PurePosixPath((value or '').strip().lstrip('/')))
+
+
+def manifest_value(row: dict[str, str], aliases: tuple[str, ...]) -> str:
+    targets = {alias.casefold() for alias in aliases}
+    for key, value in row.items():
+        if str(key or '').strip().casefold() not in targets:
+            continue
+        cleaned = (value or '').strip()
+        if cleaned:
+            return cleaned
+    return ''
+
+
+def manifest_image_id(row: dict[str, str]) -> str:
+    explicit = manifest_value(row, ('image_id',))
+    if explicit:
+        return explicit
+    return image_id_from_path(norm_path(manifest_value(row, IMAGE_PATH_COLUMNS)))
 
 
 def load_manifest(blob):
@@ -41,12 +61,14 @@ def load_manifest(blob):
     reader = csv.DictReader(io.StringIO(text))
     if not reader.fieldnames:
         raise RuntimeError('manifest has no header')
-    fields = set(reader.fieldnames)
-    missing = REQUIRED_COLUMNS - fields
-    if not fields.intersection(IMAGE_PATH_COLUMNS):
-        missing.add('image_path/file_name')
+    fields = {str(field).strip().casefold() for field in reader.fieldnames if str(field or '').strip()}
+    missing = []
+    if not fields.intersection(alias.casefold() for alias in IMAGE_PATH_COLUMNS):
+        missing.append('image_path/file_name')
+    if not fields.intersection(alias.casefold() for alias in SPECIES_FIELD_ALIASES):
+        missing.append('claimed_species/species_name/fish_name/label/species')
     if missing:
-        raise RuntimeError(f'manifest missing required columns: {sorted(missing)}')
+        raise RuntimeError(f'manifest missing required columns: {missing}')
     rows = list(reader)
     malformed = sum(1 for r in rows if None in r)
     return reader.fieldnames, rows, malformed
@@ -124,9 +146,9 @@ def main():
     for rel, blob in rel_blob.items():
         basename_index[PurePosixPath(rel).name].append(blob)
 
-    id_counts = Counter((r.get('image_id') or '').strip() for r in rows if (r.get('image_id') or '').strip())
+    id_counts = Counter(manifest_image_id(row) for row in rows if manifest_image_id(row))
     def image_value(row):
-        return next((row.get(key) for key in IMAGE_PATH_COLUMNS if (row.get(key) or '').strip()), '')
+        return manifest_value(row, IMAGE_PATH_COLUMNS)
 
     file_counts = Counter(norm_path(image_value(r)) for r in rows if image_value(r).strip())
     url_counts = Counter((r.get('source_url') or '').strip() for r in rows if (r.get('source_url') or '').strip())
@@ -136,9 +158,10 @@ def main():
     md5_first = {}
 
     for idx, row in enumerate(rows, start=1):
-        image_id = (row.get('image_id') or '').strip()
+        explicit_image_id = manifest_value(row, ('image_id',))
+        image_id = manifest_image_id(row)
         file_name = norm_path(image_value(row))
-        species = (row.get('claimed_species') or '').strip()
+        species = manifest_value(row, SPECIES_FIELD_ALIASES)
         source_url = (row.get('source_url') or '').strip()
         reasons = []
         status = 'CANDIDATE'
@@ -146,6 +169,8 @@ def main():
 
         if not image_id:
             reasons.append('missing_image_id')
+        elif not explicit_image_id:
+            reasons.append('generated_image_id')
         if not file_name:
             reasons.append('missing_file_name')
         if not species:
