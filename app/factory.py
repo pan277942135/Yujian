@@ -535,7 +535,7 @@ def sync_batch_registry(db: Session, batch_id: str, bucket_name: str | None = No
                 "CANDIDATE": "pending",
             }.get(auto_status, manifest_review)
 
-        claimed_species = (row.get("claimed_species") or row.get("species") or row.get("class_name") or "").strip() or None
+        claimed_species = _manifest_value(row, SPECIES_FIELD_ALIASES) or None
         truth_species = (row.get("truth_species") or row.get("species_truth") or "").strip() or None
         # An external manifest may claim a review result, but approved is only valid with explicit Ground Truth.
         if manifest_review == "approved" and not truth_species:
