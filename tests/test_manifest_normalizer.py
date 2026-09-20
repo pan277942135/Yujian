@@ -135,7 +135,10 @@ def test_existing_fish_manifest_without_image_id_column_is_accepted_without_over
     assert existing.read_text(encoding="utf-8") == before
 
 
-@pytest.mark.parametrize("species_field", ["species_name", "fish_name", "label", "species"])
+@pytest.mark.parametrize(
+    "species_field",
+    ["species_name", "fish_name", "species_cn", "species_en", "label", "species"],
+)
 def test_existing_fish_manifest_accepts_species_alias_without_overwrite(tmp_path, species_field):
     row = {
         "image_path": "images/legacy/fish_alias.jpg",
