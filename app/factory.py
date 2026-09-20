@@ -15,15 +15,18 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Batch, DatasetVersion, ImageAsset
-from app.services.manifest_normalizer import image_id_from_path
+from app.services.manifest_normalizer import (
+    IMAGE_FIELD_ALIASES,
+    SPECIES_FIELD_ALIASES,
+    image_id_from_path,
+)
 from app.services.review_prefill import SIGNAL_PREFIX, encode_review_signals
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 TARGET_SPECIES = ["草鱼", "鳙鱼", "白鲢", "鲤鱼", "鲫鱼", "加州鲈", "黑鱼", "黄骨鱼", "青鱼"]
 TARGET_SPECIES_SET = set(TARGET_SPECIES)
 VALID_REVIEW = {"approved", "needs_review", "rejected", "hard_case", "pending"}
-REQUIRED_COLUMNS = {"image_id", "claimed_species"}
-IMAGE_PATH_COLUMNS = ("image_path", "file_name", "filename", "image_name")
+IMAGE_PATH_COLUMNS = IMAGE_FIELD_ALIASES
 DOWNLOAD_RETRY = Retry(initial=1.0, maximum=20.0, multiplier=2.0, deadline=600.0)
 
 
@@ -43,16 +46,22 @@ def norm_path(value: str | None) -> str:
     return str(PurePosixPath(value)) if value else ""
 
 
+def _manifest_value(row: dict[str, str], aliases: tuple[str, ...]) -> str:
+    targets = {alias.casefold() for alias in aliases}
+    for key, value in row.items():
+        if str(key or "").strip().casefold() not in targets:
+            continue
+        cleaned = (value or "").strip()
+        if cleaned:
+            return cleaned
+    return ""
+
+
 def _manifest_image_id(row: dict[str, str]) -> str:
-    explicit = (row.get("image_id") or "").strip()
+    explicit = _manifest_value(row, ("image_id",))
     if explicit:
         return explicit
-    image_path = norm_path(
-        row.get("image_path")
-        or row.get("file_name")
-        or row.get("filename")
-        or row.get("image_name")
-    )
+    image_path = norm_path(_manifest_value(row, IMAGE_PATH_COLUMNS))
     return image_id_from_path(image_path)
 
 
@@ -66,12 +75,14 @@ def _manifest_rows(blob: storage.Blob) -> tuple[list[str], list[dict[str, str]],
     reader = csv.DictReader(io.StringIO(text))
     if not reader.fieldnames:
         raise RuntimeError("manifest has no header")
-    fieldnames = set(reader.fieldnames)
-    missing = REQUIRED_COLUMNS - fieldnames
-    if not (fieldnames & set(IMAGE_PATH_COLUMNS)):
-        missing.add("image_path/file_name")
+    fieldnames = {str(field).strip().casefold() for field in reader.fieldnames if str(field or "").strip()}
+    missing: list[str] = []
+    if not fieldnames & {alias.casefold() for alias in IMAGE_PATH_COLUMNS}:
+        missing.append("image_path/file_name")
+    if not fieldnames & {alias.casefold() for alias in SPECIES_FIELD_ALIASES}:
+        missing.append("claimed_species/species_name/fish_name/label/species")
     if missing:
-        raise RuntimeError(f"manifest missing required columns: {sorted(missing)}")
+        raise RuntimeError(f"manifest missing required columns: {missing}")
     rows = list(reader)
     malformed = sum(1 for row in rows if None in row)
     return list(reader.fieldnames), rows, malformed
@@ -180,11 +191,8 @@ def audit_incoming_batch(
 
     manifest_image_ids = [_manifest_image_id(row) for row in rows]
     id_counts = Counter(image_id for image_id in manifest_image_ids if image_id)
-    file_counts = Counter(
-        norm_path(r.get("image_path") or r.get("file_name") or r.get("filename") or r.get("image_name"))
-        for r in rows
-        if (r.get("image_path") or r.get("file_name") or r.get("filename") or r.get("image_name") or "").strip()
-    )
+    file_names = [_manifest_value(row, IMAGE_PATH_COLUMNS) for row in rows]
+    file_counts = Counter(norm_path(value) for value in file_names if value)
     url_counts = Counter((r.get("source_url") or "").strip() for r in rows if (r.get("source_url") or "").strip())
 
     linked_blob_names: set[str] = set()
@@ -192,12 +200,10 @@ def audit_incoming_batch(
     md5_first: dict[str, str] = {}
 
     for idx, row in enumerate(rows, start=1):
-        explicit_image_id = (row.get("image_id") or "").strip()
+        explicit_image_id = _manifest_value(row, ("image_id",))
         image_id = manifest_image_ids[idx - 1]
-        file_name = norm_path(
-            row.get("image_path") or row.get("file_name") or row.get("filename") or row.get("image_name")
-        )
-        species = (row.get("claimed_species") or "").strip()
+        file_name = norm_path(_manifest_value(row, IMAGE_PATH_COLUMNS))
+        species = _manifest_value(row, SPECIES_FIELD_ALIASES)
         source_url = (row.get("source_url") or "").strip()
         reasons: list[str] = []
         status = "CANDIDATE"
