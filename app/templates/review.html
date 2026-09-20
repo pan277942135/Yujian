@@ -21,6 +21,9 @@
 </style>
 <main><div class="summary" id="summary"></div><div id="content"></div></main>
 <script>
+const PENDING_REVIEW_STATUSES=['pending','needs_review','hard_case'];
+function pendingReviewCount(batch){return PENDING_REVIEW_STATUSES.reduce((total,status)=>total+Number(batch.review?.[status]||0),0)}
+function reviewableBatches(list){return list.filter(batch=>pendingReviewCount(batch)>0)}
 let catalog=[],current=null,offset=0,currentBackendStatus='pending';
 function esc(v){return (v??'').toString().replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 async function api(url,opts){const r=await fetch(url,opts);const t=await r.text();let d;try{d=JSON.parse(t)}catch{d=t}if(!r.ok)throw new Error(d.detail||t);return d}
@@ -31,10 +34,11 @@ function statusName(v){if(v==='approved')return '通过';if(v==='rejected')retur
 function presenceName(v){return ({single_fish:'单鱼',multi_fish:'多鱼',no_fish:'无鱼',uncertain:'不确定',error:'检测失败',not_scanned:'未检测'})[v]||'未检测'}
 function presenceClass(v){if(v==='single_fish')return 'presenceGood';if(v==='no_fish')return 'presenceBad';return 'presencePending'}
 async function init(){
-  const [batches,speciesCatalog]=await Promise.all([api('/api/batches'),api('/api/species')]);catalog=speciesCatalog;
+  const [allBatches,speciesCatalog]=await Promise.all([api('/api/batches'),api('/api/species')]);catalog=speciesCatalog;
+  const batches=reviewableBatches(allBatches);
   document.getElementById('species').innerHTML+=catalog.map(x=>`<option value="${esc(x.common_name_zh)}">${esc(x.common_name_zh)}${x.status==='candidate'?' · 候选鱼种':''}</option>`).join('');
-  document.getElementById('batch').innerHTML+=batches.map(x=>`<option value="${esc(x.batch_id)}">${esc(x.batch_id)} · ${sourceName(x.source)}</option>`).join('');
-  const u=new URLSearchParams(location.search);if(u.get('batch'))document.getElementById('batch').value=u.get('batch');if(u.get('status'))document.getElementById('status').value=u.get('status');if(u.get('species'))document.getElementById('species').value=u.get('species');
+  document.getElementById('batch').innerHTML='<option value="">全部批次</option>'+batches.map(x=>`<option value="${esc(x.batch_id)}">${esc(x.batch_id)} · ${sourceName(x.source)}</option>`).join('');
+  const u=new URLSearchParams(location.search);if(u.get('batch')&&batches.some(x=>x.batch_id===u.get('batch')))document.getElementById('batch').value=u.get('batch');if(u.get('status'))document.getElementById('status').value=u.get('status');if(u.get('species'))document.getElementById('species').value=u.get('species');
   await load();
 }
 async function fetchOne(status){const p=baseParams();if(status)p.set('status',status);p.set('limit','1');p.set('offset',offset);return api('/api/review?'+p)}
