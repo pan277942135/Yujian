@@ -40,6 +40,16 @@ jobs:
           project_id: ${{ env.GCP_AUTH_PROJECT }}
           version: '>= 416.0.0'
 
+      - name: Inspect VM access configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud compute instances describe "${GCP_INSTANCE}" \
+            --project="${GCP_VM_PROJECT}" \
+            --zone="${GCP_ZONE}" \
+            --format='yaml(metadata.items,serviceAccounts.email,networkInterfaces[].accessConfigs[].natIP)'
+          gcloud compute os-login describe-profile --format='yaml(posixAccounts,sshPublicKeys)' || true
+
       - name: Sync Worker to GPU VM
         shell: bash
         run: |
