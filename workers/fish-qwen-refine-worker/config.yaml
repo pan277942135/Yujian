@@ -1,0 +1,18 @@
+model:
+  name: Qwen-Image-Edit-2511
+  # The verified L4 workflow uses quantized weights that fit in 24 GiB.
+  # CUDA compute is kept on float16; do not replace this with a full fp16
+  # 20B weight file on the L4.
+  unet_name: qwen_image_edit_2511_int8_convrot.safetensors
+
+generation:
+  width: 768
+  height: 768
+  steps: 25
+  dtype: float16
+
+runtime:
+  device: cuda
+  warmup: true
+  warmup_steps: 1
+  warmup_timeout_seconds: 1200
