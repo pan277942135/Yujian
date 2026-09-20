@@ -16,9 +16,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from google.cloud import storage
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -43,24 +44,14 @@ ALLOWED_MEDIA_TYPES = {
 }
 
 DEFAULT_PROMPT = (
-    "Create a realistic wildlife fish portrait from the uploaded photo.\n\n"
-    "Preserve the exact fish species, body shape, scales, fins and natural appearance.\n\n"
-    "Improve lighting, clarity and composition.\n\n"
-    "Professional fishing magazine photography style."
+    "请优先严格保留原图中的真实鱼体，不要改变鱼的身份、鱼种、身体比例、体型、鳞片、鱼鳍、颜色和真实外观。\n\n"
+    "仅在此基础上，对缺失、模糊、不完整或被遮挡的局部区域进行自然补全，并去除杂乱背景、无关物体、脏乱地面、塑料桶、噪点和不自然阴影，适度优化光线、清晰度和构图。\n\n"
+    "输出要求为真实写实的高质量鱼类摄影效果，鱼体必须横向放置，整条鱼横向完整展示，适合鱼获收藏展示。"
 )
 DEFAULT_NEGATIVE_PROMPT = (
-    "cartoon,\n"
-    "anime,\n"
-    "illustration,\n"
-    "different fish species,\n"
-    "changed body shape,\n"
-    "extra fins,\n"
-    "missing fins,\n"
-    "deformed fish,\n"
-    "fake scales,\n"
-    "unrealistic texture,\n"
-    "CGI,\n"
-    "painting style"
+    "不要改变鱼种，不要改变鱼的身份，不要把原鱼变成另一条鱼，不要改变体型比例，不要改变鳞片纹理，不要改变鱼鳍结构，"
+    "不要出现多余鱼鳍，不要缺失鱼鳍，不要出现畸形鱼体，不要出现幻想鱼，不要出现不真实颜色，不要出现塑料感纹理，"
+    "不要卡通化，不要插画风，不要3D渲染风，不要CG感，不要艺术化过度，不要竖向摆放鱼体，不要只显示半条鱼。"
 )
 
 
@@ -434,6 +425,20 @@ async def generate_qwen_image_edit_lab(
             status_code=500,
             detail={"error_code": "QWEN_IMAGE_EDIT_LAB_FAILED", "message": str(exc), "run_id": run_id},
         ) from exc
+
+
+@router.get("/runs")
+def qwen_image_edit_lab_runs(
+    limit: int = Query(default=30, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    rows = db.scalars(
+        select(PipelineRun)
+        .where(PipelineRun.pipeline_type == PIPELINE_TYPE)
+        .order_by(PipelineRun.created_at.desc(), PipelineRun.run_id.desc())
+        .limit(limit)
+    ).all()
+    return [_response(row, _state_for_run(row)) for row in rows]
 
 
 @router.get("/runs/{run_id}")
