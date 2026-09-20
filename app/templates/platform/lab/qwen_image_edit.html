@@ -13,6 +13,12 @@
   .qwen-lab-field select:focus,.qwen-lab-field textarea:focus,.qwen-lab-field input[type=file]:focus,.qwen-lab-field input[type=number]:focus{outline:2px solid #a9d0bf;outline-offset:1px}
   .qwen-lab-upload{border:1px dashed #b9d2c7;border-radius:11px;background:#f8fcfa;padding:12px}
   .qwen-lab-dataset-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;max-height:330px;overflow:auto;padding:2px}
+  .qwen-lab-pager{display:flex;justify-content:space-between;align-items:center;gap:9px;flex-wrap:wrap;margin-top:9px}
+  .qwen-lab-pager[hidden]{display:none}
+  .qwen-lab-pager-info{color:var(--muted);font-size:12px}
+  .qwen-lab-pager-actions{display:flex;gap:7px}
+  .qwen-lab-pager-actions button{padding:6px 10px}
+  .qwen-lab-pager-actions button:disabled{opacity:.45;cursor:not-allowed}
   .qwen-lab-dataset-card{border:1px solid #d5e5df;border-radius:10px;background:#fbfefd;padding:7px;text-align:left;cursor:pointer;color:inherit}
   .qwen-lab-dataset-card:hover,.qwen-lab-dataset-card.selected{border-color:#2a8068;background:#eff9f4;box-shadow:0 0 0 2px rgba(42,128,104,.12)}
   .qwen-lab-dataset-card img{display:block;width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:7px;background:#edf4f1}
@@ -96,6 +102,13 @@
       <label>数据集图片</label>
       <div id="qwenLabDatasetState" class="qwen-lab-history-state">请选择 Dataset 后加载图片；也可以使用本地上传。</div>
       <div id="qwenLabDatasetGrid" class="qwen-lab-dataset-grid" hidden></div>
+      <div id="qwenLabDatasetPager" class="qwen-lab-pager" hidden>
+        <span id="qwenLabDatasetPageInfo" class="qwen-lab-pager-info"></span>
+        <div class="qwen-lab-pager-actions">
+          <button id="qwenLabDatasetPrev" class="button" type="button">上一页</button>
+          <button id="qwenLabDatasetNext" class="button" type="button">下一页</button>
+        </div>
+      </div>
     </div>
 
     <div class="qwen-lab-field">
@@ -157,6 +170,13 @@
   </div>
   <div id="qwenLabHistoryState" class="qwen-lab-history-state">加载中…</div>
   <div id="qwenLabHistoryList" class="qwen-lab-history-list" hidden></div>
+  <div id="qwenLabHistoryPager" class="qwen-lab-pager" hidden>
+    <span id="qwenLabHistoryPageInfo" class="qwen-lab-pager-info"></span>
+    <div class="qwen-lab-pager-actions">
+      <button id="qwenLabHistoryPrev" class="button" type="button">上一页</button>
+      <button id="qwenLabHistoryNext" class="button" type="button">下一页</button>
+    </div>
+  </div>
 </section>
 {% endblock %}
 
@@ -168,6 +188,10 @@
   const datasetHint = document.getElementById('qwenLabDatasetHint');
   const datasetState = document.getElementById('qwenLabDatasetState');
   const datasetGrid = document.getElementById('qwenLabDatasetGrid');
+  const datasetPager = document.getElementById('qwenLabDatasetPager');
+  const datasetPageInfo = document.getElementById('qwenLabDatasetPageInfo');
+  const datasetPrev = document.getElementById('qwenLabDatasetPrev');
+  const datasetNext = document.getElementById('qwenLabDatasetNext');
   const originalPreview = document.getElementById('qwenLabOriginalPreview');
   const uploadEmpty = document.getElementById('qwenLabUploadEmpty');
   const generateButton = document.getElementById('qwenLabGenerate');
@@ -180,9 +204,19 @@
   const promptMeta = document.getElementById('qwenLabPromptMeta');
   const historyState = document.getElementById('qwenLabHistoryState');
   const historyList = document.getElementById('qwenLabHistoryList');
+  const historyPager = document.getElementById('qwenLabHistoryPager');
+  const historyPageInfo = document.getElementById('qwenLabHistoryPageInfo');
+  const historyPrev = document.getElementById('qwenLabHistoryPrev');
+  const historyNext = document.getElementById('qwenLabHistoryNext');
   let objectUrl = '';
   let datasetId = '';
   let selectedDatasetSource = null;
+  const DATASET_PAGE_SIZE = 10;
+  const HISTORY_PAGE_SIZE = 10;
+  let datasetPage = 1;
+  let datasetTotal = 0;
+  let historyPage = 1;
+  let historyTotal = 0;
   let datasetRows = [];
 
   function setStatus(element, text, className) {
@@ -210,6 +244,16 @@
     return payload;
   }
 
+  function updatePager(pager, info, previous, next, page, total, pageSize, unit) {
+    const totalValue = Number(total || 0);
+    const pageValue = Math.max(1, Number(page || 1));
+    const pageCount = Math.max(1, Math.ceil(totalValue / pageSize));
+    pager.hidden = !totalValue || pageCount <= 1;
+    info.textContent = totalValue ? ('第 ' + pageValue + ' / ' + pageCount + ' 页 · 共 ' + totalValue + ' ' + unit) : '';
+    previous.disabled = pageValue <= 1;
+    next.disabled = pageValue >= pageCount;
+  }
+
   function hasImageSource() {
     return Boolean((imageInput.files && imageInput.files[0]) || selectedDatasetSource);
   }
@@ -217,6 +261,14 @@
   function clearDatasetSelection() {
     selectedDatasetSource = null;
     datasetGrid.querySelectorAll('[data-dataset-index]').forEach((button) => button.classList.remove('selected'));
+    if (!(imageInput.files && imageInput.files[0])) {
+      originalPreview.removeAttribute('src');
+      originalPreview.hidden = true;
+      uploadEmpty.hidden = false;
+      setStatus(status, '待上传', 'status-neutral');
+      setHint('请先上传图片，或从数据集选择图片。', false);
+      generateButton.disabled = true;
+    }
   }
 
   function renderDatasetOptions(rows) {
@@ -242,9 +294,12 @@
     }
   }
 
-  function renderDatasetItems(items) {
+  function renderDatasetItems(items, pagination) {
     clearDatasetSelection();
     const rows = Array.isArray(items) ? items : [];
+    datasetPage = Number(pagination && pagination.page) || datasetPage;
+    datasetTotal = Number(pagination && pagination.total) || 0;
+    updatePager(datasetPager, datasetPageInfo, datasetPrev, datasetNext, datasetPage, datasetTotal, DATASET_PAGE_SIZE, '张');
     if (!rows.length) {
       datasetGrid.hidden = true;
       datasetState.hidden = false;
@@ -287,24 +342,33 @@
     generateButton.disabled = false;
   }
 
-  async function loadDatasetItems() {
+  async function loadDatasetItems(page) {
+    datasetPage = Math.max(1, Number(page) || 1);
     clearDatasetSelection();
+    datasetPager.hidden = true;
+    datasetPrev.disabled = true;
+    datasetNext.disabled = true;
     if (!datasetId) {
       datasetRows = [];
-      renderDatasetItems([]);
+      datasetTotal = 0;
+      renderDatasetItems([], {page: 1, total: 0});
       return;
     }
     datasetState.hidden = false;
     datasetGrid.hidden = true;
     datasetState.textContent = '正在加载 Dataset 图片…';
     try {
-      const payload = await fetchDatasetJson('/api/platform/datasets/' + encodeURIComponent(datasetId) + '/items?page=1&size=60');
+      const payload = await fetchDatasetJson(
+        '/api/platform/datasets/' + encodeURIComponent(datasetId) + '/items?page=' + datasetPage + '&size=' + DATASET_PAGE_SIZE
+      );
       datasetRows = Array.isArray(payload.items) ? payload.items : [];
-      renderDatasetItems(datasetRows);
+      renderDatasetItems(datasetRows, payload);
     } catch (error) {
       datasetRows = [];
+      datasetTotal = 0;
       datasetState.hidden = false;
       datasetGrid.hidden = true;
+      datasetPager.hidden = true;
       datasetState.textContent = error instanceof Error ? error.message : String(error);
       generateButton.disabled = !hasImageSource();
     }
@@ -360,7 +424,10 @@
       : '<div class="qwen-lab-history-empty-media">' + esc(emptyText) + '</div>';
   }
 
-  function renderHistory(rows) {
+  function renderHistory(rows, pagination) {
+    historyPage = Number(pagination && pagination.page) || historyPage;
+    historyTotal = Number(pagination && pagination.total) || (Array.isArray(rows) ? rows.length : 0);
+    updatePager(historyPager, historyPageInfo, historyPrev, historyNext, historyPage, historyTotal, HISTORY_PAGE_SIZE, '条');
     if (!rows.length) {
       historyState.hidden = false;
       historyState.textContent = '还没有 Qwen Image Edit 处理记录。';
@@ -398,18 +465,25 @@
     }).join('');
   }
 
-  async function loadHistory() {
+  async function loadHistory(page) {
+    historyPage = Math.max(1, Number(page) || 1);
+    historyPager.hidden = true;
+    historyPrev.disabled = true;
+    historyNext.disabled = true;
     historyState.hidden = false;
     historyList.hidden = true;
     historyState.textContent = '加载中…';
     try {
-      const response = await fetch('/api/fish-portrait/qwen-lab/runs?limit=30');
+      const response = await fetch('/api/fish-portrait/qwen-lab/runs?page=' + historyPage + '&size=' + HISTORY_PAGE_SIZE);
       const bodyText = await response.text();
-      let data = [];
-      try { data = bodyText ? JSON.parse(bodyText) : []; } catch (_) { data = []; }
-      if (!response.ok) throw new Error((data && data.detail) || '处理历史加载失败');
-      renderHistory(Array.isArray(data) ? data : []);
+      let payload = {};
+      try { payload = bodyText ? JSON.parse(bodyText) : {}; } catch (_) { payload = {}; }
+      if (!response.ok) throw new Error((payload && payload.detail) || '处理历史加载失败');
+      const rows = Array.isArray(payload) ? payload : (Array.isArray(payload.items) ? payload.items : []);
+      renderHistory(rows, Array.isArray(payload) ? {page: 1, total: rows.length} : payload);
     } catch (error) {
+      historyTotal = 0;
+      historyPager.hidden = true;
       historyState.hidden = false;
       historyList.hidden = true;
       historyState.textContent = error instanceof Error ? error.message : String(error);
@@ -492,7 +566,7 @@
       setStatus(status, '生成成功', 'status-success');
       setHint('生成完成，可调整 Prompt 或固定 Seed 再次对比。', false);
       showMeta(data);
-      loadHistory();
+      loadHistory(1);
     } catch (error) {
       runStatus.textContent = 'FAILED';
       setStatus(status, '生成失败', 'status-failed');
@@ -503,12 +577,17 @@
   });
   datasetSelect.addEventListener('change', async (event) => {
     datasetId = String(event.target.value || '');
+    datasetPage = 1;
     datasetHint.textContent = datasetId ? '正在读取 ' + datasetId + '…' : '未选择 Dataset，将使用本地上传。';
-    await loadDatasetItems();
+    await loadDatasetItems(1);
   });
-  document.getElementById('qwenLabHistoryRefresh').addEventListener('click', loadHistory);
+  datasetPrev.addEventListener('click', () => loadDatasetItems(datasetPage - 1));
+  datasetNext.addEventListener('click', () => loadDatasetItems(datasetPage + 1));
+  historyPrev.addEventListener('click', () => loadHistory(historyPage - 1));
+  historyNext.addEventListener('click', () => loadHistory(historyPage + 1));
+  document.getElementById('qwenLabHistoryRefresh').addEventListener('click', () => loadHistory(historyPage));
   loadDatasets();
-  loadHistory();
+  loadHistory(1);
 })();
 </script>
 {% endblock %}
