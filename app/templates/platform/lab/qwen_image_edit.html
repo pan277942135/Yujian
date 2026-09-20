@@ -32,7 +32,29 @@
   .qwen-lab-vs{display:flex;align-items:center;gap:8px;color:#71817d;font-size:12px;font-weight:800;margin:0 0 8px}
   .qwen-lab-vs::before,.qwen-lab-vs::after{content:'';height:1px;background:#dfe8e4;flex:1}
   .qwen-lab-status{display:inline-flex;align-items:center;gap:6px}
+  .qwen-lab-history{margin-top:16px}
+  .qwen-lab-history-list{display:grid;gap:10px}
+  .qwen-lab-history-state{padding:18px;border:1px dashed #cddfd7;border-radius:10px;color:var(--muted);text-align:center}
+  .qwen-lab-history-item{border:1px solid #d5e5df;border-radius:11px;background:#fbfefd;overflow:hidden}
+  .qwen-lab-history-item summary{display:flex;align-items:center;gap:10px;flex-wrap:wrap;cursor:pointer;list-style:none;padding:12px 14px}
+  .qwen-lab-history-item summary::-webkit-details-marker{display:none}
+  .qwen-lab-history-item summary::before{content:'＋';font-size:16px;color:#52766a}
+  .qwen-lab-history-item[open] summary::before{content:'－'}
+  .qwen-lab-history-summary-time{color:var(--muted);font-size:12px}
+  .qwen-lab-history-summary-run{color:var(--muted);font-size:11px;overflow-wrap:anywhere}
+  .qwen-lab-history-body{border-top:1px solid #e0ebe6;padding:14px;display:grid;gap:14px}
+  .qwen-lab-history-images{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .qwen-lab-history-images figure{margin:0;display:grid;gap:7px}
+  .qwen-lab-history-images figcaption{font-size:12px;font-weight:750;color:#36574d}
+  .qwen-lab-history-images img,.qwen-lab-history-empty-media{width:100%;aspect-ratio:4/3;object-fit:contain;border:1px solid #d5e5df;border-radius:9px;background:#edf4f1}
+  .qwen-lab-history-empty-media{display:grid;place-items:center;padding:14px;box-sizing:border-box;color:var(--muted);font-size:12px;text-align:center}
+  .qwen-lab-history-meta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}
+  .qwen-lab-history-meta div,.qwen-lab-history-prompts div{min-width:0;border:1px solid #e0ebe6;border-radius:9px;background:#fff;padding:10px}
+  .qwen-lab-history-meta strong,.qwen-lab-history-prompts strong{display:block;font-size:11px;color:#71817d;margin-bottom:5px}
+  .qwen-lab-history-meta span,.qwen-lab-history-prompts pre{display:block;margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.5}
+  .qwen-lab-history-prompts{display:grid;gap:9px}
   @media(max-width:900px){.qwen-lab-layout{grid-template-columns:1fr}.qwen-lab-result{min-height:0}}
+  @media(max-width:560px){.qwen-lab-meta{grid-template-columns:1fr 1fr}.qwen-lab-history-images{grid-template-columns:1fr}.qwen-lab-history-meta{grid-template-columns:1fr 1fr}.page-heading h1{font-size:26px}}
   @media(max-width:560px){.qwen-lab-meta{grid-template-columns:1fr 1fr}.page-heading h1{font-size:26px}}
 </style>
 {% endblock %}
@@ -71,29 +93,16 @@
 
     <div class="qwen-lab-field">
       <label for="qwenLabPrompt">Prompt</label>
-      <textarea id="qwenLabPrompt">Create a realistic wildlife fish portrait from the uploaded photo.
+      <textarea id="qwenLabPrompt">请优先严格保留原图中的真实鱼体，不要改变鱼的身份、鱼种、身体比例、体型、鳞片、鱼鳍、颜色和真实外观。
 
-Preserve the exact fish species, body shape, scales, fins and natural appearance.
+仅在此基础上，对缺失、模糊、不完整或被遮挡的局部区域进行自然补全，并去除杂乱背景、无关物体、脏乱地面、塑料桶、噪点和不自然阴影，适度优化光线、清晰度和构图。
 
-Improve lighting, clarity and composition.
-
-Professional fishing magazine photography style.</textarea>
+输出要求为真实写实的高质量鱼类摄影效果，鱼体必须横向放置，整条鱼横向完整展示，适合鱼获收藏展示。</textarea>
     </div>
 
     <div class="qwen-lab-field">
       <label for="qwenLabNegativePrompt">Negative Prompt</label>
-      <textarea id="qwenLabNegativePrompt">cartoon,
-anime,
-illustration,
-different fish species,
-changed body shape,
-extra fins,
-missing fins,
-deformed fish,
-fake scales,
-unrealistic texture,
-CGI,
-painting style</textarea>
+      <textarea id="qwenLabNegativePrompt">不要改变鱼种，不要改变鱼的身份，不要把原鱼变成另一条鱼，不要改变体型比例，不要改变鳞片纹理，不要改变鱼鳍结构，不要出现多余鱼鳍，不要缺失鱼鳍，不要出现畸形鱼体，不要出现幻想鱼，不要出现不真实颜色，不要出现塑料感纹理，不要卡通化，不要插画风，不要3D渲染风，不要CG感，不要艺术化过度，不要竖向摆放鱼体，不要只显示半条鱼。</textarea>
     </div>
 
     <div class="qwen-lab-field">
@@ -122,6 +131,15 @@ painting style</textarea>
     <div id="qwenLabPromptMeta" class="qwen-lab-prompt-meta" hidden></div>
   </section>
 </div>
+
+<section class="panel qwen-lab-history" aria-label="Qwen Image Edit Lab 处理历史">
+  <div class="panel-heading">
+    <div><h2>处理历史</h2><p>点击记录展开详情，对比原图和生成图。</p></div>
+    <button id="qwenLabHistoryRefresh" class="button" type="button">刷新</button>
+  </div>
+  <div id="qwenLabHistoryState" class="qwen-lab-history-state">加载中…</div>
+  <div id="qwenLabHistoryList" class="qwen-lab-history-list" hidden></div>
+</section>
 {% endblock %}
 
 {% block scripts %}
@@ -138,6 +156,8 @@ painting style</textarea>
   const resultImage = document.getElementById('qwenLabResultImage');
   const meta = document.getElementById('qwenLabMeta');
   const promptMeta = document.getElementById('qwenLabPromptMeta');
+  const historyState = document.getElementById('qwenLabHistoryState');
+  const historyList = document.getElementById('qwenLabHistoryList');
   let objectUrl = '';
 
   function setStatus(element, text, className) {
@@ -161,6 +181,82 @@ painting style</textarea>
       '<div><strong>PipelineRun</strong><span>' + esc(data.run_id || '') + '</span></div>';
     meta.hidden = false;
     promptMeta.hidden = false;
+  }
+
+  function historyTime(value) {
+    if (!value) return '时间未知';
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString('zh-CN', {hour12: false});
+  }
+
+  function historyStatusClass(value) {
+    const statusValue = String(value || 'UNKNOWN').toUpperCase();
+    if (statusValue === 'SUCCESS' || statusValue === 'COMPLETED') return 'status-success';
+    if (statusValue === 'FAILED') return 'status-failed';
+    if (statusValue === 'RUNNING' || statusValue === 'QUEUED') return 'status-running';
+    return 'status-neutral';
+  }
+
+  function historyMedia(url, alt, emptyText) {
+    return url
+      ? '<img loading="lazy" decoding="async" src="' + esc(url) + '" alt="' + esc(alt) + '">'
+      : '<div class="qwen-lab-history-empty-media">' + esc(emptyText) + '</div>';
+  }
+
+  function renderHistory(rows) {
+    if (!rows.length) {
+      historyState.hidden = false;
+      historyState.textContent = '还没有 Qwen Image Edit 处理记录。';
+      historyList.hidden = true;
+      historyList.innerHTML = '';
+      return;
+    }
+    historyState.hidden = true;
+    historyList.hidden = false;
+    historyList.innerHTML = rows.map((data, index) => {
+      const statusValue = String(data.status || 'UNKNOWN').toUpperCase();
+      const statusText = statusValue === 'SUCCESS' ? '成功' : statusValue === 'FAILED' ? '失败' : statusValue === 'RUNNING' ? '生成中' : statusValue;
+      return '<details class="qwen-lab-history-item"' + (index === 0 ? ' open' : '') + '>' +
+        '<summary><span class="status-tag ' + historyStatusClass(statusValue) + '"><span class="status-dot"></span>' + esc(statusText) + '</span>' +
+        '<span class="qwen-lab-history-summary-time">' + esc(historyTime(data.created_at)) + '</span>' +
+        '<span class="qwen-lab-history-summary-run">' + esc(data.run_id || '') + '</span></summary>' +
+        '<div class="qwen-lab-history-body">' +
+          '<div class="qwen-lab-history-images">' +
+            '<figure><figcaption>Original</figcaption>' + historyMedia(data.input_image_url, 'Original Image', '原图不可用') + '</figure>' +
+            '<figure><figcaption>Qwen Result</figcaption>' + historyMedia(data.output_image_url, 'Qwen Result', statusValue === 'FAILED' ? '生成失败，无结果图片' : '结果图片不可用') + '</figure>' +
+          '</div>' +
+          '<div class="qwen-lab-history-meta">' +
+            '<div><strong>Model</strong><span>' + esc(data.model_label || data.model || '—') + '</span></div>' +
+            '<div><strong>Seed</strong><span>' + esc(data.seed == null ? '随机' : data.seed) + '</span></div>' +
+            '<div><strong>Time</strong><span>' + esc(data.time_ms == null ? '—' : data.time_ms + ' ms') + '</span></div>' +
+            '<div><strong>状态</strong><span>' + esc(statusText) + '</span></div>' +
+          '</div>' +
+          '<div class="qwen-lab-history-prompts">' +
+            '<div><strong>Prompt</strong><pre>' + esc(data.prompt || '') + '</pre></div>' +
+            '<div><strong>Negative Prompt</strong><pre>' + esc(data.negative_prompt || '') + '</pre></div>' +
+            '<div><strong>PipelineRun</strong><pre>' + esc(data.run_id || '') + '</pre></div>' +
+          '</div>' +
+        '</div>' +
+      '</details>';
+    }).join('');
+  }
+
+  async function loadHistory() {
+    historyState.hidden = false;
+    historyList.hidden = true;
+    historyState.textContent = '加载中…';
+    try {
+      const response = await fetch('/api/fish-portrait/qwen-lab/runs?limit=30');
+      const bodyText = await response.text();
+      let data = [];
+      try { data = bodyText ? JSON.parse(bodyText) : []; } catch (_) { data = []; }
+      if (!response.ok) throw new Error((data && data.detail) || '处理历史加载失败');
+      renderHistory(Array.isArray(data) ? data : []);
+    } catch (error) {
+      historyState.hidden = false;
+      historyList.hidden = true;
+      historyState.textContent = error instanceof Error ? error.message : String(error);
+    }
   }
 
   imageInput.addEventListener('change', () => {
@@ -224,6 +320,7 @@ painting style</textarea>
       setStatus(status, '生成成功', 'status-success');
       setHint('生成完成，可调整 Prompt 或固定 Seed 再次对比。', false);
       showMeta(data);
+      loadHistory();
     } catch (error) {
       runStatus.textContent = 'FAILED';
       setStatus(status, '生成失败', 'status-failed');
@@ -232,6 +329,8 @@ painting style</textarea>
       generateButton.disabled = false;
     }
   });
+  document.getElementById('qwenLabHistoryRefresh').addEventListener('click', loadHistory);
+  loadHistory();
 })();
 </script>
 {% endblock %}
