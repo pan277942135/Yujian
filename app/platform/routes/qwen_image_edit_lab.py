@@ -19,7 +19,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from google.cloud import storage
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.dataset_models import DatasetItem
@@ -533,16 +533,46 @@ async def generate_qwen_image_edit_lab(
 
 @router.get("/runs")
 def qwen_image_edit_lab_runs(
-    limit: int = Query(default=30, ge=1, le=100),
+    page: int = Query(default=1, ge=1, le=100000),
+    size: int = Query(default=10, ge=1, le=100),
+    limit: int | None = Query(default=None, ge=1, le=100),
     db: Session = Depends(get_db),
-) -> list[dict[str, Any]]:
+) -> dict[str, Any] | list[dict[str, Any]]:
+    # Keep the legacy limit query usable for existing callers while the Lab UI
+    # uses the paginated response with a stable ten-row page size.
+    legacy_limit = limit is not None
+    if limit is not None:
+        page = 1
+        size = limit
+
+    predicate = PipelineRun.pipeline_type == PIPELINE_TYPE
+    total = int(
+        db.scalar(
+            select(func.count())
+            .select_from(PipelineRun)
+            .where(predicate)
+        )
+        or 0
+    )
     rows = db.scalars(
         select(PipelineRun)
-        .where(PipelineRun.pipeline_type == PIPELINE_TYPE)
+        .where(predicate)
         .order_by(PipelineRun.created_at.desc(), PipelineRun.run_id.desc())
-        .limit(limit)
+        .offset((page - 1) * size)
+        .limit(size)
     ).all()
-    return [_response(row, _state_for_run(row)) for row in rows]
+    items = [_response(row, _state_for_run(row)) for row in rows]
+    if legacy_limit:
+        return items
+    page_count = max(1, (total + size - 1) // size)
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "size": size,
+        "page_count": page_count,
+        "has_next": page < page_count,
+    }
 
 
 @router.get("/runs/{run_id}")
