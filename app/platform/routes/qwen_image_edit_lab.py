@@ -22,7 +22,9 @@ from google.cloud import storage
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.dataset_models import DatasetItem
 from app.db import get_db
+from app.models import DatasetVersion
 from app.platform.models import PipelineRun
 from app.platform.services import adapters
 from app.portrait_worker_client import PortraitWorkerError, _read_image_uri
@@ -214,6 +216,74 @@ def _read_managed_uri(uri: str) -> tuple[bytes, str]:
     return path.read_bytes(), mimetypes.guess_type(path.name)[0] or "application/octet-stream"
 
 
+def _read_dataset_image(
+    db: Session,
+    dataset_id: str,
+    dataset_item_id: str,
+) -> tuple[bytes, str, str, dict[str, Any]]:
+    dataset_key = str(dataset_id or "").strip()
+    item_key = str(dataset_item_id or "").strip()
+    if not dataset_key or not item_key:
+        raise HTTPException(status_code=422, detail="dataset_id 和 dataset_item_id 不能为空")
+
+    dataset = db.get(DatasetVersion, dataset_key)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="数据集不存在")
+    if str(dataset.status or "").upper() != "FROZEN":
+        raise HTTPException(status_code=409, detail="只能从已冻结 Dataset 选择图片")
+
+    item = None
+    if item_key.isdigit():
+        item = db.scalar(
+            select(DatasetItem).where(
+                DatasetItem.dataset_version == dataset_key,
+                DatasetItem.id == int(item_key),
+            )
+        )
+    if item is None:
+        item = db.scalar(
+            select(DatasetItem).where(
+                DatasetItem.dataset_version == dataset_key,
+                DatasetItem.image_id == item_key,
+            )
+        )
+    if item is None:
+        raise HTTPException(status_code=404, detail="数据集图片不存在")
+    uri = str(item.gcs_uri or "").strip()
+    if not uri:
+        raise HTTPException(status_code=422, detail="数据集图片没有可读取的存储地址")
+
+    try:
+        data, media_type = _read_managed_uri(uri)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="数据集图片资源不存在") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="数据集图片暂时不可读取") from exc
+
+    if not data:
+        raise HTTPException(status_code=422, detail="数据集图片为空")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="数据集图片不能超过 50 MiB")
+
+    normalized_type = str(media_type or "").split(";", 1)[0].strip().lower()
+    if normalized_type not in ALLOWED_MEDIA_TYPES:
+        suffix = Path(uri.split("?", 1)[0]).suffix.lower()
+        suffix_to_type = {suffix: media for media, suffix in ALLOWED_MEDIA_TYPES.items()}
+        normalized_type = suffix_to_type.get(suffix, "")
+    if normalized_type not in ALLOWED_MEDIA_TYPES:
+        raise HTTPException(status_code=422, detail="数据集图片格式仅支持 jpg、png、webp")
+
+    source = {
+        "input_source": "DATASET",
+        "dataset_id": dataset_key,
+        "dataset_item_id": item.id,
+        "image_id": item.image_id,
+        "batch_id": item.batch_id,
+        "species": item.species_name,
+    }
+    return data, normalized_type, ALLOWED_MEDIA_TYPES[normalized_type], source
+
+
 def _state_for_run(run: PipelineRun) -> dict[str, Any]:
     state = _json(run.stage_json, {})
     return state if isinstance(state, dict) else {}
@@ -228,6 +298,11 @@ def _response(run: PipelineRun, state: dict[str, Any]) -> dict[str, Any]:
         "run_id": run.run_id,
         "input_image_uri": input_uri,
         "input_image_url": _public_media_url(run.run_id, "input") if input_uri else None,
+        "input_source": request.get("input_source") or "LOCAL_UPLOAD",
+        "dataset_id": request.get("dataset_id"),
+        "dataset_item_id": request.get("dataset_item_id"),
+        "image_id": request.get("image_id"),
+        "species": request.get("species"),
         "prompt": request.get("prompt"),
         "negative_prompt": request.get("negative_prompt"),
         "output_image_uri": output_uri,
@@ -283,29 +358,49 @@ def _mark_failed(
 
 @router.post("/generate")
 async def generate_qwen_image_edit_lab(
-    image: UploadFile = File(...),
+    image: UploadFile | None = File(default=None),
     prompt: str = Form(default=DEFAULT_PROMPT),
     negative_prompt: str = Form(default=DEFAULT_NEGATIVE_PROMPT),
     seed: str | None = Form(default=None),
+    dataset_id: str | None = Form(default=None),
+    dataset_item_id: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    data, media_type, extension = await _read_upload(image)
+    has_upload = image is not None
+    has_dataset = bool(str(dataset_id or "").strip() or str(dataset_item_id or "").strip())
+    if has_upload and has_dataset:
+        raise HTTPException(status_code=422, detail="本地上传和 Dataset 图片不能同时提交")
+    if not has_upload and not (str(dataset_id or "").strip() and str(dataset_item_id or "").strip()):
+        raise HTTPException(status_code=422, detail="请选择本地图片或 Dataset 图片")
+
+    if has_upload:
+        data, media_type, extension = await _read_upload(image)
+        source = {"input_source": "LOCAL_UPLOAD"}
+    else:
+        data, media_type, extension, source = _read_dataset_image(
+            db,
+            str(dataset_id or ""),
+            str(dataset_item_id or ""),
+        )
+
     prompt_value = _normalise_text(prompt, DEFAULT_PROMPT, "Prompt")
     negative_prompt_value = _normalise_text(negative_prompt, DEFAULT_NEGATIVE_PROMPT, "Negative Prompt")
     seed_value = _parse_seed(seed)
 
     run_id = _new_run_id()
     input_uri = _store_bytes(run_id, "input", data, media_type, extension)
+    request_state = {
+        "input_image_uri": input_uri,
+        "prompt": prompt_value,
+        "negative_prompt": negative_prompt_value,
+        "seed": seed_value,
+        "model": MODEL_ID,
+        "worker": WORKER_NAME,
+        **source,
+    }
     state: dict[str, Any] = {
         "type": PIPELINE_TYPE,
-        "request": {
-            "input_image_uri": input_uri,
-            "prompt": prompt_value,
-            "negative_prompt": negative_prompt_value,
-            "seed": seed_value,
-            "model": MODEL_ID,
-            "worker": WORKER_NAME,
-        },
+        "request": request_state,
         "result": None,
         "worker": None,
         "stages": [
@@ -332,6 +427,10 @@ async def generate_qwen_image_edit_lab(
         detail={
             "type": PIPELINE_TYPE,
             "input_image": input_uri,
+            "input_source": source.get("input_source"),
+            "dataset_id": source.get("dataset_id"),
+            "dataset_item_id": source.get("dataset_item_id"),
+            "image_id": source.get("image_id"),
             "prompt": prompt_value,
             "negative_prompt": negative_prompt_value,
             "model": MODEL_ID,
@@ -395,6 +494,9 @@ async def generate_qwen_image_edit_lab(
                 "type": PIPELINE_TYPE,
                 "model": MODEL_ID,
                 "worker": WORKER_NAME,
+                "input_source": source.get("input_source"),
+                "dataset_id": source.get("dataset_id"),
+                "dataset_item_id": source.get("dataset_item_id"),
                 "seed": state["result"]["seed"],
                 "elapsed_ms": elapsed_ms,
             },
