@@ -68,6 +68,16 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _duration_ms(started: datetime | None, finished: datetime | None) -> int | None:
+    if started is None or finished is None:
+        return None
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    if finished.tzinfo is None:
+        finished = finished.replace(tzinfo=timezone.utc)
+    return max(0, int((finished - started).total_seconds() * 1000))
+
+
 def _new_run_id() -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     return f"QWEN_LAB_{timestamp}_{secrets.token_hex(5)}"
@@ -266,7 +276,7 @@ def _mark_failed(
     run.error_message = f"{error_code}: {safe_message}"
     run.finished_at = _utcnow()
     if run.started_at:
-        run.duration_ms = max(0, int((run.finished_at - run.started_at).total_seconds() * 1000))
+        run.duration_ms = _duration_ms(run.started_at, run.finished_at)
     _set_state(run, state)
     adapters.record_operation(
         db,
@@ -381,7 +391,7 @@ async def generate_qwen_image_edit_lab(
         run.current_stage = "complete"
         run.finished_at = _utcnow()
         if run.started_at:
-            run.duration_ms = max(0, int((run.finished_at - run.started_at).total_seconds() * 1000))
+            run.duration_ms = _duration_ms(run.started_at, run.finished_at)
         _set_state(run, state)
         adapters.record_operation(
             db,
