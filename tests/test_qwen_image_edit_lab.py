@@ -37,10 +37,64 @@ def test_qwen_image_edit_lab_routes_are_additive():
     paths = app.openapi()["paths"]
     assert "/fish-portrait/qwen-lab" in paths
     assert "/api/fish-portrait/qwen-lab/generate" in paths
+    assert "/api/fish-portrait/qwen-lab/runs" in paths
     assert "/api/fish-portrait/qwen-lab/runs/{run_id}" in paths
     assert "/api/fish-portrait/qwen-lab/runs/{run_id}/media/{kind}" in paths
     assert lab.PIPELINE_TYPE == "QWEN_IMAGE_EDIT_LAB"
     assert lab.MODEL_ID == "qwen-image-edit-2511"
+
+
+def test_qwen_image_edit_lab_defaults_preserve_original_fish():
+    assert "严格保留原图中的真实鱼体" in lab.DEFAULT_PROMPT
+    assert "鱼体必须横向放置" in lab.DEFAULT_PROMPT
+    assert "不要改变鱼种" in lab.DEFAULT_NEGATIVE_PROMPT
+    assert "不要只显示半条鱼" in lab.DEFAULT_NEGATIVE_PROMPT
+
+
+def test_qwen_image_edit_lab_history_lists_only_lab_runs(tmp_path):
+    db = _session(tmp_path)
+    try:
+        db.add(
+            PipelineRun(
+                run_id="QWEN_HISTORY_1",
+                pipeline_type=lab.PIPELINE_TYPE,
+                status="SUCCESS",
+                stage_json=json.dumps(
+                    {
+                        "request": {
+                            "input_image_uri": "gs://bucket/input.jpg",
+                            "prompt": lab.DEFAULT_PROMPT,
+                            "negative_prompt": lab.DEFAULT_NEGATIVE_PROMPT,
+                            "seed": 42,
+                        },
+                        "result": {
+                            "output_image_uri": "gs://bucket/output.png",
+                            "seed": 42,
+                            "elapsed_ms": 321,
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        )
+        db.add(
+            PipelineRun(
+                run_id="OTHER_PIPELINE_1",
+                pipeline_type="FISH_PORTRAIT_POC",
+                status="SUCCESS",
+                stage_json="{}",
+            )
+        )
+        db.commit()
+
+        rows = lab.qwen_image_edit_lab_runs(limit=10, db=db)
+
+        assert [row["run_id"] for row in rows] == ["QWEN_HISTORY_1"]
+        assert rows[0]["input_image_url"].endswith("/runs/QWEN_HISTORY_1/media/input")
+        assert rows[0]["output_image_url"].endswith("/runs/QWEN_HISTORY_1/media/output")
+        assert rows[0]["time_ms"] == 321
+    finally:
+        db.close()
 
 
 def test_qwen_image_edit_lab_direct_original_to_worker_and_records_run(tmp_path, monkeypatch):
