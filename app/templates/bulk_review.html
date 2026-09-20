@@ -35,7 +35,10 @@
   <div class="footer"><button onclick="prevPage()">← 上一页</button><span id="pageInfo" class="muted"></span><button onclick="nextPage()">下一页 →</button></div>
 </main>
 <script>
-let batches=[],catalog=[],speciesRows=[],currentSpecies='',items=[],offset=0,limit=window.matchMedia('(max-width:768px)').matches?12:24,total=0;
+const PENDING_REVIEW_STATUSES=['pending','needs_review','hard_case'];
+function pendingReviewCount(batch){return PENDING_REVIEW_STATUSES.reduce((total,status)=>total+Number(batch.review?.[status]||0),0)}
+function reviewableBatches(list){return list.filter(batch=>pendingReviewCount(batch)>0)}
+let batches=[],catalog=[],speciesRows=[],currentSpecies='',items=[],offset=0,limit=window.matchMedia('(max-width:768px)').matches?12:24,total=0,allImageCache=new Map();
 function esc(v){return (v??'').toString().replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 async function api(url,opts){const r=await fetch(url,opts);const t=await r.text();let d;try{d=JSON.parse(t)}catch{d=t}if(!r.ok)throw new Error(d.detail||t);return d}
 function msg(text,err=false){const b=document.getElementById('banner');b.style.display='block';b.style.background=err?'#fff1f2':'#eef2ff';b.textContent=text}
@@ -44,19 +47,66 @@ function presenceName(v){return ({single_fish:'单鱼',multi_fish:'多鱼',no_fi
 function presenceClass(v){if(v==='single_fish')return 'good';if(v==='multi_fish'||v==='uncertain')return 'warn';if(v==='no_fish')return 'bad';return ''}
 function speciesOptions(selected){const current=catalog.find(x=>x.common_name_zh===selected);const historical=current?.status==='retired'?`<option value="${esc(selected)}" selected>${esc(selected)} · 已停用（历史保留）</option>`:'';return `<option value="" ${!selected?'selected':''}>未确认真实鱼种</option>`+historical+catalog.filter(x=>x.status!=='retired').map(x=>`<option value="${esc(x.common_name_zh)}" ${x.common_name_zh===selected?'selected':''}>${esc(x.common_name_zh)}</option>`).join('')}
 async function init(){
-  [batches,catalog]=await Promise.all([api('/api/batches'),api('/api/species')]);
-  document.getElementById('batch').innerHTML+=[...batches].map(x=>`<option value="${esc(x.batch_id)}">${esc(x.batch_id)} · ${esc(sourceName(x.source))}</option>`).join('');
+  const [registered,catalogData]=await Promise.all([api('/api/batches'),api('/api/species')]);
+  batches=reviewableBatches(registered);catalog=catalogData;
+  document.getElementById('batch').innerHTML='<option value="">全部批次</option>'+batches.map(x=>`<option value="${esc(x.batch_id)}">${esc(x.batch_id)} · ${esc(sourceName(x.source))}</option>`).join('');
   document.getElementById('bulkSpecies').innerHTML='<option value="">批量设置真实鱼种</option>';
-  const u=new URLSearchParams(location.search);if(u.get('batch'))document.getElementById('batch').value=u.get('batch');
-  document.getElementById('batch').addEventListener('change',()=>{offset=0;loadSpecies().catch(e=>msg(e.message,true))});
+  const u=new URLSearchParams(location.search);if(u.get('batch')&&batches.some(x=>x.batch_id===u.get('batch')))document.getElementById('batch').value=u.get('batch');
+  document.getElementById('batch').addEventListener('change',()=>{offset=0;allImageCache.clear();loadSpecies().catch(e=>msg(e.message,true))});
   document.getElementById('presence').addEventListener('change',()=>{offset=0;loadImages().catch(e=>msg(e.message,true))});
-  if(document.getElementById('batch').value)await loadSpecies();
+  await loadSpecies();
 }
-async function loadSpecies(){const batch=document.getElementById('batch').value;if(!batch){document.getElementById('content').innerHTML='<div class="empty">先选择一个批次。</div>';return}speciesRows=await api(`/api/bulk-review/species?batch_id=${encodeURIComponent(batch)}&status=pending`);if(!speciesRows.length){currentSpecies='';renderTabs();document.getElementById('content').innerHTML='<div class="empty">这个批次已经没有待审核图片。</div>';return}if(!speciesRows.some(x=>x.species===currentSpecies))currentSpecies=speciesRows[0].species;offset=0;renderTabs();await loadImages()}
+async function loadSpecies(){
+  const selectedBatch=document.getElementById('batch').value;
+  const targetBatches=selectedBatch?batches.filter(x=>x.batch_id===selectedBatch):batches;
+  allImageCache.clear();
+  if(!targetBatches.length){speciesRows=[];currentSpecies='';renderTabs();document.getElementById('content').innerHTML='<div class="empty">没有可审核的批次。</div>';return}
+  const perBatch=await Promise.all(targetBatches.map(x=>api(`/api/bulk-review/species?batch_id=${encodeURIComponent(x.batch_id)}&status=pending`)));
+  const merged=new Map();
+  perBatch.forEach((rows,index)=>rows.forEach(row=>{
+    const current=merged.get(row.species)||{species:row.species,count:0,sources:[]};
+    current.count+=Number(row.count||0);
+    current.sources.push({batch_id:targetBatches[index].batch_id,count:Number(row.count||0)});
+    merged.set(row.species,current);
+  }));
+  const catalogOrder=new Map(catalog.map((x,index)=>[x.common_name_zh,index]));
+  speciesRows=[...merged.values()].sort((a,b)=>(catalogOrder.get(a.species)??9999)-(catalogOrder.get(b.species)??9999)||String(a.species).localeCompare(String(b.species)));
+  if(!speciesRows.length){currentSpecies='';renderTabs();document.getElementById('content').innerHTML='<div class="empty">当前没有待审核图片。</div>';return}
+  if(!speciesRows.some(x=>x.species===currentSpecies))currentSpecies=speciesRows[0].species;
+  offset=0;renderTabs();await loadImages()
+}
 function renderBulkSpeciesOptions(){const el=document.getElementById('bulkSpecies');const selected=el.value;el.innerHTML='<option value="">批量设置真实鱼种</option>'+speciesRows.map(x=>`<option value="${esc(x.species)}">${esc(x.species)} · ${x.count}</option>`).join('');if(selected&&speciesRows.some(x=>x.species===selected))el.value=selected}
 function renderTabs(){document.getElementById('speciesTabs').innerHTML=speciesRows.map(x=>`<button class="${x.species===currentSpecies?'active':''}" onclick="chooseSpecies('${esc(x.species)}')">${esc(x.species)} · ${x.count}</button>`).join('');renderBulkSpeciesOptions()}
 function chooseSpecies(name){currentSpecies=name;offset=0;renderTabs();loadImages().catch(e=>msg(e.message,true))}
-async function loadImages(){const batch=document.getElementById('batch').value;if(!batch||!currentSpecies)return;const p=new URLSearchParams({batch_id:batch,species:currentSpecies,status:'pending',limit:String(limit),offset:String(offset)});const presence=document.getElementById('presence').value;if(presence)p.set('presence',presence);const d=await api('/api/bulk-review/images?'+p);items=d.items||[];total=d.total||0;document.getElementById('counter').textContent=`${currentSpecies} · 待处理 ${total}`;render();updatePageInfo()}
+async function fetchAllImages(batchId,species,presence){
+  let cursor=0;const result=[];
+  while(true){
+    const p=new URLSearchParams({batch_id:batchId,species,status:'pending',limit:'60',offset:String(cursor)});
+    if(presence)p.set('presence',presence);
+    const d=await api('/api/bulk-review/images?'+p);
+    const page=(d.items||[]).map(x=>({...x,batch_id:batchId}));
+    result.push(...page);
+    if(!page.length||cursor+page.length>=Number(d.total||0))break;
+    cursor+=page.length;
+  }
+  return result;
+}
+async function loadImages(){
+  const selectedBatch=document.getElementById('batch').value;if(!currentSpecies)return;
+  const presence=document.getElementById('presence').value;
+  if(selectedBatch){
+    const p=new URLSearchParams({batch_id:selectedBatch,species:currentSpecies,status:'pending',limit:String(limit),offset:String(offset)});
+    if(presence)p.set('presence',presence);
+    const d=await api('/api/bulk-review/images?'+p);
+    items=(d.items||[]).map(x=>({...x,batch_id:selectedBatch}));total=d.total||0;
+  }else{
+    const speciesRow=speciesRows.find(x=>x.species===currentSpecies);if(!speciesRow){items=[];total=0;render();updatePageInfo();return}
+    const cacheKey=`all|${currentSpecies}|${presence}`;let all=allImageCache.get(cacheKey);
+    if(!all){const pages=await Promise.all(speciesRow.sources.map(source=>fetchAllImages(source.batch_id,currentSpecies,presence)));all=pages.flat();allImageCache.set(cacheKey,all)}
+    total=all.length;items=all.slice(offset,offset+limit);
+  }
+  document.getElementById('counter').textContent=`${currentSpecies} · 待处理 ${total}`;render();updatePageInfo()
+}
 function render(){const c=document.getElementById('content');document.getElementById('selectAll').checked=false;if(!items.length){c.innerHTML='<div class="empty">当前筛选下没有图片。可以切换鱼体结果或下一个鱼种。</div>';updateSelectedCount();return}c.innerHTML=`<div class="grid">${items.map((x,i)=>{const initial=x.review_status==='rejected'?'rejected':'approved';const dup=x.duplicate?.is_duplicate?`<span class="pill warn">近重复${x.duplicate.kind==='exact'?'·完全':'·相似'}</span>`:'';const b=x.accepted_bbox||x.candidate_bbox||[0,0,0,0];const bboxLabel=x.accepted_bbox?'已确认':x.candidate_bbox?'Parity 候选框已生成':'缺失，自动识别中…';return `<div class="card" id="card-${i}" data-state="${initial}"><div class="photoStage"><img id="photo-${i}" class="photo" loading="lazy" src="${x.media_url}" onload="syncCardBbox(${i})"><svg id="bbox-overlay-${i}" class="bboxOverlay" viewBox="0 0 1 1" preserveAspectRatio="xMidYMid meet" aria-hidden="true"><rect id="bbox-rect-${i}" x="0" y="0" width="0" height="0" style="display:none"></rect></svg></div><div class="meta"><div class="row"><label class="pickLabel"><input class="itemPick" id="pick-${i}" type="checkbox" onchange="updateSelectedCount()">选择</label><b>${esc(x.image_id)}</b></div><div class="row"><span class="pill ${presenceClass(x.presence?.status)}">${presenceName(x.presence?.status)}${(x.presence?.fish_count||0)>0?' · '+x.presence.fish_count+'条':''}</span>${dup}</div><div class="muted">采集：${esc(x.claimed_species||'-')}</div><select class="speciesSelect" id="species-${i}">${speciesOptions(x.truth_species||'')}</select><div class="row"><div class="muted">accepted_bbox x / y / w / h</div><span id="bbox-status-${i}" class="pill bboxStatus ${x.accepted_bbox?'good':x.candidate_bbox?'good':'pending'}">${bboxLabel}</span></div><div class="bbox">${b.map((v,n)=>'<input id="bbox-'+i+'-'+n+'" type="number" min="0" max="1" step="0.000001" value="'+Number(v||0)+'" placeholder="'+['x','y','w','h'][n]+'" oninput="syncCardBbox('+i+')">').join('')}</div><div class="bboxTools"><button class="soft" onclick="reidentifyBbox(${i})">重新识别</button><button class="soft" onclick="startManualBbox(${i})">手动框选</button><button class="soft" onclick="clearBbox(${i})">清空框</button></div><div class="stateBtns"><button onclick="setState(${i},'approved')">通过</button><button onclick="setState(${i},'rejected')">不通过</button><button onclick="setState(${i},'pending')">待定</button></div></div></div>`}).join('')}</div>`;items.forEach((x,i)=>{x._state=x.review_status==='rejected'?'rejected':'approved'});updateSelectedCount();autoDetectMissingBboxes()}
 function setState(i,state){items[i]._state=state;document.getElementById('card-'+i).dataset.state=state}
 function markAll(state){items.forEach((_,i)=>setState(i,state))}
@@ -73,10 +123,24 @@ function clearBbox(i){if(!items[i])return;items[i].accepted_bbox=null;items[i].c
 function startManualBbox(i){const img=document.getElementById('photo-'+i);const stage=document.getElementById('card-'+i)?.querySelector('.photoStage');if(!img||!stage||!img.naturalWidth){setBboxStatus(i,'图片尚未加载','warn');return}stage.classList.add('bboxEditing');setBboxStatus(i,'拖动图片框选','pending');let start=null,active=false;const down=e=>{const point=bboxPoint(i,e);if(!point)return;e.preventDefault();start=point;active=true;stage.setPointerCapture?.(e.pointerId)};const move=e=>{if(!active)return;const end=bboxPoint(i,e);if(!end)return;setBboxInputs(i,[Math.min(start[0],end[0]),Math.min(start[1],end[1]),Math.abs(end[0]-start[0]),Math.abs(end[1]-start[1])])};const cleanup=()=>{stage.classList.remove('bboxEditing');stage.removeEventListener('pointerdown',down);stage.removeEventListener('pointermove',move);stage.removeEventListener('pointerup',finish);stage.removeEventListener('pointercancel',finish)};const finish=e=>{if(!active)return;const end=bboxPoint(i,e);active=false;stage.releasePointerCapture?.(e.pointerId);if(end){const b=[Math.min(start[0],end[0]),Math.min(start[1],end[1]),Math.abs(end[0]-start[0]),Math.abs(end[1]-start[1])];if(b[2]>=0.01&&b[3]>=0.01){items[i].accepted_bbox=null;items[i].candidate_bbox=null;setBboxInputs(i,b);setBboxStatus(i,'手动框选已填入','good')}else{setBboxStatus(i,'单击未修改，请拖动鼠标框选','warn')}}start=null;cleanup()};stage.addEventListener('pointerdown',down);stage.addEventListener('pointermove',move);stage.addEventListener('pointerup',finish);stage.addEventListener('pointercancel',finish)}
 function setBboxStatus(i,text,kind='pending'){const el=document.getElementById('bbox-status-'+i);if(el){el.textContent=text;el.className='pill bboxStatus '+kind}}
 function fillCandidate(i,b){if(!Array.isArray(b)||b.length!==4||items[i].accepted_bbox||hasBox(i))return;items[i].candidate_bbox=b;b.forEach((v,n)=>{const el=document.getElementById('bbox-'+i+'-'+n);if(el)el.value=Number(v||0)});setBboxStatus(i,'Parity 候选框已生成','good');syncCardBbox(i)}
-async function reidentifyBbox(i){if(!items[i])return;setBboxStatus(i,'识别中…','pending');try{const d=await api('/api/review/'+encodeURIComponent(document.getElementById('batch').value)+'/'+encodeURIComponent(items[i].image_id)+'/reidentify-bbox',{method:'POST'});items[i]={...items[i],...d};if(d.candidate_bbox)fillCandidate(i,d.candidate_bbox);else setBboxStatus(i,'未检测到鱼体框','warn')}catch(e){setBboxStatus(i,'识别失败','warn');msg(items[i].image_id+'：'+e.message,true)}}
+async function reidentifyBbox(i){if(!items[i])return;const batchId=items[i].batch_id||document.getElementById('batch').value;if(!batchId){setBboxStatus(i,'缺少批次','warn');return}setBboxStatus(i,'识别中…','pending');try{const d=await api('/api/review/'+encodeURIComponent(batchId)+'/'+encodeURIComponent(items[i].image_id)+'/reidentify-bbox',{method:'POST'});items[i]={...items[i],...d,batch_id:batchId};if(d.candidate_bbox)fillCandidate(i,d.candidate_bbox);else setBboxStatus(i,'未检测到鱼体框','warn')}catch(e){setBboxStatus(i,'识别失败','warn');msg(items[i].image_id+'：'+e.message,true)}}
 async function autoDetectMissingBboxes(){const queue=items.map((x,i)=>({x,i})).filter(({x})=>!x.accepted_bbox&&!x.candidate_bbox);if(!queue.length)return;let cursor=0;let generated=0;async function worker(){while(cursor<queue.length){const job=queue[cursor++];try{await reidentifyBbox(job.i);if(items[job.i].candidate_bbox)generated++}catch{}}}await Promise.all(Array.from({length:Math.min(2,queue.length)},worker));if(generated)msg('已按 Detector Golden Parity 自动生成 '+generated+' 张候选框，请检查后提交。')}
 function applyBulkBbox(){const selected=selectedIndexes();if(!selected.length){msg('请先勾选图片',true);return}let count=0;selected.forEach(i=>{const b=items[i].candidate_bbox;if(!b)return;b.forEach((v,n)=>{const el=document.getElementById('bbox-'+i+'-'+n);if(el)el.value=v});syncCardBbox(i);count++});msg('已将 '+count+' 张图片的候选框填入 accepted_bbox，请检查后提交。')}
-async function submitPage(){if(!items.length)return;for(let i=0;i<items.length;i++){if(items[i]._state==='approved'&&!document.getElementById('species-'+i).value){msg(`${items[i].image_id} 通过前必须确认真实鱼种`,true);return}if(items[i]._state==='approved'&&!hasBox(i)){msg(items[i].image_id+' 通过前必须确认 accepted_bbox',true);return}}const batch=document.getElementById('batch').value;const payload={batch_id:batch,items:items.map((x,i)=>({image_id:x.image_id,review_status:x._state||'pending',truth_species:document.getElementById('species-'+i).value,accepted_bbox:hasBox(i)?boxValues(i):null,notes:x.notes||''}))};try{const d=await api('/api/bulk-review/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});msg(`已提交 ${d.updated} 张。正在继续当前鱼种…`);offset=0;await loadSpecies();if(speciesRows.length&&currentSpecies)await loadImages()}catch(e){msg(e.message,true)}}
+async function submitPage(){
+  if(!items.length)return;
+  for(let i=0;i<items.length;i++){if(items[i]._state==='approved'&&!document.getElementById('species-'+i).value){msg(`${items[i].image_id} 通过前必须确认真实鱼种`,true);return}if(items[i]._state==='approved'&&!hasBox(i)){msg(items[i].image_id+' 通过前必须确认 accepted_bbox',true);return}}
+  const fallbackBatch=document.getElementById('batch').value;const grouped=new Map();
+  for(let i=0;i<items.length;i++){const batchId=items[i].batch_id||fallbackBatch;if(!batchId){msg(items[i].image_id+' 缺少批次信息',true);return}if(!grouped.has(batchId))grouped.set(batchId,[]);grouped.get(batchId).push({image_id:items[i].image_id,review_status:items[i]._state||'pending',truth_species:document.getElementById('species-'+i).value,accepted_bbox:hasBox(i)?boxValues(i):null,notes:items[i].notes||''})}
+  try{
+    let updated=0;
+    for(const [batchId,batchItems] of grouped){const d=await api('/api/bulk-review/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({batch_id:batchId,items:batchItems})});updated+=d.updated||0}
+    msg(`已提交 ${updated} 张。正在继续当前鱼种…`);
+    const selectedBatch=fallbackBatch;const registered=await api('/api/batches');batches=reviewableBatches(registered);
+    const select=document.getElementById('batch');select.innerHTML='<option value="">全部批次</option>'+batches.map(x=>`<option value="${esc(x.batch_id)}">${esc(x.batch_id)} · ${esc(sourceName(x.source))}</option>`).join('');
+    if(selectedBatch&&batches.some(x=>x.batch_id===selectedBatch))select.value=selectedBatch;else select.value='';
+    allImageCache.clear();offset=0;await loadSpecies();if(speciesRows.length&&currentSpecies)await loadImages()
+  }catch(e){msg(e.message,true)}
+}
 function updatePageInfo(){const from=total?offset+1:0;const to=Math.min(total,offset+limit);document.getElementById('pageInfo').textContent=`${from}-${to} / ${total}`}
 function nextPage(){if(offset+limit<total){offset+=limit;loadImages().catch(e=>msg(e.message,true));return}const idx=speciesRows.findIndex(x=>x.species===currentSpecies);if(idx>=0&&idx+1<speciesRows.length){currentSpecies=speciesRows[idx+1].species;offset=0;renderTabs();loadImages().catch(e=>msg(e.message,true))}}
 function prevPage(){if(offset>=limit){offset-=limit;loadImages().catch(e=>msg(e.message,true))}}
