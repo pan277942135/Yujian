@@ -21,16 +21,26 @@ class ManifestNormalizationError(ValueError):
 
     code = "MANIFEST_INVALID"
 
-    def __init__(self, reason: str, *, source_path: str | Path | None = None, row_number: int | None = None):
+    def __init__(
+        self,
+        reason: str,
+        *,
+        source_path: str | Path | None = None,
+        row_number: int | None = None,
+        available_fields: Iterable[str] | None = None,
+    ):
         self.reason = reason
         self.source_path = str(source_path) if source_path is not None else None
         self.row_number = row_number
+        self.available_fields = tuple(str(field) for field in (available_fields or ()) if str(field).strip())
         super().__init__(reason)
 
-    def as_dict(self) -> dict[str, str]:
-        payload = {"error": self.code, "reason": self.reason}
+    def as_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"error": self.code, "reason": self.reason}
         if self.row_number is not None:
             payload["row"] = str(self.row_number)
+        if self.available_fields:
+            payload["available_fields"] = list(self.available_fields)
         return payload
 
 
@@ -128,7 +138,13 @@ def _normalize_image_path(value: str, *, row_number: int | None = None, source_n
     return normalized
 
 
-def _iter_rows(reader: csv.DictReader, lookup: Mapping[str, str], *, source_name: str):
+def _iter_rows(
+    reader: csv.DictReader,
+    lookup: Mapping[str, str],
+    *,
+    source_name: str,
+    available_fields: Iterable[str] | None = None,
+):
     seen_rows = 0
     for row_number, row in enumerate(reader, start=2):
         if None in row:
@@ -141,7 +157,12 @@ def _iter_rows(reader: csv.DictReader, lookup: Mapping[str, str], *, source_name
             raise ManifestNormalizationError("missing image_id field", source_path=source_name, row_number=row_number)
         claimed_species = _pick(row, lookup, SPECIES_FIELD_ALIASES)
         if not claimed_species:
-            raise ManifestNormalizationError("missing species field", source_path=source_name, row_number=row_number)
+            raise ManifestNormalizationError(
+                "missing species field",
+                source_path=source_name,
+                row_number=row_number,
+                available_fields=available_fields,
+            )
         species_key = _pick(row, lookup, SPECIES_KEY_ALIASES)
         source = _pick(row, lookup, SOURCE_FIELD_ALIASES) or "unknown"
         yield {
@@ -167,7 +188,14 @@ def normalize_manifest_text(source_text: str, *, source_name: str = "metadata/ma
     """Convert a Data Asset Manifest into the fixed Training Manifest contract."""
 
     reader, lookup = _csv_reader(source_text, source_name=source_name)
-    rows = list(_iter_rows(reader, lookup, source_name=source_name))
+    rows = list(
+        _iter_rows(
+            reader,
+            lookup,
+            source_name=source_name,
+            available_fields=reader.fieldnames,
+        )
+    )
     return _render(rows), len(rows)
 
 
@@ -185,11 +213,21 @@ def validate_fish_manifest_text(source_text: str, *, source_name: str = "metadat
         if None in row:
             raise ManifestNormalizationError("malformed CSV row", source_path=source_name, row_number=row_number)
         if not _pick(row, lookup, ("image_path", "file_name", "filename", "image_name")):
-            raise ManifestNormalizationError("missing image field", source_path=source_name, row_number=row_number)
+            raise ManifestNormalizationError(
+                "missing image field",
+                source_path=source_name,
+                row_number=row_number,
+                available_fields=reader.fieldnames,
+            )
         # Legacy rows may leave image_id blank; the audit/sync path derives
         # the same stable ID from the image path.
         if not _pick(row, lookup, SPECIES_FIELD_ALIASES):
-            raise ManifestNormalizationError("missing species field", source_path=source_name, row_number=row_number)
+            raise ManifestNormalizationError(
+                "missing species field",
+                source_path=source_name,
+                row_number=row_number,
+                available_fields=reader.fieldnames,
+            )
     return len(rows)
 
 

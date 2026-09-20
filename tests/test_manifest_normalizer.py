@@ -223,3 +223,25 @@ def test_missing_species_is_a_manifest_invalid_error(tmp_path):
 
     assert exc_info.value.code == "MANIFEST_INVALID"
     assert exc_info.value.reason == "missing species field"
+
+def test_missing_species_error_reports_available_manifest_fields(tmp_path):
+    write_manifest(
+        tmp_path,
+        "metadata/fish_manifest.csv",
+        [{
+            "image_path": "images/fish.jpg",
+            "image_id": "IMG_001",
+            "species_key": "crucian_carp",
+        }],
+        ["image_path", "image_id", "species_key"],
+    )
+
+    with pytest.raises(ManifestNormalizationError) as exc_info:
+        normalize_manifest(tmp_path)
+
+    assert exc_info.value.as_dict() == {
+        "error": "MANIFEST_INVALID",
+        "reason": "missing species field",
+        "row": "2",
+        "available_fields": ["image_path", "image_id", "species_key"],
+    }
