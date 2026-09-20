@@ -366,11 +366,13 @@ async def generate_qwen_image_edit_lab(
     dataset_item_id: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    dataset_id_value = dataset_id.strip() if isinstance(dataset_id, str) else ""
+    dataset_item_id_value = dataset_item_id.strip() if isinstance(dataset_item_id, str) else ""
     has_upload = image is not None
-    has_dataset = bool(str(dataset_id or "").strip() or str(dataset_item_id or "").strip())
+    has_dataset = bool(dataset_id_value or dataset_item_id_value)
     if has_upload and has_dataset:
         raise HTTPException(status_code=422, detail="本地上传和 Dataset 图片不能同时提交")
-    if not has_upload and not (str(dataset_id or "").strip() and str(dataset_item_id or "").strip()):
+    if not has_upload and not (dataset_id_value and dataset_item_id_value):
         raise HTTPException(status_code=422, detail="请选择本地图片或 Dataset 图片")
 
     if has_upload:
@@ -379,8 +381,8 @@ async def generate_qwen_image_edit_lab(
     else:
         data, media_type, extension, source = _read_dataset_image(
             db,
-            str(dataset_id or ""),
-            str(dataset_item_id or ""),
+            dataset_id_value,
+            dataset_item_id_value,
         )
 
     prompt_value = _normalise_text(prompt, DEFAULT_PROMPT, "Prompt")
