@@ -11,7 +11,15 @@ from typing import Any, Iterable, Mapping
 OUTPUT_FIELDS = ("image_path", "image_id", "claimed_species", "species_key", "source")
 
 IMAGE_FIELD_ALIASES = ("image_path", "file_name", "filename", "image_name")
-SPECIES_FIELD_ALIASES = ("claimed_species", "species_name", "fish_name", "label", "species")
+SPECIES_FIELD_ALIASES = (
+    "claimed_species",
+    "species_name",
+    "fish_name",
+    "species_cn",
+    "species_en",
+    "label",
+    "species",
+)
 SPECIES_KEY_ALIASES = ("species_key", "class_name", "category_key")
 SOURCE_FIELD_ALIASES = ("source_platform", "source", "dataset_source")
 
