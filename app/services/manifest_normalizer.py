@@ -188,7 +188,7 @@ def validate_fish_manifest_text(source_text: str, *, source_name: str = "metadat
             raise ManifestNormalizationError("missing image field", source_path=source_name, row_number=row_number)
         # Legacy rows may leave image_id blank; the audit/sync path derives
         # the same stable ID from the image path.
-        if not _pick(row, lookup, ("claimed_species",)):
+        if not _pick(row, lookup, SPECIES_FIELD_ALIASES):
             raise ManifestNormalizationError("missing species field", source_path=source_name, row_number=row_number)
     return len(rows)
 
