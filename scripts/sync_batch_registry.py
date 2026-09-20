@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from app.db import SessionLocal, init_db
 from app.models import Batch, ImageAsset
+from app.services.manifest_normalizer import SPECIES_FIELD_ALIASES
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 VALID_REVIEW = {"approved", "needs_review", "rejected", "hard_case", "pending"}
@@ -125,7 +126,10 @@ def main():
                 gcs_uri=f"gs://{args.bucket}/{object_name}",
                 source_url=first(row, "source_url", "url"),
                 source_platform=first(row, "source_platform", "platform", "source"),
-                claimed_species=first(row, "claimed_species", "species", "class_name"),
+                claimed_species=next(
+                    (str(row.get(key) or "").strip() for key in SPECIES_FIELD_ALIASES if str(row.get(key) or "").strip()),
+                    None,
+                ),
                 scene=first(row, "scene"),
                 lighting=first(row, "lighting"),
                 quality=first(row, "image_quality", "quality", "quality_score"),
