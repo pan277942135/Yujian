@@ -135,6 +135,29 @@ def test_existing_fish_manifest_without_image_id_column_is_accepted_without_over
     assert existing.read_text(encoding="utf-8") == before
 
 
+@pytest.mark.parametrize("species_field", ["species_name", "fish_name", "label", "species"])
+def test_existing_fish_manifest_accepts_species_alias_without_overwrite(tmp_path, species_field):
+    row = {
+        "image_path": "images/legacy/fish_alias.jpg",
+        species_field: "鳙鱼",
+        "species_key": "bighead_carp",
+        "source": "legacy",
+    }
+    existing = write_manifest(
+        tmp_path,
+        "metadata/fish_manifest.csv",
+        [row],
+        ["image_path", species_field, "species_key", "source"],
+    )
+    before = existing.read_text(encoding="utf-8")
+
+    result = normalize_manifest(tmp_path)
+
+    assert result.generated is False
+    assert result.rows == 1
+    assert existing.read_text(encoding="utf-8") == before
+
+
 def test_p5_manifest_generates_all_525_rows(tmp_path):
     rows = [
         {
