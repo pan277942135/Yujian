@@ -46,8 +46,8 @@ jobs:
           set -euo pipefail
           ARCHIVE="/tmp/qwen-worker-${GITHUB_SHA}.tar.gz"
           REMOTE_TMP="/tmp/qwen-worker-${GITHUB_SHA}"
-          tar -czf "\$ARCHIVE" -C workers fish-qwen-refine-worker
-          gcloud compute scp "\$ARCHIVE" \
+          tar -czf "$ARCHIVE" -C workers fish-qwen-refine-worker
+          gcloud compute scp "$ARCHIVE" \
             "${GCP_USER}@${GCP_INSTANCE}:${REMOTE_TMP}.tar.gz" \
             --project="${GCP_VM_PROJECT}" \
             --zone="${GCP_ZONE}" \
@@ -59,13 +59,13 @@ jobs:
             --quiet \
             --command="
               set -euo pipefail
-              sudo install -d '\$REMOTE_TMP'
-              sudo tar -xzf '\$REMOTE_TMP.tar.gz' -C '\$REMOTE_TMP'
+              sudo install -d '$REMOTE_TMP'
+              sudo tar -xzf '$REMOTE_TMP.tar.gz' -C '$REMOTE_TMP'
               sudo install -d /opt/fish-qwen-refine-worker/output
               if [[ -f /opt/fish-qwen-refine-worker/worker.py ]]; then
                 sudo cp /opt/fish-qwen-refine-worker/worker.py /opt/fish-qwen-refine-worker/worker.py.before-${GITHUB_SHA}
               fi
-              sudo cp -a '\$REMOTE_TMP/fish-qwen-refine-worker/.' /opt/fish-qwen-refine-worker/
+              sudo cp -a '$REMOTE_TMP/fish-qwen-refine-worker/.' /opt/fish-qwen-refine-worker/
               sudo chown -R '${GCP_USER}:${GCP_USER}' /opt/fish-qwen-refine-worker
               sudo /opt/fish-qwen-refine-worker/.venv/bin/pip install -r /opt/fish-qwen-refine-worker/requirements.txt
               sudo systemctl daemon-reload
@@ -78,18 +78,18 @@ jobs:
         run: |
           set -euo pipefail
           HEALTH=""
-          for attempt in \$(seq 1 180); do
-            HEALTH="\$(gcloud compute ssh "${GCP_USER}@${GCP_INSTANCE}" \
+          for attempt in $(seq 1 180); do
+            HEALTH="$(gcloud compute ssh "${GCP_USER}@${GCP_INSTANCE}" \
               --project="${GCP_VM_PROJECT}" \
               --zone="${GCP_ZONE}" \
               --quiet \
               --command='curl -sS --max-time 20 http://127.0.0.1:8002/health' || true)"
             echo "health attempt=${attempt}: ${HEALTH}"
-            STATE="\$(printf '%s' "\$HEALTH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
-            if [[ "\$STATE" == "ready" ]]; then
+            STATE="$(printf '%s' "$HEALTH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
+            if [[ "$STATE" == "ready" ]]; then
               break
             fi
-            if [[ "\$STATE" == "error" ]]; then
+            if [[ "$STATE" == "error" ]]; then
               gcloud compute ssh "${GCP_USER}@${GCP_INSTANCE}" \
                 --project="${GCP_VM_PROJECT}" \
                 --zone="${GCP_ZONE}" \
@@ -99,9 +99,9 @@ jobs:
             fi
             sleep 10
           done
-          FINAL_STATE="\$(printf '%s' "\$HEALTH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
-          test "\$FINAL_STATE" = "ready"
-          printf '%s\n' "\$HEALTH" | python3 -m json.tool
+          FINAL_STATE="$(printf '%s' "$HEALTH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
+          test "$FINAL_STATE" = "ready"
+          printf '%s\n' "$HEALTH" | python3 -m json.tool
 
       - name: Verify GPU residency
         shell: bash
@@ -122,16 +122,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TEST_IMAGE="\$(gcloud compute ssh "${GCP_USER}@${GCP_INSTANCE}" \
+          TEST_IMAGE="$(gcloud compute ssh "${GCP_USER}@${GCP_INSTANCE}" \
             --project="${GCP_VM_PROJECT}" \
             --zone="${GCP_ZONE}" \
             --quiet \
-            --command='find /opt/ComfyUI/input -maxdepth 1 -type f \\( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.webp" \\) | sort | head -1' | tr -d '\r')"
-          if [[ -z "\$TEST_IMAGE" ]]; then
+            --command='find /opt/ComfyUI/input -maxdepth 1 -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.webp" \) | sort | head -1' | tr -d '\r')"
+          if [[ -z "$TEST_IMAGE" ]]; then
             echo "No fixed worker test image found; health and GPU checks already passed."
             exit 0
           fi
-          echo "Using fixed test image: \$TEST_IMAGE"
+          echo "Using fixed test image: $TEST_IMAGE"
           gcloud compute ssh "${GCP_USER}@${GCP_INSTANCE}" \
             --project="${GCP_VM_PROJECT}" \
             --zone="${GCP_ZONE}" \
