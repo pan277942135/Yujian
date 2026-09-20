@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Batch, DatasetVersion, ImageAsset
+from app.services.manifest_normalizer import image_id_from_path
 from app.services.review_prefill import SIGNAL_PREFIX, encode_review_signals
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
@@ -40,6 +41,19 @@ def get_bucket_name() -> str:
 def norm_path(value: str | None) -> str:
     value = (value or "").strip().replace("\\", "/").lstrip("/")
     return str(PurePosixPath(value)) if value else ""
+
+
+def _manifest_image_id(row: dict[str, str]) -> str:
+    explicit = (row.get("image_id") or "").strip()
+    if explicit:
+        return explicit
+    image_path = norm_path(
+        row.get("image_path")
+        or row.get("file_name")
+        or row.get("filename")
+        or row.get("image_name")
+    )
+    return image_id_from_path(image_path)
 
 
 def _download_text(blob: storage.Blob, encoding: str = "utf-8-sig") -> str:
@@ -164,7 +178,8 @@ def audit_incoming_batch(
     for rel, blob in rel_blob.items():
         basename_index[PurePosixPath(rel).name].append(blob)
 
-    id_counts = Counter((r.get("image_id") or "").strip() for r in rows if (r.get("image_id") or "").strip())
+    manifest_image_ids = [_manifest_image_id(row) for row in rows]
+    id_counts = Counter(image_id for image_id in manifest_image_ids if image_id)
     file_counts = Counter(
         norm_path(r.get("image_path") or r.get("file_name") or r.get("filename") or r.get("image_name"))
         for r in rows
@@ -177,7 +192,8 @@ def audit_incoming_batch(
     md5_first: dict[str, str] = {}
 
     for idx, row in enumerate(rows, start=1):
-        image_id = (row.get("image_id") or "").strip()
+        explicit_image_id = (row.get("image_id") or "").strip()
+        image_id = manifest_image_ids[idx - 1]
         file_name = norm_path(
             row.get("image_path") or row.get("file_name") or row.get("filename") or row.get("image_name")
         )
@@ -189,6 +205,8 @@ def audit_incoming_batch(
 
         if not image_id:
             reasons.append("missing_image_id")
+        elif not explicit_image_id:
+            reasons.append("generated_image_id")
         if not file_name:
             reasons.append("missing_file_name")
         if not species:
@@ -492,7 +510,10 @@ def sync_batch_registry(db: Session, batch_id: str, bucket_name: str | None = No
             continue
 
         resolved_file = PurePosixPath(object_name).name
-        image_id = str((row.get("image_id") or "").strip() or PurePosixPath(resolved_file).stem)
+        image_id = str(
+            (row.get("image_id") or "").strip()
+            or image_id_from_path(file_name or resolved_file)
+        )
         existing = db.scalar(
             select(ImageAsset).where(ImageAsset.batch_id == batch_id, ImageAsset.image_id == image_id)
         )

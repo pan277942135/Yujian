@@ -5,6 +5,7 @@ import pytest
 
 from app.services.manifest_normalizer import (
     ManifestNormalizationError,
+    image_id_from_path,
     normalize_manifest,
 )
 
@@ -70,6 +71,47 @@ def test_asset_manifest_is_converted_to_fixed_training_contract(tmp_path):
         "species_key": "bighead_carp",
         "source": "image_search",
     }]
+
+
+def test_missing_image_id_is_generated_from_stable_image_path(tmp_path):
+    write_manifest(
+        tmp_path,
+        "metadata/manifest.csv",
+        [{
+            "image_id": "",
+            "file_name": "legacy/fish_001.jpg",
+            "species_name": "鳙鱼",
+        }],
+        ["image_id", "file_name", "species_name"],
+    )
+
+    result = normalize_manifest(tmp_path)
+    row = next(csv.DictReader(result.output_path.open(encoding="utf-8", newline="")))
+
+    assert row["image_id"] == image_id_from_path("images/legacy/fish_001.jpg")
+    assert row["image_id"].startswith("yj_img_")
+
+
+def test_existing_fish_manifest_with_blank_image_id_is_accepted_without_overwrite(tmp_path):
+    existing = write_manifest(
+        tmp_path,
+        "metadata/fish_manifest.csv",
+        [{
+            "image_path": "images/legacy/fish_001.jpg",
+            "image_id": "",
+            "claimed_species": "鳙鱼",
+            "species_key": "bighead_carp",
+            "source": "legacy",
+        }],
+        ["image_path", "image_id", "claimed_species", "species_key", "source"],
+    )
+    before = existing.read_text(encoding="utf-8")
+
+    result = normalize_manifest(tmp_path)
+
+    assert result.generated is False
+    assert result.rows == 1
+    assert existing.read_text(encoding="utf-8") == before
 
 
 def test_p5_manifest_generates_all_525_rows(tmp_path):
