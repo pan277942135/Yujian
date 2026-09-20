@@ -88,7 +88,7 @@ def test_missing_image_id_is_generated_from_stable_image_path(tmp_path):
     result = normalize_manifest(tmp_path)
     row = next(csv.DictReader(result.output_path.open(encoding="utf-8", newline="")))
 
-    assert row["image_id"] == image_id_from_path("images/legacy/fish_001.jpg")
+    assert row["image_id"] == image_id_from_path("legacy/fish_001.jpg")
     assert row["image_id"].startswith("yj_img_")
 
 
