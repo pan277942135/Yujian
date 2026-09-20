@@ -118,7 +118,11 @@ def audit_with_species_catalog(
         reasons = [x for x in (row.get("auto_reasons") or "").split(";") if x]
         raw_claimed = (row.get("claimed_species") or "").strip()
         normalized = normalize_species_name(raw_claimed)
-        if normalized in accepted_names and set(reasons) <= {"non_target_or_unknown_species", "resolved_by_basename"}:
+        if normalized in accepted_names and set(reasons) <= {
+            "non_target_or_unknown_species",
+            "resolved_by_basename",
+            "generated_image_id",
+        }:
             row["auto_status"] = "CANDIDATE"
             row["auto_reasons"] = ";".join(x for x in reasons if x != "non_target_or_unknown_species")
             changed += 1

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping
@@ -69,6 +70,17 @@ def _clean(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
+def image_id_from_path(value: str | None) -> str:
+    """Return a stable ID for legacy manifest rows without an explicit image_id."""
+
+    normalized = _clean(value).replace("\\", "/")
+    if not normalized:
+        return ""
+    normalized = str(PurePosixPath(normalized))
+    token = uuid.uuid5(uuid.NAMESPACE_URL, f"yujian:image:{normalized}").hex
+    return f"yj_img_{token}"
+
+
 def _field_lookup(fieldnames: Iterable[str]) -> dict[str, str]:
     lookup: dict[str, str] = {}
     for field in fieldnames:
@@ -122,11 +134,11 @@ def _iter_rows(reader: csv.DictReader, lookup: Mapping[str, str], *, source_name
         if None in row:
             raise ManifestNormalizationError("malformed CSV row", source_path=source_name, row_number=row_number)
         seen_rows += 1
-        image_id = _pick(row, lookup, ("image_id",))
-        if not image_id:
-            raise ManifestNormalizationError("missing image_id field", source_path=source_name, row_number=row_number)
         image_value = _pick(row, lookup, IMAGE_FIELD_ALIASES)
         image_path = _normalize_image_path(image_value, row_number=row_number, source_name=source_name)
+        image_id = _pick(row, lookup, ("image_id",)) or image_id_from_path(image_path)
+        if not image_id:
+            raise ManifestNormalizationError("missing image_id field", source_path=source_name, row_number=row_number)
         claimed_species = _pick(row, lookup, SPECIES_FIELD_ALIASES)
         if not claimed_species:
             raise ManifestNormalizationError("missing species field", source_path=source_name, row_number=row_number)
@@ -163,6 +175,8 @@ def validate_fish_manifest_text(source_text: str, *, source_name: str = "metadat
     """Validate an existing Training Manifest without rewriting it."""
 
     reader, lookup = _csv_reader(source_text, source_name=source_name)
+    if lookup.get("image_id") is None:
+        raise ManifestNormalizationError("missing image_id field", source_path=source_name)
     rows = list(reader)
     if not rows:
         raise ManifestNormalizationError("manifest is empty", source_path=source_name)
@@ -171,8 +185,8 @@ def validate_fish_manifest_text(source_text: str, *, source_name: str = "metadat
             raise ManifestNormalizationError("malformed CSV row", source_path=source_name, row_number=row_number)
         if not _pick(row, lookup, ("image_path", "file_name", "filename", "image_name")):
             raise ManifestNormalizationError("missing image field", source_path=source_name, row_number=row_number)
-        if not _pick(row, lookup, ("image_id",)):
-            raise ManifestNormalizationError("missing image_id field", source_path=source_name, row_number=row_number)
+        # Legacy rows may leave image_id blank; the audit/sync path derives
+        # the same stable ID from the image path.
         if not _pick(row, lookup, ("claimed_species",)):
             raise ManifestNormalizationError("missing species field", source_path=source_name, row_number=row_number)
     return len(rows)
@@ -256,6 +270,7 @@ __all__ = [
     "ManifestNormalizationResult",
     "ManifestNormalizer",
     "OUTPUT_FIELDS",
+    "image_id_from_path",
     "normalize_batch_manifest",
     "normalize_manifest",
     "normalize_manifest_text",
