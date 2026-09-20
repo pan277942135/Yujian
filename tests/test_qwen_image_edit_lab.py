@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -95,6 +96,24 @@ def test_qwen_image_edit_lab_history_lists_only_lab_runs(tmp_path):
         assert rows[0]["time_ms"] == 321
     finally:
         db.close()
+
+
+def test_qwen_image_edit_lab_template_supports_dataset_selection():
+    template = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "templates"
+        / "platform"
+        / "lab"
+        / "qwen_image_edit.html"
+    ).read_text(encoding="utf-8")
+
+    assert 'id="qwenLabDataset"' in template
+    assert 'id="qwenLabDatasetGrid"' in template
+    assert "/api/platform/datasets" in template
+    assert "/items?page=1&size=60" in template
+    assert "File([blob]" in template
+    assert "selectedDatasetSource" in template
 
 
 def test_qwen_image_edit_lab_direct_original_to_worker_and_records_run(tmp_path, monkeypatch):

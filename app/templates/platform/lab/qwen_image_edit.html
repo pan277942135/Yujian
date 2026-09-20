@@ -8,10 +8,16 @@
   .qwen-lab-panel p{margin:5px 0 0;color:var(--muted);line-height:1.6}
   .qwen-lab-field{display:grid;gap:7px}
   .qwen-lab-field label{font-size:13px;font-weight:750;color:#36574d}
-  .qwen-lab-field textarea,.qwen-lab-field input[type=file]{width:100%;box-sizing:border-box;border:1px solid #cddfd7;border-radius:8px;background:#fff;color:#24483d;padding:10px 11px;font:inherit}
+  .qwen-lab-field select,.qwen-lab-field textarea,.qwen-lab-field input[type=file],.qwen-lab-field input[type=number]{width:100%;box-sizing:border-box;border:1px solid #cddfd7;border-radius:8px;background:#fff;color:#24483d;padding:10px 11px;font:inherit}
   .qwen-lab-field textarea{min-height:132px;resize:vertical;line-height:1.5}
-  .qwen-lab-field textarea:focus,.qwen-lab-field input[type=file]:focus{outline:2px solid #a9d0bf;outline-offset:1px}
+  .qwen-lab-field select:focus,.qwen-lab-field textarea:focus,.qwen-lab-field input[type=file]:focus,.qwen-lab-field input[type=number]:focus{outline:2px solid #a9d0bf;outline-offset:1px}
   .qwen-lab-upload{border:1px dashed #b9d2c7;border-radius:11px;background:#f8fcfa;padding:12px}
+  .qwen-lab-dataset-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;max-height:330px;overflow:auto;padding:2px}
+  .qwen-lab-dataset-card{border:1px solid #d5e5df;border-radius:10px;background:#fbfefd;padding:7px;text-align:left;cursor:pointer;color:inherit}
+  .qwen-lab-dataset-card:hover,.qwen-lab-dataset-card.selected{border-color:#2a8068;background:#eff9f4;box-shadow:0 0 0 2px rgba(42,128,104,.12)}
+  .qwen-lab-dataset-card img{display:block;width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:7px;background:#edf4f1}
+  .qwen-lab-dataset-card strong{display:block;font-size:12px;margin-top:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .qwen-lab-dataset-card small{display:block;color:var(--muted);font-size:11px;margin-top:3px}
   .qwen-lab-upload-preview{margin-top:10px;border:1px solid #d5e5df;border-radius:9px;background:#edf4f1;min-height:190px;display:grid;place-items:center;overflow:hidden}
   .qwen-lab-upload-preview img{display:block;width:100%;max-height:300px;object-fit:contain}
   .qwen-lab-upload-preview img[hidden]{display:none}
@@ -81,7 +87,19 @@
     </div>
 
     <div class="qwen-lab-field">
-      <label for="qwenLabImage">Upload Image</label>
+      <label for="qwenLabDataset">数据集（可选）</label>
+      <select id="qwenLabDataset"><option value="">加载中…</option></select>
+      <span id="qwenLabDatasetHint" class="qwen-lab-hint">可选择已冻结 Dataset 图片，也可以继续使用下面的本地上传。</span>
+    </div>
+
+    <div class="qwen-lab-field">
+      <label>数据集图片</label>
+      <div id="qwenLabDatasetState" class="qwen-lab-history-state">请选择 Dataset 后加载图片；也可以使用本地上传。</div>
+      <div id="qwenLabDatasetGrid" class="qwen-lab-dataset-grid" hidden></div>
+    </div>
+
+    <div class="qwen-lab-field">
+      <label for="qwenLabImage">本地上传（可选）</label>
       <div class="qwen-lab-upload">
         <input id="qwenLabImage" type="file" accept="image/jpeg,image/png,image/webp">
         <div id="qwenLabUploadPreview" class="qwen-lab-upload-preview">
@@ -146,6 +164,10 @@
 <script>
 (() => {
   const imageInput = document.getElementById('qwenLabImage');
+  const datasetSelect = document.getElementById('qwenLabDataset');
+  const datasetHint = document.getElementById('qwenLabDatasetHint');
+  const datasetState = document.getElementById('qwenLabDatasetState');
+  const datasetGrid = document.getElementById('qwenLabDatasetGrid');
   const originalPreview = document.getElementById('qwenLabOriginalPreview');
   const uploadEmpty = document.getElementById('qwenLabUploadEmpty');
   const generateButton = document.getElementById('qwenLabGenerate');
@@ -159,6 +181,9 @@
   const historyState = document.getElementById('qwenLabHistoryState');
   const historyList = document.getElementById('qwenLabHistoryList');
   let objectUrl = '';
+  let datasetId = '';
+  let selectedDatasetSource = null;
+  let datasetRows = [];
 
   function setStatus(element, text, className) {
     element.className = 'status-tag ' + className;
@@ -168,6 +193,138 @@
   function setHint(text, isError) {
     hint.textContent = text;
     hint.style.color = isError ? '#a63b34' : '';
+  }
+
+  function datasetErrorMessage(payload, fallback) {
+    if (payload && typeof payload.detail === 'string') return payload.detail;
+    if (payload && payload.detail && typeof payload.detail.message === 'string') return payload.detail.message;
+    return fallback;
+  }
+
+  async function fetchDatasetJson(url) {
+    const response = await fetch(url);
+    const bodyText = await response.text();
+    let payload = {};
+    try { payload = bodyText ? JSON.parse(bodyText) : {}; } catch (_) { payload = {}; }
+    if (!response.ok) throw new Error(datasetErrorMessage(payload, '数据集读取失败'));
+    return payload;
+  }
+
+  function hasImageSource() {
+    return Boolean((imageInput.files && imageInput.files[0]) || selectedDatasetSource);
+  }
+
+  function clearDatasetSelection() {
+    selectedDatasetSource = null;
+    datasetGrid.querySelectorAll('[data-dataset-index]').forEach((button) => button.classList.remove('selected'));
+  }
+
+  function renderDatasetOptions(rows) {
+    const frozen = rows.filter((row) => String(row.status || '').toUpperCase() === 'FROZEN');
+    datasetSelect.innerHTML = '<option value="">不选择数据集（使用本地上传）</option>';
+    rows.forEach((row) => {
+      const id = String(row.id || row.dataset_id || row.dataset_version || '');
+      if (!id) return;
+      const statusValue = String(row.status || 'UNKNOWN').toUpperCase();
+      const option = document.createElement('option');
+      option.value = id;
+      option.textContent = id + ' · ' + Number(row.total ?? row.image_count ?? 0) + ' 张 · ' + (statusValue === 'FROZEN' ? '已冻结' : statusValue);
+      option.disabled = statusValue !== 'FROZEN';
+      datasetSelect.appendChild(option);
+    });
+    if (frozen.length) {
+      datasetId = String(frozen[0].id || frozen[0].dataset_id || frozen[0].dataset_version);
+      datasetSelect.value = datasetId;
+      datasetHint.textContent = '已选择 ' + datasetId + '；数据集为只读实验输入。';
+    } else {
+      datasetId = '';
+      datasetHint.textContent = '暂无已冻结 Dataset，可直接使用本地上传。';
+    }
+  }
+
+  function renderDatasetItems(items) {
+    clearDatasetSelection();
+    const rows = Array.isArray(items) ? items : [];
+    if (!rows.length) {
+      datasetGrid.hidden = true;
+      datasetState.hidden = false;
+      datasetState.textContent = datasetId ? '该 Dataset 暂无可选图片。' : '请选择 Dataset 图片；也可以使用本地上传。';
+      generateButton.disabled = !hasImageSource();
+      return;
+    }
+    datasetState.hidden = true;
+    datasetGrid.hidden = false;
+    datasetGrid.innerHTML = rows.map((item, index) => (
+      '<button type="button" class="qwen-lab-dataset-card" data-dataset-index="' + index + '">' +
+        '<img loading="lazy" decoding="async" src="' + esc(item.preview_url || item.image_url || '') + '" alt="' + esc(item.image_id || '真实照片') + '">' +
+        '<strong>' + esc(item.image_id || ('图片 ' + (index + 1))) + '</strong>' +
+        '<small>' + esc(item.species_name || item.species_id || '') + ' · ' + esc(item.split || '—') + '</small>' +
+      '</button>'
+    )).join('');
+    datasetGrid.querySelectorAll('[data-dataset-index]').forEach((button) => {
+      button.addEventListener('click', () => selectDatasetSource(Number(button.dataset.datasetIndex)));
+    });
+    generateButton.disabled = !hasImageSource();
+  }
+
+  function selectDatasetSource(index) {
+    const buttons = datasetGrid.querySelectorAll('[data-dataset-index]');
+    const source = buttons[index] ? datasetRows[index] : null;
+    if (!source) return;
+    selectedDatasetSource = source;
+    imageInput.value = '';
+    if (objectUrl) {
+      URL.revokeObjectURL(objectUrl);
+      objectUrl = '';
+    }
+    buttons.forEach((button, buttonIndex) => button.classList.toggle('selected', buttonIndex === index));
+    const previewUrl = source.image_url || source.preview_url || '';
+    originalPreview.src = previewUrl;
+    originalPreview.hidden = !previewUrl;
+    uploadEmpty.hidden = Boolean(previewUrl);
+    setStatus(status, '已选择数据集图片', 'status-queued');
+    setHint('已选择 Dataset 图片：' + (source.image_id || '未命名图片') + '，可以开始调用 Qwen。', false);
+    generateButton.disabled = false;
+  }
+
+  async function loadDatasetItems() {
+    clearDatasetSelection();
+    if (!datasetId) {
+      datasetRows = [];
+      renderDatasetItems([]);
+      return;
+    }
+    datasetState.hidden = false;
+    datasetGrid.hidden = true;
+    datasetState.textContent = '正在加载 Dataset 图片…';
+    try {
+      const payload = await fetchDatasetJson('/api/platform/datasets/' + encodeURIComponent(datasetId) + '/items?page=1&size=60');
+      datasetRows = Array.isArray(payload.items) ? payload.items : [];
+      renderDatasetItems(datasetRows);
+    } catch (error) {
+      datasetRows = [];
+      datasetState.hidden = false;
+      datasetGrid.hidden = true;
+      datasetState.textContent = error instanceof Error ? error.message : String(error);
+      generateButton.disabled = !hasImageSource();
+    }
+  }
+
+  async function loadDatasets() {
+    datasetState.hidden = false;
+    datasetGrid.hidden = true;
+    try {
+      const payload = await fetchDatasetJson('/api/platform/datasets');
+      const rows = Array.isArray(payload) ? payload : (Array.isArray(payload.datasets) ? payload.datasets : []);
+      renderDatasetOptions(rows);
+      await loadDatasetItems();
+    } catch (error) {
+      datasetId = '';
+      datasetRows = [];
+      datasetSelect.innerHTML = '<option value="">数据集加载失败</option>';
+      datasetHint.textContent = error instanceof Error ? error.message : String(error);
+      renderDatasetItems([]);
+    }
   }
 
   function showMeta(data) {
@@ -261,28 +418,32 @@
 
   imageInput.addEventListener('change', () => {
     const file = imageInput.files && imageInput.files[0];
-    generateButton.disabled = !file;
     if (!file) {
-      originalPreview.hidden = true;
-      uploadEmpty.hidden = false;
-      setStatus(status, '待上传', 'status-neutral');
-      setHint('请先上传图片。', false);
+      generateButton.disabled = !hasImageSource();
+      if (!selectedDatasetSource) {
+        originalPreview.hidden = true;
+        uploadEmpty.hidden = false;
+        setStatus(status, '待上传', 'status-neutral');
+        setHint('请先上传图片，或从数据集选择图片。', false);
+      }
       return;
     }
+    clearDatasetSelection();
     if (objectUrl) URL.revokeObjectURL(objectUrl);
     objectUrl = URL.createObjectURL(file);
     originalPreview.src = objectUrl;
     originalPreview.hidden = false;
     uploadEmpty.hidden = true;
-    setStatus(status, '已选择图片', 'status-queued');
+    setStatus(status, '已选择本地图片', 'status-queued');
     setHint('可以开始调用 Qwen。', false);
+    generateButton.disabled = false;
   });
 
   generateButton.addEventListener('click', async () => {
-    const file = imageInput.files && imageInput.files[0];
-    if (!file) return;
+    const localFile = imageInput.files && imageInput.files[0];
+    const datasetSource = selectedDatasetSource;
+    if (!localFile && !datasetSource) return;
     const form = new FormData();
-    form.append('image', file);
     form.append('prompt', document.getElementById('qwenLabPrompt').value);
     form.append('negative_prompt', document.getElementById('qwenLabNegativePrompt').value);
     const seed = document.getElementById('qwenLabSeed').value.trim();
@@ -291,13 +452,25 @@
     generateButton.disabled = true;
     setStatus(status, '生成中', 'status-running');
     runStatus.textContent = 'Qwen Worker 处理中…';
-    setHint('正在上传原图并调用 Qwen Image Edit 2511，请稍候。', false);
+    setHint(datasetSource && !localFile ? '正在读取 Dataset 原图并调用 Qwen Image Edit 2511，请稍候。' : '正在上传原图并调用 Qwen Image Edit 2511，请稍候。', false);
     resultEmpty.hidden = false;
     resultImage.hidden = true;
     meta.hidden = true;
     promptMeta.hidden = true;
 
     try {
+      let file = localFile;
+      if (!file && datasetSource) {
+        const sourceUrl = datasetSource.image_url || datasetSource.preview_url || '';
+        if (!sourceUrl) throw new Error('数据集图片没有可读取的地址');
+        const sourceResponse = await fetch(sourceUrl);
+        if (!sourceResponse.ok) throw new Error('数据集图片读取失败');
+        const blob = await sourceResponse.blob();
+        file = new File([blob], datasetSource.image_id || 'dataset-image.jpg', {type: blob.type || 'image/jpeg'});
+      }
+      if (!file) throw new Error('请选择本地图片或数据集图片');
+      form.append('image', file);
+
       const response = await fetch('/api/fish-portrait/qwen-lab/generate', {
         method: 'POST',
         body: form
@@ -326,10 +499,16 @@
       setStatus(status, '生成失败', 'status-failed');
       setHint(error instanceof Error ? error.message : String(error), true);
     } finally {
-      generateButton.disabled = false;
+      generateButton.disabled = hasImageSource() ? false : true;
     }
   });
+  datasetSelect.addEventListener('change', async (event) => {
+    datasetId = String(event.target.value || '');
+    datasetHint.textContent = datasetId ? '正在读取 ' + datasetId + '…' : '未选择 Dataset，将使用本地上传。';
+    await loadDatasetItems();
+  });
   document.getElementById('qwenLabHistoryRefresh').addEventListener('click', loadHistory);
+  loadDatasets();
   loadHistory();
 })();
 </script>
