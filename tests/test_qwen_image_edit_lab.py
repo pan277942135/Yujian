@@ -11,8 +11,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from starlette.datastructures import Headers, UploadFile
 
+from app.dataset_models import DatasetItem
 from app.db import Base
 from app.entry import app
+from app.models import DatasetVersion
 from app.platform.models import PipelineRun
 from app.platform.routes import qwen_image_edit_lab as lab
 
@@ -112,8 +114,97 @@ def test_qwen_image_edit_lab_template_supports_dataset_selection():
     assert 'id="qwenLabDatasetGrid"' in template
     assert "/api/platform/datasets" in template
     assert "/items?page=1&size=60" in template
-    assert "File([blob]" in template
+    assert "URLSearchParams" in template
+    assert "dataset_item_id" in template
     assert "selectedDatasetSource" in template
+    assert "new File([blob]" not in template
+
+
+def test_qwen_image_edit_lab_dataset_source_reads_server_side(tmp_path, monkeypatch):
+    db = _session(tmp_path)
+    try:
+        db.add(
+            DatasetVersion(
+                dataset_version="DS_TEST",
+                manifest_uri="gs://bucket/manifest.json",
+                git_commit="test",
+                status="FROZEN",
+                pipeline_type="WHOLE_IMAGE_V1",
+            )
+        )
+        db.add(
+            DatasetItem(
+                dataset_version="DS_TEST",
+                image_asset_id=1,
+                batch_id="BATCH_TEST",
+                image_id="IMG00012",
+                gcs_uri="gs://bucket/IMG00012.jpg",
+                species_key="crucian_carp",
+                species_name="鲫鱼",
+                class_index=0,
+                split="train",
+            )
+        )
+        db.commit()
+
+        stored = {}
+
+        def fake_store(run_id, kind, data, media_type, extension):
+            uri = "local://qwen-image-edit-lab/" + run_id + "/" + kind + extension
+            stored[kind] = (uri, data, media_type)
+            return uri
+
+        def fake_managed(uri):
+            assert uri == "gs://bucket/IMG00012.jpg"
+            return b"dataset-image", "image/jpeg"
+
+        def fake_read(uri, *, label):
+            assert uri == "http://worker/output.png"
+            assert label == "qwen_lab_output"
+            return b"generated-image", "image/png"
+
+        def fake_worker(**kwargs):
+            assert kwargs["visible_fish_refined_image_uri"].startswith("local://qwen-image-edit-lab/")
+            return {
+                "result_uri": "http://worker/output.png",
+                "worker_model": "Qwen-Image-Edit-2511",
+                "worker_status": "WORKER_EXECUTED",
+                "worker_http_status": 200,
+                "seed": 456,
+                "elapsed_ms": 789,
+            }
+
+        monkeypatch.setattr(lab, "_store_bytes", fake_store)
+        monkeypatch.setattr(lab, "_read_managed_uri", fake_managed)
+        monkeypatch.setattr(lab, "_read_image_uri", fake_read)
+        monkeypatch.setattr(lab, "invoke_qwen_refine_worker", fake_worker)
+
+        response = asyncio.run(
+            lab.generate_qwen_image_edit_lab(
+                image=None,
+                prompt="dataset prompt",
+                negative_prompt="dataset negative",
+                seed="456",
+                dataset_id="DS_TEST",
+                dataset_item_id="1",
+                db=db,
+            )
+        )
+
+        assert response["status"] == "SUCCESS"
+        assert response["input_source"] == "DATASET"
+        assert response["dataset_id"] == "DS_TEST"
+        assert response["dataset_item_id"] == 1
+        assert response["image_id"] == "IMG00012"
+        run = db.get(PipelineRun, response["run_id"])
+        state = json.loads(run.stage_json)
+        assert state["request"]["input_source"] == "DATASET"
+        assert state["request"]["dataset_id"] == "DS_TEST"
+        assert state["request"]["dataset_item_id"] == 1
+        assert state["request"]["image_id"] == "IMG00012"
+        assert stored["input"][1] == b"dataset-image"
+    finally:
+        db.close()
 
 
 def test_qwen_image_edit_lab_direct_original_to_worker_and_records_run(tmp_path, monkeypatch):

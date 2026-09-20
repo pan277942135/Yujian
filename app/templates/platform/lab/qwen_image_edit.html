@@ -23,7 +23,7 @@
   .qwen-lab-upload-preview img[hidden]{display:none}
   .qwen-lab-upload-empty{padding:28px 12px;color:var(--muted);font-size:12px;text-align:center}
   .qwen-lab-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
-  .qwen-lab-hint{color:var(--muted);font-size:12px;line-height:1.5}
+  .qwen-lab-hint{color:var(--muted);font-size:12px;line-height:1.5;overflow-wrap:anywhere;word-break:break-word}
   .qwen-lab-result{min-height:480px}
   .qwen-lab-result-image{width:100%;max-height:720px;aspect-ratio:4/3;object-fit:contain;border:1px solid #d5e5df;border-radius:11px;background:#edf4f1}
   .qwen-lab-result-image[hidden]{display:none}
@@ -443,11 +443,17 @@
     const localFile = imageInput.files && imageInput.files[0];
     const datasetSource = selectedDatasetSource;
     if (!localFile && !datasetSource) return;
-    const form = new FormData();
-    form.append('prompt', document.getElementById('qwenLabPrompt').value);
-    form.append('negative_prompt', document.getElementById('qwenLabNegativePrompt').value);
+    const requestBody = datasetSource && !localFile ? new URLSearchParams() : new FormData();
+    requestBody.append('prompt', document.getElementById('qwenLabPrompt').value);
+    requestBody.append('negative_prompt', document.getElementById('qwenLabNegativePrompt').value);
     const seed = document.getElementById('qwenLabSeed').value.trim();
-    if (seed) form.append('seed', seed);
+    if (seed) requestBody.append('seed', seed);
+    if (datasetSource && !localFile) {
+      requestBody.append('dataset_id', datasetId);
+      requestBody.append('dataset_item_id', String(datasetSource.item_id || datasetSource.image_id || ''));
+    } else {
+      requestBody.append('image', localFile);
+    }
 
     generateButton.disabled = true;
     setStatus(status, '生成中', 'status-running');
@@ -459,26 +465,19 @@
     promptMeta.hidden = true;
 
     try {
-      let file = localFile;
-      if (!file && datasetSource) {
-        const sourceUrl = datasetSource.image_url || datasetSource.preview_url || '';
-        if (!sourceUrl) throw new Error('数据集图片没有可读取的地址');
-        const sourceResponse = await fetch(sourceUrl);
-        if (!sourceResponse.ok) throw new Error('数据集图片读取失败');
-        const blob = await sourceResponse.blob();
-        file = new File([blob], datasetSource.image_id || 'dataset-image.jpg', {type: blob.type || 'image/jpeg'});
-      }
-      if (!file) throw new Error('请选择本地图片或数据集图片');
-      form.append('image', file);
-
       const response = await fetch('/api/fish-portrait/qwen-lab/generate', {
         method: 'POST',
-        body: form
+        headers: datasetSource && !localFile ? {'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'} : undefined,
+        body: requestBody
       });
       const bodyText = await response.text();
+      const contentType = String(response.headers.get('content-type') || '').toLowerCase();
       let data = {};
-      try { data = bodyText ? JSON.parse(bodyText) : {}; } catch (_) { data = {detail: bodyText}; }
+      try { data = bodyText ? JSON.parse(bodyText) : {}; } catch (_) { data = {}; }
       if (!response.ok) {
+        if (contentType.includes('text/html') || /^\s*<!doctype html/i.test(bodyText) || /<html[\s>]/i.test(bodyText)) {
+          throw new Error('当前网络代理限制文件上传；请改用数据集图片生成，或切换到允许上传文件的网络。');
+        }
         const detail = typeof data.detail === 'string'
           ? data.detail
           : (data.detail && (data.detail.message || data.detail.error_code)) || '生成失败';
