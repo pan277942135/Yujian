@@ -475,7 +475,7 @@
       let data = {};
       try { data = bodyText ? JSON.parse(bodyText) : {}; } catch (_) { data = {}; }
       if (!response.ok) {
-        if (contentType.includes('text/html') || /^\\s*<!doctype html/i.test(bodyText) || /<html[\\s>]/i.test(bodyText)) {
+        if (contentType.includes('text/html') || /^\s*<!doctype html/i.test(bodyText) || /<html[\s>]/i.test(bodyText)) {
           throw new Error('当前网络代理限制文件上传；请改用数据集图片生成，或切换到允许上传文件的网络。');
         }
         const detail = typeof data.detail === 'string'
