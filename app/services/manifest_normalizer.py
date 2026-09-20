@@ -175,8 +175,9 @@ def validate_fish_manifest_text(source_text: str, *, source_name: str = "metadat
     """Validate an existing Training Manifest without rewriting it."""
 
     reader, lookup = _csv_reader(source_text, source_name=source_name)
-    if lookup.get("image_id") is None:
-        raise ManifestNormalizationError("missing image_id field", source_path=source_name)
+    # Legacy canonical manifests may omit the image_id column. The audit/sync
+    # path derives the same stable ID from the normalized image path, so
+    # validation only requires the image and claimed-species fields.
     rows = list(reader)
     if not rows:
         raise ManifestNormalizationError("manifest is empty", source_path=source_name)
