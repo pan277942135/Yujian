@@ -114,6 +114,27 @@ def test_existing_fish_manifest_with_blank_image_id_is_accepted_without_overwrit
     assert existing.read_text(encoding="utf-8") == before
 
 
+def test_existing_fish_manifest_without_image_id_column_is_accepted_without_overwrite(tmp_path):
+    existing = write_manifest(
+        tmp_path,
+        "metadata/fish_manifest.csv",
+        [{
+            "image_path": "images/legacy/fish_002.jpg",
+            "claimed_species": "鳙鱼",
+            "species_key": "bighead_carp",
+            "source": "legacy",
+        }],
+        ["image_path", "claimed_species", "species_key", "source"],
+    )
+    before = existing.read_text(encoding="utf-8")
+
+    result = normalize_manifest(tmp_path)
+
+    assert result.generated is False
+    assert result.rows == 1
+    assert existing.read_text(encoding="utf-8") == before
+
+
 def test_p5_manifest_generates_all_525_rows(tmp_path):
     rows = [
         {
