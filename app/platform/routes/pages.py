@@ -32,6 +32,7 @@ PLATFORM_PAGES = (
     PlatformPage("/platform/model/evaluation", "platform/model_evaluation.html", "模型评估", "模型工厂", "查看指标、混淆关系和错误案例。", "/api/platform/models/{model_id}/evaluation"),
     PlatformPage("/platform/pipeline", "platform/pipeline.html", "智能流水线", "智能流水线", "追踪一张鱼照片如何经过 AI 节点生成资产。", "/api/platform/pipelines"),
     PlatformPage("/platform/lab/fish-portrait", "platform/lab/fish_portrait.html", "Fish Portrait POC", "智能流水线", "基于真实钓获照片和标准鱼体资产，验证 AI 鱼体数字化生成效果。", "/api/platform/portrait/jobs"),
+    PlatformPage("/fish-portrait/qwen-lab", "platform/lab/qwen_image_edit.html", "Qwen Image Edit Lab", "智能流水线", "测试 Qwen 对真实鱼获图片的编辑能力。", "/api/fish-portrait/qwen-lab/generate"),
     PlatformPage("/platform/assets", "platform/assets.html", "数字资产工厂", "数字资产工厂", "查看原图、Mask、透明鱼和 Sticker 资产。", "/api/platform/assets"),
     PlatformPage("/platform/knowledge", "platform/knowledge.html", "鱼类知识库", "鱼类知识库", "复用现有 Fish Knowledge CMS 数据。", "/api/platform/knowledge"),
     PlatformPage("/platform/habitat", "platform/habitat.html", "渔境生态", "渔境生态", "管理鱼缸、鱼塘、湖湾等渔境生态配置。", "/api/platform/habitat"),

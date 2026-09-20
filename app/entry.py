@@ -7,6 +7,7 @@ from app.detector_runtime import load_detector
 from app.main import app, templates as main_templates
 from app.platform.routes.api import router as platform_api_router
 from app.platform.routes.portrait import router as platform_portrait_router
+from app.platform.routes.qwen_image_edit_lab import router as qwen_image_edit_lab_router
 from app.model_publish_api import router as model_publish_router
 from app.presence import router as presence_router
 from app.dedupe import router as dedupe_router
@@ -175,5 +176,6 @@ app.include_router(fish_asset_import_router)
 app.include_router(fish_asset_import_page_router)
 app.include_router(platform_pages_router)
 app.include_router(platform_portrait_router)
+app.include_router(qwen_image_edit_lab_router)
 app.include_router(platform_api_router)
 app.include_router(model_publish_router)

@@ -1,0 +1,237 @@
+{% extends "platform/base.html" %}
+
+{% block head %}
+<style>
+  .qwen-lab-layout{display:grid;grid-template-columns:minmax(320px,440px) minmax(0,1fr);gap:16px;align-items:start}
+  .qwen-lab-panel{display:grid;gap:16px}
+  .qwen-lab-panel h2{margin:0;font-size:17px}
+  .qwen-lab-panel p{margin:5px 0 0;color:var(--muted);line-height:1.6}
+  .qwen-lab-field{display:grid;gap:7px}
+  .qwen-lab-field label{font-size:13px;font-weight:750;color:#36574d}
+  .qwen-lab-field textarea,.qwen-lab-field input[type=file]{width:100%;box-sizing:border-box;border:1px solid #cddfd7;border-radius:8px;background:#fff;color:#24483d;padding:10px 11px;font:inherit}
+  .qwen-lab-field textarea{min-height:132px;resize:vertical;line-height:1.5}
+  .qwen-lab-field textarea:focus,.qwen-lab-field input[type=file]:focus{outline:2px solid #a9d0bf;outline-offset:1px}
+  .qwen-lab-upload{border:1px dashed #b9d2c7;border-radius:11px;background:#f8fcfa;padding:12px}
+  .qwen-lab-upload-preview{margin-top:10px;border:1px solid #d5e5df;border-radius:9px;background:#edf4f1;min-height:190px;display:grid;place-items:center;overflow:hidden}
+  .qwen-lab-upload-preview img{display:block;width:100%;max-height:300px;object-fit:contain}
+  .qwen-lab-upload-preview img[hidden]{display:none}
+  .qwen-lab-upload-empty{padding:28px 12px;color:var(--muted);font-size:12px;text-align:center}
+  .qwen-lab-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  .qwen-lab-hint{color:var(--muted);font-size:12px;line-height:1.5}
+  .qwen-lab-result{min-height:480px}
+  .qwen-lab-result-image{width:100%;max-height:720px;aspect-ratio:4/3;object-fit:contain;border:1px solid #d5e5df;border-radius:11px;background:#edf4f1}
+  .qwen-lab-result-image[hidden]{display:none}
+  .qwen-lab-result-empty{min-height:420px;display:grid;place-items:center;border:1px dashed #cddfd7;border-radius:11px;color:var(--muted);text-align:center;padding:20px;line-height:1.6}
+  .qwen-lab-meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:13px}
+  .qwen-lab-meta .stat{min-width:0}
+  .qwen-lab-meta .stat strong{display:block;overflow-wrap:anywhere}
+  .qwen-lab-prompt-meta{display:grid;gap:9px;margin-top:13px}
+  .qwen-lab-prompt-meta div{border:1px solid #e0ebe6;border-radius:9px;background:#fbfefd;padding:10px}
+  .qwen-lab-prompt-meta strong{display:block;font-size:11px;color:#71817d;margin-bottom:5px}
+  .qwen-lab-prompt-meta span{display:block;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.5}
+  .qwen-lab-vs{display:flex;align-items:center;gap:8px;color:#71817d;font-size:12px;font-weight:800;margin:0 0 8px}
+  .qwen-lab-vs::before,.qwen-lab-vs::after{content:'';height:1px;background:#dfe8e4;flex:1}
+  .qwen-lab-status{display:inline-flex;align-items:center;gap:6px}
+  @media(max-width:900px){.qwen-lab-layout{grid-template-columns:1fr}.qwen-lab-result{min-height:0}}
+  @media(max-width:560px){.qwen-lab-meta{grid-template-columns:1fr 1fr}.page-heading h1{font-size:26px}}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-heading">
+  <div>
+    <h1>Qwen Image Edit Lab</h1>
+    <p>测试 Qwen 对真实鱼获图片的编辑能力</p>
+  </div>
+  <div class="page-actions">
+    <span id="qwenLabStatus" class="status-tag status-neutral"><span class="status-dot"></span>待上传</span>
+  </div>
+</div>
+
+<div class="notice" style="margin-bottom:16px">
+  独立实验入口：原图直接交给 Qwen Image Edit 2511，不经过 Detector、SAM、Mask 或 Fish Portrait Preserve Pipeline。
+</div>
+
+<div class="qwen-lab-layout">
+  <section class="panel qwen-lab-panel" aria-label="Qwen Image Edit Lab 输入">
+    <div class="panel-heading">
+      <div><h2>实验输入</h2><p>上传一张真实鱼获图片，修改 Prompt 后直接生成。</p></div>
+    </div>
+
+    <div class="qwen-lab-field">
+      <label for="qwenLabImage">Upload Image</label>
+      <div class="qwen-lab-upload">
+        <input id="qwenLabImage" type="file" accept="image/jpeg,image/png,image/webp">
+        <div id="qwenLabUploadPreview" class="qwen-lab-upload-preview">
+          <div id="qwenLabUploadEmpty" class="qwen-lab-upload-empty">支持 jpg、png、webp</div>
+          <img id="qwenLabOriginalPreview" alt="Original Image" hidden>
+        </div>
+      </div>
+    </div>
+
+    <div class="qwen-lab-field">
+      <label for="qwenLabPrompt">Prompt</label>
+      <textarea id="qwenLabPrompt">Create a realistic wildlife fish portrait from the uploaded photo.
+
+Preserve the exact fish species, body shape, scales, fins and natural appearance.
+
+Improve lighting, clarity and composition.
+
+Professional fishing magazine photography style.</textarea>
+    </div>
+
+    <div class="qwen-lab-field">
+      <label for="qwenLabNegativePrompt">Negative Prompt</label>
+      <textarea id="qwenLabNegativePrompt">cartoon,
+anime,
+illustration,
+different fish species,
+changed body shape,
+extra fins,
+missing fins,
+deformed fish,
+fake scales,
+unrealistic texture,
+CGI,
+painting style</textarea>
+    </div>
+
+    <div class="qwen-lab-field">
+      <label for="qwenLabSeed">Seed（可选）</label>
+      <input id="qwenLabSeed" type="number" min="0" max="9223372036854775807" step="1" placeholder="留空则随机">
+      <span class="qwen-lab-hint">固定 Seed 可用于对比不同 Prompt；留空由 Worker 随机生成。</span>
+    </div>
+
+    <div class="qwen-lab-actions">
+      <button id="qwenLabGenerate" class="button primary" type="button" disabled>Generate with Qwen</button>
+      <span id="qwenLabHint" class="qwen-lab-hint">请先上传图片。</span>
+    </div>
+  </section>
+
+  <section class="panel qwen-lab-panel qwen-lab-result" aria-label="Qwen Image Edit Lab 结果">
+    <div class="panel-heading">
+      <div><h2>结果展示</h2><p>Original VS Qwen Result</p></div>
+      <span id="qwenLabRunStatus" class="status-tag status-neutral">未开始</span>
+    </div>
+
+    <div class="qwen-lab-vs"><span>Original</span><span>VS</span><span>Qwen Result</span></div>
+    <div class="qwen-lab-result-empty" id="qwenLabResultEmpty">生成成功后显示 Qwen 结果。</div>
+    <img id="qwenLabResultImage" class="qwen-lab-result-image" alt="Qwen Result" hidden>
+
+    <div id="qwenLabMeta" class="qwen-lab-meta" hidden></div>
+    <div id="qwenLabPromptMeta" class="qwen-lab-prompt-meta" hidden></div>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+  const imageInput = document.getElementById('qwenLabImage');
+  const originalPreview = document.getElementById('qwenLabOriginalPreview');
+  const uploadEmpty = document.getElementById('qwenLabUploadEmpty');
+  const generateButton = document.getElementById('qwenLabGenerate');
+  const hint = document.getElementById('qwenLabHint');
+  const status = document.getElementById('qwenLabStatus');
+  const runStatus = document.getElementById('qwenLabRunStatus');
+  const resultEmpty = document.getElementById('qwenLabResultEmpty');
+  const resultImage = document.getElementById('qwenLabResultImage');
+  const meta = document.getElementById('qwenLabMeta');
+  const promptMeta = document.getElementById('qwenLabPromptMeta');
+  let objectUrl = '';
+
+  function setStatus(element, text, className) {
+    element.className = 'status-tag ' + className;
+    element.innerHTML = '<span class="status-dot"></span>' + esc(text);
+  }
+
+  function setHint(text, isError) {
+    hint.textContent = text;
+    hint.style.color = isError ? '#a63b34' : '';
+  }
+
+  function showMeta(data) {
+    meta.innerHTML =
+      '<div class="stat"><strong>' + esc(data.model_label || data.model || '—') + '</strong><span>Model</span></div>' +
+      '<div class="stat"><strong>' + esc(data.seed == null ? '随机' : data.seed) + '</strong><span>Seed</span></div>' +
+      '<div class="stat"><strong>' + esc(data.time_ms == null ? '—' : data.time_ms + ' ms') + '</strong><span>Time</span></div>';
+    promptMeta.innerHTML =
+      '<div><strong>Prompt</strong><span>' + esc(data.prompt || '') + '</span></div>' +
+      '<div><strong>Negative Prompt</strong><span>' + esc(data.negative_prompt || '') + '</span></div>' +
+      '<div><strong>PipelineRun</strong><span>' + esc(data.run_id || '') + '</span></div>';
+    meta.hidden = false;
+    promptMeta.hidden = false;
+  }
+
+  imageInput.addEventListener('change', () => {
+    const file = imageInput.files && imageInput.files[0];
+    generateButton.disabled = !file;
+    if (!file) {
+      originalPreview.hidden = true;
+      uploadEmpty.hidden = false;
+      setStatus(status, '待上传', 'status-neutral');
+      setHint('请先上传图片。', false);
+      return;
+    }
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+    objectUrl = URL.createObjectURL(file);
+    originalPreview.src = objectUrl;
+    originalPreview.hidden = false;
+    uploadEmpty.hidden = true;
+    setStatus(status, '已选择图片', 'status-queued');
+    setHint('可以开始调用 Qwen。', false);
+  });
+
+  generateButton.addEventListener('click', async () => {
+    const file = imageInput.files && imageInput.files[0];
+    if (!file) return;
+    const form = new FormData();
+    form.append('image', file);
+    form.append('prompt', document.getElementById('qwenLabPrompt').value);
+    form.append('negative_prompt', document.getElementById('qwenLabNegativePrompt').value);
+    const seed = document.getElementById('qwenLabSeed').value.trim();
+    if (seed) form.append('seed', seed);
+
+    generateButton.disabled = true;
+    setStatus(status, '生成中', 'status-running');
+    runStatus.textContent = 'Qwen Worker 处理中…';
+    setHint('正在上传原图并调用 Qwen Image Edit 2511，请稍候。', false);
+    resultEmpty.hidden = false;
+    resultImage.hidden = true;
+    meta.hidden = true;
+    promptMeta.hidden = true;
+
+    try {
+      const response = await fetch('/api/fish-portrait/qwen-lab/generate', {
+        method: 'POST',
+        body: form
+      });
+      const bodyText = await response.text();
+      let data = {};
+      try { data = bodyText ? JSON.parse(bodyText) : {}; } catch (_) { data = {detail: bodyText}; }
+      if (!response.ok) {
+        const detail = typeof data.detail === 'string'
+          ? data.detail
+          : (data.detail && (data.detail.message || data.detail.error_code)) || '生成失败';
+        throw new Error(detail);
+      }
+      const resultUrl = data.output_image_url || data.output_image_uri;
+      if (!resultUrl) throw new Error('API 未返回 output_image_uri');
+      resultImage.src = resultUrl + (resultUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
+      resultImage.hidden = false;
+      resultEmpty.hidden = true;
+      runStatus.textContent = 'SUCCESS';
+      setStatus(status, '生成成功', 'status-success');
+      setHint('生成完成，可调整 Prompt 或固定 Seed 再次对比。', false);
+      showMeta(data);
+    } catch (error) {
+      runStatus.textContent = 'FAILED';
+      setStatus(status, '生成失败', 'status-failed');
+      setHint(error instanceof Error ? error.message : String(error), true);
+    } finally {
+      generateButton.disabled = false;
+    }
+  });
+})();
+</script>
+{% endblock %}
