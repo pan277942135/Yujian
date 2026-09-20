@@ -28,30 +28,30 @@ jobs:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3.0.0
         with:
-          project_id: \${{ env.GCP_PROJECT }}
-          workload_identity_provider: \${{ env.WIF_PROVIDER }}
-          service_account: \${{ env.DEPLOY_SERVICE_ACCOUNT }}
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
 
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3.0.1
         with:
-          project_id: \${{ env.GCP_PROJECT }}
+          project_id: ${{ env.GCP_PROJECT }}
           version: '>= 416.0.0'
 
       - name: Sync Worker to GPU VM
         shell: bash
         run: |
           set -euo pipefail
-          ARCHIVE="/tmp/qwen-worker-\${GITHUB_SHA}.tar.gz"
-          REMOTE_TMP="/tmp/qwen-worker-\${GITHUB_SHA}"
+          ARCHIVE="/tmp/qwen-worker-${GITHUB_SHA}.tar.gz"
+          REMOTE_TMP="/tmp/qwen-worker-${GITHUB_SHA}"
           tar -czf "$ARCHIVE" -C workers fish-qwen-refine-worker
           gcloud compute scp "$ARCHIVE" \
-            "\${GCP_USER}@\${GCP_INSTANCE}:\${REMOTE_TMP}.tar.gz" \
+            "${GCP_USER}@${GCP_INSTANCE}:${REMOTE_TMP}.tar.gz" \
             --project="$GCP_PROJECT" \
             --zone="$GCP_ZONE" \
             --quiet
 
-          gcloud compute ssh "\${GCP_USER}@\${GCP_INSTANCE}" \
+          gcloud compute ssh "${GCP_USER}@${GCP_INSTANCE}" \
             --project="$GCP_PROJECT" \
             --zone="$GCP_ZONE" \
             --quiet \
@@ -61,11 +61,11 @@ jobs:
               sudo tar -xzf '$REMOTE_TMP.tar.gz' -C '$REMOTE_TMP'
               sudo install -d /opt/fish-qwen-refine-worker/output
               if [[ -f /opt/fish-qwen-refine-worker/worker.py ]]; then
-                sudo cp /opt/fish-qwen-refine-worker/worker.py /opt/fish-qwen-refine-worker/worker.py.before-\${GITHUB_SHA}
+                sudo cp /opt/fish-qwen-refine-worker/worker.py /opt/fish-qwen-refine-worker/worker.py.before-${GITHUB_SHA}
               fi
               sudo cp -a '$REMOTE_TMP/fish-qwen-refine-worker/.' /opt/fish-qwen-refine-worker/
-              sudo chown -R '\${GCP_USER}:\${GCP_USER}' /opt/fish-qwen-refine-worker
-              sudo '\${GCP_USER}/.venv/bin/pip' install -r /opt/fish-qwen-refine-worker/requirements.txt
+              sudo chown -R '${GCP_USER}:${GCP_USER}' /opt/fish-qwen-refine-worker
+              sudo /opt/fish-qwen-refine-worker/.venv/bin/pip install -r /opt/fish-qwen-refine-worker/requirements.txt
               sudo systemctl daemon-reload
               sudo systemctl restart fish-qwen-refine-worker
               sudo systemctl is-active --quiet fish-qwen-refine-worker
@@ -77,18 +77,18 @@ jobs:
           set -euo pipefail
           HEALTH=""
           for attempt in $(seq 1 180); do
-            HEALTH="$(gcloud compute ssh "\${GCP_USER}@\${GCP_INSTANCE}" \
+            HEALTH="$(gcloud compute ssh "${GCP_USER}@${GCP_INSTANCE}" \
               --project="$GCP_PROJECT" \
               --zone="$GCP_ZONE" \
               --quiet \
               --command='curl -sS --max-time 20 http://127.0.0.1:8002/health' || true)"
-            echo "health attempt=\${attempt}: \${HEALTH}"
+            echo "health attempt=${attempt}: ${HEALTH}"
             STATE="$(printf '%s' "$HEALTH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
             if [[ "$STATE" == "ready" ]]; then
               break
             fi
             if [[ "$STATE" == "error" ]]; then
-              gcloud compute ssh "\${GCP_USER}@\${GCP_INSTANCE}" \
+              gcloud compute ssh "${GCP_USER}@${GCP_INSTANCE}" \
                 --project="$GCP_PROJECT" \
                 --zone="$GCP_ZONE" \
                 --quiet \
@@ -105,7 +105,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gcloud compute ssh "\${GCP_USER}@\${GCP_INSTANCE}" \
+          gcloud compute ssh "${GCP_USER}@${GCP_INSTANCE}" \
             --project="$GCP_PROJECT" \
             --zone="$GCP_ZONE" \
             --quiet \
@@ -119,7 +119,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TEST_IMAGE="$(gcloud compute ssh "\${GCP_USER}@\${GCP_INSTANCE}" \
+          TEST_IMAGE="$(gcloud compute ssh "${GCP_USER}@${GCP_INSTANCE}" \
             --project="$GCP_PROJECT" \
             --zone="$GCP_ZONE" \
             --quiet \
@@ -128,11 +128,11 @@ jobs:
             echo "No fixed worker test image found; health and GPU checks already passed."
             exit 0
           fi
-          gcloud compute ssh "\${GCP_USER}@\${GCP_INSTANCE}" \
+          gcloud compute ssh "${GCP_USER}@${GCP_INSTANCE}" \
             --project="$GCP_PROJECT" \
             --zone="$GCP_ZONE" \
             --quiet \
             --command="curl -sS --max-time 1200 -X POST \
-              -F image=@\${TEST_IMAGE} \
+              -F image=@${TEST_IMAGE} \
               -F 'params={\"mode\":\"fish_preserve_refine_qwen_v1\",\"steps\":25,\"seed\":12345,\"source_run_id\":\"P0_FIXED_LATENCY_TEST\",\"prompt\":\"Restore and refine this fish.\",\"negative_prompt\":\"deformed, duplicate, artifact\"}' \
               http://127.0.0.1:8002/refine | tee /tmp/qwen-p0-performance.json"
