@@ -352,16 +352,20 @@ CGI,
 
   function gpuErrorText(payload) {
     const error = payload && payload.error;
+    const detail = payload && payload.detail;
     const code = String(
       (error && error.error_code)
       || (payload && payload.error_code)
+      || (detail && detail.error_code)
       || ''
     ).toUpperCase();
     const message = typeof error === 'string'
       ? error
       : (error && typeof error.message === 'string'
         ? error.message
-        : (payload && typeof payload.message === 'string' ? payload.message : ''));
+        : (detail && typeof detail.message === 'string'
+          ? detail.message
+          : (payload && typeof payload.message === 'string' ? payload.message : '')));
     if (code === 'COMFYUI_UNAVAILABLE' || /ComfyUI/i.test(message)) {
       return 'ComfyUI 服务未正常启动，Qwen Worker 无法完成模型加载。';
     }
