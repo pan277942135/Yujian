@@ -136,6 +136,7 @@ def _qwen_output(db: Session, run_id: str) -> tuple[PipelineRun, str, bytes]:
 
 def _step_response(session_id: str, row: BsideVisualStep) -> dict[str, Any]:
     metadata = _json(row.metadata_json, {})
+    preview_asset = "compose_preview" if row.step_key == STEP_COMPOSE and row.preview_uri else None
     return {
         "step": row.step_key,
         "label": STEP_LABELS[row.step_key],
@@ -145,7 +146,7 @@ def _step_response(session_id: str, row: BsideVisualStep) -> dict[str, Any]:
         "template_id": row.template_id,
         "metadata": metadata if isinstance(metadata, dict) else {},
         "output_url": _asset_url(session_id, row.step_key),
-        "preview_url": _asset_url(session_id, f"{row.step_key}_preview") if row.preview_uri else None,
+        "preview_url": _asset_url(session_id, preview_asset) if preview_asset else None,
         "available": bool(row.output_uri),
         "error": {"code": row.error_code, "message": row.error_message} if row.error_code or row.error_message else None,
     }
