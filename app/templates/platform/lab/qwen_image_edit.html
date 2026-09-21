@@ -31,7 +31,13 @@
   .qwen-lab-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
   .qwen-lab-hint{color:var(--muted);font-size:12px;line-height:1.5;overflow-wrap:anywhere;word-break:break-word}
   .qwen-lab-result{min-height:480px}
+  .qwen-lab-result-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .qwen-lab-result-figure{margin:0;display:grid;gap:7px;min-width:0}
+  .qwen-lab-result-figure figcaption{font-size:12px;font-weight:750;color:#36574d}
   .qwen-lab-result-image{width:100%;max-height:720px;aspect-ratio:4/3;object-fit:contain;border:1px solid #d5e5df;border-radius:11px;background:#edf4f1}
+  .qwen-lab-alpha-preview{width:100%;max-height:720px;aspect-ratio:4/3;border:1px solid #d5e5df;border-radius:11px;overflow:hidden;background-color:#f2f7f4;background-image:linear-gradient(45deg,#dce8e2 25%,transparent 25%),linear-gradient(-45deg,#dce8e2 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#dce8e2 75%),linear-gradient(-45deg,transparent 75%,#dce8e2 75%);background-size:18px 18px;background-position:0 0,0 9px,9px -9px,-9px 0;display:grid;place-items:center}
+  .qwen-lab-alpha-preview img{display:block;width:100%;height:100%;object-fit:contain}
+  .qwen-lab-asset-status{color:var(--muted);font-size:12px;line-height:1.45;min-height:18px}
   .qwen-lab-result-image[hidden]{display:none}
   .qwen-lab-result-empty{min-height:420px;display:grid;place-items:center;border:1px dashed #cddfd7;border-radius:11px;color:var(--muted);text-align:center;padding:20px;line-height:1.6}
   .qwen-lab-meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:13px}
@@ -230,9 +236,21 @@ CGI,
       <span id="qwenLabRunStatus" class="status-tag status-neutral">未开始</span>
     </div>
 
-    <div class="qwen-lab-vs"><span>Original</span><span>VS</span><span>Qwen Result</span></div>
-    <div class="qwen-lab-result-empty" id="qwenLabResultEmpty">生成成功后显示 Qwen 结果。</div>
-    <img id="qwenLabResultImage" class="qwen-lab-result-image" alt="Qwen Result" hidden>
+    <div class="qwen-lab-vs"><span>Qwen Result</span><span>VS</span><span>Transparent Fish</span></div>
+    <div class="qwen-lab-result-empty" id="qwenLabResultEmpty">生成成功后显示 Qwen RGB 与透明鱼体结果。</div>
+    <div id="qwenLabResultGrid" class="qwen-lab-result-grid" hidden>
+      <figure class="qwen-lab-result-figure">
+        <figcaption>Qwen Result · RGB</figcaption>
+        <img id="qwenLabResultImage" class="qwen-lab-result-image" alt="Qwen Result RGB" hidden>
+      </figure>
+      <figure class="qwen-lab-result-figure">
+        <figcaption>透明鱼体 · RGBA PNG</figcaption>
+        <div class="qwen-lab-alpha-preview">
+          <img id="qwenLabTransparentFishImage" alt="Transparent Fish" hidden>
+        </div>
+        <div id="qwenLabTransparentFishStatus" class="qwen-lab-asset-status">等待透明鱼体后处理。</div>
+      </figure>
+    </div>
 
     <div id="qwenLabMeta" class="qwen-lab-meta" hidden></div>
     <div id="qwenLabPromptMeta" class="qwen-lab-prompt-meta" hidden></div>
@@ -285,7 +303,10 @@ CGI,
   const gpuStopConfirm = document.getElementById('qwenGpuStopConfirm');
   const runStatus = document.getElementById('qwenLabRunStatus');
   const resultEmpty = document.getElementById('qwenLabResultEmpty');
+  const resultGrid = document.getElementById('qwenLabResultGrid');
   const resultImage = document.getElementById('qwenLabResultImage');
+  const transparentFishImage = document.getElementById('qwenLabTransparentFishImage');
+  const transparentFishStatus = document.getElementById('qwenLabTransparentFishStatus');
   const meta = document.getElementById('qwenLabMeta');
   const promptMeta = document.getElementById('qwenLabPromptMeta');
   const historyState = document.getElementById('qwenLabHistoryState');
@@ -700,14 +721,22 @@ CGI,
   }
 
   function showMeta(data) {
+    const assetMeta = data.transparent_asset_metadata || {};
+    const alphaCoverage = assetMeta.alpha_coverage == null
+      ? '—'
+      : (Number(assetMeta.alpha_coverage) * 100).toFixed(1) + '%';
+    const assetStatus = String(data.transparent_asset_status || 'NOT_AVAILABLE').toUpperCase();
     meta.innerHTML =
       '<div class="stat"><strong>' + esc(data.model_label || data.model || '—') + '</strong><span>Model</span></div>' +
       '<div class="stat"><strong>' + esc(data.seed == null ? '随机' : data.seed) + '</strong><span>Seed</span></div>' +
-      '<div class="stat"><strong>' + esc(data.time_ms == null ? '—' : data.time_ms + ' ms') + '</strong><span>Time</span></div>';
+      '<div class="stat"><strong>' + esc(data.time_ms == null ? '—' : data.time_ms + ' ms') + '</strong><span>Qwen Time</span></div>' +
+      '<div class="stat"><strong>' + esc(assetStatus === 'SUCCESS' ? 'RGBA' : assetStatus) + '</strong><span>Transparent Asset</span></div>' +
+      '<div class="stat"><strong>' + esc(alphaCoverage) + '</strong><span>Alpha Coverage</span></div>';
     promptMeta.innerHTML =
       '<div><strong>Prompt</strong><span>' + esc(data.prompt || '') + '</span></div>' +
       '<div><strong>Negative Prompt</strong><span>' + esc(data.negative_prompt || '') + '</span></div>' +
-      '<div><strong>PipelineRun</strong><span>' + esc(data.run_id || '') + '</span></div>';
+      '<div><strong>PipelineRun</strong><span>' + esc(data.run_id || '') + '</span></div>' +
+      (data.transparent_asset_error ? '<div><strong>Transparent Asset Error</strong><span>' + esc((data.transparent_asset_error.code || '') + ': ' + (data.transparent_asset_error.message || '')) + '</span></div>' : '');
     meta.hidden = false;
     promptMeta.hidden = false;
   }
@@ -721,7 +750,7 @@ CGI,
   function historyStatusClass(value) {
     const statusValue = String(value || 'UNKNOWN').toUpperCase();
     if (statusValue === 'SUCCESS' || statusValue === 'COMPLETED') return 'status-success';
-    if (statusValue === 'FAILED') return 'status-failed';
+    if (statusValue === 'PARTIAL_SUCCESS' || statusValue === 'FAILED') return 'status-failed';
     if (statusValue === 'RUNNING' || statusValue === 'QUEUED') return 'status-running';
     return 'status-neutral';
   }
@@ -747,7 +776,7 @@ CGI,
     historyList.hidden = false;
     historyList.innerHTML = rows.map((data, index) => {
       const statusValue = String(data.status || 'UNKNOWN').toUpperCase();
-      const statusText = statusValue === 'SUCCESS' ? '成功' : statusValue === 'FAILED' ? '失败' : statusValue === 'RUNNING' ? '生成中' : statusValue;
+      const statusText = statusValue === 'SUCCESS' ? '成功' : statusValue === 'PARTIAL_SUCCESS' ? 'Qwen 成功 · 透明资产失败' : statusValue === 'FAILED' ? '失败' : statusValue === 'RUNNING' ? '生成中' : statusValue;
       return '<details class="qwen-lab-history-item"' + (index === 0 ? ' open' : '') + '>' +
         '<summary><span class="status-tag ' + historyStatusClass(statusValue) + '"><span class="status-dot"></span>' + esc(statusText) + '</span>' +
         '<span class="qwen-lab-history-summary-time">' + esc(historyTime(data.created_at)) + '</span>' +
@@ -755,13 +784,15 @@ CGI,
         '<div class="qwen-lab-history-body">' +
           '<div class="qwen-lab-history-images">' +
             '<figure><figcaption>Original</figcaption>' + historyMedia(data.input_image_url, 'Original Image', '原图不可用') + '</figure>' +
-            '<figure><figcaption>Qwen Result</figcaption>' + historyMedia(data.output_image_url, 'Qwen Result', statusValue === 'FAILED' ? '生成失败，无结果图片' : '结果图片不可用') + '</figure>' +
+            '<figure><figcaption>Qwen Result · RGB</figcaption>' + historyMedia(data.output_image_url, 'Qwen Result', statusValue === 'FAILED' ? '生成失败，无结果图片' : '结果图片不可用') + '</figure>' +
+            '<figure><figcaption>Transparent Fish · RGBA</figcaption>' + historyMedia(data.transparent_fish_url, 'Transparent Fish', data.transparent_asset_error ? '透明鱼体失败：' + (data.transparent_asset_error.code || 'UNKNOWN') : '透明鱼体不可用') + '</figure>' +
           '</div>' +
           '<div class="qwen-lab-history-meta">' +
             '<div><strong>Model</strong><span>' + esc(data.model_label || data.model || '—') + '</span></div>' +
             '<div><strong>Seed</strong><span>' + esc(data.seed == null ? '随机' : data.seed) + '</span></div>' +
             '<div><strong>Time</strong><span>' + esc(data.time_ms == null ? '—' : data.time_ms + ' ms') + '</span></div>' +
             '<div><strong>状态</strong><span>' + esc(statusText) + '</span></div>' +
+            '<div><strong>Alpha Coverage</strong><span>' + esc(data.transparent_asset_metadata && data.transparent_asset_metadata.alpha_coverage != null ? (Number(data.transparent_asset_metadata.alpha_coverage) * 100).toFixed(1) + '%' : '—') + '</span></div>'' +
           '</div>' +
           '<div class="qwen-lab-history-prompts">' +
             '<div><strong>Prompt</strong><pre>' + esc(data.prompt || '') + '</pre></div>' +
@@ -769,7 +800,7 @@ CGI,
             '<div><strong>PipelineRun</strong><pre>' + esc(data.run_id || '') + '</pre></div>' +
           '</div>' +
           '<div class="qwen-lab-history-actions">' +
-            ((statusValue === 'SUCCESS' && data.output_image_url) ? '<button class="button primary" type="button" data-bside-run="' + esc(data.run_id || '') + '">B面视觉生成</button>' : '') +
+            ((statusValue === 'SUCCESS' && data.transparent_fish_url && data.transparent_asset_status === 'SUCCESS') ? '<button class="button primary" type="button" data-bside-run="' + esc(data.run_id || '') + '">B面视觉生成</button>' : '') +
           '</div>' +
         '</div>' +
       '</details>';
@@ -889,7 +920,10 @@ CGI,
     runStatus.textContent = 'Qwen Worker 处理中…';
     setHint(datasetSource && !localFile ? '正在读取 Dataset 原图并调用 Qwen Image Edit 2511，请稍候。' : '正在上传原图并调用 Qwen Image Edit 2511，请稍候。', false);
     resultEmpty.hidden = false;
+    resultGrid.hidden = true;
     resultImage.hidden = true;
+    transparentFishImage.hidden = true;
+    transparentFishStatus.textContent = '等待透明鱼体后处理。';
     meta.hidden = true;
     promptMeta.hidden = true;
 
@@ -912,14 +946,28 @@ CGI,
           : (data.detail && (data.detail.message || data.detail.error_code)) || '生成失败';
         throw new Error(detail);
       }
-      const resultUrl = data.output_image_url || data.output_image_uri;
-      if (!resultUrl) throw new Error('API 未返回 output_image_uri');
+      const resultUrl = data.qwen_result_rgb_url || data.output_image_url || data.output_image_uri;
+      if (!resultUrl) throw new Error('API 未返回 Qwen RGB 结果');
       resultImage.src = resultUrl + (resultUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
       resultImage.hidden = false;
+      resultGrid.hidden = false;
       resultEmpty.hidden = true;
-      runStatus.textContent = 'SUCCESS';
-      setStatus(status, '生成成功', 'status-success');
-      setHint('生成完成，可调整 Prompt 或固定 Seed 再次对比。', false);
+      const transparentUrl = data.transparent_fish_url || data.transparent_fish_uri;
+      if (transparentUrl && String(data.transparent_asset_status || '').toUpperCase() === 'SUCCESS') {
+        transparentFishImage.src = transparentUrl + (transparentUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
+        transparentFishImage.hidden = false;
+        transparentFishStatus.textContent = 'RGBA · Alpha Coverage ' + ((Number((data.transparent_asset_metadata || {}).alpha_coverage || 0) * 100).toFixed(1)) + '%';
+        transparentFishStatus.style.color = '';
+      } else {
+        transparentFishImage.hidden = true;
+        const assetError = data.transparent_asset_error || {};
+        transparentFishStatus.textContent = '透明鱼体失败：' + (assetError.code || 'QWEN_RGBA_EXPORT_FAILED');
+        transparentFishStatus.style.color = '#a63b34';
+      }
+      const assetOk = String(data.transparent_asset_status || '').toUpperCase() === 'SUCCESS';
+      runStatus.textContent = assetOk ? 'SUCCESS' : 'PARTIAL';
+      setStatus(status, assetOk ? '生成成功' : 'Qwen 成功 · 透明资产失败', assetOk ? 'status-success' : 'status-failed');
+      setHint(assetOk ? '生成完成，可调整 Prompt 或固定 Seed 再次对比。' : 'Qwen 已生成 RGB，但透明鱼体资产导出失败，请查看错误信息。', !assetOk);
       showMeta(data);
       loadHistory(1);
     } catch (error) {

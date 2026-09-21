@@ -86,7 +86,7 @@ def _page_url(session_id: str) -> str:
 
 
 def _source_url(run_id: str) -> str:
-    return f"/api/fish-portrait/qwen-lab/runs/{run_id}/media/output"
+    return f"/api/fish-portrait/qwen-lab/runs/{run_id}/media/transparent_fish"
 
 
 def _asset_url(session_id: str, asset: str) -> str:
@@ -121,9 +121,9 @@ def _qwen_output(db: Session, run_id: str) -> tuple[PipelineRun, str, bytes]:
         raise HTTPException(status_code=409, detail={"error": "QWEN_RUN_NOT_SUCCESS", "message": "只有成功的 Qwen Run 才能进入 B 面视觉生成"})
     state = qwen_lab._state_for_run(run)
     result = state.get("result") if isinstance(state.get("result"), dict) else {}
-    uri = str(result.get("output_image_uri") or "").strip()
+    uri = str(result.get("transparent_fish_uri") or result.get("output_image_uri") or "").strip()
     if not uri:
-        raise HTTPException(status_code=409, detail={"error": "QWEN_OUTPUT_MISSING", "message": "该 Qwen Run 没有可用的透明鱼输出"})
+        raise HTTPException(status_code=409, detail={"error": "QWEN_TRANSPARENT_ASSET_MISSING", "message": "该 Qwen Run 没有可用的透明鱼输出"})
     try:
         data, _media_type = _read_uri(uri)
         validate_transparent_fish(data)

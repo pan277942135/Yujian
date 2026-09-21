@@ -27,6 +27,11 @@ from app.db import get_db
 from app.models import DatasetVersion
 from app.platform.models import PipelineRun
 from app.platform.services import adapters
+from app.platform.services.qwen_output import (
+    QwenOutputError,
+    normalise_qwen_rgb,
+    process_qwen_output,
+)
 from app.portrait_worker_client import PortraitWorkerError, _read_image_uri
 from app.qwen_refine_worker_client import (
     QWEN_MODEL_LABEL,
@@ -192,7 +197,8 @@ def _store_bytes(
     return str(path)
 
 
-def _materialize_output(run_id: str, worker_result: dict[str, Any]) -> str:
+
+def _materialize_output(run_id: str, worker_result: dict[str, Any]) -> tuple[str, bytes]:
     output_uri = str(
         worker_result.get("result_uri")
         or worker_result.get("output_image_uri")
@@ -205,10 +211,11 @@ def _materialize_output(run_id: str, worker_result: dict[str, Any]) -> str:
             "Qwen Worker 没有返回生成图片",
         )
     data, media_type = _read_image_uri(output_uri, label="qwen_lab_output")
-    extension = mimetypes.guess_extension(media_type.split(";", 1)[0].strip()) or ".png"
-    return _store_bytes(run_id, "output", data, media_type, extension)
-
-
+    rgb_bytes = normalise_qwen_rgb(data)
+    return (
+        _store_bytes(run_id, "qwen_result_rgb", rgb_bytes, "image/png", ".png"),
+        rgb_bytes,
+    )
 def _read_managed_uri(uri: str) -> tuple[bytes, str]:
     value = str(uri or "").strip()
     if value.startswith("gs://"):
@@ -309,11 +316,24 @@ def _state_for_run(run: PipelineRun) -> dict[str, Any]:
     return state if isinstance(state, dict) else {}
 
 
+
 def _response(run: PipelineRun, state: dict[str, Any]) -> dict[str, Any]:
     request = state.get("request") if isinstance(state.get("request"), dict) else {}
     result = state.get("result") if isinstance(state.get("result"), dict) else {}
     input_uri = str(request.get("input_image_uri") or "").strip() or None
-    output_uri = str(result.get("output_image_uri") or "").strip() or None
+    output_uri = str(
+        result.get("qwen_result_rgb_uri")
+        or result.get("output_image_uri")
+        or ""
+    ).strip() or None
+    raw_mask_uri = str(result.get("fish_mask_raw_uri") or "").strip() or None
+    mask_uri = str(result.get("fish_mask_uri") or "").strip() or None
+    transparent_uri = str(result.get("transparent_fish_uri") or "").strip() or None
+    run_status = str(run.status or "UNKNOWN").upper()
+    transparent_status = str(
+        result.get("transparent_asset_status")
+        or ("SUCCESS" if transparent_uri else "NOT_AVAILABLE")
+    ).upper()
     return {
         "run_id": run.run_id,
         "input_image_uri": input_uri,
@@ -327,7 +347,19 @@ def _response(run: PipelineRun, state: dict[str, Any]) -> dict[str, Any]:
         "negative_prompt": request.get("negative_prompt"),
         "output_image_uri": output_uri,
         "output_image_url": _public_media_url(run.run_id, "output") if output_uri else None,
-        "status": str(run.status or "UNKNOWN").upper(),
+        "qwen_result_rgb_uri": output_uri,
+        "qwen_result_rgb_url": _public_media_url(run.run_id, "qwen_result_rgb") if output_uri else None,
+        "fish_mask_raw_uri": raw_mask_uri,
+        "fish_mask_raw_url": _public_media_url(run.run_id, "fish_mask_raw") if raw_mask_uri else None,
+        "fish_mask_uri": mask_uri,
+        "fish_mask_url": _public_media_url(run.run_id, "fish_mask") if mask_uri else None,
+        "transparent_fish_uri": transparent_uri,
+        "transparent_fish_url": _public_media_url(run.run_id, "transparent_fish") if transparent_uri else None,
+        "transparent_asset_status": transparent_status,
+        "transparent_asset_metadata": result.get("transparent_asset_metadata"),
+        "transparent_asset_error": result.get("transparent_asset_error"),
+        "qwen_generation_status": "SUCCESS" if output_uri and run_status in {"SUCCESS", "PARTIAL_SUCCESS"} else run_status,
+        "status": run_status,
         "model": MODEL_ID,
         "model_label": QWEN_MODEL_LABEL,
         "worker": WORKER_NAME,
@@ -338,8 +370,6 @@ def _response(run: PipelineRun, state: dict[str, Any]) -> dict[str, Any]:
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
         "error": state.get("error"),
     }
-
-
 def _mark_failed(
     db: Session,
     run_id: str,
@@ -485,7 +515,7 @@ async def generate_qwen_image_edit_lab(
         _set_state(run, state)
         db.commit()
 
-        output_uri = _materialize_output(run_id, worker_result)
+        output_uri, output_bytes = _materialize_output(run_id, worker_result)
         elapsed_ms = worker_result.get("elapsed_ms")
         if elapsed_ms is None:
             elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
@@ -493,14 +523,74 @@ async def generate_qwen_image_edit_lab(
         state["result"] = {
             "input_image_uri": input_uri,
             "output_image_uri": output_uri,
+            "qwen_result_rgb_uri": output_uri,
             "seed": actual_seed if actual_seed is not None else seed_value,
             "elapsed_ms": elapsed_ms,
             "model": MODEL_ID,
             "worker": WORKER_NAME,
+            "transparent_asset_status": "PROCESSING",
         }
         _set_stage(state, "persist_result", "DONE")
-        run.status = "SUCCESS"
-        run.current_stage = "complete"
+        _set_stage(state, "transparent_fish_export", "RUNNING")
+        run.current_stage = "transparent_fish_export"
+        _set_state(run, state)
+        db.commit()
+
+        run_status = "SUCCESS"
+        try:
+            artifacts = process_qwen_output(output_bytes)
+            raw_mask_uri = _store_bytes(
+                run_id, "qwen_fish_mask_raw", artifacts.fish_mask_raw, "image/png", ".png"
+            )
+            mask_uri = _store_bytes(
+                run_id, "qwen_fish_mask", artifacts.fish_mask, "image/png", ".png"
+            )
+            transparent_uri = _store_bytes(
+                run_id, "qwen_fish_rgba", artifacts.transparent_fish, "image/png", ".png"
+            )
+            state["result"].update(
+                {
+                    "fish_mask_raw_uri": raw_mask_uri,
+                    "fish_mask_uri": mask_uri,
+                    "transparent_fish_uri": transparent_uri,
+                    "transparent_asset_status": "SUCCESS",
+                    "transparent_asset_metadata": artifacts.metadata,
+                }
+            )
+            _set_stage(state, "transparent_fish_export", "DONE")
+        except (QwenOutputError, PortraitWorkerError) as exc:
+            error_code = getattr(exc, "error_code", "QWEN_RGBA_EXPORT_FAILED")
+            error_message = str(exc)[:3000]
+            state["result"].update(
+                {
+                    "transparent_asset_status": "ERROR",
+                    "transparent_asset_error": {
+                        "code": error_code,
+                        "message": error_message,
+                        "details": getattr(exc, "details", {}) or {},
+                    },
+                }
+            )
+            _set_stage(state, "transparent_fish_export", "FAILED", f"{error_code}: {error_message}")
+            run_status = "PARTIAL_SUCCESS"
+        except Exception as exc:
+            error_code = "QWEN_RGBA_EXPORT_FAILED"
+            error_message = f"{exc.__class__.__name__}: {exc}"[:3000]
+            state["result"].update(
+                {
+                    "transparent_asset_status": "ERROR",
+                    "transparent_asset_error": {
+                        "code": error_code,
+                        "message": error_message,
+                        "details": {},
+                    },
+                }
+            )
+            _set_stage(state, "transparent_fish_export", "FAILED", f"{error_code}: {error_message}")
+            run_status = "PARTIAL_SUCCESS"
+
+        run.status = run_status
+        run.current_stage = "complete" if run_status == "SUCCESS" else "transparent_asset_error"
         run.finished_at = _utcnow()
         if run.started_at:
             run.duration_ms = _duration_ms(run.started_at, run.finished_at)
@@ -510,8 +600,12 @@ async def generate_qwen_image_edit_lab(
             "CREATE_QWEN_IMAGE_EDIT_LAB_RUN",
             "PIPELINE_RUN",
             run_id,
-            status="SUCCESS",
-            message="Qwen Image Edit Lab 生成完成",
+            status=run_status,
+            message=(
+                "Qwen Image Edit Lab 生成与透明鱼资产导出完成"
+                if run_status == "SUCCESS"
+                else "Qwen 生成完成，但透明鱼资产导出失败"
+            ),
             detail={
                 "type": PIPELINE_TYPE,
                 "model": MODEL_ID,
@@ -521,6 +615,9 @@ async def generate_qwen_image_edit_lab(
                 "dataset_item_id": source.get("dataset_item_id"),
                 "seed": state["result"]["seed"],
                 "elapsed_ms": elapsed_ms,
+                "qwen_generation_status": "SUCCESS",
+                "transparent_asset_status": state["result"]["transparent_asset_status"],
+                "transparent_asset_error": state["result"].get("transparent_asset_error"),
             },
         )
         db.commit()
@@ -608,7 +705,15 @@ def qwen_image_edit_lab_run(run_id: str, db: Session = Depends(get_db)) -> dict[
 
 @router.get("/runs/{run_id}/media/{kind}")
 def qwen_image_edit_lab_media(run_id: str, kind: str, db: Session = Depends(get_db)) -> Response:
-    if kind not in {"input", "output"}:
+    allowed_kinds = {
+        "input",
+        "output",
+        "qwen_result_rgb",
+        "fish_mask_raw",
+        "fish_mask",
+        "transparent_fish",
+    }
+    if kind not in allowed_kinds:
         raise HTTPException(status_code=404, detail="资源不存在")
     run = db.get(PipelineRun, run_id)
     if run is None or run.pipeline_type != PIPELINE_TYPE:
@@ -616,7 +721,15 @@ def qwen_image_edit_lab_media(run_id: str, kind: str, db: Session = Depends(get_
     state = _state_for_run(run)
     request = state.get("request") if isinstance(state.get("request"), dict) else {}
     result = state.get("result") if isinstance(state.get("result"), dict) else {}
-    uri = request.get("input_image_uri") if kind == "input" else result.get("output_image_uri")
+    uri_by_kind = {
+        "input": request.get("input_image_uri"),
+        "output": result.get("qwen_result_rgb_uri") or result.get("output_image_uri"),
+        "qwen_result_rgb": result.get("qwen_result_rgb_uri") or result.get("output_image_uri"),
+        "fish_mask_raw": result.get("fish_mask_raw_uri"),
+        "fish_mask": result.get("fish_mask_uri"),
+        "transparent_fish": result.get("transparent_fish_uri"),
+    }
+    uri = uri_by_kind.get(kind)
     if not uri:
         raise HTTPException(status_code=404, detail="资源不存在")
     try:
@@ -630,6 +743,7 @@ def qwen_image_edit_lab_media(run_id: str, kind: str, db: Session = Depends(get_
         media_type=media_type,
         headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"},
     )
+
 
 
 __all__ = [

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
+from PIL import Image
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from starlette.datastructures import Headers, UploadFile
@@ -33,6 +34,31 @@ def _upload() -> UploadFile:
         file=io.BytesIO(b"fake-image-bytes"),
         filename="fish.jpg",
         headers=Headers({"content-type": "image/jpeg"}),
+    )
+
+
+def _generated_png() -> bytes:
+    image = Image.new("RGB", (64, 48), (235, 240, 237))
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
+
+
+def _fake_qwen_artifacts(data: bytes):
+    from app.platform.services.qwen_output import QwenOutputArtifacts
+
+    return QwenOutputArtifacts(
+        qwen_result_rgb=data,
+        fish_mask_raw=b"raw-mask",
+        fish_mask=b"final-mask",
+        transparent_fish=b"rgba-png",
+        metadata={
+            "mode": "RGBA",
+            "channels": 4,
+            "alpha_min": 0,
+            "alpha_max": 255,
+            "alpha_coverage": 0.25,
+        },
     )
 
 
@@ -215,7 +241,7 @@ def test_qwen_image_edit_lab_dataset_source_reads_server_side(tmp_path, monkeypa
         def fake_read(uri, *, label):
             assert uri == "http://worker/output.png"
             assert label == "qwen_lab_output"
-            return b"generated-image", "image/png"
+            return _generated_png(), "image/png"
 
         def fake_worker(**kwargs):
             assert kwargs["visible_fish_refined_image_uri"].startswith("local://qwen-image-edit-lab/")
@@ -231,6 +257,7 @@ def test_qwen_image_edit_lab_dataset_source_reads_server_side(tmp_path, monkeypa
         monkeypatch.setattr(lab, "_store_bytes", fake_store)
         monkeypatch.setattr(lab, "_read_managed_uri", fake_managed)
         monkeypatch.setattr(lab, "_read_image_uri", fake_read)
+        monkeypatch.setattr(lab, "process_qwen_output", lambda data: _fake_qwen_artifacts(data))
         monkeypatch.setattr(lab, "invoke_qwen_refine_worker", fake_worker)
 
         response = asyncio.run(
@@ -274,7 +301,7 @@ def test_qwen_image_edit_lab_direct_original_to_worker_and_records_run(tmp_path,
         def fake_read(uri, *, label):
             assert uri == "http://worker/output.png"
             assert label == "qwen_lab_output"
-            return b"generated-image", "image/png"
+            return _generated_png(), "image/png"
 
         def fake_worker(**kwargs):
             assert kwargs["visible_fish_refined_image_uri"].startswith("local://qwen-image-edit-lab/")
@@ -292,6 +319,7 @@ def test_qwen_image_edit_lab_direct_original_to_worker_and_records_run(tmp_path,
 
         monkeypatch.setattr(lab, "_store_bytes", fake_store)
         monkeypatch.setattr(lab, "_read_image_uri", fake_read)
+        monkeypatch.setattr(lab, "process_qwen_output", lambda data: _fake_qwen_artifacts(data))
         monkeypatch.setattr(lab, "invoke_qwen_refine_worker", fake_worker)
 
         response = asyncio.run(
@@ -308,7 +336,10 @@ def test_qwen_image_edit_lab_direct_original_to_worker_and_records_run(tmp_path,
         assert response["model"] == "qwen-image-edit-2511"
         assert response["seed"] == 123
         assert response["time_ms"] == 456
-        assert response["output_image_uri"] == stored["output"][0]
+        assert response["output_image_uri"] == stored["qwen_result_rgb"][0]
+        assert response["transparent_asset_status"] == "SUCCESS"
+        assert response["transparent_fish_uri"] == stored["qwen_fish_rgba"][0]
+        assert response["fish_mask_uri"] == stored["qwen_fish_mask"][0]
 
         run = db.get(PipelineRun, response["run_id"])
         assert run is not None
@@ -317,7 +348,7 @@ def test_qwen_image_edit_lab_direct_original_to_worker_and_records_run(tmp_path,
         assert run.status == "SUCCESS"
         state = json.loads(run.stage_json)
         assert state["request"]["input_image_uri"] == stored["input"][0]
-        assert state["result"]["output_image_uri"] == stored["output"][0]
+        assert state["result"]["output_image_uri"] == stored["qwen_result_rgb"][0]
         assert state["result"]["seed"] == 123
         assert state["stages"][-1]["status"] == "DONE"
         assert all("visible" not in json.dumps(item).lower() for item in state["stages"])
