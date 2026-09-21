@@ -66,7 +66,7 @@ payload=json.load(open(sys.argv[1], encoding="utf-8"))
 assert payload.get("accepted") is True, payload
 assert payload.get("display_status") == "STARTING", payload
 PY
-elif [[ "$INITIAL_STATUS" != "READY" && "$INITIAL_STATUS" != "LOADING" && "$INITIAL_STATUS" != "STARTING" && "$INITIAL_STATUS" != "BUSY" ]]; then
+elif [[ "$INITIAL_STATUS" != "READY" && "$INITIAL_STATUS" != "LOADING" && "$INITIAL_STATUS" != "STARTING" && "$INITIAL_STATUS" != "BUSY" && "$INITIAL_STATUS" != "ERROR" ]]; then
   cat "$STATUS_JSON"
   echo "Unexpected GPU state before worker bootstrap: $INITIAL_STATUS" >&2
   exit 1
