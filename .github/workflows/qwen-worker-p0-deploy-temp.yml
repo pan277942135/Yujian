@@ -195,7 +195,7 @@ jobs:
           fi
           echo "[P0] health ready"
           health_file="/tmp/qwen-p0-health-ready.json"
-          printf '%s\\n' "$health" > "$health_file"
+          printf '%s\n' "$health" > "$health_file"
           cat "$health_file"
           echo
           journal_file="/tmp/qwen-p0-startup-journal.txt"
