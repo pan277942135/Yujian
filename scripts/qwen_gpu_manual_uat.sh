@@ -174,44 +174,57 @@ test "$VM_STATUS" = "RUNNING"
 DATASETS_JSON="$OUT_DIR/datasets.json"
 DATASETS_HTTP="$(request GET "$SERVICE_URL/api/platform/datasets" "$DATASETS_JSON")"
 test "$DATASETS_HTTP" = "200"
-read -r DATASET_ID DATASET_ITEM_ID < <(python3 - "$DATASETS_JSON" <<'PY'
+DATASET_ID="$(python3 - "$DATASETS_JSON" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     payload = json.load(handle)
 rows = payload if isinstance(payload, list) else payload.get("datasets") or []
-frozen = [row for row in rows if str(row.get("status") or "").upper() == "FROZEN"]
+frozen = [
+    row for row in rows
+    if isinstance(row, dict) and str(row.get("status") or "").upper() == "FROZEN"
+]
 if not frozen:
     raise SystemExit("no frozen dataset available")
 dataset = frozen[0]
-print(str(dataset.get("id") or dataset.get("dataset_id") or dataset.get("dataset_version") or ""), end=" ")
+dataset_id = str(
+    dataset.get("id")
+    or dataset.get("dataset_id")
+    or dataset.get("dataset_version")
+    or ""
+).strip()
+if not dataset_id:
+    raise SystemExit("frozen dataset has no id")
+print(dataset_id)
 PY
 )"
+test -n "${DATASET_ID:-}""
 test -n "$DATASET_ID"
 ITEMS_JSON="$OUT_DIR/items.json"
 ITEMS_HTTP="$(request GET "$SERVICE_URL/api/platform/datasets/$DATASET_ID/items?page=1&size=10" "$ITEMS_JSON")"
 test "$ITEMS_HTTP" = "200"
-read -r DATASET_ID DATASET_ITEM_ID < <(python3 - "$DATASETS_JSON" "$ITEMS_JSON" <<'PY'
+DATASET_ITEM_ID="$(python3 - "$ITEMS_JSON" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
-    datasets = json.load(handle)
-with open(sys.argv[2], encoding="utf-8") as handle:
-    items = json.load(handle)
-rows = datasets if isinstance(datasets, list) else datasets.get("datasets") or []
-frozen = [row for row in rows if str(row.get("status") or "").upper() == "FROZEN"]
-dataset = frozen[0]
-dataset_id = str(dataset.get("id") or dataset.get("dataset_id") or dataset.get("dataset_version") or "")
-item_rows = items.get("items") if isinstance(items, dict) else items
+    payload = json.load(handle)
+item_rows = (
+    payload.get("items") or payload.get("data") or []
+    if isinstance(payload, dict)
+    else payload
+)
 if not item_rows:
     raise SystemExit("frozen dataset has no items")
 item = item_rows[0]
-item_id = str(item.get("id") or item.get("image_id") or "")
+if not isinstance(item, dict):
+    raise SystemExit("dataset item is not an object")
+item_id = str(item.get("id") or item.get("image_id") or "").strip()
 if not item_id:
     raise SystemExit("dataset item has no id")
-print(dataset_id, item_id)
+print(item_id)
 PY
 )"
+test -n "${DATASET_ITEM_ID:-}""
 test -n "$DATASET_ID"
 test -n "$DATASET_ITEM_ID"
 
