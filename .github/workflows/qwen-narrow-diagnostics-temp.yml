@@ -70,6 +70,10 @@ jobs:
           sed -n '1,520p' /opt/fish-qwen-refine-worker/worker.py > "$out/worker.py.txt" 2>&1
           cat /opt/fish-qwen-refine-worker/config.yaml > "$out/config.yaml.txt" 2>&1
           cat /opt/fish-qwen-refine-worker/qwen2511_api.json > "$out/qwen2511_api.json" 2>&1
+          curl -fsS --max-time 30 http://127.0.0.1:8188/object_info/FluxKontextImageScale > "$out/object_info_flux_kontext.json" 2>&1
+          curl -fsS --max-time 30 http://127.0.0.1:8188/object_info/ImageScale > "$out/object_info_image_scale.json" 2>&1
+          find /opt/comfyui-qwen/custom_nodes -maxdepth 5 -type f -print 2>/dev/null | sort > "$out/comfy-custom-node-files.txt"
+          grep -Rni --exclude="*.pyc" --exclude="*.json" -E "class.*FluxKontextImageScale|FluxKontextImageScale|class.*ImageScale" /opt/comfyui-qwen/custom_nodes /opt/comfyui-qwen/comfy 2>/dev/null > "$out/comfy-scale-code-grep.txt" || true
           REMOTE
           chmod +x "$remote_script"
           gcloud compute scp "$remote_script" "${VM_NAME}:/tmp/" --project="$GPU_PROJECT" --zone="$ZONE" --quiet
