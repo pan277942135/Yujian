@@ -101,16 +101,16 @@ for attempt in $(seq 1 6); do
   sleep 5
 done
 
+STAGE_PATH="$REMOTE_PARENT/fish-qwen-refine-worker"
 remote_ssh "
 set -euo pipefail
-STAGE='$REMOTE_PARENT/fish-qwen-refine-worker'
 sudo install -d -o pan277942135 -g pan277942135 /opt/fish-qwen-refine-worker
-sudo install -o pan277942135 -g pan277942135 -m 0644 "$STAGE/worker.py" /opt/fish-qwen-refine-worker/worker.py
-sudo install -o pan277942135 -g pan277942135 -m 0644 "$STAGE/config.yaml" /opt/fish-qwen-refine-worker/config.yaml
-sudo install -o pan277942135 -g pan277942135 -m 0644 "$STAGE/qwen2511_api.json" /opt/fish-qwen-refine-worker/qwen2511_api.json
-sudo install -o root -g root -m 0644 "$STAGE/fish-qwen-comfyui.service" /etc/systemd/system/fish-qwen-comfyui.service
-sudo install -o root -g root -m 0644 "$STAGE/fish-qwen-refine-worker.service" /etc/systemd/system/fish-qwen-refine-worker.service
-sudo install -o pan277942135 -g pan277942135 -m 0755 "$STAGE/wait-for-comfyui.sh" /opt/fish-qwen-refine-worker/wait-for-comfyui.sh
+sudo install -o pan277942135 -g pan277942135 -m 0644 $STAGE_PATH/worker.py /opt/fish-qwen-refine-worker/worker.py
+sudo install -o pan277942135 -g pan277942135 -m 0644 $STAGE_PATH/config.yaml /opt/fish-qwen-refine-worker/config.yaml
+sudo install -o pan277942135 -g pan277942135 -m 0644 $STAGE_PATH/qwen2511_api.json /opt/fish-qwen-refine-worker/qwen2511_api.json
+sudo install -o root -g root -m 0644 $STAGE_PATH/fish-qwen-comfyui.service /etc/systemd/system/fish-qwen-comfyui.service
+sudo install -o root -g root -m 0644 $STAGE_PATH/fish-qwen-refine-worker.service /etc/systemd/system/fish-qwen-refine-worker.service
+sudo install -o pan277942135 -g pan277942135 -m 0755 $STAGE_PATH/wait-for-comfyui.sh /opt/fish-qwen-refine-worker/wait-for-comfyui.sh
 sudo install -d -o pan277942135 -g pan277942135 /opt/fish-qwen-refine-worker/output
 sudo systemctl daemon-reload
 sudo systemctl enable fish-qwen-comfyui.service fish-qwen-refine-worker.service
