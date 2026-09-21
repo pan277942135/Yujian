@@ -189,8 +189,48 @@ jobs:
           REMOTE
           chmod +x "$remote_script"
 
-          gcloud compute scp "$archive" "$remote_script" "${VM_NAME}:/tmp/"             --project="$GPU_PROJECT" --zone="$ZONE" --quiet
-          gcloud compute ssh "$VM_NAME"             --project="$GPU_PROJECT" --zone="$ZONE" --quiet             --command="sudo bash /tmp/$(basename "$remote_script") $TARGET_SHA /tmp/$(basename "$archive")"
+          ssh_dir="$RUNNER_TEMP/qwen-p0-ssh"
+          mkdir -p "$ssh_dir"
+          ssh-keygen -t rsa -b 3072 -N "" -f "$ssh_dir/google_compute_engine" -C "qwen-p0-${GITHUB_RUN_ID}" >/dev/null
+          chmod 600 "$ssh_dir/google_compute_engine"
+          instance_json="$ssh_dir/instance.json"
+          gcloud compute instances describe "$VM_NAME" --project="$GPU_PROJECT" --zone="$ZONE" --format=json > "$instance_json"
+          python3 - "$instance_json" "$ssh_dir/ssh-keys-original" "$ssh_dir/ssh-keys-p0" "$ssh_dir/google_compute_engine.pub" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          instance_path, original_path, merged_path, public_key_path = map(Path, sys.argv[1:])
+          payload = json.loads(instance_path.read_text(encoding="utf-8"))
+          existing = ""
+          for item in (payload.get("metadata") or {}).get("items") or []:
+              if item.get("key") == "ssh-keys":
+                  existing = str(item.get("value") or "")
+                  break
+          original_path.write_text(existing, encoding="utf-8")
+          public_key = public_key_path.read_text(encoding="utf-8").strip()
+          entry = f"pan277942135:{public_key}"
+          rows = existing.splitlines()
+          if entry not in rows:
+              rows.append(entry)
+          merged_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+          PY
+          metadata_changed=1
+          restore_ssh_metadata() {
+            if [[ "$metadata_changed" != "1" ]]; then
+              return
+            fi
+            if [[ -s "$ssh_dir/ssh-keys-original" ]]; then
+              gcloud compute instances add-metadata "$VM_NAME" --project="$GPU_PROJECT" --zone="$ZONE" --metadata-from-file="ssh-keys=$ssh_dir/ssh-keys-original" --quiet || true
+            else
+              gcloud compute instances remove-metadata "$VM_NAME" --project="$GPU_PROJECT" --zone="$ZONE" --keys=ssh-keys --quiet || true
+            fi
+          }
+          trap restore_ssh_metadata EXIT
+          gcloud compute instances add-metadata "$VM_NAME" --project="$GPU_PROJECT" --zone="$ZONE" --metadata-from-file="ssh-keys=$ssh_dir/ssh-keys-p0" --quiet
+          vm_ip="$(gcloud compute instances describe "$VM_NAME" --project="$GPU_PROJECT" --zone="$ZONE" --format="get(networkInterfaces[0].accessConfigs[0].natIP)")"
+          test -n "$vm_ip"
+          scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 -i "$ssh_dir/google_compute_engine" "$archive" "$remote_script" "pan277942135@$vm_ip:/tmp/"
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 -i "$ssh_dir/google_compute_engine" "pan277942135@$vm_ip" "sudo bash /tmp/$(basename "$remote_script") $TARGET_SHA /tmp/$(basename "$archive")"
 
       - name: Run fixed-input first and steady-state latency tests
         shell: bash
