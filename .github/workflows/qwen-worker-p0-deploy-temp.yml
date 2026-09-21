@@ -12,7 +12,7 @@ permissions:
 
 env:
   TARGET_SHA: 781cb5864c3b2c4c44691f908ed17b63b7e10d92
-  GCP_PROJECT: gen-lang-client-0224022273
+  GPU_PROJECT: gen-lang-client-0224022273
   VM_NAME: fish-completion-worker
   ZONE: us-central1-a
   DEPLOY_PROJECT: gemini-api-project-503706
@@ -189,8 +189,8 @@ jobs:
           REMOTE
           chmod +x "$remote_script"
 
-          gcloud compute scp "$archive" "$remote_script" "${VM_NAME}:/tmp/"             --project="$GCP_PROJECT" --zone="$ZONE" --quiet
-          gcloud compute ssh "$VM_NAME"             --project="$GCP_PROJECT" --zone="$ZONE" --quiet             --command="sudo bash /tmp/$(basename "$remote_script") $TARGET_SHA /tmp/$(basename "$archive")"
+          gcloud compute scp "$archive" "$remote_script" "${VM_NAME}:/tmp/"             --project="$GPU_PROJECT" --zone="$ZONE" --quiet
+          gcloud compute ssh "$VM_NAME"             --project="$GPU_PROJECT" --zone="$ZONE" --quiet             --command="sudo bash /tmp/$(basename "$remote_script") $TARGET_SHA /tmp/$(basename "$archive")"
 
       - name: Run fixed-input first and steady-state latency tests
         shell: bash
