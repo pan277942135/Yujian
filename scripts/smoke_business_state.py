@@ -149,6 +149,26 @@ def main():
         db.refresh(pending2)
         assert pending2.truth_species is None and pending2.review_status == "hard_case"
 
+        # Batch species-only edits may set truth on selected rows while preserving
+        # every row's existing pending review status and without requiring a bbox.
+        pending3 = add_image(db, "BATCH_P0", "I9", "黄骨鱼", None, "pending")
+        pending4 = add_image(db, "BATCH_P0", "I10", "黄骨鱼", None, "needs_review")
+        db.commit()
+        api_bulk_apply(
+            BulkReviewApply(
+                batch_id="BATCH_P0",
+                items=[
+                    BulkReviewItem(image_id="I9", review_status="pending", truth_species="黄骨鱼"),
+                    BulkReviewItem(image_id="I10", review_status="needs_review", truth_species=None),
+                ],
+            ),
+            db,
+        )
+        db.refresh(pending3)
+        db.refresh(pending4)
+        assert pending3.truth_species == "黄骨鱼" and pending3.review_status == "pending"
+        assert pending4.truth_species is None and pending4.review_status == "needs_review"
+
         # Freeze Preview requires QA scans and verified truth. This tiny fixture is
         # intentionally below the default training thresholds, so no class is enabled.
         preview1 = build_preview(db, DatasetFreezePreviewRequest(dataset_version="DS_P0", seed=7, train=0.7, val=0.15))
