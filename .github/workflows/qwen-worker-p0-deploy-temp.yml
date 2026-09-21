@@ -89,7 +89,7 @@ jobs:
           gpu_used="$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -n 1 | tr -cd '0-9')"
           gpu_used="${gpu_used:-0}"
           journal_file="/tmp/qwen-p0-runtime-journal.txt"
-          sudo journalctl -u "$SERVICE" -n 300 -o short-iso-precise > "$journal_file"
+          sudo journalctl -u "$SERVICE" -n 1000 -o short-iso-precise > "$journal_file"
           python3 - "$journal_file" "$health_file" "$gpu_used" <<'PY'
           import json
           import sys
