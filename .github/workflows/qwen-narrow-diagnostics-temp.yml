@@ -75,9 +75,9 @@ jobs:
           find /opt/comfyui-qwen/custom_nodes -maxdepth 5 -type f -print 2>/dev/null | sort > "$out/comfy-custom-node-files.txt"
           grep -Rni --exclude="*.pyc" --exclude="*.json" -E "class.*FluxKontextImageScale|FluxKontextImageScale|class.*ImageScale" /opt/comfyui-qwen/custom_nodes /opt/comfyui-qwen/comfy 2>/dev/null > "$out/comfy-scale-code-grep.txt" || true
           find /opt /usr/local /home -name nodes_flux.py -type f 2>/dev/null | sort > "$out/nodes_flux_paths.txt"
-          (cd /opt/comfyui-qwen/ComfyUI && ../.venv/bin/python -c 'import comfy_extras.nodes_flux as nodes_flux; print(nodes_flux.__file__); print(nodes_flux.FluxKontextImageScale.upscale.__code__.co_filename); print(nodes_flux.FluxKontextImageScale.upscale.__code__.co_firstlineno)') > "$out/nodes_flux_runtime.txt" 2>&1
-          source_path="$(sed -n '1p' "$out/nodes_flux_runtime.txt")"
-          first_line="$(sed -n '3p' "$out/nodes_flux_runtime.txt")"
+          (cd /opt/comfyui-qwen/ComfyUI && ../.venv/bin/python -c 'import comfy_extras.nodes_flux as nodes_flux; print("SOURCE=" + nodes_flux.__file__); print("FILE=" + nodes_flux.FluxKontextImageScale.scale.__code__.co_filename); print("LINE=" + str(nodes_flux.FluxKontextImageScale.scale.__code__.co_firstlineno))') > "$out/nodes_flux_runtime.txt" 2>&1
+          source_path="$(sed -n 's/^SOURCE=//p' "$out/nodes_flux_runtime.txt" | tail -n 1)"
+          first_line="$(sed -n 's/^LINE=//p' "$out/nodes_flux_runtime.txt" | tail -n 1)"
           if [ -n "$source_path" ] && [ -f "$source_path" ] && [ -n "$first_line" ]; then
             start_line=$((first_line - 30))
             [ "$start_line" -lt 1 ] && start_line=1
