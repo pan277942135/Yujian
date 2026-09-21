@@ -154,7 +154,9 @@ jobs:
           printf '%s' "$WORKER_HEALTH" | python -c '
           import json,sys
           payload=json.load(sys.stdin)
-          assert payload.get("status") == "ok", payload
+          assert payload.get("status") in {"ok", "ready"}, payload
+          if payload.get("status") == "ready":
+              assert payload.get("model_loaded") is True, payload
           assert payload.get("service") == "fish-portrait-worker", payload
           '
           DEPLOY_HEALTH="$(curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 30 -fsS "$SERVICE_URL/health/deploy")"
