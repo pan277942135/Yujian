@@ -74,7 +74,26 @@ jobs:
           curl -fsS --max-time 30 http://127.0.0.1:8188/object_info/ImageScale > "$out/object_info_image_scale.json" 2>&1
           find /opt/comfyui-qwen/custom_nodes -maxdepth 5 -type f -print 2>/dev/null | sort > "$out/comfy-custom-node-files.txt"
           grep -Rni --exclude="*.pyc" --exclude="*.json" -E "class.*FluxKontextImageScale|FluxKontextImageScale|class.*ImageScale" /opt/comfyui-qwen/custom_nodes /opt/comfyui-qwen/comfy 2>/dev/null > "$out/comfy-scale-code-grep.txt" || true
-          grep -n -A90 -B15 "class FluxKontextImageScale" /opt/comfyui-qwen/comfy_extras/nodes_flux.py > "$out/nodes_flux_FluxKontextImageScale.txt" 2>&1 || true
+          find /opt /usr/local /home -name nodes_flux.py -type f 2>/dev/null | sort > "$out/nodes_flux_paths.txt"
+          /opt/comfyui-qwen/.venv/bin/python - <<PY > "$out/nodes_flux_runtime.txt" 2>&1
+import comfy_extras.nodes_flux as nodes_flux
+print(nodes_flux.__file__)
+print(nodes_flux.FluxKontextImageScale.upscale.__code__.co_filename)
+print(nodes_flux.FluxKontextImageScale.upscale.__code__.co_firstlineno)
+PY
+          source_path="$(head -n 1 "$out/nodes_flux_runtime.txt")"
+          if [ -n "$source_path" ] && [ -f "$source_path" ]; then
+            first_line="$(python3 - "$out/nodes_flux_runtime.txt" <<PY
+from pathlib import Path
+text=Path("$out/nodes_flux_runtime.txt").read_text().splitlines()
+print(next((line for line in text if line.isdigit()), "1"))
+PY
+)"
+            start_line=$((first_line - 30))
+            [ "$start_line" -lt 1 ] && start_line=1
+            sed -n "${start_line},$((first_line + 80))p" "$source_path" > "$out/nodes_flux_FluxKontextImageScale.txt"
+          fi
+          true
           REMOTE
           chmod +x "$remote_script"
           gcloud compute scp "$remote_script" "${VM_NAME}:/tmp/" --project="$GPU_PROJECT" --zone="$ZONE" --quiet
