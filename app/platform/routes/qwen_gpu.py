@@ -252,8 +252,22 @@ def _worker_snapshot() -> dict[str, Any]:
     worker_status = str(health.get("status") or "").strip().lower() or None
     model_loaded = health.get("model_loaded") is True
     ready = worker_status == "ready" and model_loaded
+    explicit_error = worker_status in {"error", "failed"}
     error = None
-    if not ready:
+    if explicit_error:
+        error = {
+            "error_code": str(
+                health.get("error_code")
+                or health.get("code")
+                or "QWEN_WORKER_ERROR"
+            ),
+            "message": str(
+                health.get("error")
+                or health.get("message")
+                or "Qwen Worker 报告了明确错误"
+            )[:1000],
+        }
+    elif not ready:
         error = {
             "error_code": "QWEN_WORKER_NOT_READY",
             "message": "Qwen Worker 尚未报告 status=ready 且 model_loaded=true",
@@ -262,6 +276,7 @@ def _worker_snapshot() -> dict[str, Any]:
         "worker_status": worker_status,
         "model_loaded": model_loaded,
         "ready": ready,
+        "explicit_error": explicit_error,
         "error": error,
         "health": health,
     }
@@ -335,13 +350,19 @@ def _status_from_instance(
     payload["worker_status"] = worker.get("worker_status")
     payload["model_loaded"] = bool(worker.get("model_loaded"))
     payload["active_jobs"] = active_jobs
-    if active_jobs > 0:
+    if worker.get("explicit_error"):
+        payload["display_status"] = "ERROR"
+        payload["error"] = worker["error"]
+        payload["worker_error"] = worker["error"]
+    elif active_jobs > 0:
         payload["display_status"] = "BUSY"
     elif worker.get("ready"):
         payload["display_status"] = "READY"
     else:
+        # A just-started VM can expose RUNNING before the Worker HTTP
+        # listener exists. Keep this transient transport gap in LOADING.
         payload["display_status"] = "LOADING"
-    if worker.get("error"):
+    if worker.get("error") and not worker.get("explicit_error"):
         payload["worker_error"] = worker["error"]
     return payload
 
@@ -376,12 +397,16 @@ def qwen_gpu_status(db: Session = Depends(get_db)) -> dict[str, Any]:
         instance = _get_instance(config)
         return _status_from_instance(config, instance, db)
     except QwenGpuControlError as exc:
-        return _error_payload(exc)
+        raise _http_error(exc) from exc
     except Exception as exc:
         logger.exception("qwen_gpu_status_failed")
-        return _error_payload(
-            QwenGpuControlError("QWEN_GPU_STATUS_FAILED", str(exc)[:1000])
-        )
+        raise _http_error(
+            QwenGpuControlError(
+                "QWEN_GPU_STATUS_FAILED",
+                str(exc)[:1000],
+                status_code=503,
+            )
+        ) from exc
 
 
 @router.post("/start")

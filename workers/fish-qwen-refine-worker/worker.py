@@ -46,6 +46,8 @@ DEFAULT_WIDTH = 768
 DEFAULT_HEIGHT = 768
 DEFAULT_DTYPE = "float16"
 DEFAULT_DEVICE = "cuda"
+DEFAULT_COMFY_READY_TIMEOUT_SECONDS = 120.0
+DEFAULT_COMFY_READY_POLL_SECONDS = 2.0
 DEFAULT_PROMPT = (
     "Restore and refine this fish into a clean, complete, realistic fish portrait. "
     "Keep the exact same fish identity, species traits, body proportions, head shape, "
@@ -197,6 +199,14 @@ CONFIG, CONFIG_ERROR = _load_config(CONFIG_PATH)
 OUTPUT_DIR = Path(os.getenv("QWEN_OUTPUT_DIR", DEFAULT_OUTPUT_DIR))
 WORKFLOW_PATH = Path(os.getenv("QWEN_WORKFLOW_PATH", DEFAULT_WORKFLOW_PATH))
 COMFY_URL = os.getenv("COMFYUI_URL", DEFAULT_COMFY_URL).rstrip("/")
+COMFY_READY_TIMEOUT_SECONDS = max(
+    30.0,
+    float(os.getenv("COMFYUI_READY_TIMEOUT_SECONDS", str(DEFAULT_COMFY_READY_TIMEOUT_SECONDS))),
+)
+COMFY_READY_POLL_SECONDS = max(
+    0.5,
+    float(os.getenv("COMFYUI_READY_POLL_SECONDS", str(DEFAULT_COMFY_READY_POLL_SECONDS))),
+)
 WORKER_TOKEN = os.getenv("QWEN_REFINE_WORKER_TOKEN", "").strip()
 REQUEST_TIMEOUT = max(
     30.0,
@@ -240,7 +250,9 @@ app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR)), name="output")
 _RUNTIME_LOCK = threading.Lock()
 _RUNTIME: dict[str, Any] = {
     "status": "starting",
+    "stage": "waiting_comfyui",
     "model_loaded": False,
+    "error_code": "QWEN_CONFIG_INVALID" if CONFIG_ERROR else None,
     "error": CONFIG_ERROR,
     "warmup_request_id": None,
     "warmup_time": None,
@@ -249,9 +261,15 @@ _WARMUP_STARTED = False
 
 
 class WorkerError(RuntimeError):
-    def __init__(self, message: str, status_code: int = 502):
+    def __init__(
+        self,
+        message: str,
+        status_code: int = 502,
+        error_code: str = "QWEN_WORKER_ERROR",
+    ):
         super().__init__(message)
         self.status_code = status_code
+        self.error_code = error_code
 
 
 def _runtime_snapshot() -> dict[str, Any]:
@@ -273,6 +291,7 @@ def _health_payload() -> dict[str, Any]:
     state = _runtime_snapshot()
     payload: dict[str, Any] = {
         "status": state["status"],
+        "stage": state.get("stage"),
         "service": SERVICE_NAME,
         "model": CONFIG.model_name or MODEL_LABEL,
         "gpu": GPU_NAME,
@@ -289,6 +308,8 @@ def _health_payload() -> dict[str, Any]:
             "config_path": str(CONFIG_PATH),
         },
     }
+    if state.get("error_code"):
+        payload["error_code"] = state["error_code"]
     if state.get("warmup_request_id"):
         payload["warmup_request_id"] = state["warmup_request_id"]
     if state.get("warmup_time") is not None:
@@ -328,20 +349,30 @@ def _json_request(
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")[:2000]
         raise WorkerError(
-            f"ComfyUI {method} {path}: {detail or exc}", 502
+            f"ComfyUI {method} {path}: {detail or exc}",
+            502,
+            "COMFYUI_ERROR",
         ) from exc
     except (urllib.error.URLError, TimeoutError) as exc:
         raise WorkerError(
-            f"ComfyUI {method} {path} unavailable: {exc}", 502
+            f"ComfyUI {method} {path} unavailable: {exc}",
+            502,
+            "COMFYUI_UNAVAILABLE",
         ) from exc
     try:
         decoded = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise WorkerError(
-            f"ComfyUI returned non-JSON for {method} {path}"
+            f"ComfyUI returned non-JSON for {method} {path}",
+            502,
+            "COMFYUI_INVALID_RESPONSE",
         ) from exc
     if not isinstance(decoded, dict):
-        raise WorkerError(f"ComfyUI returned a non-object for {method} {path}")
+        raise WorkerError(
+            f"ComfyUI returned a non-object for {method} {path}",
+            502,
+            "COMFYUI_INVALID_RESPONSE",
+        )
     return decoded
 
 
@@ -371,18 +402,30 @@ def _multipart_upload(filename: str, content: bytes, content_type: str) -> dict[
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")[:2000]
         raise WorkerError(
-            "ComfyUI image upload failed: " + (detail or str(exc)), 502
+            "ComfyUI image upload failed: " + (detail or str(exc)),
+            502,
+            "COMFYUI_ERROR",
         ) from exc
     except (urllib.error.URLError, TimeoutError) as exc:
         raise WorkerError(
-            "ComfyUI image upload unavailable: " + str(exc), 502
+            "ComfyUI image upload unavailable: " + str(exc),
+            502,
+            "COMFYUI_UNAVAILABLE",
         ) from exc
     try:
         payload = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise WorkerError("ComfyUI image upload returned non-JSON") from exc
+        raise WorkerError(
+            "ComfyUI image upload returned non-JSON",
+            502,
+            "COMFYUI_INVALID_RESPONSE",
+        ) from exc
     if not isinstance(payload, dict) or not payload.get("name"):
-        raise WorkerError("ComfyUI image upload did not return a name")
+        raise WorkerError(
+            "ComfyUI image upload did not return a name",
+            502,
+            "COMFYUI_INVALID_RESPONSE",
+        )
     return payload
 
 
@@ -405,12 +448,57 @@ def _download_view(image_ref: dict[str, Any]) -> bytes:
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")[:2000]
         raise WorkerError(
-            "ComfyUI result download failed: " + (detail or str(exc)), 502
+            "ComfyUI result download failed: " + (detail or str(exc)),
+            502,
+            "COMFYUI_ERROR",
         ) from exc
     except (urllib.error.URLError, TimeoutError) as exc:
         raise WorkerError(
-            "ComfyUI result download unavailable: " + str(exc), 502
+            "ComfyUI result download unavailable: " + str(exc),
+            502,
+            "COMFYUI_UNAVAILABLE",
         ) from exc
+
+
+def _wait_for_comfyui_ready() -> None:
+    """Wait for the local ComfyUI HTTP process before submitting warmup."""
+
+    deadline = time.monotonic() + COMFY_READY_TIMEOUT_SECONDS
+    probe_url = COMFY_URL + "/system_stats"
+    last_error = "no response"
+    _set_runtime(status="loading", stage="waiting_comfyui", error=None, error_code=None)
+    while time.monotonic() < deadline:
+        request = urllib.request.Request(
+            probe_url,
+            method="GET",
+            headers={"Accept": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=min(5.0, COMFY_READY_TIMEOUT_SECONDS),
+            ) as response:
+                if 200 <= int(getattr(response, "status", 200)) < 500:
+                    logger.info("ComfyUI ready url=%s", COMFY_URL)
+                    return
+                last_error = "HTTP %s" % getattr(response, "status", "unknown")
+        except urllib.error.HTTPError as exc:
+            # A responsive ComfyUI process may return 404 for an endpoint
+            # changed by its installed version; any HTTP response below 500
+            # still proves that port 8188 is serving.
+            if exc.code < 500:
+                logger.info("ComfyUI ready url=%s http_status=%s", COMFY_URL, exc.code)
+                return
+            last_error = "HTTP %s" % exc.code
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            last_error = str(exc)
+        time.sleep(COMFY_READY_POLL_SECONDS)
+    raise WorkerError(
+        "ComfyUI readiness timeout at %s after %.0fs: %s"
+        % (COMFY_URL, COMFY_READY_TIMEOUT_SECONDS, last_error),
+        503,
+        "COMFYUI_UNAVAILABLE",
+    )
 
 
 def _load_workflow() -> dict[str, Any]:
@@ -662,8 +750,10 @@ def _warmup_worker() -> None:
     request_id = "warmup-" + secrets.token_hex(6)
     _set_runtime(
         status="starting",
+        stage="waiting_comfyui",
         model_loaded=False,
         error=None,
+        error_code=None,
         warmup_request_id=request_id,
     )
     started = time.monotonic()
@@ -678,10 +768,25 @@ def _warmup_worker() -> None:
         CONFIG.warmup_steps,
     )
     if CONFIG_ERROR:
-        _set_runtime(status="error", model_loaded=False, error=CONFIG_ERROR)
+        _set_runtime(
+            status="error",
+            stage="config",
+            model_loaded=False,
+            error_code="QWEN_CONFIG_INVALID",
+            error=CONFIG_ERROR,
+        )
         logger.error("Worker config error: %s", CONFIG_ERROR)
         return
     try:
+        _wait_for_comfyui_ready()
+        _set_runtime(
+            status="loading",
+            stage="qwen_warmup",
+            model_loaded=False,
+            error=None,
+            error_code=None,
+        )
+        logger.info("Qwen warmup started request_id=%s", request_id)
         result = _execute_generation(
             content=_make_warmup_image(),
             content_type="image/png",
@@ -699,8 +804,10 @@ def _warmup_worker() -> None:
         warmup_seconds = round(time.monotonic() - started, 3)
         _set_runtime(
             status="ready",
+            stage="ready",
             model_loaded=True,
             error=None,
+            error_code=None,
             warmup_time=warmup_seconds,
         )
         logger.info(
@@ -714,10 +821,22 @@ def _warmup_worker() -> None:
             result["inference_seconds"],
         )
         logger.info("Worker ready")
+    except WorkerError as exc:
+        _set_runtime(
+            status="error",
+            stage="qwen_warmup",
+            model_loaded=False,
+            error_code=exc.error_code,
+            error=str(exc),
+            warmup_time=round(time.monotonic() - started, 3),
+        )
+        logger.exception("Qwen model warmup failed code=%s", exc.error_code)
     except Exception as exc:
         _set_runtime(
             status="error",
+            stage="qwen_warmup",
             model_loaded=False,
+            error_code="QWEN_WARMUP_FAILED",
             error=str(exc),
             warmup_time=round(time.monotonic() - started, 3),
         )
@@ -733,7 +852,9 @@ def _start_warmup() -> None:
     if not CONFIG.warmup_enabled:
         _set_runtime(
             status="error",
+            stage="config",
             model_loaded=False,
+            error_code="QWEN_WARMUP_DISABLED",
             error="runtime.warmup is disabled; worker cannot become ready",
         )
         logger.error("runtime.warmup is disabled; refusing inference")

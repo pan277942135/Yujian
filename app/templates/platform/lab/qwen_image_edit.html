@@ -309,6 +309,9 @@ CGI,
   let generationBusy = false;
   let gpuPollTimer = null;
   let gpuStatusLoading = false;
+  let gpuLoadingStartedAt = null;
+  const GPU_LOADING_WARNING_MS = 10 * 60 * 1000;
+  const GPU_LOADING_TIMEOUT_MS = 15 * 60 * 1000;
 
   function setStatus(element, text, className) {
     element.className = 'status-tag ' + className;
@@ -327,7 +330,7 @@ CGI,
       READY: 'Ready',
       BUSY: '正在生成',
       STOPPING: 'GPU 关闭中',
-      ERROR: '状态异常'
+      ERROR: '启动失败'
     };
     return labels[value] || '状态读取中';
   }
@@ -349,9 +352,23 @@ CGI,
 
   function gpuErrorText(payload) {
     const error = payload && payload.error;
-    if (typeof error === 'string') return error;
-    if (error && typeof error.message === 'string') return error.message;
-    return 'GPU 状态异常，请刷新状态。';
+    const code = String(
+      (error && error.error_code)
+      || (payload && payload.error_code)
+      || ''
+    ).toUpperCase();
+    const message = typeof error === 'string'
+      ? error
+      : (error && typeof error.message === 'string'
+        ? error.message
+        : (payload && typeof payload.message === 'string' ? payload.message : ''));
+    if (code === 'COMFYUI_UNAVAILABLE' || /ComfyUI/i.test(message)) {
+      return 'ComfyUI 服务未正常启动，Qwen Worker 无法完成模型加载。';
+    }
+    if (code === 'LOAD_TIMEOUT') {
+      return 'Qwen Worker 加载超过 15 分钟，请检查 ComfyUI 和 Worker 日志。';
+    }
+    return message || 'GPU 状态异常，请刷新状态。';
   }
 
   function updateGenerateControl() {
@@ -377,22 +394,40 @@ CGI,
   }
 
   function applyGpuStatus(payload) {
-    const value = String((payload && payload.display_status) || 'ERROR').toUpperCase();
-    lastGpuPayload = payload || {};
+    const nextPayload = Object.assign({}, payload || {});
+    let value = String(nextPayload.display_status || 'ERROR').toUpperCase();
+    if (value === 'STARTING' || value === 'LOADING') {
+      if (!gpuLoadingStartedAt) gpuLoadingStartedAt = Date.now();
+      const elapsed = Date.now() - gpuLoadingStartedAt;
+      if (elapsed >= GPU_LOADING_TIMEOUT_MS) {
+        value = 'ERROR';
+        nextPayload.display_status = 'ERROR';
+        nextPayload.error = {
+          error_code: 'LOAD_TIMEOUT',
+          message: 'Qwen Worker 加载超过 15 分钟，请检查 ComfyUI 和 Worker 日志。'
+        };
+      }
+    } else if (value !== 'BUSY') {
+      gpuLoadingStartedAt = null;
+    }
+    lastGpuPayload = nextPayload;
     const effective = generationBusy ? 'BUSY' : value;
     gpuDisplayStatus = effective;
     setStatus(gpuStatusTag, gpuStatusLabel(effective), gpuStatusClass(effective));
-    gpuStateTitle.textContent = gpuStatusLabel(effective);
+    gpuStateTitle.textContent = effective === 'STOPPED' ? 'GPU 当前未运行' : gpuStatusLabel(effective);
+    const loadingElapsed = gpuLoadingStartedAt ? Date.now() - gpuLoadingStartedAt : 0;
     const hints = {
-      STOPPED: 'GPU 已关闭 · 不产生 GPU 运行计算费用',
+      STOPPED: 'GPU 已关闭 · 不产生 GPU / VM 运行计算费用',
       STARTING: 'GPU 正在启动，Qwen 模型加载完成后即可生成。',
-      LOADING: 'Qwen Worker 启动中，模型加载完成后即可生成。',
+      LOADING: loadingElapsed >= GPU_LOADING_WARNING_MS
+        ? 'Qwen 模型加载时间较长，请继续等待或检查 Worker 日志。'
+        : 'Qwen Worker 启动中，模型加载完成后即可生成。',
       READY: 'Qwen Image Edit 2511 已加载',
       BUSY: '正在生成，请勿关闭 GPU。',
       STOPPING: 'GPU 正在关闭，请稍候。'
     };
-    gpuStateHint.textContent = effective === 'ERROR' ? gpuErrorText(payload) : hints[effective];
-    const runSeconds = payload && payload.run_seconds;
+    gpuStateHint.textContent = effective === 'ERROR' ? gpuErrorText(nextPayload) : hints[effective];
+    const runSeconds = nextPayload && nextPayload.run_seconds;
     if ((effective === 'READY' || effective === 'BUSY') && runSeconds != null) {
       gpuRuntime.textContent = '本次运行：' + formatGpuRuntime(runSeconds);
       gpuRuntime.hidden = false;
@@ -418,7 +453,9 @@ CGI,
       const message = typeof detail === 'string'
         ? detail
         : (detail && (detail.message || detail.error_code)) || 'GPU 操作失败';
-      throw new Error(message);
+      const error = new Error(message);
+      error.payload = payload;
+      throw error;
     }
     return payload;
   }
@@ -437,7 +474,7 @@ CGI,
       const payload = await readGpuResponse(response);
       applyGpuStatus(payload);
     } catch (error) {
-      applyGpuStatus({
+      applyGpuStatus(error && error.payload ? error.payload : {
         display_status: 'ERROR',
         error: {message: error instanceof Error ? error.message : String(error)}
       });
@@ -467,7 +504,7 @@ CGI,
       const payload = await readGpuResponse(response);
       applyGpuStatus(Object.assign({}, lastGpuPayload || {}, payload));
     } catch (error) {
-      applyGpuStatus({
+      applyGpuStatus(error && error.payload ? error.payload : {
         display_status: 'ERROR',
         error: {message: error instanceof Error ? error.message : String(error)}
       });
@@ -486,7 +523,7 @@ CGI,
       const payload = await readGpuResponse(response);
       applyGpuStatus(Object.assign({}, lastGpuPayload || {}, payload));
     } catch (error) {
-      applyGpuStatus({
+      applyGpuStatus(error && error.payload ? error.payload : {
         display_status: 'ERROR',
         error: {message: error instanceof Error ? error.message : String(error)}
       });

@@ -141,6 +141,16 @@ jobs:
           QWEN_WORKER_BASE_URL: ${{ env.QWEN_WORKER_BASE_URL }}
         run: bash scripts/deploy_console_runtime.sh
 
+      - name: Install Qwen ComfyUI boot dependency and readiness gate
+        env:
+          SERVICE_URL: ${{ steps.deploy.outputs.service_url }}
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          GPU_PROJECT_ID: ${{ env.QWEN_GPU_PROJECT_ID }}
+          GPU_ZONE: ${{ env.QWEN_GPU_ZONE }}
+          GPU_INSTANCE: ${{ env.QWEN_GPU_INSTANCE }}
+        shell: bash
+        run: bash scripts/deploy_qwen_worker_boot.sh
+
       - name: Legacy Fish Portrait Worker connectivity smoke (non-blocking)
         continue-on-error: true
         env:
