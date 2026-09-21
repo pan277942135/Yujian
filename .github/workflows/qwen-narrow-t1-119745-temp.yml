@@ -1,4 +1,4 @@
-name: qwen narrow t1 attachment temp
+name: qwen narrow t2 attachment temp
 # retry after temporary deploy cleanup
 on:
   push:
@@ -49,7 +49,7 @@ jobs:
           gcloud compute scp "$RUNNER_TEMP/119745.jpg" \
             "$VM_NAME:/tmp/qwen-narrow-t1/119745.jpg" \
             --project="$GPU_PROJECT" --zone="$ZONE" --quiet
-      - name: Run fixed T1 No-CFG test on VM
+      - name: Run fixed T2 Real-768 test on VM
         id: t1
         continue-on-error: true
         run: |
@@ -87,8 +87,8 @@ jobs:
                   "cartoon, painting, fake texture, unrealistic fins, broken tail"
               ),
               "experimental_no_cfg": True,
-              "resolution_mode": "current",
-              "source_run_id": "QWEN_NARROW_T1_119745",
+              "resolution_mode": "real_768",
+              "source_run_id": "QWEN_NARROW_T2_119745",
           }
           with open("/tmp/qwen-narrow-t1/t1_params.json", "w", encoding="utf-8") as handle:
               json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
@@ -100,7 +100,7 @@ jobs:
             -F "image=@$input;type=image/jpeg" \
             -F "params=$(cat "$stage/t1_params.json")" \
             -F "mode=fish_preserve_refine_qwen_v1" \
-            -F "source_run_id=QWEN_NARROW_T1_119745" \
+            -F "source_run_id=QWEN_NARROW_T2_119745" \
             http://127.0.0.1:8002/refine)"
           curl_rc=$?
           ended="$(date +%s.%N)"
@@ -159,7 +159,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: qwen-narrow-t1-119745-evidence
+          name: qwen-narrow-t2-119745-evidence
           path: ${{ runner.temp }}/qwen-narrow-t1-evidence
           if-no-files-found: warn
           retention-days: 3
