@@ -48,10 +48,28 @@ def test_qwen_image_edit_lab_routes_are_additive():
 
 
 def test_qwen_image_edit_lab_defaults_preserve_original_fish():
-    assert "严格保留原图中的真实鱼体" in lab.DEFAULT_PROMPT
-    assert "鱼体必须横向放置" in lab.DEFAULT_PROMPT
-    assert "不要改变鱼种" in lab.DEFAULT_NEGATIVE_PROMPT
-    assert "不要只显示半条鱼" in lab.DEFAULT_NEGATIVE_PROMPT
+    assert "最高优先级：必须保留原图中的同一条真实鱼" in lab.DEFAULT_PROMPT
+    assert "原图中已经清晰可见的鱼体区域保持不变" in lab.DEFAULT_PROMPT
+    assert "输出透明背景的真实鱼体资产" in lab.DEFAULT_PROMPT
+    assert "new fish" in lab.DEFAULT_NEGATIVE_PROMPT
+    assert "different fish species" in lab.DEFAULT_NEGATIVE_PROMPT
+    assert "cropped fish" in lab.DEFAULT_NEGATIVE_PROMPT
+
+
+def test_qwen_image_edit_lab_template_uses_asset_prompt_defaults():
+    template = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "templates"
+        / "platform"
+        / "lab"
+        / "qwen_image_edit.html"
+    ).read_text(encoding="utf-8")
+
+    assert "最高优先级：必须保留原图中的同一条真实鱼" in template
+    assert "输出透明背景的真实鱼体资产" in template
+    assert "new fish," in template
+    assert "3D render" in template
 
 
 def test_qwen_image_edit_lab_history_lists_only_lab_runs(tmp_path):

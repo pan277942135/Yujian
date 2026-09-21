@@ -46,14 +46,34 @@ ALLOWED_MEDIA_TYPES = {
 }
 
 DEFAULT_PROMPT = (
-    "请优先严格保留原图中的真实鱼体，不要改变鱼的身份、鱼种、身体比例、体型、鳞片、鱼鳍、颜色和真实外观。\n\n"
-    "仅在此基础上，对缺失、模糊、不完整或被遮挡的局部区域进行自然补全，并去除杂乱背景、无关物体、脏乱地面、塑料桶、噪点和不自然阴影，适度优化光线、清晰度和构图。\n\n"
-    "输出要求为真实写实的高质量鱼类摄影效果，鱼体必须横向放置，整条鱼横向完整展示，适合鱼获收藏展示。"
+    "最高优先级：必须保留原图中的同一条真实鱼，不要重新创造或重新设计鱼体。\n\n"
+    "保持原鱼的鱼种、身体比例、体型、鱼头特征、眼睛、鳞片纹理、颜色、鱼鳍结构和尾部特征。\n\n"
+    "原图中已经清晰可见的鱼体区域保持不变。\n\n"
+    "仅补全原图中缺失、被手遮挡、模糊或不完整的鱼体部分，补全内容必须依据原鱼已有结构自然延续，不增加不存在的鱼体特征。\n\n"
+    "移除人物、手、物体以及全部原始背景，只保留鱼体。\n\n"
+    "输出透明背景的真实鱼体资产，不生成新的场景、背景、地面、阴影或装饰元素。"
 )
 DEFAULT_NEGATIVE_PROMPT = (
-    "不要改变鱼种，不要改变鱼的身份，不要把原鱼变成另一条鱼，不要改变体型比例，不要改变鳞片纹理，不要改变鱼鳍结构，"
-    "不要出现多余鱼鳍，不要缺失鱼鳍，不要出现畸形鱼体，不要出现幻想鱼，不要出现不真实颜色，不要出现塑料感纹理，"
-    "不要卡通化，不要插画风，不要3D渲染风，不要CG感，不要艺术化过度，不要竖向摆放鱼体，不要只显示半条鱼。"
+    "new fish,\n"
+    "different fish species,\n"
+    "changed fish identity,\n"
+    "changed body proportions,\n"
+    "changed head,\n"
+    "changed scales,\n"
+    "changed fins,\n"
+    "extra fins,\n"
+    "missing fins,\n"
+    "deformed fish,\n"
+    "artificial fish texture,\n"
+    "new background,\n"
+    "environment,\n"
+    "ground,\n"
+    "shadow,\n"
+    "cropped fish,\n"
+    "cartoon,\n"
+    "illustration,\n"
+    "CGI,\n"
+    "3D render"
 )
 
 
