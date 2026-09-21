@@ -14,12 +14,12 @@ COOKIE_JAR="$OUT_DIR/cookies.txt"
 STATUS_JSON="$OUT_DIR/status.json"
 
 START_REQUESTED=false
-WORKER_URL="\${QWEN_WORKER_BASE_URL:-http://34.69.75.199:8002}"
+WORKER_URL="${QWEN_WORKER_BASE_URL:-http://34.69.75.199:8002}"
 
 diagnose_worker() {
   echo "### Qwen worker diagnostic (read-only)"
   echo "--- runner -> worker /health ---"
-  curl --connect-timeout 10 --max-time 30 -sS "\${WORKER_URL%/}/health" || true
+  curl --connect-timeout 10 --max-time 30 -sS "${WORKER_URL%/}/health" || true
   echo
   echo "--- GCE instance status and external IP ---"
   gcloud compute instances describe "$GPU_INSTANCE" \
