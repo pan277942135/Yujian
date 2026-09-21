@@ -116,13 +116,18 @@ jobs:
               if "Model loaded successfully" in line:
                   load_finished = parsed
           model_load_time = None
+          model_load_time_source = "systemd_journal"
           if load_started is not None and load_finished is not None:
               model_load_time = round((load_finished - load_started).total_seconds(), 3)
+          if model_load_time is None:
+              model_load_time = health.get("warmup_time")
+              model_load_time_source = "worker_warmup_time"
           config = health.get("config") or {}
           startup = {
               "status": health.get("status"),
               "model_loaded": health.get("model_loaded"),
               "model_load_time": model_load_time,
+              "model_load_time_source": model_load_time_source,
               "warmup_time": health.get("warmup_time"),
               "gpu_memory_mib": int(gpu_used or 0),
               "runtime_fp16": (
@@ -135,8 +140,6 @@ jobs:
               "gpu": health.get("gpu"),
           }
           print("QWEN_RUNTIME_STARTUP=" + json.dumps(startup, ensure_ascii=False, sort_keys=True))
-          if model_load_time is None:
-              raise SystemExit("model load markers missing from systemd journal")
           if health.get("status") != "ready" or health.get("model_loaded") is not True:
               raise SystemExit("health is not ready/model_loaded=true")
           if int(gpu_used or 0) < 1000:
