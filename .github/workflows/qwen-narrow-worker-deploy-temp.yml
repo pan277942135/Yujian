@@ -1,0 +1,109 @@
+name: Temporary Qwen Narrow Worker Deploy Test
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  TARGET_SHA: 1966c0e65b7c39f4d227eaa2ee874080647181bf
+  GPU_PROJECT: gen-lang-client-0224022273
+  VM_NAME: fish-completion-worker
+  ZONE: us-central1-a
+  DEPLOY_PROJECT: gemini-api-project-503706
+  WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+  DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout target Worker code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 1
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: ${{ env.DEPLOY_PROJECT }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: ${{ env.DEPLOY_PROJECT }}
+          version: '>= 416.0.0'
+
+      - name: Deploy only Qwen Worker and verify ready
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          stage="$RUNNER_TEMP/qwen-worker-stage"
+          mkdir -p "$stage"
+          cp workers/fish-qwen-refine-worker/worker.py "$stage/"
+          cp workers/fish-qwen-refine-worker/config.yaml "$stage/"
+          cp workers/fish-qwen-refine-worker/qwen2511_api.json "$stage/"
+          cp workers/fish-qwen-refine-worker/fish-qwen-refine-worker.service "$stage/"
+          gcloud compute ssh "$VM_NAME" --project="$GPU_PROJECT" --zone="$ZONE" --quiet --command="mkdir -p /tmp/qwen-worker-stage"
+          gcloud compute scp "$stage/worker.py" "$stage/config.yaml" "$stage/qwen2511_api.json" "$stage/fish-qwen-refine-worker.service" "${VM_NAME}:/tmp/qwen-worker-stage/" --project="$GPU_PROJECT" --zone="$ZONE" --quiet
+          remote="$RUNNER_TEMP/qwen-worker-deploy.sh"
+          cat > "$remote" <<'REMOTE'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          worker_dir="/opt/fish-qwen-refine-worker"
+          backup="${worker_dir}.before_narrow_stage1_$(date -u +%Y%m%dT%H%M%SZ)"
+          sudo mkdir -p "$backup"
+          for file in worker.py config.yaml qwen2511_api.json; do
+            if [ -f "$worker_dir/$file" ]; then
+              sudo cp -a "$worker_dir/$file" "$backup/$file"
+            fi
+          done
+          sudo cp -a "/etc/systemd/system/fish-qwen-refine-worker.service" "$backup/fish-qwen-refine-worker.service" 2>/dev/null || true
+          sudo install -m 0644 /tmp/qwen-worker-stage/worker.py "$worker_dir/worker.py"
+          sudo install -m 0644 /tmp/qwen-worker-stage/config.yaml "$worker_dir/config.yaml"
+          sudo install -m 0644 /tmp/qwen-worker-stage/qwen2511_api.json "$worker_dir/qwen2511_api.json"
+          sudo install -m 0644 /tmp/qwen-worker-stage/fish-qwen-refine-worker.service /etc/systemd/system/fish-qwen-refine-worker.service
+          sudo "$worker_dir/.venv/bin/python" -m py_compile "$worker_dir/worker.py"
+          sudo systemctl daemon-reload
+          sudo systemctl restart fish-qwen-refine-worker
+          ready=0
+          for attempt in $(seq 1 110); do
+            health="$(curl -fsS --max-time 15 http://127.0.0.1:8002/health || true)"
+            echo "[NARROW-DEPLOY] attempt=$attempt health=$health"
+            if echo "$health" | grep -q '"status":"ready"' && echo "$health" | grep -q '"model_loaded":true'; then
+              ready=1
+              break
+            fi
+            sleep 10
+          done
+          if [ "$ready" -ne 1 ]; then
+            sudo systemctl status fish-qwen-refine-worker --no-pager || true
+            sudo journalctl -u fish-qwen-refine-worker -n 120 --no-pager || true
+            exit 1
+          fi
+          echo "[NARROW-DEPLOY] backup=$backup"
+          echo "[NARROW-DEPLOY] systemd="
+          sudo systemctl show fish-qwen-refine-worker -p MainPID -p ActiveEnterTimestamp -p ExecStart
+          echo "[NARROW-DEPLOY] nvidia-smi="
+          nvidia-smi
+          REMOTE
+          chmod +x "$remote"
+          gcloud compute scp "$remote" "${VM_NAME}:/tmp/" --project="$GPU_PROJECT" --zone="$ZONE" --quiet
+          gcloud compute ssh "$VM_NAME" --project="$GPU_PROJECT" --zone="$ZONE" --quiet --command="sudo bash /tmp/$(basename "$remote")" | tee "$RUNNER_TEMP/qwen-worker-deploy.log"
+
+      - name: Upload deployment evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen-narrow-worker-deploy-evidence
+          path: ${{ runner.temp }}/qwen-worker-deploy.log
+          if-no-files-found: warn
