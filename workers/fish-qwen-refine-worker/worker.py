@@ -454,11 +454,22 @@ def _patch_workflow(
     output_prefix: str,
     width: int,
     height: int,
+    cfg_scale: float,
+    negative_prompt_sent: bool,
+    resolution_mode: str,
+    diffusion_width: int | None,
+    diffusion_height: int | None,
 ) -> None:
     _set_input(workflow, "41", "image", uploaded_file)
     _set_input(workflow, "170:151", "prompt", prompt)
-    _set_input(workflow, "170:149", "prompt", negative_prompt)
+    _set_input(
+        workflow,
+        "170:149",
+        "prompt",
+        negative_prompt if negative_prompt_sent else "",
+    )
     _set_input(workflow, "170:169", "seed", seed)
+    _set_input(workflow, "170:154", "value", cfg_scale)
     _set_input(workflow, "170:165", "value", 4)
     _set_input(workflow, "170:166", "value", steps)
     # The validated workflow keeps the Lightning branch opt-in. The page uses
@@ -466,13 +477,23 @@ def _patch_workflow(
     _set_input(workflow, "170:168", "value", False)
     _set_input(workflow, "195", "filename_prefix", output_prefix)
 
-    # These optional inputs are applied only when the installed ComfyUI node
-    # exposes them. The current FluxKontext scale node derives the resolution
-    # internally, so adding unknown keys would break prompt validation.
-    for key in ("width", "target_width", "image_width"):
-        _set_optional_input(workflow, "170:160", key, width)
-    for key in ("height", "target_height", "image_height"):
-        _set_optional_input(workflow, "170:160", key, height)
+    if resolution_mode == "real_768":
+        if diffusion_width is None or diffusion_height is None:
+            raise WorkerError("real_768 dimensions were not calculated", 500)
+        workflow["196"] = {
+            "inputs": {
+                "image": ["41", 0],
+                "upscale_method": "lanczos",
+                "width": diffusion_width,
+                "height": diffusion_height,
+                "crop": "disabled",
+            },
+            "class_type": "ImageScale",
+            "_meta": {"title": "Real-768 aspect-preserving input scale"},
+        }
+        _set_input(workflow, "170:160", "image", ["196", 0])
+    elif resolution_mode != "current":
+        raise WorkerError("unsupported resolution_mode: " + resolution_mode, 422)
 
     _set_optional_input(workflow, "170:161", "unet_name", CONFIG.unet_name)
     if "int8" not in CONFIG.unet_name.lower():
@@ -539,6 +560,36 @@ def _make_warmup_image() -> bytes:
         return _FALLBACK_WARMUP_PNG
 
 
+def _read_image_size(content: bytes) -> tuple[int, int] | None:
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(content)) as image:
+            return int(image.width), int(image.height)
+    except Exception:
+        return None
+
+
+def _real_768_dimensions(content: bytes) -> tuple[int, int]:
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(content)) as image:
+            source_width, source_height = image.size
+    except Exception as exc:
+        raise WorkerError(
+            "real_768 requires a readable image: " + str(exc), 422
+        ) from exc
+
+    if source_width <= 0 or source_height <= 0:
+        raise WorkerError("real_768 requires a non-empty image", 422)
+
+    scale = 768.0 / max(source_width, source_height)
+    width = max(16, int(round(source_width * scale / 16.0)) * 16)
+    height = max(16, int(round(source_height * scale / 16.0)) * 16)
+    return width, height
+
+
 def _execute_generation(
     *,
     content: bytes,
@@ -553,6 +604,11 @@ def _execute_generation(
     source_run_id: str | None,
     request_id: str,
     timeout: float,
+    cfg_scale: float = 4.0,
+    negative_prompt_sent: bool = True,
+    resolution_mode: str = "current",
+    diffusion_width: int | None = None,
+    diffusion_height: int | None = None,
 ) -> dict[str, Any]:
     uploaded_name = "QWEN_" + request_id + "_" + Path(filename).name
     uploaded = _multipart_upload(uploaded_name, content, content_type)
@@ -571,6 +627,11 @@ def _execute_generation(
         output_prefix="Qwen_Refine_" + _safe_prefix(source_run_id) + "_" + request_id[:8],
         width=width,
         height=height,
+        cfg_scale=cfg_scale,
+        negative_prompt_sent=negative_prompt_sent,
+        resolution_mode=resolution_mode,
+        diffusion_width=diffusion_width,
+        diffusion_height=diffusion_height,
     )
 
     inference_started = time.monotonic()
@@ -741,6 +802,16 @@ def refine(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    experiment_no_cfg = _as_bool(options.get("experimental_no_cfg", False))
+    resolution_mode = str(options.get("resolution_mode") or "current").strip().lower()
+    if resolution_mode not in {"current", "real_768"}:
+        raise HTTPException(
+            status_code=422,
+            detail="resolution_mode must be current or real_768",
+        )
+    cfg_scale = 1.0 if experiment_no_cfg else 4.0
+    negative_prompt_sent = not experiment_no_cfg
+
     raw_seed = options.get("seed")
     try:
         seed = (
@@ -755,15 +826,24 @@ def refine(
 
     auto_straighten = bool(options.get("auto_straighten", False))
     prompt = str(options.get("prompt") or DEFAULT_PROMPT).strip()
-    negative_prompt = str(
-        options.get("negative_prompt") or DEFAULT_NEGATIVE_PROMPT
-    ).strip()
+    negative_prompt = (
+        str(options.get("negative_prompt") or DEFAULT_NEGATIVE_PROMPT).strip()
+        if negative_prompt_sent
+        else ""
+    )
     source_id = str(options.get("source_run_id") or source_run_id or "") or None
     content = image.file.read()
     if not content:
         raise HTTPException(status_code=422, detail="image is empty")
     content_type = image.content_type or "image/png"
     original_filename = Path(image.filename or "visible_fish.png").name
+    diffusion_width = None
+    diffusion_height = None
+    if resolution_mode == "real_768":
+        try:
+            diffusion_width, diffusion_height = _real_768_dimensions(content)
+        except WorkerError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
     try:
         result = _execute_generation(
@@ -779,6 +859,11 @@ def refine(
             source_run_id=source_id,
             request_id=request_id,
             timeout=REQUEST_TIMEOUT,
+            cfg_scale=cfg_scale,
+            negative_prompt_sent=negative_prompt_sent,
+            resolution_mode=resolution_mode,
+            diffusion_width=diffusion_width,
+            diffusion_height=diffusion_height,
         )
         save_started = time.monotonic()
         output_name = "REFINE_" + secrets.token_hex(12) + ".png"
@@ -787,6 +872,13 @@ def refine(
         save_seconds = round(time.monotonic() - save_started, 3)
         total_seconds = round(time.monotonic() - request_received, 3)
         result_uri = "/output/" + output_name
+        output_size = _read_image_size(result["result_bytes"])
+        decoded_size = list(output_size) if output_size else None
+        effective_diffusion_size = (
+            [diffusion_width, diffusion_height]
+            if diffusion_width is not None and diffusion_height is not None
+            else decoded_size
+        )
         logger.info(
             "[QWEN] request_id=%s resolution=%sx%s steps=%s model_loaded=%s "
             "dtype=torch.%s device=%s inference_time=%.3fs total_time=%.3fs",
@@ -800,6 +892,16 @@ def refine(
             result["inference_seconds"],
             total_seconds,
         )
+        logger.info(
+            "[QWEN] request_id=%s cfg_scale=%.2f negative_prompt_sent=%s "
+            "resolution_mode=%s diffusion_size=%s output_size=%s",
+            request_id,
+            cfg_scale,
+            str(negative_prompt_sent).lower(),
+            resolution_mode,
+            effective_diffusion_size,
+            decoded_size,
+        )
         payload = {
             "status": "success",
             "service": SERVICE_NAME,
@@ -811,6 +913,13 @@ def refine(
             "result_uri": result_uri,
             "steps": steps,
             "seed": seed,
+            "true_cfg_scale": cfg_scale,
+            "cfg_scale": cfg_scale,
+            "negative_prompt_sent": negative_prompt_sent,
+            "resolution_mode": resolution_mode,
+            "diffusion_size": effective_diffusion_size,
+            "decoded_size": decoded_size,
+            "saved_size": decoded_size,
             "auto_straighten": auto_straighten,
             "auto_straighten_applied": False,
             "worker_model": MODEL_LABEL,
@@ -831,6 +940,11 @@ def refine(
                 "precision_mode": CONFIG.precision_mode,
                 "width": width,
                 "height": height,
+                "cfg_scale": cfg_scale,
+                "negative_prompt_sent": negative_prompt_sent,
+                "resolution_mode": resolution_mode,
+                "diffusion_size": effective_diffusion_size,
+                "decoded_size": decoded_size,
             },
         }
         return JSONResponse(payload)
