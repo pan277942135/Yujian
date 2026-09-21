@@ -1,4 +1,4 @@
-name: Temporary Qwen Worker P0 Deploy
+name: Temporary Qwen Worker P0 Runtime UAT
 
 on:
   push:
@@ -22,16 +22,10 @@ env:
   TEST_BUCKET: yujian-model-factory-571785698442
 
 jobs:
-  deploy:
+  runtime-uat:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
-      - name: Checkout deployment baseline
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ env.TARGET_SHA }}
-          fetch-depth: 1
-
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3.0.0
         with:
@@ -45,25 +39,19 @@ jobs:
           project_id: ${{ env.DEPLOY_PROJECT }}
           version: '>= 416.0.0'
 
-      - name: Prepare worker source and fixed test input
+      - name: Prepare fixed test input
         shell: bash
         run: |
           set -euo pipefail
-          test -f workers/fish-qwen-refine-worker/worker.py
-          test -f workers/fish-qwen-refine-worker/config.yaml
-          test -f workers/fish-qwen-refine-worker/qwen2511_api.json
-          grep -q 'warmup_steps' workers/fish-qwen-refine-worker/worker.py
-          grep -q 'torch.%s' workers/fish-qwen-refine-worker/worker.py
-          tar -C workers -czf "$RUNNER_TEMP/qwen-worker-p0.tgz" fish-qwen-refine-worker
-
-          mkdir -p "$RUNNER_TEMP/qwen-p0-evidence"
+          evidence="$RUNNER_TEMP/qwen-p0-evidence"
+          mkdir -p "$evidence"
           report_uri="$(gcloud storage ls "gs://${TEST_BUCKET}/experiments/fish_completion_lab/v0.3.1/FCL_20260918_*/16_test_report.json" 2>/dev/null | sort | tail -n 1 || true)"
           if [[ -z "$report_uri" ]]; then
             echo "No historical fish report found in ${TEST_BUCKET}" >&2
             exit 1
           fi
-          gcloud storage cp "$report_uri" "$RUNNER_TEMP/qwen-p0-evidence/historical_report.json"
-          input_uri="$(python3 - "$RUNNER_TEMP/qwen-p0-evidence/historical_report.json" <<'PY'
+          gcloud storage cp "$report_uri" "$evidence/historical_report.json"
+          input_uri="$(python3 - "$evidence/historical_report.json" <<'PY'
           import json
           import sys
           with open(sys.argv[1], encoding="utf-8") as handle:
@@ -78,136 +66,37 @@ jobs:
               raise SystemExit("historical report has no usable input asset")
           PY
           )"
-          printf '%s\n' "$input_uri" > "$RUNNER_TEMP/qwen-p0-evidence/input_uri.txt"
-          gcloud storage cp "$input_uri" "$RUNNER_TEMP/qwen-p0-evidence/input.png"
-          file "$RUNNER_TEMP/qwen-p0-evidence/input.png"
+          printf '%s\n' "$input_uri" > "$evidence/input_uri.txt"
+          gcloud storage cp "$input_uri" "$evidence/input.png"
+          file "$evidence/input.png"
 
-      - name: Deploy worker to GPU VM and verify startup
+      - name: Re-verify SSH/SCP and deployed runtime
         shell: bash
         run: |
           set -euo pipefail
-          archive="$RUNNER_TEMP/qwen-worker-p0.tgz"
-          remote_script="$RUNNER_TEMP/qwen-p0-remote.sh"
+          evidence="$RUNNER_TEMP/qwen-p0-evidence"
+          remote_script="$RUNNER_TEMP/qwen-p0-runtime-verify.sh"
           cat > "$remote_script" <<'REMOTE'
           #!/usr/bin/env bash
           set -Eeuo pipefail
-          TARGET_SHA="$1"
-          ARCHIVE="$2"
-          WORKER="/opt/fish-qwen-refine-worker"
-          BACKUP="$WORKER.before_p0_$(date -u +%Y%m%d_%H%M%S)"
-          echo "[P0] host=$(hostname)"
-          echo "[P0] target=$TARGET_SHA"
-          test -d "$WORKER"
-
-          echo "[P0] systemd before"
-          sudo systemctl cat fish-qwen-refine-worker || true
-          echo "[P0] health before"
-          curl -sS --max-time 15 http://127.0.0.1:8002/health || true
-          echo
-          echo "[P0] gpu before"
-          nvidia-smi || true
-
-          sudo cp -a "$WORKER" "$BACKUP"
-          echo "[P0] backup=$BACKUP"
-
-          is_git="$(sudo git -C "$WORKER" rev-parse --is-inside-work-tree 2>/dev/null || true)"
-          if [[ "$is_git" == "true" ]]; then
-            sudo git -C "$WORKER" fetch --no-tags https://github.com/pan277942135/Yujian.git "$TARGET_SHA"
-            sudo git -C "$WORKER" checkout --detach "$TARGET_SHA"
-          else
-            sudo mkdir -p /tmp/qwen-worker-p0-source
-            sudo tar -xzf "$ARCHIVE" -C /tmp/qwen-worker-p0-source
-            sudo cp -a /tmp/qwen-worker-p0-source/fish-qwen-refine-worker/. "$WORKER"/
-          fi
-
-          sudo install -m 0644 "$WORKER/fish-qwen-refine-worker.service" /etc/systemd/system/fish-qwen-refine-worker.service
-          sudo mkdir -p "$WORKER/output"
-          sudo chown -R pan277942135:pan277942135 "$WORKER/output"
-          if [[ ! -x "$WORKER/.venv/bin/python" ]]; then
-            sudo python3 -m venv "$WORKER/.venv"
-          fi
-          sudo "$WORKER/.venv/bin/pip" install --disable-pip-version-check -r "$WORKER/requirements.txt"
-
-          echo "[P0] static worker commit"
-          sudo git -C "$WORKER" rev-parse HEAD 2>/dev/null || true
-          echo "[P0] config"
-          sudo sed -n '1,160p' "$WORKER/config.yaml"
-          echo "[P0] systemd after"
-          sudo systemctl cat fish-qwen-refine-worker
-
-          sudo systemctl daemon-reload
-          sudo systemctl enable fish-qwen-refine-worker
-          restart_started="$(date -u --iso-8601=seconds)"
-          restart_epoch="$(date +%s.%N)"
-          sudo systemctl restart fish-qwen-refine-worker
-          sudo systemctl is-active --quiet fish-qwen-refine-worker
-
-          health=""
-          ready=0
-          for attempt in $(seq 1 180); do
-            health="$(curl -fsS --max-time 15 http://127.0.0.1:8002/health || true)"
-            echo "[P0] health attempt=$attempt $health"
-            if HEALTH_JSON="$health" python3 - <<'PY'
-          import json
-          import os
-          try:
-              payload = json.loads(os.environ["HEALTH_JSON"])
-          except Exception:
-              raise SystemExit(1)
-          required = (
-              payload.get("status") == "ready"
-              and payload.get("model_loaded") is True
-              and payload.get("dtype") == "float16"
-              and payload.get("device") == "cuda"
-              and (payload.get("config") or {}).get("width") == 768
-              and (payload.get("config") or {}).get("height") == 768
-              and (payload.get("config") or {}).get("steps") == 25
-          )
-          raise SystemExit(0 if required else 1)
-          PY
-            then
-              ready=1
-              break
-            fi
-            sleep 5
-          done
-          if [[ "$ready" != "1" ]]; then
-            echo "[P0] worker did not become ready"
-            sudo systemctl status fish-qwen-refine-worker --no-pager || true
-            sudo journalctl -u fish-qwen-refine-worker -n 300 --no-pager || true
-            exit 1
-          fi
-
-          echo "[P0] startup journal"
-          sudo journalctl -u fish-qwen-refine-worker -n 300 --no-pager
-          echo "[P0] gpu resident initial"
-          nvidia-smi
-          gpu_used_initial="$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -n 1 | tr -cd '0-9')"
-          gpu_used_initial="${gpu_used_initial:-0}"
-          sleep 35
-          echo "[P0] gpu resident idle_35s"
-          nvidia-smi
-          gpu_used_idle="$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -n 1 | tr -cd '0-9')"
-          gpu_used_idle="${gpu_used_idle:-0}"
-          if (( gpu_used_idle < 1000 )); then
-            echo "[P0] GPU resident check failed: idle memory=${gpu_used_idle} MiB"
-            exit 1
-          fi
-          echo "[P0] health ready"
-          health_file="/tmp/qwen-p0-health-ready.json"
+          SERVICE="fish-qwen-refine-worker"
+          health="$(curl -fsS --max-time 15 http://127.0.0.1:8002/health)"
+          health_file="/tmp/qwen-p0-runtime-health.json"
           printf '%s\n' "$health" > "$health_file"
-          cat "$health_file"
-          echo
-          journal_file="/tmp/qwen-p0-startup-journal.txt"
-          sudo journalctl -u fish-qwen-refine-worker --since "$restart_started" -o short-iso-precise > "$journal_file" || true
-          python3 - "$journal_file" "$health_file" "$restart_epoch" "$gpu_used_initial" "$gpu_used_idle" <<'PY'
+          echo "[P0-UAT] health=$health"
+          echo "[P0-UAT] nvidia-smi"
+          nvidia-smi
+          gpu_used="$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -n 1 | tr -cd '0-9')"
+          gpu_used="${gpu_used:-0}"
+          journal_file="/tmp/qwen-p0-runtime-journal.txt"
+          sudo journalctl -u "$SERVICE" --since "30 minutes ago" -o short-iso-precise > "$journal_file"
+          python3 - "$journal_file" "$health_file" "$gpu_used" <<'PY'
           import json
           import sys
-          import time
           from datetime import datetime
           from pathlib import Path
 
-          journal_path, health_path, restart_epoch, gpu_initial, gpu_idle = sys.argv[1:]
+          journal_path, health_path, gpu_used = sys.argv[1:]
           health = json.loads(Path(health_path).read_text(encoding="utf-8"))
           lines = Path(journal_path).read_text(encoding="utf-8", errors="replace").splitlines()
           load_started = None
@@ -218,43 +107,54 @@ jobs:
                   parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
               except ValueError:
                   continue
-              if "Loading Qwen Image Edit model" in line and load_started is None:
+              if "Loading Qwen Image Edit model" in line:
                   load_started = parsed
-              if "Model loaded successfully" in line and load_finished is None:
+              if "Model loaded successfully" in line:
                   load_finished = parsed
           model_load_time = None
           if load_started is not None and load_finished is not None:
               model_load_time = round((load_finished - load_started).total_seconds(), 3)
+          config = health.get("config") or {}
           startup = {
               "status": health.get("status"),
               "model_loaded": health.get("model_loaded"),
               "model_load_time": model_load_time,
               "warmup_time": health.get("warmup_time"),
-              "ready_wall_time": round(time.time() - float(restart_epoch), 3),
-              "gpu_memory_initial_mib": int(gpu_initial or 0),
-              "gpu_memory_idle_35s_mib": int(gpu_idle or 0),
+              "gpu_memory_mib": int(gpu_used or 0),
               "runtime_fp16": (
                   health.get("dtype") == "float16"
                   and str(health.get("precision_mode", "")).startswith("fp16")
               ),
-              "runtime_config": health.get("config"),
+              "runtime_config": config,
+              "service": health.get("service"),
+              "model": health.get("model"),
+              "gpu": health.get("gpu"),
           }
           print("QWEN_RUNTIME_STARTUP=" + json.dumps(startup, ensure_ascii=False, sort_keys=True))
           if model_load_time is None:
               raise SystemExit("model load markers missing from systemd journal")
           if health.get("status") != "ready" or health.get("model_loaded") is not True:
               raise SystemExit("health is not ready/model_loaded=true")
+          if int(gpu_used or 0) < 1000:
+              raise SystemExit("GPU resident memory check failed")
           if startup["runtime_fp16"] is not True:
-              raise SystemExit("runtime fp16 check failed")
-          config = health.get("config") or {}
+              raise SystemExit("runtime FP16 check failed")
           if (config.get("width"), config.get("height"), config.get("steps")) != (768, 768, 25):
               raise SystemExit("runtime config check failed")
           PY
           REMOTE
           chmod +x "$remote_script"
-
-          gcloud compute scp "$archive" "$remote_script" "${VM_NAME}:/tmp/"             --project="$GPU_PROJECT" --zone="$ZONE" --quiet
-          gcloud compute ssh "$VM_NAME"             --project="$GPU_PROJECT" --zone="$ZONE" --quiet             --command="sudo bash /tmp/$(basename "$remote_script") $TARGET_SHA /tmp/$(basename "$archive")"
+          gcloud compute scp "$remote_script" "${VM_NAME}:/tmp/" --project="$GPU_PROJECT" --zone="$ZONE" --quiet
+          gcloud compute ssh "$VM_NAME" --project="$GPU_PROJECT" --zone="$ZONE" --quiet --command="sudo bash /tmp/$(basename "$remote_script")" | tee "$evidence/remote_runtime.log"
+          grep '^QWEN_RUNTIME_STARTUP=' "$evidence/remote_runtime.log" | tail -n 1 | sed 's/^QWEN_RUNTIME_STARTUP=//' > "$evidence/runtime_startup.json"
+          test -s "$evidence/runtime_startup.json"
+          python3 - "$evidence/runtime_startup.json" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              payload = json.load(handle)
+          print(json.dumps(payload, ensure_ascii=False, indent=2))
+          PY
 
       - name: Run fixed-input first and steady-state latency tests
         shell: bash
@@ -273,11 +173,15 @@ jobs:
             "negative_prompt": "human hand, fingers, arm, person, tool, fishing net, hook, rope, bucket, extra fish, duplicated fish, changed species, wrong anatomy, deformed body, cartoon, painting, fake texture, unrealistic fins, broken tail"
           }
           JSON
-
           for label in first steady_state; do
             started="$(date +%s.%N)"
             status="$(
-              curl --retry 2 --retry-all-errors --retry-delay 2                 --connect-timeout 15 --max-time 1500                 -sS -o "$evidence/${label}.json" -w '%{http_code}'                 -F "image=@$evidence/input.png;type=image/png"                 -F "params=<${evidence}/params.json"                 "${WORKER_URL}/refine"
+              curl --retry 2 --retry-all-errors --retry-delay 2 \
+                --connect-timeout 15 --max-time 1500 \
+                -sS -o "$evidence/${label}.json" -w '%{http_code}' \
+                -F "image=@$evidence/input.png;type=image/png" \
+                -F "params=<${evidence}/params.json" \
+                "${WORKER_URL}/refine"
             )"
             finished="$(date +%s.%N)"
             printf '%s\n' "$status" > "$evidence/${label}.http_status"
@@ -318,7 +222,8 @@ jobs:
           PY
             )"
             test -n "$result_uri"
-            curl --retry 2 --retry-all-errors --retry-delay 2 --connect-timeout 15 --max-time 120               -fsS "${WORKER_URL}${result_uri}" -o "$evidence/${label}_output.png"
+            curl --retry 2 --retry-all-errors --retry-delay 2 --connect-timeout 15 --max-time 120 \
+              -fsS "${WORKER_URL}$result_uri" -o "$evidence/${label}_output.png"
           done
 
           python3 - "$evidence" <<'PY'
@@ -338,21 +243,69 @@ jobs:
           print(json.dumps(rows, ensure_ascii=False, indent=2))
           PY
 
+      - name: Automatic output quality checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/qwen-p0-evidence"
+          python3 - "$evidence" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          from PIL import Image, ImageStat, ImageChops
+
+          root = Path(sys.argv[1])
+          checks = []
+          for label in ("first", "steady_state"):
+              path = root / f"{label}_output.png"
+              with Image.open(path) as image:
+                  rgb = image.convert("RGB")
+                  stat = ImageStat.Stat(rgb)
+                  checks.append({
+                      "label": label,
+                      "size": list(image.size),
+                      "mode": image.mode,
+                      "mean_rgb": [round(value, 2) for value in stat.mean],
+                      "stddev_rgb": [round(value, 2) for value in stat.stddev],
+                      "non_blank": max(stat.stddev) > 2.0,
+                  })
+          with Image.open(root / "first_output.png") as first, Image.open(root / "steady_state_output.png") as steady:
+              a = first.convert("RGB").resize((64, 64))
+              b = steady.convert("RGB").resize((64, 64))
+              diff = ImageStat.Stat(ImageChops.difference(a, b).convert("RGB")).mean
+          result = {
+              "automatic_checks": checks,
+              "same_seed_mean_abs_diff_64px": [round(value, 3) for value in diff],
+              "manual_visual_review_required": True,
+              "review_scope": ["same fish identity", "body completeness", "anatomy", "no obvious artifacts", "no quality regression versus prior worker"],
+          }
+          if any(item["size"] != [768, 768] or not item["non_blank"] for item in checks):
+              raise SystemExit(json.dumps(result, ensure_ascii=False))
+          (root / "quality_check.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+          (root / "quality_review.md").write_text(
+              "# Qwen P0 quality review\n\n"
+              "Automatic output checks passed: both outputs are readable, 768x768, and non-blank.\n\n"
+              "Manual visual review is required for fish identity, anatomy, completeness, artifacts, and regression versus the prior worker.\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(result, ensure_ascii=False, indent=2))
+          PY
+
       - name: Collect runtime evidence
         if: ${{ always() }}
         shell: bash
         run: |
           set +e
-          mkdir -p "$RUNNER_TEMP/qwen-p0-evidence"
-          curl -sS --connect-timeout 10 --max-time 30 "${WORKER_URL}/health"             -o "$RUNNER_TEMP/qwen-p0-evidence/public_health.json" || true
+          evidence="$RUNNER_TEMP/qwen-p0-evidence"
+          mkdir -p "$evidence"
+          curl -sS --connect-timeout 10 --max-time 30 "${WORKER_URL}/health" -o "$evidence/public_health.json" || true
           {
             echo "### Qwen Worker P0 Runtime Evidence"
             echo "- Target commit: $TARGET_SHA"
             echo "- Worker URL: $WORKER_URL"
-            echo "- Fixed input source: historical fish completion report asset"
             echo "- Baseline: approximately 390 seconds"
-          } > "$RUNNER_TEMP/qwen-p0-evidence/summary.md"
-          cat "$RUNNER_TEMP/qwen-p0-evidence/public_health.json" >> "$RUNNER_TEMP/qwen-p0-evidence/summary.md" 2>/dev/null || true
+          } > "$evidence/summary.md"
+          cat "$evidence/public_health.json" >> "$evidence/summary.md" 2>/dev/null || true
 
       - name: Upload P0 evidence
         if: ${{ always() }}
