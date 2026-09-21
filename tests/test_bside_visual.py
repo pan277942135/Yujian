@@ -161,7 +161,7 @@ def test_bside_page_contains_locked_three_step_ui_and_no_gpu_dependency():
     assert "特色描边" in template
     assert "融入水体背景" in template
     assert "Qwen完整鱼体" in template
-    assert "B面最终视觉" in template
+    assert "data-asset" in template
     assert "棋盘格" in template
     assert "/api/qwen-lab/bside-visual/" in template
     assert "Detector" in template
