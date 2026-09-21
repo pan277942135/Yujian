@@ -1,0 +1,165 @@
+name: qwen narrow t1 attachment temp
+on:
+  push:
+    paths:
+      - ".github/workflows/qwen-narrow-t1-119745-temp.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  t1:
+    runs-on: ubuntu-latest
+    env:
+      GPU_PROJECT: gen-lang-client-0224022273
+      VM_NAME: fish-completion-worker
+      ZONE: us-central1-a
+      DEPLOY_PROJECT: gemini-api-project-503706
+      WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+      DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: gemini-api-project-503706
+          workload_identity_provider: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+          service_account: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: gemini-api-project-503706
+      - name: Prepare fixed attachment
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import base64
+          from pathlib import Path
+          payload = base64.b64decode("""Warning: truncated output (original token count: 97408)
+Total output lines: 1
+
+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…96408 tokens truncated…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""")
+          path = Path("$RUNNER_TEMP") / "119745.jpg"
+          path.write_bytes(payload)
+          print(f"prepared {path} bytes={len(payload)}")
+          PY
+      - name: Copy attachment to VM
+        run: |
+          set -Eeuo pipefail
+          gcloud compute ssh "$VM_NAME" --project="$GPU_PROJECT" --zone="$ZONE" --quiet \
+            --command="mkdir -p /tmp/qwen-narrow-t1"
+          gcloud compute scp "$RUNNER_TEMP/119745.jpg" \
+            "$VM_NAME:/tmp/qwen-narrow-t1/119745.jpg" \
+            --project="$GPU_PROJECT" --zone="$ZONE" --quiet
+      - name: Run fixed T1 No-CFG test on VM
+        id: t1
+        continue-on-error: true
+        run: |
+          set -Eeuo pipefail
+          remote="$RUNNER_TEMP/qwen-narrow-t1-run.sh"
+          cat > "$remote" <<'REMOTE'
+          #!/usr/bin/env bash
+          set -u
+          stage="/tmp/qwen-narrow-t1"
+          response="$stage/t1_response.json"
+          status_file="$stage/t1_http_status.txt"
+          timing_file="$stage/t1_timing.txt"
+          health_file="$stage/health_before.json"
+          input="$stage/119745.jpg"
+          curl -fsS --max-time 20 http://127.0.0.1:8002/health > "$health_file" || true
+          python3 - <<'PY'
+          import json
+          payload = {
+              "mode": "fish_preserve_refine_qwen_v1",
+              "steps": 25,
+              "seed": 12345,
+              "prompt": (
+                  "Restore and refine this fish into a clean, complete, realistic fish portrait. "
+                  "Keep the exact same fish identity, species traits, body proportions, head shape, "
+                  "fin structure, scale texture, and natural color pattern. "
+                  "Use the visible fish as the only identity reference. "
+                  "Complete the missing or occluded fish body parts naturally. "
+                  "Remove all non-fish objects and do not keep any human hand, fingers, tools, nets, "
+                  "hooks, ropes, buckets, or other foreign objects. "
+                  "The result should be a single complete fish, realistic, clean, natural, and high-detail."
+              ),
+              "negative_prompt": (
+                  "human hand, fingers, arm, person, tool, fishing net, hook, rope, bucket, "
+                  "extra fish, duplicated fish, changed species, wrong anatomy, deformed body, "
+                  "cartoon, painting, fake texture, unrealistic fins, broken tail"
+              ),
+              "experimental_no_cfg": True,
+              "resolution_mode": "current",
+              "source_run_id": "QWEN_NARROW_T1_119745",
+          }
+          with open("/tmp/qwen-narrow-t1/t1_params.json", "w", encoding="utf-8") as handle:
+              json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
+          PY
+          started="$(date +%s.%N)"
+          set +e
+          http_status="$(curl -sS --max-time 1500 \
+            -o "$response" -w "%{http_code}" \
+            -F "image=@$input;type=image/jpeg" \
+            -F "params=$(cat "$stage/t1_params.json")" \
+            -F "mode=fish_preserve_refine_qwen_v1" \
+            -F "source_run_id=QWEN_NARROW_T1_119745" \
+            http://127.0.0.1:8002/refine)"
+          curl_rc=$?
+          ended="$(date +%s.%N)"
+          set -e
+          printf '%s\n' "$http_status" > "$status_file"
+          printf 'started=%s\nended=%s\ncurl_rc=%s\n' "$started" "$ended" "$curl_rc" > "$timing_file"
+          if [ "$curl_rc" -ne 0 ] || [ "$http_status" != "200" ]; then
+            echo "T1 request failed: curl_rc=$curl_rc http_status=$http_status"
+            exit 1
+          fi
+          result_uri="$(python3 - "$response" <<'PY'
+          import json, sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              payload = json.load(handle)
+          print(payload.get("result_uri") or payload.get("refine_result_uri") or "")
+          PY
+          )"
+          if [ -z "$result_uri" ]; then
+            echo "T1 response has no result URI"
+            exit 1
+          fi
+          curl -fsS --max-time 60 "http://127.0.0.1:8002${result_uri}" \
+            -o "$stage/t1_output.png"
+          nvidia-smi --query-gpu=name,memory.total,memory.used,utilization.gpu \
+            --format=csv,noheader > "$stage/nvidia_query.txt" || true
+          free -h > "$stage/free.txt" || true
+          swapon --show > "$stage/swap.txt" || true
+          sudo journalctl -u fish-qwen-refine-worker -n 240 --no-pager \
+            > "$stage/worker_journal.txt" 2>&1 || true
+          stat "$stage/t1_output.png" > "$stage/output_stat.txt" || true
+          REMOTE
+          chmod +x "$remote"
+          gcloud compute scp "$remote" \
+            "$VM_NAME:/tmp/qwen-narrow-t1-run.sh" \
+            --project="$GPU_PROJECT" --zone="$ZONE" --quiet
+          set +e
+          gcloud compute ssh "$VM_NAME" --project="$GPU_PROJECT" --zone="$ZONE" --quiet \
+            --command="bash /tmp/qwen-narrow-t1-run.sh"
+          rc=$?
+          set -e
+          echo "remote_exit=$rc" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+      - name: Fetch T1 evidence
+        if: always()
+        run: |
+          set +e
+          evidence="$RUNNER_TEMP/qwen-narrow-t1-evidence"
+          mkdir -p "$evidence"
+          gcloud compute scp --recurse \
+            "$VM_NAME:/tmp/qwen-narrow-t1" "$evidence/" \
+            --project="$GPU_PROJECT" --zone="$ZONE" --quiet
+          cp "$evidence/qwen-narrow-t1/"* "$evidence/" 2>/dev/null || true
+          find "$evidence" -maxdepth 2 -type f -printf '%p %s bytes\n' | sort
+          exit 0
+      - name: Upload T1 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen-narrow-t1-119745-evidence
+          path: ${{ runner.temp }}/qwen-narrow-t1-evidence
+          if-no-files-found: warn
+          retention-days: 3
