@@ -354,6 +354,8 @@ def _status_from_instance(
         payload["display_status"] = "ERROR"
         payload["error"] = worker["error"]
         payload["worker_error"] = worker["error"]
+        payload["error_code"] = worker["error"]["error_code"]
+        payload["message"] = worker["error"]["message"]
     elif active_jobs > 0:
         payload["display_status"] = "BUSY"
     elif worker.get("ready"):
