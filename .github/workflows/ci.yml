@@ -93,6 +93,8 @@ jobs:
         run: test -f schemas/0017_fish_knowledge_crud_v1.sql
       - name: Validate MVP user-catch migration exists
         run: test -f schemas/0020_user_catches_mvp_v1.sql
+      - name: Validate Qwen B-side migration exists
+        run: test -f schemas/0023_qwen_bside_visual_v1.sql
       - name: Validate classifier trainer assets exist
         run: test -f Dockerfile.trainer && test -f requirements-training.txt && test -f infra/cloudbuild.trainer.yaml
       - name: Validate inference runtime image configuration

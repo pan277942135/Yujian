@@ -85,6 +85,7 @@
   @media(max-width:900px){.qwen-lab-layout{grid-template-columns:1fr}.qwen-lab-result{min-height:0}}
   @media(max-width:560px){.qwen-lab-meta{grid-template-columns:1fr 1fr}.qwen-lab-history-images{grid-template-columns:1fr}.qwen-lab-history-meta{grid-template-columns:1fr 1fr}.page-heading h1{font-size:26px}}
   @media(max-width:560px){.qwen-lab-meta{grid-template-columns:1fr 1fr}.page-heading h1{font-size:26px}}
+  .qwen-lab-history-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-top:2px}.qwen-lab-history-actions .button{font-size:12px;padding:7px 11px}
 </style>
 {% endblock %}
 
@@ -238,7 +239,7 @@ CGI,
   </section>
 </div>
 
-<section class="panel qwen-lab-history" aria-label="Qwen Image Edit Lab 处理历史">
+<section id="qwenLabHistory" class="panel qwen-lab-history" aria-label="Qwen Image Edit Lab 处理历史">
   <div class="panel-heading">
     <div><h2>处理历史</h2><p>点击记录展开详情，对比原图和生成图。</p></div>
     <button id="qwenLabHistoryRefresh" class="button" type="button">刷新</button>
@@ -726,9 +727,42 @@ CGI,
             '<div><strong>Negative Prompt</strong><pre>' + esc(data.negative_prompt || '') + '</pre></div>' +
             '<div><strong>PipelineRun</strong><pre>' + esc(data.run_id || '') + '</pre></div>' +
           '</div>' +
+          '<div class="qwen-lab-history-actions">' +
+            ((statusValue === 'SUCCESS' && data.output_image_url) ? '<button class="button primary" type="button" data-bside-run="' + esc(data.run_id || '') + '">B面视觉生成</button>' : '') +
+          '</div>' +
         '</div>' +
       '</details>';
     }).join('');
+    historyList.querySelectorAll('[data-bside-run]').forEach((button) => button.addEventListener('click', () => openBsideVisual(button)));
+  }
+
+  async function openBsideVisual(button) {
+    if (!button || button.dataset.busy === '1') return;
+    const runId = String(button.dataset.bsideRun || '').trim();
+    if (!runId) return;
+    button.dataset.busy = '1';
+    button.disabled = true;
+    button.textContent = 'B面视觉生成 1/3';
+    try {
+      const response = await fetch('/api/qwen-lab/runs/' + encodeURIComponent(runId) + '/bside-visual', {method: 'POST'});
+      const bodyText = await response.text();
+      let payload = {};
+      try { payload = bodyText ? JSON.parse(bodyText) : {}; } catch (_) { payload = {}; }
+      if (!response.ok) {
+        const detail = payload && payload.detail;
+        throw new Error(typeof detail === 'string' ? detail : (detail && (detail.message || detail.error)) || 'B面视觉 Session 创建失败');
+      }
+      button.textContent = 'B面视觉生成 2/3';
+      const pageUrl = payload.page_url;
+      if (!pageUrl) throw new Error('API 未返回 B面视觉页面地址');
+      button.textContent = '已完成';
+      window.location.assign(pageUrl);
+    } catch (error) {
+      button.disabled = false;
+      button.dataset.busy = '0';
+      button.textContent = 'B面视觉生成';
+      setHint(error instanceof Error ? error.message : String(error), true);
+    }
   }
 
   async function loadHistory(page) {
