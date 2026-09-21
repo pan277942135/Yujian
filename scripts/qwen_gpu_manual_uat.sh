@@ -198,7 +198,7 @@ if not dataset_id:
 print(dataset_id)
 PY
 )"
-test -n "${DATASET_ID:-}""
+test -n "${DATASET_ID:-}"
 test -n "$DATASET_ID"
 ITEMS_JSON="$OUT_DIR/items.json"
 ITEMS_HTTP="$(request GET "$SERVICE_URL/api/platform/datasets/$DATASET_ID/items?page=1&size=10" "$ITEMS_JSON")"
@@ -224,7 +224,7 @@ if not item_id:
 print(item_id)
 PY
 )"
-test -n "${DATASET_ITEM_ID:-}""
+test -n "${DATASET_ITEM_ID:-}"
 test -n "$DATASET_ID"
 test -n "$DATASET_ITEM_ID"
 
