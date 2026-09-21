@@ -96,6 +96,8 @@ def test_running_vm_with_explicit_worker_error_maps_to_error(tmp_path, monkeypat
         payload = gpu.qwen_gpu_status(db)
         assert payload["worker_status"] == "error"
         assert payload["display_status"] == "ERROR"
+        assert payload["error_code"] == "COMFYUI_UNAVAILABLE"
+        assert payload["message"] == "ComfyUI readiness timeout"
         assert payload["error"]["error_code"] == "COMFYUI_UNAVAILABLE"
     finally:
         db.close()
