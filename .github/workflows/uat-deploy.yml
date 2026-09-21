@@ -179,6 +179,19 @@ jobs:
         shell: bash
         run: |
           set -u
+          VM_STATUS="$(gcloud compute instances describe "$GPU_INSTANCE" \
+            --project "$GPU_PROJECT_ID" --zone "$GPU_ZONE" --format='value(status)' 2>/dev/null || true)"
+          if [[ "$VM_STATUS" == "TERMINATED" ]]; then
+            gcloud compute instances start "$GPU_INSTANCE" \
+              --project "$GPU_PROJECT_ID" --zone "$GPU_ZONE" --quiet || true
+            for _ in $(seq 1 36); do
+              VM_STATUS="$(gcloud compute instances describe "$GPU_INSTANCE" \
+                --project "$GPU_PROJECT_ID" --zone "$GPU_ZONE" --format='value(status)' 2>/dev/null || true)"
+              echo "diagnostic-start vm_status=$VM_STATUS"
+              [[ "$VM_STATUS" == "RUNNING" ]] && break
+              sleep 5
+            done
+          fi
           timeout 120s gcloud compute ssh "$GPU_INSTANCE" \
             --project "$GPU_PROJECT_ID" --zone "$GPU_ZONE" --quiet \
             --command='
@@ -197,6 +210,16 @@ jobs:
               echo "--- related systemd units ---"
               systemctl list-unit-files --type=service | grep -Ei "qwen|comfy|fish" || true
               systemctl --type=service --state=running | grep -Ei "qwen|comfy|fish" || true
+              echo "--- qwen worker unit ---"
+              systemctl cat fish-qwen-refine-worker || true
+              echo "--- running processes ---"
+              ps -ef | grep -Ei "comfy|qwen|python" | grep -v grep || true
+              echo "--- /opt directories ---"
+              find /opt -maxdepth 3 -type d -print 2>/dev/null | grep -Ei "comfy|qwen|model" | head -200 || true
+              echo "--- candidate launch files ---"
+              find /opt /home/pan277942135 -maxdepth 4 -type f \
+                \( -iname "main.py" -o -iname "*comfy*.service" -o -iname "*comfy*.sh" -o -iname "run*.sh" \) \
+                -print 2>/dev/null | head -200 || true
               echo "--- docker containers ---"
               sudo docker ps -a --format "{{.Names}}\\t{{.Status}}\\t{{.Ports}}" || true
               echo "--- qwen worker journal ---"
