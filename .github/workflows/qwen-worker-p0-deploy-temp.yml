@@ -95,18 +95,22 @@ jobs:
           import sys
           from datetime import datetime
           from pathlib import Path
+          import re
 
           journal_path, health_path, gpu_used = sys.argv[1:]
           health = json.loads(Path(health_path).read_text(encoding="utf-8"))
           lines = Path(journal_path).read_text(encoding="utf-8", errors="replace").splitlines()
           load_started = None
           load_finished = None
+          timestamp_pattern = re.compile(r"(\\d{4}-\\d{2}-\\d{2})[ T](\\d{2}:\\d{2}:\\d{2})(?:[,.](\\d+))?")
           for line in lines:
-              stamp = line.split(" ", 1)[0]
-              try:
-                  parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
-              except ValueError:
+              match = timestamp_pattern.search(line)
+              if not match:
                   continue
+              fraction = (match.group(3) or "0")[:6].ljust(6, "0")
+              parsed = datetime.fromisoformat(
+                  f"{match.group(1)}T{match.group(2)}.{fraction}+00:00"
+              )
               if "Loading Qwen Image Edit model" in line:
                   load_started = parsed
               if "Model loaded successfully" in line:
