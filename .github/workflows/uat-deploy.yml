@@ -36,6 +36,13 @@ env:
   FISH_PORTRAIT_WORKER_PATH: /portrait
   FISH_QWEN_REFINE_WORKER_URL: http://34.69.75.199:8002
   FISH_QWEN_REFINE_WORKER_PATH: /refine
+  QWEN_GPU_PROJECT_ID: gen-lang-client-0224022273
+  QWEN_GPU_ZONE: us-central1-a
+  QWEN_GPU_INSTANCE: fish-completion-worker
+  QWEN_GPU_NAME: NVIDIA L4
+  QWEN_GPU_WORKER: fish-qwen-refine-worker
+  QWEN_GPU_MODEL: Qwen Image Edit 2511
+  QWEN_WORKER_BASE_URL: http://34.69.75.199:8002
 
 jobs:
   preflight:
@@ -125,6 +132,13 @@ jobs:
           FISH_PORTRAIT_WORKER_PATH: ${{ env.FISH_PORTRAIT_WORKER_PATH }}
           FISH_QWEN_REFINE_WORKER_URL: ${{ env.FISH_QWEN_REFINE_WORKER_URL }}
           FISH_QWEN_REFINE_WORKER_PATH: ${{ env.FISH_QWEN_REFINE_WORKER_PATH }}
+          QWEN_GPU_PROJECT_ID: ${{ env.QWEN_GPU_PROJECT_ID }}
+          QWEN_GPU_ZONE: ${{ env.QWEN_GPU_ZONE }}
+          QWEN_GPU_INSTANCE: ${{ env.QWEN_GPU_INSTANCE }}
+          QWEN_GPU_NAME: ${{ env.QWEN_GPU_NAME }}
+          QWEN_GPU_WORKER: ${{ env.QWEN_GPU_WORKER }}
+          QWEN_GPU_MODEL: ${{ env.QWEN_GPU_MODEL }}
+          QWEN_WORKER_BASE_URL: ${{ env.QWEN_WORKER_BASE_URL }}
         run: bash scripts/deploy_console_runtime.sh
 
       - name: Legacy Fish Portrait Worker connectivity smoke (non-blocking)
@@ -184,6 +198,13 @@ jobs:
           env={item.get("name"): item.get("value") for item in ((containers[0].get("env") if containers else []) or [])}
           assert env.get("FISH_QWEN_REFINE_WORKER_URL") == "http://34.69.75.199:8002", env
           assert env.get("FISH_QWEN_REFINE_WORKER_PATH") == "/refine", env
+          assert env.get("QWEN_GPU_PROJECT_ID") == "gen-lang-client-0224022273", env
+          assert env.get("QWEN_GPU_ZONE") == "us-central1-a", env
+          assert env.get("QWEN_GPU_INSTANCE") == "fish-completion-worker", env
+          assert env.get("QWEN_GPU_NAME") == "NVIDIA L4", env
+          assert env.get("QWEN_GPU_WORKER") == "fish-qwen-refine-worker", env
+          assert env.get("QWEN_GPU_MODEL") == "Qwen Image Edit 2511", env
+          assert env.get("QWEN_WORKER_BASE_URL") == "http://34.69.75.199:8002", env
           '
 
           DEPLOY_HEALTH="$(curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 30 -fsS "$SERVICE_URL/health/deploy")"
