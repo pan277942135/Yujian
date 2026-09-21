@@ -37,7 +37,7 @@ jobs:
           project_id: ${{ env.BACKEND_PROJECT_ID }}
           version: '>= 416.0.0'
 
-      - name: Audit Cloud Run runtime identity and VM permissions
+      - name: Audit Cloud Run identity, VM access and systemd
         shell: bash
         run: |
           set -euo pipefail
@@ -54,34 +54,31 @@ jobs:
           PY
           )"
           test -n "$RUNTIME_SA"
+          echo "runtime_service_account=$RUNTIME_SA"
           echo "runtime_service_account=$RUNTIME_SA" >> "$GITHUB_STEP_SUMMARY"
 
-          gcloud projects get-iam-policy "$GPU_PROJECT_ID" --format=json > /tmp/gpu-policy.json
-          RUNTIME_SA="$RUNTIME_SA" python3 - <<'PY'
-          import json
-          import os
-          runtime_member = "serviceAccount:" + os.environ["RUNTIME_SA"]
-          with open("/tmp/gpu-policy.json", encoding="utf-8") as handle:
-              policy = json.load(handle)
-          roles = []
-          for binding in policy.get("bindings", []):
-              if runtime_member in (binding.get("members") or []):
-                  roles.append(binding.get("role"))
-          print("project_roles=" + ",".join(sorted(role for role in roles if role)))
-          with open("/tmp/runtime_roles.txt", "w", encoding="utf-8") as handle:
-              handle.write("\n".join(sorted(role for role in roles if role)))
-          PY
+          echo "vm_access_as_deployer:"
+          gcloud compute instances describe "$GPU_INSTANCE"             --project "$GPU_PROJECT_ID"             --zone "$GPU_ZONE"             --format='yaml(name,status,lastStartTimestamp,lastStopTimestamp)'
 
-          while IFS= read -r role; do
-            test -n "$role" || continue
-            echo "role=$role"
-            if [[ "$role" == roles/* ]]; then
-              gcloud iam roles describe "$role" --format=json 2>/dev/null                 | python3 -c 'import json,sys; p=json.load(sys.stdin); print("permissions="+",".join(x for x in p.get("includedPermissions",[]) if x.startswith("compute.instances.")))'                 || true
-            fi
-          done < /tmp/runtime_roles.txt
+          echo "runtime_permission_probe:"
+          set +e
+          PROBE_OUTPUT="$(gcloud projects test-iam-permissions "$GPU_PROJECT_ID"             --permissions=compute.instances.get,compute.instances.start,compute.instances.stop             --impersonate-service-account="$RUNTIME_SA" 2>&1)"
+          PROBE_RC=$?
+          set -e
+          printf '%s\n' "$PROBE_OUTPUT"
+          echo "runtime_permission_probe_exit=$PROBE_RC"
+          if [[ "$PROBE_RC" -eq 0 ]]; then
+            echo "runtime_permission_probe=$PROBE_OUTPUT" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "runtime_permission_probe_error=$PROBE_OUTPUT" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
-          echo "required_permissions=compute.instances.get,compute.instances.start,compute.instances.stop" >> "$GITHUB_STEP_SUMMARY"
-
-          gcloud compute instances describe "$GPU_INSTANCE"             --project "$GPU_PROJECT_ID"             --zone "$GPU_ZONE"             --format='yaml(name,status,lastStartTimestamp,lastStopTimestamp)' | tee /tmp/vm.yaml
-
-          gcloud compute ssh "$GPU_INSTANCE"             --project "$GPU_PROJECT_ID"             --zone "$GPU_ZONE"             --quiet             --command='systemctl is-enabled fish-qwen-refine-worker && systemctl is-active fish-qwen-refine-worker && systemctl --no-pager --full status fish-qwen-refine-worker | sed -n "1,20p"'
+          echo "systemd_probe:"
+          set +e
+          SSH_OUTPUT="$(gcloud compute ssh "$GPU_INSTANCE"             --project "$GPU_PROJECT_ID"             --zone "$GPU_ZONE"             --quiet             --command='systemctl is-enabled fish-qwen-refine-worker && systemctl is-active fish-qwen-refine-worker && systemctl --no-pager --full status fish-qwen-refine-worker | sed -n "1,20p"' 2>&1)"
+          SSH_RC=$?
+          set -e
+          printf '%s\n' "$SSH_OUTPUT"
+          echo "systemd_probe_exit=$SSH_RC"
+          echo "systemd_probe=$SSH_OUTPUT" >> "$GITHUB_STEP_SUMMARY"
+          test "$SSH_RC" -eq 0
