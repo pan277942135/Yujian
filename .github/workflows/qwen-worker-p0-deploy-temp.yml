@@ -283,8 +283,8 @@ jobs:
           curl -sS --connect-timeout 10 --max-time 30 "${WORKER_URL}/health"             -o "$RUNNER_TEMP/qwen-p0-evidence/public_health.json" || true
           {
             echo "### Qwen Worker P0 Runtime Evidence"
-            echo "- Target commit: `${TARGET_SHA}`"
-            echo "- Worker URL: `${WORKER_URL}`"
+            echo "- Target commit: $TARGET_SHA"
+            echo "- Worker URL: $WORKER_URL"
             echo "- Fixed input source: historical fish completion report asset"
             echo "- Baseline: approximately 390 seconds"
           } > "$RUNNER_TEMP/qwen-p0-evidence/summary.md"
