@@ -1,4 +1,5 @@
 name: qwen narrow t1 attachment temp
+# retry after temporary deploy cleanup
 on:
   push:
     paths:
