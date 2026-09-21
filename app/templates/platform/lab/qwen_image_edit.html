@@ -65,6 +65,23 @@
   .qwen-lab-history-meta strong,.qwen-lab-history-prompts strong{display:block;font-size:11px;color:#71817d;margin-bottom:5px}
   .qwen-lab-history-meta span,.qwen-lab-history-prompts pre{display:block;margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.5}
   .qwen-lab-history-prompts{display:grid;gap:9px}
+  .qwen-gpu-card{margin-bottom:16px;border:1px solid #cfe1d8;background:linear-gradient(180deg,#fbfefd 0%,#f3f9f5 100%)}
+  .qwen-gpu-card-main{display:grid;gap:12px}
+  .qwen-gpu-card-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap}
+  .qwen-gpu-card-heading h2{margin:0;font-size:17px}
+  .qwen-gpu-card-heading p{margin:5px 0 0;color:var(--muted);line-height:1.5}
+  .qwen-gpu-state-title{font-size:18px;font-weight:800;color:#24483d}
+  .qwen-gpu-state-hint{color:var(--muted);line-height:1.5;overflow-wrap:anywhere}
+  .qwen-gpu-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .qwen-gpu-runtime{color:var(--muted);font-size:12px}
+  .qwen-gpu-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:auto}
+  .qwen-gpu-actions button[hidden]{display:none}
+  .qwen-gpu-modal[hidden]{display:none}
+  .qwen-gpu-modal{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:20px;background:rgba(20,49,42,.24)}
+  .qwen-gpu-modal-card{width:min(420px,100%);box-sizing:border-box;border:1px solid #cfe1d8;border-radius:14px;background:#fff;padding:20px;box-shadow:0 18px 50px rgba(21,65,53,.18)}
+  .qwen-gpu-modal-card h2{margin:0;color:#24483d;font-size:18px}
+  .qwen-gpu-modal-card p{margin:10px 0 18px;color:var(--muted);line-height:1.6;white-space:pre-line}
+  .qwen-gpu-modal-actions{display:flex;justify-content:flex-end;gap:8px}
   @media(max-width:900px){.qwen-lab-layout{grid-template-columns:1fr}.qwen-lab-result{min-height:0}}
   @media(max-width:560px){.qwen-lab-meta{grid-template-columns:1fr 1fr}.qwen-lab-history-images{grid-template-columns:1fr}.qwen-lab-history-meta{grid-template-columns:1fr 1fr}.page-heading h1{font-size:26px}}
   @media(max-width:560px){.qwen-lab-meta{grid-template-columns:1fr 1fr}.page-heading h1{font-size:26px}}
@@ -86,6 +103,39 @@
   独立实验入口：原图直接交给 Qwen Image Edit 2511，不经过 Detector、SAM、Mask 或 Fish Portrait Preserve Pipeline。
 </div>
 
+<section class="panel qwen-gpu-card" aria-label="GPU Worker 状态" aria-live="polite">
+  <div class="qwen-gpu-card-main">
+    <div class="qwen-gpu-card-heading">
+      <div>
+        <h2>GPU Worker</h2>
+        <p>NVIDIA L4 · fish-completion-worker</p>
+      </div>
+      <span id="qwenGpuStatusTag" class="status-tag status-neutral"><span class="status-dot"></span>状态读取中</span>
+    </div>
+    <div id="qwenGpuStateTitle" class="qwen-gpu-state-title">正在读取 GPU 状态</div>
+    <div id="qwenGpuStateHint" class="qwen-gpu-state-hint">正在查询 VM 与 Qwen Worker 状态…</div>
+    <div class="qwen-gpu-footer">
+      <span id="qwenGpuRuntime" class="qwen-gpu-runtime" hidden></span>
+      <div class="qwen-gpu-actions">
+        <button id="qwenGpuStartButton" class="button primary" type="button" hidden>启动 GPU</button>
+        <button id="qwenGpuStopButton" class="button" type="button" hidden>关闭 GPU</button>
+        <button id="qwenGpuRefreshButton" class="button" type="button" hidden>刷新状态</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div id="qwenGpuStopDialog" class="qwen-gpu-modal" role="dialog" aria-modal="true" aria-labelledby="qwenGpuStopTitle" hidden>
+  <div class="qwen-gpu-modal-card">
+    <h2 id="qwenGpuStopTitle">关闭 GPU？</h2>
+    <p>关闭后将停止 NVIDIA L4 运行计费，
+下次使用需要重新启动并等待 Qwen 加载。</p>
+    <div class="qwen-gpu-modal-actions">
+      <button id="qwenGpuStopCancel" class="button" type="button">取消</button>
+      <button id="qwenGpuStopConfirm" class="button primary" type="button">确认关闭</button>
+    </div>
+  </div>
+</div>
 <div class="qwen-lab-layout">
   <section class="panel qwen-lab-panel" aria-label="Qwen Image Edit Lab 输入">
     <div class="panel-heading">
@@ -222,6 +272,16 @@ CGI,
   const generateButton = document.getElementById('qwenLabGenerate');
   const hint = document.getElementById('qwenLabHint');
   const status = document.getElementById('qwenLabStatus');
+  const gpuStatusTag = document.getElementById('qwenGpuStatusTag');
+  const gpuStateTitle = document.getElementById('qwenGpuStateTitle');
+  const gpuStateHint = document.getElementById('qwenGpuStateHint');
+  const gpuRuntime = document.getElementById('qwenGpuRuntime');
+  const gpuStartButton = document.getElementById('qwenGpuStartButton');
+  const gpuStopButton = document.getElementById('qwenGpuStopButton');
+  const gpuRefreshButton = document.getElementById('qwenGpuRefreshButton');
+  const gpuStopDialog = document.getElementById('qwenGpuStopDialog');
+  const gpuStopCancel = document.getElementById('qwenGpuStopCancel');
+  const gpuStopConfirm = document.getElementById('qwenGpuStopConfirm');
   const runStatus = document.getElementById('qwenLabRunStatus');
   const resultEmpty = document.getElementById('qwenLabResultEmpty');
   const resultImage = document.getElementById('qwenLabResultImage');
@@ -243,6 +303,11 @@ CGI,
   let historyPage = 1;
   let historyTotal = 0;
   let datasetRows = [];
+  let lastGpuPayload = null;
+  let gpuDisplayStatus = 'ERROR';
+  let generationBusy = false;
+  let gpuPollTimer = null;
+  let gpuStatusLoading = false;
 
   function setStatus(element, text, className) {
     element.className = 'status-tag ' + className;
@@ -252,6 +317,182 @@ CGI,
   function setHint(text, isError) {
     hint.textContent = text;
     hint.style.color = isError ? '#a63b34' : '';
+  }
+  function gpuStatusLabel(value) {
+    const labels = {
+      STOPPED: '已关闭',
+      STARTING: 'GPU 启动中',
+      LOADING: 'Qwen 模型加载中',
+      READY: 'Ready',
+      BUSY: '正在生成',
+      STOPPING: 'GPU 关闭中',
+      ERROR: '状态异常'
+    };
+    return labels[value] || '状态读取中';
+  }
+
+  function gpuStatusClass(value) {
+    if (value === 'READY') return 'status-success';
+    if (value === 'ERROR') return 'status-failed';
+    if (value === 'STOPPED') return 'status-neutral';
+    return 'status-running';
+  }
+
+  function formatGpuRuntime(seconds) {
+    const value = Math.max(0, Number(seconds) || 0);
+    const hours = Math.floor(value / 3600);
+    const minutes = Math.floor((value % 3600) / 60);
+    if (hours) return hours + '小时 ' + minutes + '分';
+    return minutes + '分';
+  }
+
+  function gpuErrorText(payload) {
+    const error = payload && payload.error;
+    if (typeof error === 'string') return error;
+    if (error && typeof error.message === 'string') return error.message;
+    return 'GPU 状态异常，请刷新状态。';
+  }
+
+  function updateGenerateControl() {
+    const hasSource = hasImageSource();
+    generateButton.disabled = !hasSource || gpuDisplayStatus !== 'READY' || generationBusy;
+    if (generationBusy) {
+      setHint('正在生成，请勿关闭 GPU。', false);
+    } else if (gpuDisplayStatus === 'STOPPED') {
+      setHint('请先启动 GPU。', false);
+    } else if (gpuDisplayStatus === 'STARTING') {
+      setHint('GPU 启动中。', false);
+    } else if (gpuDisplayStatus === 'LOADING') {
+      setHint('Qwen 模型加载中。', false);
+    } else if (gpuDisplayStatus === 'STOPPING') {
+      setHint('GPU 关闭中。', false);
+    } else if (gpuDisplayStatus === 'ERROR') {
+      setHint(gpuErrorText(lastGpuPayload), true);
+    } else if (!hasSource) {
+      setHint('请先上传图片，或从数据集选择图片。', false);
+    } else {
+      setHint('可以开始调用 Qwen。', false);
+    }
+  }
+
+  function applyGpuStatus(payload) {
+    const value = String((payload && payload.display_status) || 'ERROR').toUpperCase();
+    lastGpuPayload = payload || {};
+    const effective = generationBusy ? 'BUSY' : value;
+    gpuDisplayStatus = effective;
+    setStatus(gpuStatusTag, gpuStatusLabel(effective), gpuStatusClass(effective));
+    gpuStateTitle.textContent = gpuStatusLabel(effective);
+    const hints = {
+      STOPPED: 'GPU 已关闭 · 不产生 GPU 运行计算费用',
+      STARTING: 'GPU 正在启动，Qwen 模型加载完成后即可生成。',
+      LOADING: 'Qwen Worker 启动中，模型加载完成后即可生成。',
+      READY: 'Qwen Image Edit 2511 已加载',
+      BUSY: '正在生成，请勿关闭 GPU。',
+      STOPPING: 'GPU 正在关闭，请稍候。'
+    };
+    gpuStateHint.textContent = effective === 'ERROR' ? gpuErrorText(payload) : hints[effective];
+    const runSeconds = payload && payload.run_seconds;
+    if ((effective === 'READY' || effective === 'BUSY') && runSeconds != null) {
+      gpuRuntime.textContent = '本次运行：' + formatGpuRuntime(runSeconds);
+      gpuRuntime.hidden = false;
+    } else {
+      gpuRuntime.textContent = '';
+      gpuRuntime.hidden = true;
+    }
+    gpuStartButton.hidden = effective !== 'STOPPED';
+    gpuStartButton.disabled = effective !== 'STOPPED';
+    gpuStopButton.hidden = effective !== 'READY' && effective !== 'BUSY';
+    gpuStopButton.disabled = effective !== 'READY' || generationBusy;
+    gpuStopButton.textContent = effective === 'BUSY' ? '正在生成' : '关闭 GPU';
+    gpuRefreshButton.hidden = effective !== 'ERROR';
+    updateGenerateControl();
+  }
+
+  async function readGpuResponse(response) {
+    const bodyText = await response.text();
+    let payload = {};
+    try { payload = bodyText ? JSON.parse(bodyText) : {}; } catch (_) { payload = {}; }
+    if (!response.ok) {
+      const detail = payload && payload.detail;
+      const message = typeof detail === 'string'
+        ? detail
+        : (detail && (detail.message || detail.error_code)) || 'GPU 操作失败';
+      throw new Error(message);
+    }
+    return payload;
+  }
+
+  function scheduleGpuPoll() {
+    if (gpuPollTimer) window.clearTimeout(gpuPollTimer);
+    const fast = ['STARTING', 'LOADING', 'BUSY', 'STOPPING'].includes(gpuDisplayStatus);
+    gpuPollTimer = window.setTimeout(loadGpuStatus, fast ? 5000 : 15000);
+  }
+
+  async function loadGpuStatus() {
+    if (gpuStatusLoading) return;
+    gpuStatusLoading = true;
+    try {
+      const response = await fetch('/api/qwen-lab/gpu/status?ts=' + Date.now(), {cache: 'no-store'});
+      const payload = await readGpuResponse(response);
+      applyGpuStatus(payload);
+    } catch (error) {
+      applyGpuStatus({
+        display_status: 'ERROR',
+        error: {message: error instanceof Error ? error.message : String(error)}
+      });
+    } finally {
+      gpuStatusLoading = false;
+      scheduleGpuPoll();
+    }
+  }
+
+  function openGpuStopDialog() {
+    if (gpuDisplayStatus !== 'READY' || generationBusy) return;
+    gpuStopDialog.hidden = false;
+    gpuStopDialog.setAttribute('aria-hidden', 'false');
+    gpuStopConfirm.focus();
+  }
+
+  function closeGpuStopDialog() {
+    gpuStopDialog.hidden = true;
+    gpuStopDialog.setAttribute('aria-hidden', 'true');
+  }
+
+  async function startGpu() {
+    if (gpuDisplayStatus !== 'STOPPED') return;
+    applyGpuStatus(Object.assign({}, lastGpuPayload || {}, {display_status: 'STARTING', vm_status: 'STAGING'}));
+    try {
+      const response = await fetch('/api/qwen-lab/gpu/start', {method: 'POST'});
+      const payload = await readGpuResponse(response);
+      applyGpuStatus(Object.assign({}, lastGpuPayload || {}, payload));
+    } catch (error) {
+      applyGpuStatus({
+        display_status: 'ERROR',
+        error: {message: error instanceof Error ? error.message : String(error)}
+      });
+    } finally {
+      scheduleGpuPoll();
+    }
+  }
+
+  async function stopGpu() {
+    if (gpuDisplayStatus !== 'READY' || generationBusy) return;
+    gpuStopConfirm.disabled = true;
+    closeGpuStopDialog();
+    applyGpuStatus(Object.assign({}, lastGpuPayload || {}, {display_status: 'STOPPING', vm_status: 'STOPPING'}));
+    try {
+      const response = await fetch('/api/qwen-lab/gpu/stop', {method: 'POST'});
+      const payload = await readGpuResponse(response);
+      applyGpuStatus(Object.assign({}, lastGpuPayload || {}, payload));
+    } catch (error) {
+      applyGpuStatus({
+        display_status: 'ERROR',
+        error: {message: error instanceof Error ? error.message : String(error)}
+      });
+    } finally {
+      gpuStopConfirm.disabled = false;
+      scheduleGpuPoll();
+    }
   }
 
   function datasetErrorMessage(payload, fallback) {
@@ -292,7 +533,7 @@ CGI,
       uploadEmpty.hidden = false;
       setStatus(status, '待上传', 'status-neutral');
       setHint('请先上传图片，或从数据集选择图片。', false);
-      generateButton.disabled = true;
+      updateGenerateControl();
     }
   }
 
@@ -329,7 +570,7 @@ CGI,
       datasetGrid.hidden = true;
       datasetState.hidden = false;
       datasetState.textContent = datasetId ? '该 Dataset 暂无可选图片。' : '请选择 Dataset 图片；也可以使用本地上传。';
-      generateButton.disabled = !hasImageSource();
+      updateGenerateControl();
       return;
     }
     datasetState.hidden = true;
@@ -344,7 +585,7 @@ CGI,
     datasetGrid.querySelectorAll('[data-dataset-index]').forEach((button) => {
       button.addEventListener('click', () => selectDatasetSource(Number(button.dataset.datasetIndex)));
     });
-    generateButton.disabled = !hasImageSource();
+    updateGenerateControl();
   }
 
   function selectDatasetSource(index) {
@@ -364,7 +605,7 @@ CGI,
     uploadEmpty.hidden = Boolean(previewUrl);
     setStatus(status, '已选择数据集图片', 'status-queued');
     setHint('已选择 Dataset 图片：' + (source.image_id || '未命名图片') + '，可以开始调用 Qwen。', false);
-    generateButton.disabled = false;
+    updateGenerateControl();
   }
 
   async function loadDatasetItems(page) {
@@ -395,7 +636,7 @@ CGI,
       datasetGrid.hidden = true;
       datasetPager.hidden = true;
       datasetState.textContent = error instanceof Error ? error.message : String(error);
-      generateButton.disabled = !hasImageSource();
+      updateGenerateControl();
     }
   }
 
@@ -515,10 +756,19 @@ CGI,
     }
   }
 
+  gpuStartButton.addEventListener('click', startGpu);
+  gpuStopButton.addEventListener('click', openGpuStopDialog);
+  gpuRefreshButton.addEventListener('click', loadGpuStatus);
+  gpuStopCancel.addEventListener('click', closeGpuStopDialog);
+  gpuStopConfirm.addEventListener('click', stopGpu);
+  gpuStopDialog.addEventListener('click', (event) => {
+    if (event.target === gpuStopDialog) closeGpuStopDialog();
+  });
+
   imageInput.addEventListener('change', () => {
     const file = imageInput.files && imageInput.files[0];
     if (!file) {
-      generateButton.disabled = !hasImageSource();
+      updateGenerateControl();
       if (!selectedDatasetSource) {
         originalPreview.hidden = true;
         uploadEmpty.hidden = false;
@@ -535,13 +785,17 @@ CGI,
     uploadEmpty.hidden = true;
     setStatus(status, '已选择本地图片', 'status-queued');
     setHint('可以开始调用 Qwen。', false);
-    generateButton.disabled = false;
+    updateGenerateControl();
   });
 
   generateButton.addEventListener('click', async () => {
     const localFile = imageInput.files && imageInput.files[0];
     const datasetSource = selectedDatasetSource;
     if (!localFile && !datasetSource) return;
+    if (gpuDisplayStatus !== 'READY' || generationBusy) {
+      updateGenerateControl();
+      return;
+    }
     const requestBody = datasetSource && !localFile ? new URLSearchParams() : new FormData();
     requestBody.append('prompt', document.getElementById('qwenLabPrompt').value);
     requestBody.append('negative_prompt', document.getElementById('qwenLabNegativePrompt').value);
@@ -554,7 +808,8 @@ CGI,
       requestBody.append('image', localFile);
     }
 
-    generateButton.disabled = true;
+    generationBusy = true;
+    applyGpuStatus(Object.assign({}, lastGpuPayload || {}, {display_status: 'BUSY'}));
     setStatus(status, '生成中', 'status-running');
     runStatus.textContent = 'Qwen Worker 处理中…';
     setHint(datasetSource && !localFile ? '正在读取 Dataset 原图并调用 Qwen Image Edit 2511，请稍候。' : '正在上传原图并调用 Qwen Image Edit 2511，请稍候。', false);
@@ -597,7 +852,9 @@ CGI,
       setStatus(status, '生成失败', 'status-failed');
       setHint(error instanceof Error ? error.message : String(error), true);
     } finally {
-      generateButton.disabled = hasImageSource() ? false : true;
+      generationBusy = false;
+      updateGenerateControl();
+      loadGpuStatus();
     }
   });
   datasetSelect.addEventListener('change', async (event) => {
@@ -611,6 +868,8 @@ CGI,
   historyPrev.addEventListener('click', () => loadHistory(historyPage - 1));
   historyNext.addEventListener('click', () => loadHistory(historyPage + 1));
   document.getElementById('qwenLabHistoryRefresh').addEventListener('click', () => loadHistory(historyPage));
+  updateGenerateControl();
+  loadGpuStatus();
   loadDatasets();
   loadHistory(1);
 })();
