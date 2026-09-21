@@ -348,7 +348,7 @@ def test_qwen_image_edit_lab_direct_original_to_worker_and_records_run(tmp_path,
         assert run.status == "SUCCESS"
         state = json.loads(run.stage_json)
         assert state["request"]["input_image_uri"] == stored["input"][0]
-        assert state["result"]["output_image_uri"] == stored["output"][0]
+        assert state["result"]["output_image_uri"] == stored["qwen_result_rgb"][0]
         assert state["result"]["seed"] == 123
         assert state["stages"][-1]["status"] == "DONE"
         assert all("visible" not in json.dumps(item).lower() for item in state["stages"])
