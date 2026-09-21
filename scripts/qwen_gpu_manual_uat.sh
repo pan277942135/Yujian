@@ -13,6 +13,60 @@ mkdir -p "$OUT_DIR"
 COOKIE_JAR="$OUT_DIR/cookies.txt"
 STATUS_JSON="$OUT_DIR/status.json"
 
+START_REQUESTED=false
+WORKER_URL="\${QWEN_WORKER_BASE_URL:-http://34.69.75.199:8002}"
+
+diagnose_worker() {
+  echo "### Qwen worker diagnostic (read-only)"
+  echo "--- runner -> worker /health ---"
+  curl --connect-timeout 10 --max-time 30 -sS "\${WORKER_URL%/}/health" || true
+  echo
+  echo "--- GCE instance status and external IP ---"
+  gcloud compute instances describe "$GPU_INSTANCE" \
+    --project "$GPU_PROJECT_ID" --zone "$GPU_ZONE" \
+    --format='value(status,networkInterfaces[0].accessConfigs[0].natIP)' || true
+  echo
+  echo "--- VM systemd/journal/GPU ---"
+  timeout 120s gcloud compute ssh "$GPU_INSTANCE" \
+    --project "$GPU_PROJECT_ID" --zone "$GPU_ZONE" --quiet \
+    --command='
+      echo "health_local="
+      curl --connect-timeout 5 --max-time 20 -sS http://127.0.0.1:8002/health || true
+      echo
+      echo "systemd_enabled="
+      systemctl is-enabled fish-qwen-refine-worker || true
+      echo "systemd_active="
+      systemctl is-active fish-qwen-refine-worker || true
+      echo "systemd_status="
+      sudo systemctl status fish-qwen-refine-worker --no-pager -l || true
+      echo "journal="
+      sudo journalctl -u fish-qwen-refine-worker -n 120 --no-pager || true
+      echo "nvidia_smi="
+      nvidia-smi || true
+    ' 2>&1 || true
+}
+
+cleanup_uat_vm() {
+  local rc=$?
+  if [[ "$START_REQUESTED" == "true" && "$rc" -ne 0 ]]; then
+    diagnose_worker
+    echo "UAT failed; stopping the exact test VM to leave it TERMINATED"
+    gcloud compute instances stop "$GPU_INSTANCE" \
+      --project "$GPU_PROJECT_ID" --zone "$GPU_ZONE" --quiet || true
+    for _ in $(seq 1 36); do
+      VM_STATUS="$(gcloud compute instances describe "$GPU_INSTANCE" \
+        --project "$GPU_PROJECT_ID" --zone "$GPU_ZONE" --format='value(status)' 2>/dev/null || true)"
+      echo "failure-cleanup vm_status=$VM_STATUS"
+      [[ "$VM_STATUS" == "TERMINATED" ]] && break
+      sleep 5
+    done
+  fi
+  trap - EXIT
+  exit "$rc"
+}
+trap cleanup_uat_vm EXIT
+
+
 request() {
   local method="$1"
   local url="$2"
@@ -83,6 +137,7 @@ test "$VM_STATUS" = "TERMINATED"
 
 START_JSON="$OUT_DIR/start.json"
 START_HTTP="$(request POST "$SERVICE_URL/api/qwen-lab/gpu/start" "$START_JSON")"
+START_REQUESTED=true
 test "$START_HTTP" = "200"
 python3 - "$START_JSON" <<'PY'
 import json
