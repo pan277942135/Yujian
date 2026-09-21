@@ -61,17 +61,15 @@ jobs:
           gcloud compute instances describe "$GPU_INSTANCE"             --project "$GPU_PROJECT_ID"             --zone "$GPU_ZONE"             --format='yaml(name,status,lastStartTimestamp,lastStopTimestamp)'
 
           echo "runtime_permission_probe:"
-          set +e
-          PROBE_OUTPUT="$(gcloud projects test-iam-permissions "$GPU_PROJECT_ID"             --permissions=compute.instances.get,compute.instances.start,compute.instances.stop             --impersonate-service-account="$RUNTIME_SA" 2>&1)"
-          PROBE_RC=$?
-          set -e
-          printf '%s\n' "$PROBE_OUTPUT"
-          echo "runtime_permission_probe_exit=$PROBE_RC"
-          if [[ "$PROBE_RC" -eq 0 ]]; then
-            echo "runtime_permission_probe=$PROBE_OUTPUT" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "runtime_permission_probe_error=$PROBE_OUTPUT" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          for permission in compute.instances.get compute.instances.start compute.instances.stop; do
+            set +e
+            PROBE_OUTPUT="$(gcloud policy-troubleshoot iam               "//cloudresourcemanager.googleapis.com/projects/$GPU_PROJECT_ID"               --principal-email="$RUNTIME_SA"               --permission="$permission"               --format=json 2>&1)"
+            PROBE_RC=$?
+            set -e
+            echo "permission=$permission exit=$PROBE_RC"
+            printf '%s\n' "$PROBE_OUTPUT"
+            printf 'permission=%s exit=%s\n%s\n' "$permission" "$PROBE_RC" "$PROBE_OUTPUT" >> "$GITHUB_STEP_SUMMARY"
+          done
 
           echo "systemd_probe:"
           set +e
