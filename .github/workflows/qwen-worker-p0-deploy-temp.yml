@@ -23,7 +23,6 @@ env:
 
 jobs:
   deploy:
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, 'ops(qwen): deploy p0 781cb586') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -95,7 +94,7 @@ jobs:
           TARGET_SHA="$1"
           ARCHIVE="$2"
           WORKER="/opt/fish-qwen-refine-worker"
-          BACKUP="${WORKER}.before_p0_${date -u +%Y%m%d_%H%M%S}"
+          BACKUP="$WORKER.before_p0_$(date -u +%Y%m%d_%H%M%S)"
           echo "[P0] host=$(hostname)"
           echo "[P0] target=$TARGET_SHA"
           test -d "$WORKER"
