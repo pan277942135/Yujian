@@ -151,15 +151,15 @@ def main():
 
         # Batch species-only edits may set truth on selected rows while preserving
         # every row's existing pending review status and without requiring a bbox.
-        pending3 = add_image(db, "BATCH_P0", "I9", "黄骨鱼", None, "pending")
-        pending4 = add_image(db, "BATCH_P0", "I10", "黄骨鱼", None, "needs_review")
+        pending3 = add_image(db, "BATCH_P0", "I11", "黄骨鱼", None, "pending")
+        pending4 = add_image(db, "BATCH_P0", "I12", "黄骨鱼", None, "needs_review")
         db.commit()
         api_bulk_apply(
             BulkReviewApply(
                 batch_id="BATCH_P0",
                 items=[
-                    BulkReviewItem(image_id="I9", review_status="pending", truth_species="黄骨鱼"),
-                    BulkReviewItem(image_id="I10", review_status="needs_review", truth_species=None),
+                    BulkReviewItem(image_id="I11", review_status="pending", truth_species="黄骨鱼"),
+                    BulkReviewItem(image_id="I12", review_status="needs_review", truth_species=None),
                 ],
             ),
             db,
