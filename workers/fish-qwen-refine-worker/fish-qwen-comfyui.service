@@ -1,0 +1,21 @@
+[Unit]
+Description=ComfyUI Qwen runtime
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/comfyui-qwen/.venv/bin/python
+ConditionPathExists=/opt/comfyui-qwen/ComfyUI/main.py
+
+[Service]
+Type=simple
+User=pan277942135
+WorkingDirectory=/opt/comfyui-qwen/ComfyUI
+Environment=PYTHONUNBUFFERED=1
+Environment=CUDA_VISIBLE_DEVICES=0
+ExecStart=/opt/comfyui-qwen/.venv/bin/python /opt/comfyui-qwen/ComfyUI/main.py --listen 127.0.0.1 --port 8188
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=120
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target

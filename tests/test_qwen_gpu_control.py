@@ -76,6 +76,33 @@ def test_status_maps_running_and_ready_worker_to_ready(tmp_path, monkeypatch):
         db.close()
 
 
+def test_running_vm_with_explicit_worker_error_maps_to_error(tmp_path, monkeypatch):
+    _env(monkeypatch)
+    db = _session(tmp_path)
+    try:
+        monkeypatch.setattr(gpu, "_get_instance", lambda config: {"status": "RUNNING"})
+        monkeypatch.setattr(
+            gpu,
+            "check_qwen_refine_worker",
+            lambda: {
+                "health": {
+                    "status": "error",
+                    "model_loaded": False,
+                    "error_code": "COMFYUI_UNAVAILABLE",
+                    "error": "ComfyUI readiness timeout",
+                }
+            },
+        )
+        payload = gpu.qwen_gpu_status(db)
+        assert payload["worker_status"] == "error"
+        assert payload["display_status"] == "ERROR"
+        assert payload["error_code"] == "COMFYUI_UNAVAILABLE"
+        assert payload["message"] == "ComfyUI readiness timeout"
+        assert payload["error"]["error_code"] == "COMFYUI_UNAVAILABLE"
+    finally:
+        db.close()
+
+
 def test_running_vm_without_ready_health_maps_to_loading(tmp_path, monkeypatch):
     _env(monkeypatch)
     db = _session(tmp_path)
@@ -187,10 +214,13 @@ def test_status_exposes_permission_error_without_hiding_it(tmp_path, monkeypatch
                 )
             ),
         )
-        payload = gpu.qwen_gpu_status(db)
-        assert payload["display_status"] == "ERROR"
-        assert payload["error"]["permission"] == "compute.instances.get"
-        assert payload["error"]["service_account"] == "runtime@example.iam.gserviceaccount.com"
+        with pytest.raises(HTTPException) as error:
+            gpu.qwen_gpu_status(db)
+        assert error.value.status_code == 503
+        detail = error.value.detail
+        assert detail["error_code"] == "QWEN_GPU_PERMISSION_DENIED"
+        assert detail["permission"] == "compute.instances.get"
+        assert detail["service_account"] == "runtime@example.iam.gserviceaccount.com"
     finally:
         db.close()
 
@@ -213,7 +243,9 @@ def test_qwen_gpu_template_contains_manual_control_and_polling():
     assert "READY: 'Ready'" in template
     assert "BUSY: '正在生成'" in template
     assert "STOPPING: 'GPU 关闭中'" in template
-    assert "ERROR: '状态异常'" in template
+    assert "ERROR: '启动失败'" in template
+    assert "GPU_LOADING_TIMEOUT_MS" in template
+    assert "ComfyUI 服务未正常启动" in template
     assert "fast ? 5000 : 15000" in template
     assert "gpuDisplayStatus !== 'READY'" in template
     assert "确认关闭" in template
