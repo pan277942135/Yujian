@@ -224,6 +224,16 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
 
+      - name: Qwen Lab GPU manual control Runtime UAT
+        env:
+          SERVICE_URL: ${{ steps.deploy.outputs.service_url }}
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          GPU_PROJECT_ID: ${{ env.QWEN_GPU_PROJECT_ID }}
+          GPU_ZONE: ${{ env.QWEN_GPU_ZONE }}
+          GPU_INSTANCE: ${{ env.QWEN_GPU_INSTANCE }}
+        shell: bash
+        run: bash scripts/qwen_gpu_manual_uat.sh
+
       - name: Fish Visible historical failed-case E2E
         id: fish_visible_e2e
         env:
