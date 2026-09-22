@@ -79,6 +79,27 @@ def _add_qwen_run(db, tmp_path, *, transparent=True):
     return source
 
 
+def _fake_transparent_artifacts(data: bytes):
+    from app.platform.services.qwen_output import QwenOutputArtifacts
+
+    return QwenOutputArtifacts(
+        qwen_result_rgb=data,
+        fish_mask_raw=b"raw-mask",
+        fish_mask=b"final-mask",
+        transparent_fish=_fish_bytes(),
+        metadata={
+            "mode": "RGBA",
+            "channels": 4,
+            "alpha_min": 0,
+            "alpha_max": 255,
+            "alpha_coverage": 0.25,
+            "fish_interior_alpha_mean": 255.0,
+            "fish_interior_alpha_median": 255.0,
+            "fish_interior_opaque_ratio": 1.0,
+        },
+    )
+
+
 def _local_store(tmp_path, session_id, step_key, version, filename, data, media_type):
     path = tmp_path / session_id / step_key / f"v{version}" / filename
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -90,15 +111,17 @@ def test_bside_routes_are_additive_and_options_are_registry_backed():
     paths = app.openapi()["paths"]
     assert "/api/qwen-lab/runs/{run_id}/bside-visual" in paths
     assert "/api/qwen-lab/bside-visual/{session_id}" in paths
+    assert "/api/qwen-lab/bside-visual/{session_id}/extract-transparent" in paths
     assert "/api/qwen-lab/bside-visual/{session_id}/standardize" in paths
     assert "/api/qwen-lab/bside-visual/{session_id}/outline" in paths
     assert "/api/qwen-lab/bside-visual/{session_id}/compose" in paths
     options = lab.bside_visual_options()
     assert [item["style_id"] for item in options["styles"]] == [item.style_id for item in STYLES]
     assert options["source_contract"]["gpu_required"] is False
+    assert [item["step"] for item in options["steps"]] == ["transparent", "standardize", "outline", "compose"]
 
 
-def test_session_get_or_create_is_unique_and_invalid_source_is_rejected(tmp_path):
+def test_session_get_or_create_is_unique_and_accepts_qwen_rgb_source(tmp_path):
     db = _session(tmp_path)
     try:
         _add_qwen_run(db, tmp_path)
@@ -107,8 +130,10 @@ def test_session_get_or_create_is_unique_and_invalid_source_is_rejected(tmp_path
         assert first["created"] is True
         assert second["created"] is False
         assert first["session_id"] == second["session_id"]
-        assert len(first["steps"]) == 3
-        assert [asset["label"] for asset in first["assets"]] == ["Qwen完整鱼体", "标准姿态鱼", "特色描边鱼", "B面最终视觉"]
+        assert len(first["steps"]) == 4
+        assert [asset["label"] for asset in first["assets"]] == ["Qwen Result · RGB", "透明背景鱼体", "标准姿态鱼", "特色描边鱼", "B面最终视觉"]
+        assert first["transparent_status"] == "NOT_STARTED"
+        assert first["source_qwen_rgb_uri"] == str(tmp_path / "fish.png")
 
         db.add(
             PipelineRun(
@@ -120,10 +145,10 @@ def test_session_get_or_create_is_unique_and_invalid_source_is_rejected(tmp_path
         )
         (tmp_path / "rgb.png").write_bytes(_fish_bytes(transparent=False))
         db.commit()
-        with pytest.raises(HTTPException) as error:
-            lab.create_or_get_bside_visual("QWEN_RGB_RUN", db)
-        assert error.value.status_code == 422
-        assert error.value.detail["error"] == "INVALID_TRANSPARENT_FISH"
+        rgb_session = lab.create_or_get_bside_visual("QWEN_RGB_RUN", db)
+        assert rgb_session["created"] is True
+        assert rgb_session["transparent_status"] == "NOT_STARTED"
+        assert rgb_session["source_qwen_rgb_uri"] == str(tmp_path / "rgb.png")
     finally:
         db.close()
 
@@ -193,35 +218,58 @@ def test_all_outline_styles_preserve_source_fish_pixels():
         assert result.metadata["source_rgb_preserved"] is True
 
 
+def test_bside_session_starts_from_saved_qwen_rgb_without_auto_transparent_processing(tmp_path, monkeypatch):
+    db = _session(tmp_path)
+    try:
+        _add_qwen_run(db, tmp_path)
+        calls = []
+        monkeypatch.setattr(lab, "process_qwen_output", lambda data: calls.append(data))
+        session = lab.create_or_get_bside_visual("QWEN_TEST_RUN", db)
+        assert calls == []
+        assert session["progress"] == {"completed": 0, "total": 4}
+        assert session["transparent_status"] == "NOT_STARTED"
+        transparent = next(item for item in session["steps"] if item["step"] == "transparent")
+        assert transparent["status"] == "NOT_STARTED"
+        assert transparent["available"] is False
+    finally:
+        db.close()
+
+
 def test_step_dependencies_and_rerun_invalidation(tmp_path, monkeypatch):
     db = _session(tmp_path)
     try:
         _add_qwen_run(db, tmp_path)
         monkeypatch.setattr(lab, "_store_bytes", lambda *args: _local_store(tmp_path, *args))
+        monkeypatch.setattr(lab, "process_qwen_output", lambda data: _fake_transparent_artifacts(data))
         session = lab.create_or_get_bside_visual("QWEN_TEST_RUN", db)
         session_id = session["session_id"]
         with pytest.raises(HTTPException) as locked:
             lab.run_bside_outline(session_id, lab.OutlineRequest(style_id="lake_mist"), db)
         assert locked.value.status_code == 409
+        with pytest.raises(HTTPException) as standardize_locked:
+            lab.run_bside_standardize(session_id, lab.StandardizeRequest(), db)
+        assert standardize_locked.value.status_code == 409
+        transparent = lab.run_bside_transparent(session_id, db)
+        assert transparent["transparent_status"] == "SUCCESS"
         lab.run_bside_standardize(session_id, lab.StandardizeRequest(), db)
         lab.run_bside_outline(session_id, lab.OutlineRequest(style_id="lake_mist"), db)
         composed = lab.run_bside_compose(session_id, lab.ComposeRequest(template_id="lake_dawn_01"), db)
         final_step = next(item for item in composed["steps"] if item["step"] == "compose")
-        assert final_step["status"] == "COMPLETE"
+        assert final_step["status"] == "SUCCESS"
         assert final_step["metadata"]["width"] == 1080
         assert final_step["metadata"]["height"] == 1350
         assert final_step["metadata"]["source_asset"] == "outlined_fish_rgba"
         assert final_step["metadata"]["outlined_uri"]
         rerun = lab.run_bside_outline(session_id, lab.OutlineRequest(style_id="soft_gold"), db)
         assert next(item for item in rerun["steps"] if item["step"] == "compose")["status"] == "STALE"
-        assert next(item for item in rerun["steps"] if item["step"] == "standardize")["status"] == "COMPLETE"
+        assert next(item for item in rerun["steps"] if item["step"] == "standardize")["status"] == "SUCCESS"
         steps = db.query(BsideVisualStep).filter(BsideVisualStep.session_id == session_id).all()
-        assert {row.step_key for row in steps} == {"standardize", "outline", "compose"}
+        assert {row.step_key for row in steps} == {"transparent", "standardize", "outline", "compose"}
     finally:
         db.close()
 
 
-def test_bside_page_contains_locked_three_step_ui_and_no_gpu_dependency():
+def test_bside_page_contains_locked_four_step_ui_without_angle_input_or_gpu_dependency():
     template = (
         Path(__file__).resolve().parents[1]
         / "app"
@@ -230,14 +278,20 @@ def test_bside_page_contains_locked_three_step_ui_and_no_gpu_dependency():
         / "lab"
         / "qwen_bside_visual.html"
     ).read_text(encoding="utf-8")
+    assert "四步处理" in template
+    assert "透明背景鱼体" in template
     assert "姿态标准化" in template
-    assert "姿态微调" in template
     assert "检测主轴" in template
     assert "特色描边" in template
     assert "融入水体背景" in template
-    assert "Qwen完整鱼体" in template
+    assert "Qwen Result · RGB" in template
     assert "data-asset" in template
     assert "棋盘格" in template
+    assert "extract-transparent" in template
+    assert "stepOrder = ['transparent','standardize','outline','compose']" in template
+    assert "姿态微调" not in template
+    assert "bsideRotationOffset" not in template
+    assert "三步处理" not in template
     assert "/api/qwen-lab/bside-visual/" in template
     assert "Detector" in template
     assert "GPU" not in template
