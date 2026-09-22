@@ -244,8 +244,18 @@ def standardize(source_fish: bytes, manual_rotation_offset_deg: float = 0.0) -> 
             Image.Resampling.LANCZOS,
         )
 
-    output_metrics = _foreground_metrics(cropped)
     source_metrics = _foreground_metrics(image)
+    source_mean = np.asarray(source_metrics["foreground_rgb_mean"], dtype=np.float64)
+    if (
+        source_metrics["foreground_rgb_variance"] < 0.05
+        and bool(np.all(source_mean > 250.0))
+    ):
+        raise BsideVisualError(
+            "POSE_RGBA_EXPORT_FAILED",
+            "输入透明鱼体前景是纯白 silhouette，拒绝将 Mask 冒充正式鱼体",
+        )
+
+    output_metrics = _foreground_metrics(cropped)
     if (
         source_metrics["foreground_rgb_variance"] > 1.0
         and output_metrics["foreground_rgb_variance"] < 0.05
@@ -303,6 +313,7 @@ def standardize(source_fish: bytes, manual_rotation_offset_deg: float = 0.0) -> 
         ),
         "source_alpha_min": source_metrics["alpha_min"],
         "source_alpha_max": source_metrics["alpha_max"],
+        "source_foreground_rgb_mean": source_metrics["foreground_rgb_mean"],
         "source_foreground_rgb_variance": source_metrics["foreground_rgb_variance"],
         "output_alpha_min": output_metrics["alpha_min"],
         "output_alpha_max": output_metrics["alpha_max"],
