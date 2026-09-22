@@ -34,6 +34,22 @@ def _gradient(template: WaterTemplate) -> Image.Image:
     return image
 
 
+def _canvas_layer(data: bytes, template: WaterTemplate, label: str) -> Image.Image:
+    try:
+        image = Image.open(io.BytesIO(data)).convert("RGBA")
+    except Exception as exc:
+        raise BsideVisualError("BSIDE_ASSET_UNREADABLE", f"{label} 资产不可读取") from exc
+    if image.size != (template.canvas_width, template.canvas_height):
+        raise BsideVisualError(
+            "BSIDE_ASSET_DIMENSION_INVALID",
+            (
+                f"{label} 尺寸必须为 {template.canvas_width}×{template.canvas_height}，"
+                f"实际为 {image.width}×{image.height}"
+            ),
+        )
+    return image
+
+
 def _solid_layer(color: str, alpha: np.ndarray) -> np.ndarray:
     rgb = np.asarray(ImageColor.getrgb(color), dtype=np.float32)
     layer = np.zeros((alpha.shape[0], alpha.shape[1], 4), dtype=np.float32)
@@ -69,6 +85,9 @@ def compose_bside(
     template: WaterTemplate,
     *,
     outlined_fish: bytes | None = None,
+    background_bytes: bytes | None = None,
+    foreground_bytes: bytes | None = None,
+    light_bytes: bytes | None = None,
 ) -> dict[str, Any]:
     """Compose a transparent fish into a deterministic water template."""
 
@@ -89,7 +108,13 @@ def compose_bside(
     else:
         outlined = fish.copy()
     outlined = outlined.resize(fitted_fish.size, Image.Resampling.LANCZOS)
-    canvas = _gradient(template)
+    canvas = (
+        _canvas_layer(background_bytes, template, "Background")
+        if background_bytes is not None
+        else _gradient(template)
+    )
+    if foreground_bytes is not None:
+        canvas.alpha_composite(_canvas_layer(foreground_bytes, template, "Foreground"))
     left = round(template.canvas_width * template.anchor_x - fitted_fish.width / 2)
     top = round(template.canvas_height * template.anchor_y - fitted_fish.height / 2)
     left = max(0, min(template.canvas_width - fitted_fish.width, left))
@@ -130,6 +155,8 @@ def compose_bside(
     light_draw = ImageDraw.Draw(light, "RGBA")
     light_draw.ellipse((-canvas.width * 0.2, -canvas.height * 0.12, canvas.width * 0.9, canvas.height * 0.35), fill=(255, 255, 245, 12))
     canvas.alpha_composite(light)
+    if light_bytes is not None:
+        canvas.alpha_composite(_canvas_layer(light_bytes, template, "Light"))
 
     master = io.BytesIO()
     canvas.save(master, format="PNG", optimize=True)

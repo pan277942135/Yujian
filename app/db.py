@@ -61,6 +61,14 @@ def init_db():
     _ensure_fish_knowledge_crud_constraints()
     _ensure_user_catch_columns()
     _ensure_bside_visual_columns()
+    _ensure_bside_asset_registry_columns()
+    from app.platform.services.bside_assets import seed_bside_asset_registry
+
+    seed_db = SessionLocal()
+    try:
+        seed_bside_asset_registry(seed_db)
+    finally:
+        seed_db.close()
 
 
 def _ensure_production_pipeline_columns() -> None:
@@ -179,4 +187,27 @@ def _ensure_bside_visual_columns() -> None:
         with engine.begin() as connection:
             connection.exec_driver_sql(
                 f'ALTER TABLE "{table}" ADD COLUMN "source_qwen_rgb_uri" TEXT'
+            )
+
+
+def _ensure_bside_asset_registry_columns() -> None:
+    """Add the persisted DB-backed B-side style-plan pointers in place."""
+
+    table = "qwen_bside_visual_session"
+    if not inspect(engine).has_table(table):
+        return
+    additions = {
+        "background_id": "INTEGER",
+        "outline_style_id": "INTEGER",
+        "outline_profile_id": "INTEGER",
+        "style_seed": "BIGINT",
+    }
+    existing = {column["name"] for column in inspect(engine).get_columns(table)}
+    missing = {name: definition for name, definition in additions.items() if name not in existing}
+    if not missing:
+        return
+    with engine.begin() as connection:
+        for name, definition in missing.items():
+            connection.exec_driver_sql(
+                f'ALTER TABLE "{table}" ADD COLUMN "{name}" {definition}'
             )

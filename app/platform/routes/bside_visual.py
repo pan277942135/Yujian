@@ -12,14 +12,23 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 from google.cloud import storage
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.db import get_db
-from app.platform.models import BsideVisualSession, BsideVisualStep, PipelineRun
+from app.platform.models import BsideBackground, BsideOutlineStyle, BsideVisualSession, BsideVisualStep, PipelineRun
 from app.platform.routes import qwen_image_edit_lab as qwen_lab
 from app.platform.services.bside_visual import compose_bside, outline, standardize
+from app.platform.services.bside_assets import read_bside_uri
+from app.platform.services.bside_visual.asset_registry import (
+    BsideStylePlanError,
+    background_water_template,
+    get_active_bside_backgrounds,
+    get_bside_style_plan,
+    outline_renderer_style,
+)
 from app.platform.services.bside_visual.repository import (
     create_steps,
     get_session,
@@ -308,6 +317,7 @@ def _serialize_session(db: Session, session: BsideVisualSession) -> dict[str, An
         "standardize_status": status_values[STEP_STANDARDIZE],
         "outline_status": status_values[STEP_OUTLINE],
         "bside_status": status_values[STEP_COMPOSE],
+        "style_plan": _persisted_style_plan(db, session),
         "created_at": session.created_at.isoformat() if session.created_at else None,
         "updated_at": session.updated_at.isoformat() if session.updated_at else None,
     }
@@ -318,6 +328,32 @@ def _session_or_404(db: Session, session_id: str) -> BsideVisualSession:
     if session is None:
         raise HTTPException(status_code=404, detail="B 面视觉生成 Session 不存在")
     return session
+
+
+def _persisted_style_plan(db: Session, session: BsideVisualSession) -> dict[str, Any] | None:
+    if not (session.background_id and session.outline_style_id and session.outline_profile_id):
+        return None
+    try:
+        plan = get_bside_style_plan(session, db)
+    except BsideStylePlanError:
+        return None
+    return {
+        "background_id": plan["background"].id,
+        "background_code": plan["background"].code,
+        "background_name": plan["background"].name,
+        "outline_style_id": plan["outline_style"].id,
+        "outline_code": plan["outline_style"].code,
+        "outline_name": plan["outline_style"].name,
+        "outline_profile_id": plan["profile"].id,
+        "style_seed": plan["style_seed"],
+        "fish_width_ratio": plan["fish_width_ratio"],
+    }
+
+
+def _legacy_preset_fallback_allowed(db: Session) -> bool:
+    """Keep old isolated test/legacy databases readable before the seed runs."""
+
+    return db.scalar(select(BsideBackground.id).limit(1)) is None
 
 
 def _mark_stale(steps: dict[str, BsideVisualStep], keys: tuple[str, ...]) -> None:
@@ -354,11 +390,66 @@ def _fail_step(
 
 
 def _step_error_status(code: str) -> int:
-    return 422 if code.startswith(("QWEN_", "POSE_", "STANDARDIZED_FISH", "INVALID_")) else 500
+    if code.startswith(("QWEN_", "POSE_", "STANDARDIZED_FISH", "INVALID_")):
+        return 422
+    if code.startswith("BSIDE_") or code.startswith("OUTLINE_WEIGHT"):
+        return 409
+    return 500
 
 
 @api_router.get("/bside-visual/options")
-def bside_visual_options() -> dict[str, Any]:
+def bside_visual_options(db: Session | None = Depends(get_db)) -> dict[str, Any]:
+    # Direct unit callers from the original V1 test suite invoke this function
+    # without FastAPI dependency injection. Keep the legacy registry response
+    # in that case; production requests receive the DB-backed options.
+    actual_db = db if isinstance(db, Session) else None
+    if actual_db is not None:
+        registry_backgrounds = actual_db.scalars(
+            select(BsideBackground).order_by(BsideBackground.id)
+        ).all()
+        active_backgrounds = get_active_bside_backgrounds(actual_db)
+        outline_rows = actual_db.scalars(
+            select(BsideOutlineStyle).where(BsideOutlineStyle.status == "ACTIVE").order_by(BsideOutlineStyle.id)
+        ).all()
+        if registry_backgrounds and outline_rows:
+            colors = {
+                "none": "#000000",
+                "directional_rim": "#D5E1DC",
+                "bottom_water_glow": "#C4E4DD",
+            }
+            return {
+                "steps": [{"step": key, "label": STEP_LABELS[key]} for key in STEP_ORDER],
+                "styles": [
+                    {
+                        "style_id": row.code,
+                        "name": row.name,
+                        "description": row.description,
+                        "color": colors.get(row.code, "#D5E1DC"),
+                    }
+                    for row in outline_rows
+                ],
+                "templates": [
+                    {
+                        "template_id": row.code,
+                        "name": row.name,
+                        "description": row.description,
+                        "canvas_width": 1080,
+                        "canvas_height": 1350,
+                        "anchor_x": row.fish_anchor_x,
+                        "anchor_y": row.fish_anchor_y,
+                        "max_width_ratio": row.fish_width_max,
+                    }
+                    for row in active_backgrounds
+                ],
+                "source_contract": {
+                    "type": "QWEN_RGB_PNG",
+                    "alpha_threshold": 16,
+                    "gpu_required": False,
+                    "step_1": "DETECTOR_SAM_ALPHA",
+                    "formal_output": "RGBA_REAL_FISH",
+                    "asset_source": "bside_background_and_outline_registry",
+                },
+            }
     return {
         "steps": [{"step": key, "label": STEP_LABELS[key]} for key in STEP_ORDER],
         "styles": list_styles(),
@@ -540,11 +631,30 @@ def run_bside_outline(
     row = steps[STEP_OUTLINE]
     _begin_step(db, session, row)
     try:
-        style = get_style(payload.style_id)
+        try:
+            plan = get_bside_style_plan(session, db)
+        except BsideStylePlanError as plan_error:
+            if plan_error.code == "BSIDE_ASSET_POOL_EMPTY" and _legacy_preset_fallback_allowed(db):
+                plan = None
+            else:
+                raise
+        if plan is not None:
+            style = outline_renderer_style(plan["outline_style"], plan["profile"])
+        else:
+            style = get_style(payload.style_id)
         source_data, _media_type = _read_uri(steps[STEP_STANDARDIZE].output_uri or "")
         artifact = outline(source_data, style)
         artifact_metadata = dict(artifact.metadata)
         artifact_metadata["source_uri"] = steps[STEP_STANDARDIZE].output_uri
+        if plan is not None:
+            artifact_metadata["style_plan"] = {
+                "background_id": plan["background"].id,
+                "background_code": plan["background"].code,
+                "outline_style_id": plan["outline_style"].id,
+                "outline_code": plan["outline_style"].code,
+                "outline_profile_id": plan["profile"].id,
+                "style_seed": plan["style_seed"],
+            }
         version = row.version + 1
         row.output_uri = _store_bytes(
             session_id,
@@ -586,8 +696,30 @@ def run_bside_compose(
     row = steps[STEP_COMPOSE]
     _begin_step(db, session, row)
     try:
-        style = get_style(steps[STEP_OUTLINE].style_id or "lake_mist")
-        template = get_template(payload.template_id)
+        try:
+            plan = get_bside_style_plan(session, db)
+        except BsideStylePlanError as plan_error:
+            if plan_error.code == "BSIDE_ASSET_POOL_EMPTY" and _legacy_preset_fallback_allowed(db):
+                plan = None
+            else:
+                raise
+        background_bytes = None
+        foreground_bytes = None
+        light_bytes = None
+        if plan is not None:
+            style = outline_renderer_style(plan["outline_style"], plan["profile"])
+            template = background_water_template(
+                plan["background"],
+                fish_width_ratio=plan["fish_width_ratio"],
+            )
+            background_bytes, _ = read_bside_uri(str(plan["background"].background_uri))
+            if plan["background"].foreground_uri:
+                foreground_bytes, _ = read_bside_uri(str(plan["background"].foreground_uri))
+            if plan["background"].light_uri:
+                light_bytes, _ = read_bside_uri(str(plan["background"].light_uri))
+        else:
+            style = get_style(steps[STEP_OUTLINE].style_id or "lake_mist")
+            template = get_template(payload.template_id)
         standardized_data, _media_type = _read_uri(steps[STEP_STANDARDIZE].output_uri or "")
         outlined_data, _outlined_media_type = _read_uri(steps[STEP_OUTLINE].output_uri or "")
         rendered = compose_bside(
@@ -595,6 +727,9 @@ def run_bside_compose(
             style,
             template,
             outlined_fish=outlined_data,
+            background_bytes=background_bytes,
+            foreground_bytes=foreground_bytes,
+            light_bytes=light_bytes,
         )
         version = row.version + 1
         master_uri = _store_bytes(
@@ -618,6 +753,15 @@ def run_bside_compose(
         rendered_metadata["standardized_uri"] = steps[STEP_STANDARDIZE].output_uri
         rendered_metadata["outlined_uri"] = steps[STEP_OUTLINE].output_uri
         rendered_metadata["bside_result_uri"] = master_uri
+        if plan is not None:
+            rendered_metadata["style_plan"] = {
+                "background_id": plan["background"].id,
+                "background_code": plan["background"].code,
+                "outline_style_id": plan["outline_style"].id,
+                "outline_code": plan["outline_style"].code,
+                "outline_profile_id": plan["profile"].id,
+                "style_seed": plan["style_seed"],
+            }
         row.output_uri = master_uri
         row.preview_uri = preview_uri
         row.metadata_json = json.dumps(rendered_metadata, ensure_ascii=False)

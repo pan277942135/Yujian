@@ -10,7 +10,19 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 
 from app.db import Base
 
@@ -77,6 +89,82 @@ class PlatformOperationLog(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
 
 
+class BsideBackground(Base):
+    """One reusable B-side canvas background and its optional visual layers."""
+
+    __tablename__ = "bside_background"
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_bside_background_code"),
+        CheckConstraint("status IN ('DRAFT', 'ACTIVE')", name="ck_bside_background_status"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    code = Column(String(128), nullable=False, index=True)
+    name = Column(String(256), nullable=False)
+    description = Column(Text, nullable=False, default="")
+    background_uri = Column(Text)
+    foreground_uri = Column(Text)
+    light_uri = Column(Text)
+    preview_uri = Column(Text)
+    fish_anchor_x = Column(Float, nullable=False, default=0.5)
+    fish_anchor_y = Column(Float, nullable=False, default=0.5)
+    fish_width_min = Column(Float, nullable=False, default=0.68)
+    fish_width_max = Column(Float, nullable=False, default=0.74)
+    status = Column(String(16), nullable=False, default="DRAFT", index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class BsideOutlineStyle(Base):
+    """Small registry of outline families used by the B-side renderer."""
+
+    __tablename__ = "bside_outline_style"
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_bside_outline_style_code"),
+        CheckConstraint("status IN ('DRAFT', 'ACTIVE')", name="ck_bside_outline_style_status"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    code = Column(String(128), nullable=False, index=True)
+    name = Column(String(256), nullable=False)
+    description = Column(Text, nullable=False, default="")
+    status = Column(String(16), nullable=False, default="ACTIVE", index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class BsideBackgroundOutlineProfile(Base):
+    """Many-to-many background/outline configuration for weighted selection."""
+
+    __tablename__ = "bside_background_outline_profile"
+    __table_args__ = (
+        UniqueConstraint(
+            "background_id",
+            "outline_style_id",
+            name="uq_bside_background_outline_profile_pair",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    background_id = Column(
+        Integer,
+        ForeignKey("bside_background.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    outline_style_id = Column(
+        Integer,
+        ForeignKey("bside_outline_style.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    enabled = Column(Boolean, nullable=False, default=True)
+    weight = Column(Integer, nullable=False, default=0)
+    render_params_json = Column(Text, nullable=False, default="{}")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
 class BsideVisualSession(Base):
     """One CPU-only B-side demo session derived from one Qwen output."""
 
@@ -95,6 +183,26 @@ class BsideVisualSession(Base):
     # sessions that were created before Step 1 moved into this workflow.
     source_qwen_rgb_uri = Column(Text, nullable=True)
     source_transparent_fish_uri = Column(Text, nullable=True)
+    # The selected asset plan is persisted once and reused on refresh/rerun.
+    background_id = Column(
+        Integer,
+        ForeignKey("bside_background.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    outline_style_id = Column(
+        Integer,
+        ForeignKey("bside_outline_style.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    outline_profile_id = Column(
+        Integer,
+        ForeignKey("bside_background_outline_profile.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    style_seed = Column(BigInteger, nullable=True)
     status = Column(String(32), nullable=False, default="ACTIVE", index=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
@@ -130,6 +238,9 @@ class BsideVisualStep(Base):
 
 
 __all__ = [
+    "BsideBackground",
+    "BsideBackgroundOutlineProfile",
+    "BsideOutlineStyle",
     "BsideVisualSession",
     "BsideVisualStep",
     "FishAsset",
