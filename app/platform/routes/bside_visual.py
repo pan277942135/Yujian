@@ -234,6 +234,8 @@ def bside_visual_options() -> dict[str, Any]:
             "type": "QWEN_TRANSPARENT_FISH_PNG",
             "alpha_threshold": 16,
             "gpu_required": False,
+            "analysis": "ALPHA_PCA_ONLY",
+            "formal_output": "RGBA_REAL_FISH",
         },
     }
 
