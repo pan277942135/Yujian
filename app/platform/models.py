@@ -90,7 +90,11 @@ class BsideVisualSession(Base):
         unique=True,
         index=True,
     )
-    source_transparent_fish_uri = Column(Text, nullable=False)
+    # New sessions start from the persisted Qwen RGB result. The legacy
+    # transparent URI column remains for additive upgrades and historical
+    # sessions that were created before Step 1 moved into this workflow.
+    source_qwen_rgb_uri = Column(Text, nullable=True)
+    source_transparent_fish_uri = Column(Text, nullable=True)
     status = Column(String(32), nullable=False, default="ACTIVE", index=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
