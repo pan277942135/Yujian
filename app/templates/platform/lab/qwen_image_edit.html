@@ -845,7 +845,7 @@ CGI,
     if (!runId) return;
     button.dataset.busy = '1';
     button.disabled = true;
-    button.textContent = 'B面视觉生成 1/3';
+    button.textContent = '正在打开…';
     try {
       const response = await fetch('/api/qwen-lab/runs/' + encodeURIComponent(runId) + '/bside-visual', {method: 'POST'});
       const bodyText = await response.text();
@@ -855,7 +855,6 @@ CGI,
         const detail = payload && payload.detail;
         throw new Error(typeof detail === 'string' ? detail : (detail && (detail.message || detail.error)) || 'B面视觉 Session 创建失败');
       }
-      button.textContent = 'B面视觉生成 2/3';
       const pageUrl = payload.page_url;
       if (!pageUrl) throw new Error('API 未返回 B面视觉页面地址');
       button.textContent = '已完成';
