@@ -160,6 +160,16 @@ def test_standardize_auto_aligns_rgba_and_preserves_real_fish_rgb(source_angle):
     assert int(rgba[:, :, 3].min()) == 0
 
 
+def test_standardize_rejects_white_mask_as_formal_fish_asset():
+    image = Image.new("RGBA", (220, 120), (0, 0, 0, 0))
+    ImageDraw.Draw(image).ellipse((24, 40, 196, 80), fill=(255, 255, 255, 255))
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    with pytest.raises(ValueError) as error:
+        standardize(output.getvalue())
+    assert getattr(error.value, "code", None) == "POSE_RGBA_EXPORT_FAILED"
+
+
 def test_standardize_manual_offset_is_added_to_auto_rotation():
     artifact = standardize(_slanted_fish_bytes(60.0), manual_rotation_offset_deg=5.0)
     metadata = artifact.metadata
