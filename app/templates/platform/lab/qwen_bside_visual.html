@@ -109,7 +109,7 @@
     function renderStepper(){
       stepper.innerHTML=(state?.steps||[]).map(step=>{
         const canRun=Boolean(step.can_run)&&!busy;
-        const action=step.status==='SUCCESS'||step.status==='COMPLETE'?'再次运行':step.status==='STALE'?'重跑':'开始';
+        const action=step.status==='SUCCESS'||step.status==='COMPLETE'?'再次运行':step.status==='STALE'?'重跑':step.status==='ERROR'||step.status==='FAILED'?'重新生成':'开始';
         return '<div class="bside-step '+statusClass(step.status)+'"><span class="bside-step-status">'+esc(statusText(step.status))+'</span><strong>'+esc(step.label||stepLabels[step.step]||step.step)+'</strong><small>'+esc(stepDiagnostic(step))+'</small><button type="button" data-run-step="'+esc(step.step)+'" '+(canRun?'':'disabled')+'>'+esc(action)+'</button></div>';
       }).join('');
       stepper.querySelectorAll('[data-run-step]').forEach(button=>button.addEventListener('click',()=>runStep(button.dataset.runStep)));
@@ -152,7 +152,9 @@
       if(busy)return;
       const current=stepByKey(step);
       if(!current?.can_run)return;
-      busy=true;showError('');renderStepper();
+      busy=true;showError('');
+      current.status='PROCESSING';
+      renderStepper();
       const bodies={transparent:{},standardize:{},outline:{style_id:selectedStyle},compose:{template_id:selectedTemplate}};
       const endpoint=stepEndpoints[step]||step;
       try{
