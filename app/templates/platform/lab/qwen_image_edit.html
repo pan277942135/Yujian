@@ -61,6 +61,9 @@
   .qwen-lab-history-state{padding:18px;border:1px dashed #cddfd7;border-radius:10px;color:var(--muted);text-align:center}
   .qwen-lab-history-item{border:1px solid #d5e5df;border-radius:11px;background:#fbfefd;overflow:hidden}
   .qwen-lab-history-item summary{display:flex;align-items:center;gap:10px;flex-wrap:wrap;cursor:pointer;list-style:none;padding:12px 14px}
+  .qwen-lab-history-summary-info{display:flex;align-items:center;gap:10px;flex:1 1 auto;min-width:0;flex-wrap:wrap}
+  .qwen-lab-history-summary-action{display:flex;align-items:center;flex:0 0 auto;margin-left:auto}
+  .qwen-lab-history-summary-action .button{font-size:12px;padding:7px 11px;white-space:nowrap}
   .qwen-lab-history-item summary::-webkit-details-marker{display:none}
   .qwen-lab-history-item summary::before{content:'＋';font-size:16px;color:#52766a}
   .qwen-lab-history-item[open] summary::before{content:'－'}
@@ -236,7 +239,7 @@ CGI,
     </div>
   </section>
 
-  <section class="panel qwen-lab-panel qwen-lab-result" aria-label="Qwen Image Edit Lab 结果">
+  <section id="qwenLabResultPanel" class="panel qwen-lab-panel qwen-lab-result" aria-label="Qwen Image Edit Lab 结果">
     <div class="panel-heading">
       <div><h2>结果展示</h2><p>Original VS Qwen Result</p></div>
       <span id="qwenLabRunStatus" class="status-tag status-neutral">未开始</span>
@@ -353,6 +356,7 @@ CGI,
   let currentRunId = '';
   let currentRunData = null;
   let transparentBusy = false;
+  const requestedRunId = new URLSearchParams(window.location.search).get('run_id') || '';
   let gpuPollTimer = null;
   let gpuStatusLoading = false;
   let gpuLoadingStartedAt = null;
@@ -879,10 +883,22 @@ CGI,
       const statusText = qwenStatus === 'SUCCESS'
         ? (assetStatus === 'SUCCESS' ? 'Qwen + 透明成功' : assetStatus === 'ERROR' ? 'Qwen 成功 · 透明失败' : 'Qwen 成功 · 透明未生成')
         : qwenStatus === 'FAILED' ? 'Qwen 失败' : qwenStatus;
+      const summaryStatusClass = assetStatus === 'ERROR'
+        ? 'status-failed'
+        : assetStatus === 'PROCESSING'
+          ? 'status-running'
+          : historyStatusClass(qwenStatus);
+      const transparentAction = qwenStatus === 'SUCCESS' && assetStatus !== 'SUCCESS'
+        ? '<button class="button primary" type="button" data-transparent-run="' + esc(data.run_id || '') + '"' +
+            (assetStatus === 'PROCESSING' ? ' disabled' : '') + '>' +
+            esc(assetStatus === 'ERROR' ? '重新生成透明鱼' : assetStatus === 'PROCESSING' ? '正在提取…' : '生成透明鱼') +
+          '</button>'
+        : '';
       return '<details class="qwen-lab-history-item"' + (index === 0 ? ' open' : '') + '>' +
-        '<summary><span class="status-tag ' + historyStatusClass(qwenStatus) + '"><span class="status-dot"></span>' + esc(statusText) + '</span>' +
+        '<summary><span class="qwen-lab-history-summary-info"><span class="status-tag ' + summaryStatusClass + '"><span class="status-dot"></span>' + esc(statusText) + '</span>' +
         '<span class="qwen-lab-history-summary-time">' + esc(historyTime(data.created_at)) + '</span>' +
-        '<span class="qwen-lab-history-summary-run">' + esc(data.run_id || '') + '</span></summary>' +
+        '<span class="qwen-lab-history-summary-run">' + esc(data.run_id || '') + '</span></span>' +
+        '<span class="qwen-lab-history-summary-action">' + transparentAction + '</span></summary>' +
         '<div class="qwen-lab-history-body">' +
           '<div class="qwen-lab-history-images">' +
             '<figure><figcaption>Original</figcaption>' + historyMedia(data.input_image_url, 'Original Image', '原图不可用') + '</figure>' +
@@ -908,7 +924,54 @@ CGI,
         '</div>' +
       '</details>';
     }).join('');
-    historyList.querySelectorAll('[data-bside-run]').forEach((button) => button.addEventListener('click', () => openBsideVisual(button)));
+    const rowsByRunId = new Map(rows.map((row) => [String(row.run_id || ''), row]));
+    historyList.querySelectorAll('[data-transparent-run]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openHistoryRun(rowsByRunId.get(String(button.dataset.transparentRun || '')), button);
+      });
+    });
+    historyList.querySelectorAll('[data-bside-run]').forEach((button) => button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openBsideVisual(button);
+    }));
+  }
+
+  async function openHistoryRun(data, button) {
+    if (!data || !data.run_id) return;
+    currentRunData = data;
+    currentRunId = String(data.run_id);
+    const selectedUrl = new URL(window.location.href);
+    selectedUrl.searchParams.set('run_id', currentRunId);
+    selectedUrl.hash = 'qwenLabResultPanel';
+    window.history.replaceState({}, '', selectedUrl.toString());
+    renderQwenResult(data);
+    const resultPanel = document.getElementById('qwenLabResultPanel');
+    if (resultPanel) resultPanel.scrollIntoView({behavior: 'smooth', block: 'start'});
+    if (transparentStatusValue(data) === 'SUCCESS') return;
+    if (button) {
+      button.disabled = true;
+      button.textContent = '正在提取…';
+    }
+    await extractTransparentFish();
+  }
+
+  function extractErrorInfo(payload, fallback) {
+    const detail = payload && payload.detail;
+    const source = detail && typeof detail === 'object' ? detail : payload;
+    const code = String(
+      (source && (source.error_code || source.code))
+      || (payload && payload.error_code)
+      || ''
+    ).trim().toUpperCase();
+    const message = typeof detail === 'string'
+      ? detail
+      : (source && typeof source.message === 'string'
+        ? source.message
+        : (payload && typeof payload.message === 'string' ? payload.message : fallback));
+    return {code, message: message || fallback};
   }
 
   async function extractTransparentFish() {
@@ -928,11 +991,9 @@ CGI,
       let payload = {};
       try { payload = bodyText ? JSON.parse(bodyText) : {}; } catch (_) { payload = {}; }
       if (!response.ok) {
-        const detail = payload && payload.detail;
-        const message = typeof detail === 'string'
-          ? detail
-          : (detail && (detail.message || detail.error_code)) || '透明鱼体提取失败';
-        const error = new Error(message);
+        const errorInfo = extractErrorInfo(payload, '透明鱼体提取失败');
+        const error = new Error(errorInfo.message);
+        error.errorCode = errorInfo.code;
         error.payload = payload;
         throw error;
       }
@@ -949,12 +1010,13 @@ CGI,
         currentRunData = Object.assign({}, currentRunData, {transparent_status: 'PROCESSING', transparent_asset_status: 'PROCESSING'});
         setHint('透明鱼体正在提取，请稍候。', false);
       } else {
+        const errorInfo = extractErrorInfo(payload, '透明鱼体提取失败');
         currentRunData = Object.assign({}, currentRunData, {
           transparent_status: 'ERROR',
           transparent_asset_status: 'ERROR',
           transparent_asset_error: {
-            code: 'QWEN_RGBA_EXPORT_FAILED',
-            message: error instanceof Error ? error.message : String(error)
+            code: (error && error.errorCode) || errorInfo.code || 'QWEN_TRANSPARENT_REQUEST_FAILED',
+            message: error instanceof Error ? error.message : errorInfo.message
           }
         });
         renderTransparentState(currentRunData);
@@ -1011,7 +1073,12 @@ CGI,
       if (!response.ok) throw new Error((payload && payload.detail) || '处理历史加载失败');
       const rows = Array.isArray(payload) ? payload : (Array.isArray(payload.items) ? payload.items : []);
       renderHistory(rows, Array.isArray(payload) ? {page: 1, total: rows.length} : payload);
-      if (historyPage === 1 && !currentRunId && rows.length) renderQwenResult(rows[0]);
+      if (historyPage === 1 && !currentRunId && rows.length) {
+        const requested = requestedRunId
+          ? rows.find((row) => String(row.run_id || '') === requestedRunId)
+          : null;
+        renderQwenResult(requested || rows[0]);
+      }
     } catch (error) {
       historyTotal = 0;
       historyPager.hidden = true;
