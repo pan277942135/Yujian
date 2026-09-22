@@ -184,7 +184,10 @@ def _rotate_premultiplied(
         out=restored_rgb,
         where=rotated_alpha_fraction[:, :, None] > 1e-5,
     )
-    restored_rgb = np.clip(np.rint(restored_rgb * 255.0), 0.0, 255.0).astype(np.uint8)
+    # rotated_rgb is already in the 0-255 image range because the
+    # premultiplied buffer was materialized as uint8 before rotation.
+    # Multiplying by 255 here would saturate every foreground pixel to white.
+    restored_rgb = np.clip(np.rint(restored_rgb), 0.0, 255.0).astype(np.uint8)
     return Image.fromarray(
         np.dstack((restored_rgb, rotated_alpha)),
         mode="RGBA",
