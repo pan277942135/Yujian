@@ -60,6 +60,7 @@ def init_db():
     _ensure_production_pipeline_columns()
     _ensure_fish_knowledge_crud_constraints()
     _ensure_user_catch_columns()
+    _ensure_bside_visual_columns()
 
 
 def _ensure_production_pipeline_columns() -> None:
@@ -160,3 +161,22 @@ def _ensure_user_catch_columns() -> None:
     if "image_object_name" not in existing:
         with engine.begin() as connection:
             connection.exec_driver_sql('ALTER TABLE "fish_catches" ADD COLUMN "image_object_name" TEXT')
+
+
+def _ensure_bside_visual_columns() -> None:
+    """Add the Qwen RGB source pointer for the four-step B-side workflow.
+
+    The previous release stored a transparent-fish URI on this session table.
+    Keep that column and old rows intact; the new pointer is additive and lets
+    Step 1 perform transparent extraction only after an explicit user action.
+    """
+
+    table = "qwen_bside_visual_session"
+    if not inspect(engine).has_table(table):
+        return
+    existing = {column["name"] for column in inspect(engine).get_columns(table)}
+    if "source_qwen_rgb_uri" not in existing:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                f'ALTER TABLE "{table}" ADD COLUMN "source_qwen_rgb_uri" TEXT'
+            )

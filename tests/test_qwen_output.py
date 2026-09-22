@@ -70,6 +70,9 @@ def test_qwen_result_resegmentation_exports_rgba_and_preserves_rgb(monkeypatch):
     assert artifacts.metadata["mode"] == "RGBA"
     assert artifacts.metadata["alpha_coverage"] > 0
     assert artifacts.metadata["transparent_pixel_ratio"] > 0
+    assert artifacts.metadata["fish_interior_alpha_mean"] == pytest.approx(255.0)
+    assert artifacts.metadata["fish_interior_alpha_median"] == pytest.approx(255.0)
+    assert artifacts.metadata["fish_interior_opaque_ratio"] == pytest.approx(1.0)
     assert np.array_equal(rgba[mask & (rgba[:, :, 3] == 255), :3], source[mask & (rgba[:, :, 3] == 255)])
     assert np.all(rgba[rgba[:, :, 3] == 0, :3] == 0)
 

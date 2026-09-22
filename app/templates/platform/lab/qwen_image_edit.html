@@ -246,7 +246,7 @@ CGI,
     </div>
 
     <div class="qwen-lab-vs"><span>Original</span><span>VS</span><span>Qwen Result</span></div>
-    <div class="qwen-lab-result-empty" id="qwenLabResultEmpty">生成成功后显示原图与 Qwen RGB 结果；透明鱼体需要手动生成。</div>
+    <div class="qwen-lab-result-empty" id="qwenLabResultEmpty">生成成功后显示原图与 Qwen RGB 结果。</div>
     <div id="qwenLabResultGrid" class="qwen-lab-result-grid" hidden>
       <figure class="qwen-lab-result-figure">
         <figcaption>Original</figcaption>
@@ -256,20 +256,6 @@ CGI,
         <figcaption>Qwen Result · RGB</figcaption>
         <img id="qwenLabResultImage" class="qwen-lab-result-image" alt="Qwen Result RGB" hidden>
       </figure>
-    </div>
-
-    <div id="qwenLabTransparentPanel" class="qwen-lab-transparent-panel" hidden>
-      <div class="qwen-lab-transparent-heading">
-        <h3>Transparent Fish</h3>
-        <span id="qwenLabTransparentStatusTag" class="status-tag status-neutral"><span class="status-dot"></span>尚未生成</span>
-      </div>
-      <div id="qwenLabTransparentFishPreview" class="qwen-lab-alpha-preview" hidden>
-        <img id="qwenLabTransparentFishImage" alt="Transparent Fish RGBA" hidden>
-      </div>
-      <div id="qwenLabTransparentFishStatus" class="qwen-lab-asset-status">尚未生成</div>
-      <div class="qwen-lab-transparent-action">
-        <button id="qwenLabTransparentFishButton" class="button primary" type="button" hidden>生成透明鱼</button>
-      </div>
     </div>
 
     <div id="qwenLabMeta" class="qwen-lab-meta" hidden></div>
@@ -326,12 +312,6 @@ CGI,
   const resultGrid = document.getElementById('qwenLabResultGrid');
   const resultOriginalImage = document.getElementById('qwenLabResultOriginalImage');
   const resultImage = document.getElementById('qwenLabResultImage');
-  const transparentPanel = document.getElementById('qwenLabTransparentPanel');
-  const transparentFishPreview = document.getElementById('qwenLabTransparentFishPreview');
-  const transparentStatusTag = document.getElementById('qwenLabTransparentStatusTag');
-  const transparentFishImage = document.getElementById('qwenLabTransparentFishImage');
-  const transparentFishStatus = document.getElementById('qwenLabTransparentFishStatus');
-  const transparentFishButton = document.getElementById('qwenLabTransparentFishButton');
   const meta = document.getElementById('qwenLabMeta');
   const promptMeta = document.getElementById('qwenLabPromptMeta');
   const historyState = document.getElementById('qwenLabHistoryState');
@@ -355,7 +335,6 @@ CGI,
   let generationBusy = false;
   let currentRunId = '';
   let currentRunData = null;
-  let transparentBusy = false;
   const requestedRunId = new URLSearchParams(window.location.search).get('run_id') || '';
   let gpuPollTimer = null;
   let gpuStatusLoading = false;
@@ -749,71 +728,18 @@ CGI,
     }
   }
 
-  function transparentStatusValue(data) {
-    return String(
-      (data && (data.transparent_status || data.transparent_asset_status))
-      || (data && data.transparent_fish_url ? 'SUCCESS' : 'NOT_STARTED')
-    ).toUpperCase();
-  }
-
   function showMeta(data) {
-    const assetMeta = data.transparent_asset_metadata || {};
-    const alphaCoverage = assetMeta.alpha_coverage == null
-      ? '—'
-      : (Number(assetMeta.alpha_coverage) * 100).toFixed(1) + '%';
-    const assetStatus = transparentStatusValue(data);
     meta.innerHTML =
       '<div class="stat"><strong>' + esc(data.model_label || data.model || '—') + '</strong><span>Model</span></div>' +
       '<div class="stat"><strong>' + esc(data.seed == null ? '随机' : data.seed) + '</strong><span>Seed</span></div>' +
       '<div class="stat"><strong>' + esc(data.time_ms == null ? '—' : data.time_ms + ' ms') + '</strong><span>Qwen Time</span></div>' +
-      '<div class="stat"><strong>' + esc(assetStatus === 'SUCCESS' ? 'RGBA' : assetStatus) + '</strong><span>Transparent Asset</span></div>' +
-      '<div class="stat"><strong>' + esc(alphaCoverage) + '</strong><span>Alpha Coverage</span></div>';
+      '<div class="stat"><strong>' + esc(data.qwen_status || data.qwen_generation_status || data.status || '—') + '</strong><span>Qwen Status</span></div>';
     promptMeta.innerHTML =
       '<div><strong>Prompt</strong><span>' + esc(data.prompt || '') + '</span></div>' +
       '<div><strong>Negative Prompt</strong><span>' + esc(data.negative_prompt || '') + '</span></div>' +
-      '<div><strong>PipelineRun</strong><span>' + esc(data.run_id || '') + '</span></div>' +
-      (data.transparent_asset_error ? '<div><strong>Transparent Asset Error</strong><span>' + esc((data.transparent_asset_error.code || '') + ': ' + (data.transparent_asset_error.message || '')) + '</span></div>' : '');
+      '<div><strong>PipelineRun</strong><span>' + esc(data.run_id || '') + '</span></div>';
     meta.hidden = false;
     promptMeta.hidden = false;
-  }
-
-  function renderTransparentState(data) {
-    const assetStatus = transparentStatusValue(data);
-    const assetError = data && data.transparent_asset_error ? data.transparent_asset_error : {};
-    const transparentUrl = data && (data.transparent_fish_url || data.transparent_fish_uri);
-    transparentPanel.hidden = false;
-    transparentFishPreview.hidden = true;
-    transparentFishImage.hidden = true;
-    transparentFishImage.removeAttribute('src');
-    transparentFishButton.hidden = false;
-    transparentFishButton.disabled = transparentBusy || !currentRunId;
-    transparentFishStatus.style.color = '';
-    if (assetStatus === 'PROCESSING') {
-      setStatus(transparentStatusTag, '处理中', 'status-running');
-      transparentFishStatus.textContent = '正在提取完整鱼体…';
-      transparentFishButton.textContent = '正在生成透明鱼…';
-      return;
-    }
-    if (assetStatus === 'SUCCESS' && transparentUrl) {
-      transparentFishImage.src = transparentUrl + (transparentUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
-      transparentFishPreview.hidden = false;
-      transparentFishImage.hidden = false;
-      setStatus(transparentStatusTag, '已生成', 'status-success');
-      transparentFishStatus.textContent = 'RGBA · Alpha Coverage ' + ((Number((data.transparent_asset_metadata || {}).alpha_coverage || 0) * 100).toFixed(1)) + '%';
-      transparentFishButton.disabled = true;
-      transparentFishButton.textContent = '已生成透明鱼';
-      return;
-    }
-    if (assetStatus === 'ERROR') {
-      setStatus(transparentStatusTag, '提取失败', 'status-failed');
-      transparentFishStatus.textContent = '透明鱼提取失败：' + (assetError.code || 'QWEN_RGBA_EXPORT_FAILED') + (assetError.message ? ' · ' + assetError.message : '');
-      transparentFishStatus.style.color = '#a63b34';
-      transparentFishButton.textContent = '重新生成透明鱼';
-      return;
-    }
-    setStatus(transparentStatusTag, '尚未生成', 'status-neutral');
-    transparentFishStatus.textContent = '尚未生成';
-    transparentFishButton.textContent = '生成透明鱼';
   }
 
   function renderQwenResult(data) {
@@ -826,7 +752,6 @@ CGI,
       resultGrid.hidden = true;
       resultEmpty.hidden = false;
       resultEmpty.textContent = qwenStatus === 'FAILED' ? 'Qwen 生成失败，暂无 RGB 结果。' : '暂无 Qwen RGB 结果。';
-      transparentPanel.hidden = true;
       return;
     }
     resultOriginalImage.src = originalUrl || '';
@@ -838,10 +763,9 @@ CGI,
     runStatus.textContent = qwenStatus === 'SUCCESS' ? 'SUCCESS' : qwenStatus;
     setStatus(status, qwenStatus === 'SUCCESS' ? 'Qwen 生成成功' : '生成失败', qwenStatus === 'SUCCESS' ? 'status-success' : 'status-failed');
     if (qwenStatus === 'SUCCESS') {
-      setHint(transparentStatusValue(data) === 'NOT_STARTED' ? 'Qwen RGB 已生成；如需透明鱼体，请点击“生成透明鱼”。' : 'Qwen RGB 已生成。', false);
+      setHint('Qwen RGB 已生成；如需后处理，请进入“B面视觉生成”。', false);
     }
     showMeta(data);
-    renderTransparentState(data);
   }
 
   function historyTime(value) {
@@ -879,153 +803,40 @@ CGI,
     historyList.hidden = false;
     historyList.innerHTML = rows.map((data, index) => {
       const qwenStatus = String(data.qwen_status || data.qwen_generation_status || data.status || 'UNKNOWN').toUpperCase();
-      const assetStatus = transparentStatusValue(data);
-      const statusText = qwenStatus === 'SUCCESS'
-        ? (assetStatus === 'SUCCESS' ? 'Qwen + 透明成功' : assetStatus === 'ERROR' ? 'Qwen 成功 · 透明失败' : 'Qwen 成功 · 透明未生成')
-        : qwenStatus === 'FAILED' ? 'Qwen 失败' : qwenStatus;
-      const summaryStatusClass = assetStatus === 'ERROR'
-        ? 'status-failed'
-        : assetStatus === 'PROCESSING'
-          ? 'status-running'
-          : historyStatusClass(qwenStatus);
-      const transparentAction = qwenStatus === 'SUCCESS' && assetStatus !== 'SUCCESS'
-        ? '<button class="button primary" type="button" data-transparent-run="' + esc(data.run_id || '') + '"' +
-            (assetStatus === 'PROCESSING' ? ' disabled' : '') + '>' +
-            esc(assetStatus === 'ERROR' ? '重新生成透明鱼' : assetStatus === 'PROCESSING' ? '正在提取…' : '生成透明鱼') +
-          '</button>'
+      const statusText = qwenStatus === 'SUCCESS' ? 'Qwen 成功' : qwenStatus === 'FAILED' ? 'Qwen 失败' : qwenStatus;
+      const summaryStatusClass = historyStatusClass(qwenStatus);
+      const bsideAction = qwenStatus === 'SUCCESS' && (data.qwen_result_rgb_url || data.output_image_url)
+        ? '<button class="button primary" type="button" data-bside-run="' + esc(data.run_id || '') + '">B面视觉生成</button>'
         : '';
       return '<details class="qwen-lab-history-item"' + (index === 0 ? ' open' : '') + '>' +
         '<summary><span class="qwen-lab-history-summary-info"><span class="status-tag ' + summaryStatusClass + '"><span class="status-dot"></span>' + esc(statusText) + '</span>' +
         '<span class="qwen-lab-history-summary-time">' + esc(historyTime(data.created_at)) + '</span>' +
         '<span class="qwen-lab-history-summary-run">' + esc(data.run_id || '') + '</span></span>' +
-        '<span class="qwen-lab-history-summary-action">' + transparentAction + '</span></summary>' +
+        '<span class="qwen-lab-history-summary-action">' + bsideAction + '</span></summary>' +
         '<div class="qwen-lab-history-body">' +
           '<div class="qwen-lab-history-images">' +
             '<figure><figcaption>Original</figcaption>' + historyMedia(data.input_image_url, 'Original Image', '原图不可用') + '</figure>' +
             '<figure><figcaption>Qwen Result · RGB</figcaption>' + historyMedia(data.output_image_url, 'Qwen Result', qwenStatus === 'FAILED' ? '生成失败，无结果图片' : '结果图片不可用') + '</figure>' +
-            '<figure><figcaption>Transparent Fish · RGBA</figcaption>' + historyMedia(data.transparent_fish_url, 'Transparent Fish', assetStatus === 'NOT_STARTED' ? '尚未生成' : assetStatus === 'ERROR' ? '透明鱼体失败：' + (data.transparent_asset_error && data.transparent_asset_error.code || 'UNKNOWN') : '结果图片不可用') + '</figure>' +
           '</div>' +
           '<div class="qwen-lab-history-meta">' +
             '<div><strong>Model</strong><span>' + esc(data.model_label || data.model || '—') + '</span></div>' +
             '<div><strong>Seed</strong><span>' + esc(data.seed == null ? '随机' : data.seed) + '</span></div>' +
             '<div><strong>Time</strong><span>' + esc(data.time_ms == null ? '—' : data.time_ms + ' ms') + '</span></div>' +
             '<div><strong>Qwen 状态</strong><span>' + esc(qwenStatus) + '</span></div>' +
-            '<div><strong>透明状态</strong><span>' + esc(assetStatus) + '</span></div>' +
-            '<div><strong>Alpha Coverage</strong><span>' + esc(data.transparent_asset_metadata && data.transparent_asset_metadata.alpha_coverage != null ? (Number(data.transparent_asset_metadata.alpha_coverage) * 100).toFixed(1) + '%' : '—') + '</span></div>' +
           '</div>' +
           '<div class="qwen-lab-history-prompts">' +
             '<div><strong>Prompt</strong><pre>' + esc(data.prompt || '') + '</pre></div>' +
             '<div><strong>Negative Prompt</strong><pre>' + esc(data.negative_prompt || '') + '</pre></div>' +
             '<div><strong>PipelineRun</strong><pre>' + esc(data.run_id || '') + '</pre></div>' +
           '</div>' +
-          '<div class="qwen-lab-history-actions">' +
-            ((qwenStatus === 'SUCCESS' && data.transparent_fish_url && assetStatus === 'SUCCESS') ? '<button class="button primary" type="button" data-bside-run="' + esc(data.run_id || '') + '">B面视觉生成</button>' : '') +
-          '</div>' +
         '</div>' +
       '</details>';
     }).join('');
-    const rowsByRunId = new Map(rows.map((row) => [String(row.run_id || ''), row]));
-    historyList.querySelectorAll('[data-transparent-run]').forEach((button) => {
-      button.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        openHistoryRun(rowsByRunId.get(String(button.dataset.transparentRun || '')), button);
-      });
-    });
     historyList.querySelectorAll('[data-bside-run]').forEach((button) => button.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
       openBsideVisual(button);
     }));
-  }
-
-  async function openHistoryRun(data, button) {
-    if (!data || !data.run_id) return;
-    currentRunData = data;
-    currentRunId = String(data.run_id);
-    const selectedUrl = new URL(window.location.href);
-    selectedUrl.searchParams.set('run_id', currentRunId);
-    selectedUrl.hash = 'qwenLabResultPanel';
-    window.history.replaceState({}, '', selectedUrl.toString());
-    renderQwenResult(data);
-    const resultPanel = document.getElementById('qwenLabResultPanel');
-    if (resultPanel) resultPanel.scrollIntoView({behavior: 'smooth', block: 'start'});
-    if (transparentStatusValue(data) === 'SUCCESS') return;
-    if (button) {
-      button.disabled = true;
-      button.textContent = '正在提取…';
-    }
-    await extractTransparentFish();
-  }
-
-  function extractErrorInfo(payload, fallback) {
-    const detail = payload && payload.detail;
-    const source = detail && typeof detail === 'object' ? detail : payload;
-    const code = String(
-      (source && (source.error_code || source.code))
-      || (payload && payload.error_code)
-      || ''
-    ).trim().toUpperCase();
-    const message = typeof detail === 'string'
-      ? detail
-      : (source && typeof source.message === 'string'
-        ? source.message
-        : (payload && typeof payload.message === 'string' ? payload.message : fallback));
-    return {code, message: message || fallback};
-  }
-
-  async function extractTransparentFish() {
-    if (!currentRunId || transparentBusy) return;
-    transparentBusy = true;
-    currentRunData = Object.assign({}, currentRunData || {}, {
-      run_id: currentRunId,
-      qwen_status: 'SUCCESS',
-      transparent_status: 'PROCESSING',
-      transparent_asset_status: 'PROCESSING'
-    });
-    renderTransparentState(currentRunData);
-    setHint('正在提取完整鱼体…', false);
-    try {
-      const response = await fetch('/api/fish-portrait/qwen-lab/runs/' + encodeURIComponent(currentRunId) + '/extract-transparent', {method: 'POST'});
-      const bodyText = await response.text();
-      let payload = {};
-      try { payload = bodyText ? JSON.parse(bodyText) : {}; } catch (_) { payload = {}; }
-      if (!response.ok) {
-        const errorInfo = extractErrorInfo(payload, '透明鱼体提取失败');
-        const error = new Error(errorInfo.message);
-        error.errorCode = errorInfo.code;
-        error.payload = payload;
-        throw error;
-      }
-      renderQwenResult(payload);
-      if (transparentStatusValue(payload) === 'SUCCESS') {
-        setHint('透明鱼体已生成，可继续进行后续处理。', false);
-      } else if (transparentStatusValue(payload) === 'ERROR') {
-        setHint('透明鱼体提取失败，可点击“重新生成透明鱼”。', true);
-      }
-      loadHistory(1);
-    } catch (error) {
-      const payload = error && error.payload;
-      if (payload && payload.detail && payload.detail.error_code === 'TRANSPARENT_FISH_BUSY') {
-        currentRunData = Object.assign({}, currentRunData, {transparent_status: 'PROCESSING', transparent_asset_status: 'PROCESSING'});
-        setHint('透明鱼体正在提取，请稍候。', false);
-      } else {
-        const errorInfo = extractErrorInfo(payload, '透明鱼体提取失败');
-        currentRunData = Object.assign({}, currentRunData, {
-          transparent_status: 'ERROR',
-          transparent_asset_status: 'ERROR',
-          transparent_asset_error: {
-            code: (error && error.errorCode) || errorInfo.code || 'QWEN_TRANSPARENT_REQUEST_FAILED',
-            message: error instanceof Error ? error.message : errorInfo.message
-          }
-        });
-        renderTransparentState(currentRunData);
-        setHint('透明鱼体提取失败，可点击“重新生成透明鱼”。', true);
-      }
-    } finally {
-      transparentBusy = false;
-      renderTransparentState(currentRunData);
-    }
   }
 
   async function openBsideVisual(button) {
@@ -1034,7 +845,7 @@ CGI,
     if (!runId) return;
     button.dataset.busy = '1';
     button.disabled = true;
-    button.textContent = 'B面视觉生成 1/3';
+    button.textContent = '正在打开…';
     try {
       const response = await fetch('/api/qwen-lab/runs/' + encodeURIComponent(runId) + '/bside-visual', {method: 'POST'});
       const bodyText = await response.text();
@@ -1044,7 +855,6 @@ CGI,
         const detail = payload && payload.detail;
         throw new Error(typeof detail === 'string' ? detail : (detail && (detail.message || detail.error)) || 'B面视觉 Session 创建失败');
       }
-      button.textContent = 'B面视觉生成 2/3';
       const pageUrl = payload.page_url;
       if (!pageUrl) throw new Error('API 未返回 B面视觉页面地址');
       button.textContent = '已完成';
@@ -1143,7 +953,6 @@ CGI,
     generationBusy = true;
     currentRunId = '';
     currentRunData = null;
-    transparentBusy = false;
     applyGpuStatus(Object.assign({}, lastGpuPayload || {}, {display_status: 'BUSY'}));
     setStatus(status, '生成中', 'status-running');
     runStatus.textContent = 'Qwen Worker 处理中…';
@@ -1153,9 +962,6 @@ CGI,
     resultGrid.hidden = true;
     resultOriginalImage.hidden = true;
     resultImage.hidden = true;
-    transparentPanel.hidden = true;
-    transparentFishImage.hidden = true;
-    transparentFishStatus.textContent = '尚未生成';
     meta.hidden = true;
     promptMeta.hidden = true;
 
@@ -1202,7 +1008,6 @@ CGI,
   datasetNext.addEventListener('click', () => loadDatasetItems(datasetPage + 1));
   historyPrev.addEventListener('click', () => loadHistory(historyPage - 1));
   historyNext.addEventListener('click', () => loadHistory(historyPage + 1));
-  transparentFishButton.addEventListener('click', extractTransparentFish);
   document.getElementById('qwenLabHistoryRefresh').addEventListener('click', () => loadHistory(historyPage));
   updateGenerateControl();
   loadGpuStatus();

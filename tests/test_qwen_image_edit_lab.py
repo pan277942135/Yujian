@@ -177,7 +177,7 @@ def test_qwen_image_edit_lab_history_paginates(tmp_path):
         db.close()
 
 
-def test_qwen_image_edit_lab_template_supports_dataset_selection():
+def test_qwen_image_edit_lab_template_is_rgb_only_and_supports_dataset_selection():
     template = (
         Path(__file__).resolve().parents[1]
         / "app"
@@ -199,14 +199,18 @@ def test_qwen_image_edit_lab_template_supports_dataset_selection():
     assert "dataset_item_id" in template
     assert "selectedDatasetSource" in template
     assert "new File([blob]" not in template
-    assert 'id="qwenLabTransparentFishButton"' in template
-    assert "/extract-transparent" in template
-    assert "transparent_status" in template
+    assert 'id="qwenLabTransparentFishButton"' not in template
+    assert "/extract-transparent" not in template
+    assert "Transparent Fish" not in template
+    assert "qwenLabTransparent" not in template
+    assert "data-transparent-run" not in template
+    assert "transparent_asset_metadata" not in template
     assert "B面视觉生成" in template
-    assert "data-transparent-run" in template
+    assert "data-bside-run" in template
     assert "qwen-lab-history-summary-action" in template
-    assert "openHistoryRun" in template
+    assert "openHistoryRun" not in template
     assert "qwenLabResultPanel" in template
+    assert "Qwen Result · RGB" in template
     generate_handler_start = template.index("generateButton.addEventListener")
     generate_handler_end = template.index("datasetSelect.addEventListener")
     generate_handler = template[generate_handler_start:generate_handler_end]
