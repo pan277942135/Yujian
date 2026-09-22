@@ -306,7 +306,35 @@ def test_qwen_image_edit_lab_dataset_source_reads_server_side(tmp_path, monkeypa
         assert response["transparent_fish_uri"] is None
         assert "qwen_fish_rgba" not in stored
         assert processed == []
-        assert respodef test_qwen_image_edit_lab_direct_original_to_worker_and_records_run(tmp_path, monkeypatch):
+        assert response["input_source"] == "DATASET"
+        assert response["dataset_id"] == "DS_TEST"
+        assert response["dataset_item_id"] == 1
+        assert response["image_id"] == "IMG00012"
+        run = db.get(PipelineRun, response["run_id"])
+        state = json.loads(run.stage_json)
+        assert state["request"]["input_source"] == "DATASET"
+        assert state["request"]["dataset_id"] == "DS_TEST"
+        assert state["request"]["dataset_item_id"] == 1
+        assert state["request"]["image_id"] == "IMG00012"
+        assert state["result"]["transparent_status"] == "NOT_STARTED"
+        assert all(item["name"] != "transparent_fish_export" for item in state["stages"])
+        assert stored["input"][1] == b"dataset-image"
+
+        transparent_response = lab.extract_qwen_image_edit_lab_transparent(
+            response["run_id"],
+            db=db,
+        )
+
+        assert transparent_response["qwen_status"] == "SUCCESS"
+        assert transparent_response["transparent_status"] == "SUCCESS"
+        assert transparent_response["transparent_fish_uri"] == stored["qwen_fish_rgba"][0]
+        assert transparent_response["fish_mask_uri"] == stored["qwen_fish_mask"][0]
+        assert len(processed) == 1
+    finally:
+        db.close()
+
+
+def test_qwen_image_edit_lab_direct_original_to_worker_and_records_run(tmp_path, monkeypatch):
     db = _session(tmp_path)
     try:
         stored = {}
