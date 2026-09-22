@@ -304,6 +304,7 @@ def process_qwen_output(data: bytes) -> QwenOutputArtifacts:
         composed_rgb = _decontaminate_edge_rgb(source_rgb, final_mask, alpha)
         rgba = np.dstack((composed_rgb, alpha)).astype("uint8")
         total_pixels = int(alpha.size)
+        interior_alpha = alpha[np.asarray(final_mask, dtype=bool)]
         metadata = {
             "method": "DETECTOR_SAM_RESEGMENTATION",
             "detector": detector_info,
@@ -318,6 +319,9 @@ def process_qwen_output(data: bytes) -> QwenOutputArtifacts:
             "alpha_coverage": round(float(np.count_nonzero(alpha)) / total_pixels, 6),
             "transparent_pixel_ratio": round(float(np.count_nonzero(alpha == 0)) / total_pixels, 6),
             "opaque_pixel_ratio": round(float(np.count_nonzero(alpha == 255)) / total_pixels, 6),
+            "fish_interior_alpha_mean": round(float(interior_alpha.mean()), 6),
+            "fish_interior_alpha_median": round(float(np.median(interior_alpha)), 6),
+            "fish_interior_opaque_ratio": round(float(np.count_nonzero(interior_alpha == 255)) / max(1, interior_alpha.size), 6),
             "foreground_ratio": round(foreground_ratio, 6),
             "raw_foreground_ratio": round(float(raw_mask.mean()), 6),
             "edge_feather_px": 1,
