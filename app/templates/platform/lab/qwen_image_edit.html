@@ -792,7 +792,7 @@ CGI,
             '<div><strong>Seed</strong><span>' + esc(data.seed == null ? '随机' : data.seed) + '</span></div>' +
             '<div><strong>Time</strong><span>' + esc(data.time_ms == null ? '—' : data.time_ms + ' ms') + '</span></div>' +
             '<div><strong>状态</strong><span>' + esc(statusText) + '</span></div>' +
-            '<div><strong>Alpha Coverage</strong><span>' + esc(data.transparent_asset_metadata && data.transparent_asset_metadata.alpha_coverage != null ? (Number(data.transparent_asset_metadata.alpha_coverage) * 100).toFixed(1) + '%' : '—') + '</span></div>'' +
+            '<div><strong>Alpha Coverage</strong><span>' + esc(data.transparent_asset_metadata && data.transparent_asset_metadata.alpha_coverage != null ? (Number(data.transparent_asset_metadata.alpha_coverage) * 100).toFixed(1) + '%' : '—') + '</span></div>' +
           '</div>' +
           '<div class="qwen-lab-history-prompts">' +
             '<div><strong>Prompt</strong><pre>' + esc(data.prompt || '') + '</pre></div>' +
