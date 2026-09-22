@@ -796,7 +796,8 @@ CGI,
       transparentFishImage.hidden = false;
       setStatus(transparentStatusTag, '已生成', 'status-success');
       transparentFishStatus.textContent = 'RGBA · Alpha Coverage ' + ((Number((data.transparent_asset_metadata || {}).alpha_coverage || 0) * 100).toFixed(1)) + '%';
-      transparentFishButton.textContent = '重新生成透明鱼';
+      transparentFishButton.disabled = true;
+      transparentFishButton.textContent = '已生成透明鱼';
       return;
     }
     if (assetStatus === 'ERROR') {
