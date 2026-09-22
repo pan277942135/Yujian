@@ -203,6 +203,11 @@ def test_qwen_image_edit_lab_template_supports_dataset_selection():
     assert "/extract-transparent" in template
     assert "transparent_status" in template
     assert "B面视觉生成" in template
+    generate_handler_start = template.index("generateButton.addEventListener")
+    generate_handler_end = template.index("datasetSelect.addEventListener")
+    generate_handler = template[generate_handler_start:generate_handler_end]
+    assert "/extract-transparent" not in generate_handler
+    assert "bside-visual" not in generate_handler
 
 
 def test_qwen_image_edit_lab_template_inline_script_has_no_doubled_string_terminator():
