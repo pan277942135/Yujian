@@ -304,7 +304,7 @@ def run_bside_standardize(
     except Exception as exc:
         code = getattr(exc, "code", "STANDARDIZE_FAILED")
         _fail_step(db, session, row, code, str(exc))
-        status_code = 422 if code in {"INVALID_TRANSPARENT_FISH", "ROTATION_OFFSET_INVALID"} else 500
+        status_code = 422 if code in {"INVALID_TRANSPARENT_FISH", "ROTATION_OFFSET_INVALID"} or code.startswith("POSE_") else 500
         raise HTTPException(status_code=status_code, detail={"error": code, "message": str(exc), "session_id": session_id}) from exc
     return _serialize_session(db, session)
 
