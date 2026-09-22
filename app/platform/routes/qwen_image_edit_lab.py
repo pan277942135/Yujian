@@ -6,6 +6,7 @@ fish-qwen-refine-worker, and records the experiment as its own PipelineRun type.
 """
 from __future__ import annotations
 
+import base64
 import json
 import mimetypes
 import os
@@ -14,6 +15,7 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import unquote_to_bytes
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
@@ -218,6 +220,21 @@ def _materialize_output(run_id: str, worker_result: dict[str, Any]) -> tuple[str
     )
 def _read_managed_uri(uri: str) -> tuple[bytes, str]:
     value = str(uri or "").strip()
+    if value.startswith("data:"):
+        try:
+            header, encoded = value.split(",", 1)
+        except ValueError as exc:
+            raise FileNotFoundError(value) from exc
+        media_type = header[5:].split(";", 1)[0].strip().lower() or "application/octet-stream"
+        try:
+            data = (
+                base64.b64decode(encoded, validate=True)
+                if ";base64" in header.lower()
+                else unquote_to_bytes(encoded)
+            )
+        except (TypeError, ValueError) as exc:
+            raise FileNotFoundError(value) from exc
+        return data, media_type
     if value.startswith("gs://"):
         try:
             bucket_name, object_name = value[5:].split("/", 1)
@@ -241,6 +258,49 @@ def _read_managed_uri(uri: str) -> tuple[bytes, str]:
     if not path.is_file():
         raise FileNotFoundError(value)
     return path.read_bytes(), mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+
+
+def _read_qwen_rgb_result(uri: str) -> bytes:
+    """Read the persisted RGB artifact without re-running Qwen."""
+
+    try:
+        data, _ = _read_managed_uri(uri)
+    except FileNotFoundError as exc:
+        raise PortraitWorkerError(
+            "QWEN_RGB_RESULT_NOT_FOUND",
+            "已保存的 Qwen RGB 结果不存在，请重新生成 Qwen。",
+        ) from exc
+    except Exception as exc:
+        raise PortraitWorkerError(
+            "QWEN_RGB_RESULT_READ_FAILED",
+            f"读取已保存的 Qwen RGB 失败: {exc.__class__.__name__}: {exc}",
+        ) from exc
+    if not data:
+        raise PortraitWorkerError(
+            "QWEN_RGB_RESULT_EMPTY",
+            "已保存的 Qwen RGB 结果为空，请重新生成 Qwen。",
+        )
+    return data
+
+
+def _store_transparent_asset(
+    run_id: str,
+    kind: str,
+    data: bytes,
+    media_type: str,
+    extension: str,
+) -> str:
+    """Persist a transparent-stage artifact with a classified storage error."""
+
+    try:
+        return _store_bytes(run_id, kind, data, media_type, extension)
+    except PortraitWorkerError:
+        raise
+    except Exception as exc:
+        raise PortraitWorkerError(
+            "QWEN_TRANSPARENT_ASSET_STORE_FAILED",
+            f"无法保存透明鱼体 {kind} 图片: {exc.__class__.__name__}: {exc}",
+        ) from exc
 
 
 def _read_dataset_image(
@@ -672,15 +732,27 @@ def extract_qwen_image_edit_lab_transparent(
     db.commit()
 
     try:
-        output_bytes, _ = _read_managed_uri(output_uri)
-        artifacts = process_qwen_output(output_bytes)
-        raw_mask_uri = _store_bytes(
+        output_bytes = _read_qwen_rgb_result(output_uri)
+        try:
+            artifacts = process_qwen_output(output_bytes)
+        except QwenOutputError:
+            raise
+        except Exception as exc:
+            raise QwenOutputError(
+                "QWEN_TRANSPARENT_PIPELINE_FAILED",
+                f"透明鱼体提取流程异常: {exc.__class__.__name__}: {exc}",
+                {
+                    "stage": "detector_sam_alpha",
+                    "exception_type": exc.__class__.__name__,
+                },
+            ) from exc
+        raw_mask_uri = _store_transparent_asset(
             run_id, "qwen_fish_mask_raw", artifacts.fish_mask_raw, "image/png", ".png"
         )
-        mask_uri = _store_bytes(
+        mask_uri = _store_transparent_asset(
             run_id, "qwen_fish_mask", artifacts.fish_mask, "image/png", ".png"
         )
-        transparent_uri = _store_bytes(
+        transparent_uri = _store_transparent_asset(
             run_id, "qwen_fish_rgba", artifacts.transparent_fish, "image/png", ".png"
         )
         result.update(
@@ -719,9 +791,9 @@ def extract_qwen_image_edit_lab_transparent(
         error_message = str(exc)[:3000]
         error_details = getattr(exc, "details", {}) or {}
     except Exception as exc:
-        error_code = "QWEN_RGBA_EXPORT_FAILED"
+        error_code = "QWEN_TRANSPARENT_PIPELINE_FAILED"
         error_message = f"{exc.__class__.__name__}: {exc}"[:3000]
-        error_details = {}
+        error_details = {"stage": "transparent_fish_export", "exception_type": exc.__class__.__name__}
 
     result.update(
         {

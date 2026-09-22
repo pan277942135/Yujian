@@ -203,6 +203,10 @@ def test_qwen_image_edit_lab_template_supports_dataset_selection():
     assert "/extract-transparent" in template
     assert "transparent_status" in template
     assert "B面视觉生成" in template
+    assert "data-transparent-run" in template
+    assert "qwen-lab-history-summary-action" in template
+    assert "openHistoryRun" in template
+    assert "qwenLabResultPanel" in template
     generate_handler_start = template.index("generateButton.addEventListener")
     generate_handler_end = template.index("datasetSelect.addEventListener")
     generate_handler = template[generate_handler_start:generate_handler_end]
@@ -496,6 +500,68 @@ def test_qwen_image_edit_lab_transparent_failure_preserves_qwen_result(tmp_path,
         assert transparent_response["transparent_asset_error"]["code"] == "TEST_TRANSPARENT_FAILURE"
         run = db.get(PipelineRun, qwen_response["run_id"])
         assert run.status == "SUCCESS"
+    finally:
+        db.close()
+
+
+def test_qwen_image_edit_lab_unexpected_transparent_failure_is_classified(tmp_path, monkeypatch):
+    db = _session(tmp_path)
+    try:
+        stored = {}
+
+        def fake_store(run_id, kind, data, media_type, extension):
+            uri = "local://qwen-image-edit-lab/" + run_id + "/" + kind + extension
+            stored[kind] = (uri, data, media_type)
+            return uri
+
+        def fake_managed(uri):
+            assert uri.endswith("/qwen_result_rgb.png")
+            return _generated_png(), "image/png"
+
+        def fake_read(uri, *, label):
+            assert uri == "http://worker/output.png"
+            assert label == "qwen_lab_output"
+            return _generated_png(), "image/png"
+
+        def fake_worker(**kwargs):
+            return {
+                "result_uri": "http://worker/output.png",
+                "worker_model": "Qwen-Image-Edit-2511",
+                "worker_status": "WORKER_EXECUTED",
+                "worker_http_status": 200,
+                "seed": 654,
+                "elapsed_ms": 987,
+            }
+
+        def fake_process(_data):
+            raise RuntimeError("sam process crashed")
+
+        monkeypatch.setattr(lab, "_store_bytes", fake_store)
+        monkeypatch.setattr(lab, "_read_managed_uri", fake_managed)
+        monkeypatch.setattr(lab, "_read_image_uri", fake_read)
+        monkeypatch.setattr(lab, "invoke_qwen_refine_worker", fake_worker)
+        monkeypatch.setattr(lab, "process_qwen_output", fake_process)
+
+        qwen_response = asyncio.run(
+            lab.generate_qwen_image_edit_lab(
+                _upload(),
+                prompt="test prompt",
+                negative_prompt="avoid fish change",
+                seed="654",
+                db=db,
+            )
+        )
+        transparent_response = lab.extract_qwen_image_edit_lab_transparent(
+            qwen_response["run_id"],
+            db=db,
+        )
+
+        assert transparent_response["qwen_status"] == "SUCCESS"
+        assert transparent_response["transparent_status"] == "ERROR"
+        assert transparent_response["transparent_asset_error"]["code"] == "QWEN_TRANSPARENT_PIPELINE_FAILED"
+        assert transparent_response["transparent_asset_error"]["details"]["stage"] == "detector_sam_alpha"
+        assert transparent_response["output_image_uri"] == stored["qwen_result_rgb"][0]
+        assert db.get(PipelineRun, qwen_response["run_id"]).status == "SUCCESS"
     finally:
         db.close()
 
