@@ -1,30 +1,33 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 
 NOT_STARTED = "NOT_STARTED"
-RUNNING = "RUNNING"
-COMPLETE = "COMPLETE"
-FAILED = "FAILED"
 STALE = "STALE"
 
+STEP_TRANSPARENT = "transparent"
 STEP_STANDARDIZE = "standardize"
 STEP_OUTLINE = "outline"
 STEP_COMPOSE = "compose"
 
-STEP_ORDER = (STEP_STANDARDIZE, STEP_OUTLINE, STEP_COMPOSE)
+# The persisted API accepts both the new four-step vocabulary and legacy rows.
+# SUCCESS/PROCESSING/ERROR are the public state names; aliases keep older callers
+# and historical rows readable during the additive rollout.
+PROCESSING = "PROCESSING"
+SUCCESS = "SUCCESS"
+ERROR = "ERROR"
+RUNNING = PROCESSING
+COMPLETE = SUCCESS
+FAILED = ERROR
+
+STEP_ORDER = (STEP_TRANSPARENT, STEP_STANDARDIZE, STEP_OUTLINE, STEP_COMPOSE)
 
 
 class StandardizeRequest(BaseModel):
-    manual_rotation_offset_deg: float = Field(default=0.0, ge=-15.0, le=15.0)
+    """Step 2 is automatic; the request is intentionally parameter-free."""
 
-    @field_validator("manual_rotation_offset_deg")
-    @classmethod
-    def half_degree_steps(cls, value: float) -> float:
-        if abs(value * 2 - round(value * 2)) > 1e-6:
-            raise ValueError("manual_rotation_offset_deg 必须以 0.5 度为步进")
-        return round(float(value) * 2) / 2
+    pass
 
 
 class OutlineRequest(BaseModel):
