@@ -330,10 +330,20 @@ def _response(run: PipelineRun, state: dict[str, Any]) -> dict[str, Any]:
     mask_uri = str(result.get("fish_mask_uri") or "").strip() or None
     transparent_uri = str(result.get("transparent_fish_uri") or "").strip() or None
     run_status = str(run.status or "UNKNOWN").upper()
-    transparent_status = str(
-        result.get("transparent_asset_status")
-        or ("SUCCESS" if transparent_uri else "NOT_AVAILABLE")
+    qwen_status = str(
+        result.get("qwen_status")
+        or ("SUCCESS" if output_uri and run_status in {"SUCCESS", "PARTIAL_SUCCESS"} else run_status)
     ).upper()
+    transparent_status_value = str(
+        result.get("transparent_status")
+        or result.get("transparent_asset_status")
+        or ("SUCCESS" if transparent_uri else "NOT_STARTED")
+    ).upper()
+    transparent_status = (
+        "NOT_STARTED"
+        if transparent_status_value in {"", "NOT_AVAILABLE", "NONE"}
+        else transparent_status_value
+    )
     return {
         "run_id": run.run_id,
         "input_image_uri": input_uri,
@@ -349,16 +359,19 @@ def _response(run: PipelineRun, state: dict[str, Any]) -> dict[str, Any]:
         "output_image_url": _public_media_url(run.run_id, "output") if output_uri else None,
         "qwen_result_rgb_uri": output_uri,
         "qwen_result_rgb_url": _public_media_url(run.run_id, "qwen_result_rgb") if output_uri else None,
+        "qwen_status": qwen_status,
+        "qwen_generation_status": qwen_status,
         "fish_mask_raw_uri": raw_mask_uri,
         "fish_mask_raw_url": _public_media_url(run.run_id, "fish_mask_raw") if raw_mask_uri else None,
         "fish_mask_uri": mask_uri,
         "fish_mask_url": _public_media_url(run.run_id, "fish_mask") if mask_uri else None,
         "transparent_fish_uri": transparent_uri,
         "transparent_fish_url": _public_media_url(run.run_id, "transparent_fish") if transparent_uri else None,
+        "transparent_status": transparent_status,
+        # Keep the old key as a compatibility alias for existing history rows and clients.
         "transparent_asset_status": transparent_status,
         "transparent_asset_metadata": result.get("transparent_asset_metadata"),
         "transparent_asset_error": result.get("transparent_asset_error"),
-        "qwen_generation_status": "SUCCESS" if output_uri and run_status in {"SUCCESS", "PARTIAL_SUCCESS"} else run_status,
         "status": run_status,
         "model": MODEL_ID,
         "model_label": QWEN_MODEL_LABEL,
@@ -370,6 +383,8 @@ def _response(run: PipelineRun, state: dict[str, Any]) -> dict[str, Any]:
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
         "error": state.get("error"),
     }
+
+
 def _mark_failed(
     db: Session,
     run_id: str,
@@ -515,7 +530,7 @@ async def generate_qwen_image_edit_lab(
         _set_state(run, state)
         db.commit()
 
-        output_uri, output_bytes = _materialize_output(run_id, worker_result)
+        output_uri, _ = _materialize_output(run_id, worker_result)
         elapsed_ms = worker_result.get("elapsed_ms")
         if elapsed_ms is None:
             elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
@@ -524,73 +539,20 @@ async def generate_qwen_image_edit_lab(
             "input_image_uri": input_uri,
             "output_image_uri": output_uri,
             "qwen_result_rgb_uri": output_uri,
+            "qwen_status": "SUCCESS",
             "seed": actual_seed if actual_seed is not None else seed_value,
             "elapsed_ms": elapsed_ms,
             "model": MODEL_ID,
             "worker": WORKER_NAME,
-            "transparent_asset_status": "PROCESSING",
+            "transparent_status": "NOT_STARTED",
+            "transparent_asset_status": "NOT_STARTED",
+            "fish_mask_raw_uri": None,
+            "fish_mask_uri": None,
+            "transparent_fish_uri": None,
         }
         _set_stage(state, "persist_result", "DONE")
-        _set_stage(state, "transparent_fish_export", "RUNNING")
-        run.current_stage = "transparent_fish_export"
-        _set_state(run, state)
-        db.commit()
-
-        run_status = "SUCCESS"
-        try:
-            artifacts = process_qwen_output(output_bytes)
-            raw_mask_uri = _store_bytes(
-                run_id, "qwen_fish_mask_raw", artifacts.fish_mask_raw, "image/png", ".png"
-            )
-            mask_uri = _store_bytes(
-                run_id, "qwen_fish_mask", artifacts.fish_mask, "image/png", ".png"
-            )
-            transparent_uri = _store_bytes(
-                run_id, "qwen_fish_rgba", artifacts.transparent_fish, "image/png", ".png"
-            )
-            state["result"].update(
-                {
-                    "fish_mask_raw_uri": raw_mask_uri,
-                    "fish_mask_uri": mask_uri,
-                    "transparent_fish_uri": transparent_uri,
-                    "transparent_asset_status": "SUCCESS",
-                    "transparent_asset_metadata": artifacts.metadata,
-                }
-            )
-            _set_stage(state, "transparent_fish_export", "DONE")
-        except (QwenOutputError, PortraitWorkerError) as exc:
-            error_code = getattr(exc, "error_code", "QWEN_RGBA_EXPORT_FAILED")
-            error_message = str(exc)[:3000]
-            state["result"].update(
-                {
-                    "transparent_asset_status": "ERROR",
-                    "transparent_asset_error": {
-                        "code": error_code,
-                        "message": error_message,
-                        "details": getattr(exc, "details", {}) or {},
-                    },
-                }
-            )
-            _set_stage(state, "transparent_fish_export", "FAILED", f"{error_code}: {error_message}")
-            run_status = "PARTIAL_SUCCESS"
-        except Exception as exc:
-            error_code = "QWEN_RGBA_EXPORT_FAILED"
-            error_message = f"{exc.__class__.__name__}: {exc}"[:3000]
-            state["result"].update(
-                {
-                    "transparent_asset_status": "ERROR",
-                    "transparent_asset_error": {
-                        "code": error_code,
-                        "message": error_message,
-                        "details": {},
-                    },
-                }
-            )
-            _set_stage(state, "transparent_fish_export", "FAILED", f"{error_code}: {error_message}")
-            run_status = "PARTIAL_SUCCESS"
-
-        run.status = run_status
-        run.current_stage = "complete" if run_status == "SUCCESS" else "transparent_asset_error"
+        run.status = "SUCCESS"
+        run.current_stage = "complete"
         run.finished_at = _utcnow()
         if run.started_at:
             run.duration_ms = _duration_ms(run.started_at, run.finished_at)
@@ -600,12 +562,8 @@ async def generate_qwen_image_edit_lab(
             "CREATE_QWEN_IMAGE_EDIT_LAB_RUN",
             "PIPELINE_RUN",
             run_id,
-            status=run_status,
-            message=(
-                "Qwen Image Edit Lab 生成与透明鱼资产导出完成"
-                if run_status == "SUCCESS"
-                else "Qwen 生成完成，但透明鱼资产导出失败"
-            ),
+            status="SUCCESS",
+            message="Qwen RGB 生成完成，透明鱼体等待用户触发",
             detail={
                 "type": PIPELINE_TYPE,
                 "model": MODEL_ID,
@@ -615,9 +573,8 @@ async def generate_qwen_image_edit_lab(
                 "dataset_item_id": source.get("dataset_item_id"),
                 "seed": state["result"]["seed"],
                 "elapsed_ms": elapsed_ms,
-                "qwen_generation_status": "SUCCESS",
-                "transparent_asset_status": state["result"]["transparent_asset_status"],
-                "transparent_asset_error": state["result"].get("transparent_asset_error"),
+                "qwen_status": "SUCCESS",
+                "transparent_status": "NOT_STARTED",
             },
         )
         db.commit()
@@ -646,6 +603,156 @@ async def generate_qwen_image_edit_lab(
             status_code=500,
             detail={"error_code": "QWEN_IMAGE_EDIT_LAB_FAILED", "message": str(exc), "run_id": run_id},
         ) from exc
+
+
+@router.post("/runs/{run_id}/extract-transparent")
+def extract_qwen_image_edit_lab_transparent(
+    run_id: str,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    run = db.get(PipelineRun, run_id)
+    if run is None or run.pipeline_type != PIPELINE_TYPE:
+        raise HTTPException(status_code=404, detail="Qwen Image Edit Lab 记录不存在")
+
+    state = _state_for_run(run)
+    result = state.get("result") if isinstance(state.get("result"), dict) else {}
+    output_uri = str(
+        result.get("qwen_result_rgb_uri")
+        or result.get("output_image_uri")
+        or ""
+    ).strip()
+    qwen_status = str(
+        result.get("qwen_status")
+        or ("SUCCESS" if output_uri and str(run.status or "").upper() in {"SUCCESS", "PARTIAL_SUCCESS"} else run.status)
+    ).upper()
+    if not output_uri or qwen_status != "SUCCESS":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_code": "QWEN_RESULT_NOT_READY",
+                "message": "Qwen RGB 结果尚未生成，不能提取透明鱼体",
+                "run_id": run_id,
+            },
+        )
+
+    transparent_uri = str(result.get("transparent_fish_uri") or "").strip()
+    transparent_status_value = str(
+        result.get("transparent_status")
+        or result.get("transparent_asset_status")
+        or ("SUCCESS" if transparent_uri else "NOT_STARTED")
+    ).upper()
+    transparent_status = (
+        "NOT_STARTED"
+        if transparent_status_value in {"", "NOT_AVAILABLE", "NONE"}
+        else transparent_status_value
+    )
+    if transparent_uri and transparent_status == "SUCCESS":
+        return _response(run, state)
+    if transparent_status == "PROCESSING":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_code": "TRANSPARENT_FISH_BUSY",
+                "message": "透明鱼体正在提取，请稍候",
+                "run_id": run_id,
+            },
+        )
+
+    result.update(
+        {
+            "transparent_status": "PROCESSING",
+            "transparent_asset_status": "PROCESSING",
+            "transparent_asset_error": None,
+        }
+    )
+    state["result"] = result
+    _set_stage(state, "transparent_fish_export", "RUNNING")
+    run.current_stage = "transparent_fish_export"
+    _set_state(run, state)
+    db.commit()
+
+    try:
+        output_bytes, _ = _read_managed_uri(output_uri)
+        artifacts = process_qwen_output(output_bytes)
+        raw_mask_uri = _store_bytes(
+            run_id, "qwen_fish_mask_raw", artifacts.fish_mask_raw, "image/png", ".png"
+        )
+        mask_uri = _store_bytes(
+            run_id, "qwen_fish_mask", artifacts.fish_mask, "image/png", ".png"
+        )
+        transparent_uri = _store_bytes(
+            run_id, "qwen_fish_rgba", artifacts.transparent_fish, "image/png", ".png"
+        )
+        result.update(
+            {
+                "fish_mask_raw_uri": raw_mask_uri,
+                "fish_mask_uri": mask_uri,
+                "transparent_fish_uri": transparent_uri,
+                "transparent_status": "SUCCESS",
+                "transparent_asset_status": "SUCCESS",
+                "transparent_asset_metadata": artifacts.metadata,
+                "transparent_asset_error": None,
+            }
+        )
+        _set_stage(state, "transparent_fish_export", "DONE")
+        run.current_stage = "complete"
+        _set_state(run, state)
+        adapters.record_operation(
+            db,
+            "EXTRACT_QWEN_IMAGE_EDIT_LAB_TRANSPARENT_FISH",
+            "PIPELINE_RUN",
+            run_id,
+            status="SUCCESS",
+            message="透明鱼体提取完成",
+            detail={
+                "type": PIPELINE_TYPE,
+                "model": MODEL_ID,
+                "transparent_status": "SUCCESS",
+                "fish_mask_uri": mask_uri,
+                "transparent_fish_uri": transparent_uri,
+            },
+        )
+        db.commit()
+        return _response(run, state)
+    except (QwenOutputError, PortraitWorkerError) as exc:
+        error_code = getattr(exc, "error_code", "QWEN_RGBA_EXPORT_FAILED")
+        error_message = str(exc)[:3000]
+        error_details = getattr(exc, "details", {}) or {}
+    except Exception as exc:
+        error_code = "QWEN_RGBA_EXPORT_FAILED"
+        error_message = f"{exc.__class__.__name__}: {exc}"[:3000]
+        error_details = {}
+
+    result.update(
+        {
+            "transparent_status": "ERROR",
+            "transparent_asset_status": "ERROR",
+            "transparent_asset_error": {
+                "code": error_code,
+                "message": error_message,
+                "details": error_details,
+            },
+        }
+    )
+    _set_stage(state, "transparent_fish_export", "FAILED", f"{error_code}: {error_message}")
+    run.current_stage = "complete"
+    _set_state(run, state)
+    adapters.record_operation(
+        db,
+        "EXTRACT_QWEN_IMAGE_EDIT_LAB_TRANSPARENT_FISH",
+        "PIPELINE_RUN",
+        run_id,
+        status="FAILED",
+        message=error_message,
+        detail={
+            "type": PIPELINE_TYPE,
+            "model": MODEL_ID,
+            "transparent_status": "ERROR",
+            "error_code": error_code,
+        },
+    )
+    db.commit()
+    return _response(run, state)
 
 
 @router.get("/runs")
@@ -753,6 +860,7 @@ __all__ = [
     "PIPELINE_TYPE",
     "WORKER_NAME",
     "generate_qwen_image_edit_lab",
+    "extract_qwen_image_edit_lab_transparent",
     "qwen_image_edit_lab_media",
     "qwen_image_edit_lab_run",
     "router",
