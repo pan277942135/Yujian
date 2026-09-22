@@ -282,10 +282,20 @@ def run_bside_standardize(
     try:
         source_data, _media_type = _read_uri(session.source_transparent_fish_uri)
         artifact = standardize(source_data, payload.manual_rotation_offset_deg)
+        artifact_metadata = dict(artifact.metadata)
+        artifact_metadata["source_uri"] = session.source_transparent_fish_uri
         version = row.version + 1
-        row.output_uri = _store_bytes(session_id, STEP_STANDARDIZE, version, "standardized_fish.png", artifact.data, "image/png")
+        row.output_uri = _store_bytes(
+            session_id,
+            STEP_STANDARDIZE,
+            version,
+            "standardized_fish_rgba.png",
+            artifact.data,
+            "image/png",
+        )
+        artifact_metadata["standardized_uri"] = row.output_uri
         row.preview_uri = None
-        row.metadata_json = json.dumps(artifact.metadata, ensure_ascii=False)
+        row.metadata_json = json.dumps(artifact_metadata, ensure_ascii=False)
         row.version = version
         row.status = COMPLETE
         session.updated_at = _utcnow()
@@ -315,10 +325,20 @@ def run_bside_outline(
         style = get_style(payload.style_id)
         source_data, _media_type = _read_uri(steps[STEP_STANDARDIZE].output_uri or "")
         artifact = outline(source_data, style)
+        artifact_metadata = dict(artifact.metadata)
+        artifact_metadata["source_uri"] = steps[STEP_STANDARDIZE].output_uri
         version = row.version + 1
-        row.output_uri = _store_bytes(session_id, STEP_OUTLINE, version, "outlined_fish.png", artifact.data, "image/png")
+        row.output_uri = _store_bytes(
+            session_id,
+            STEP_OUTLINE,
+            version,
+            "outlined_fish_rgba.png",
+            artifact.data,
+            "image/png",
+        )
+        artifact_metadata["outlined_uri"] = row.output_uri
         row.preview_uri = None
-        row.metadata_json = json.dumps(artifact.metadata, ensure_ascii=False)
+        row.metadata_json = json.dumps(artifact_metadata, ensure_ascii=False)
         row.style_id = style.style_id
         row.version = version
         row.status = COMPLETE
@@ -328,7 +348,7 @@ def run_bside_outline(
     except Exception as exc:
         code = getattr(exc, "code", "OUTLINE_FAILED")
         _fail_step(db, session, row, code, str(exc))
-        status_code = 422 if code.startswith("STANDARDIZED_FISH") else 500
+        status_code = 422 if code.startswith(("STANDARDIZED_FISH", "POSE_")) else 500
         raise HTTPException(status_code=status_code, detail={"error": code, "message": str(exc), "session_id": session_id}) from exc
     return _serialize_session(db, session)
 
@@ -349,11 +369,38 @@ def run_bside_compose(
         style = get_style(steps[STEP_OUTLINE].style_id or "lake_mist")
         template = get_template(payload.template_id)
         standardized_data, _media_type = _read_uri(steps[STEP_STANDARDIZE].output_uri or "")
-        rendered = compose_bside(standardized_data, style, template)
+        outlined_data, _outlined_media_type = _read_uri(steps[STEP_OUTLINE].output_uri or "")
+        rendered = compose_bside(
+            standardized_data,
+            style,
+            template,
+            outlined_fish=outlined_data,
+        )
         version = row.version + 1
-        row.output_uri = _store_bytes(session_id, STEP_COMPOSE, version, "bside_final.png", rendered["master"], "image/png")
-        row.preview_uri = _store_bytes(session_id, STEP_COMPOSE, version, "bside_preview.webp", rendered["preview"], "image/webp")
-        row.metadata_json = json.dumps(rendered["metadata"], ensure_ascii=False)
+        master_uri = _store_bytes(
+            session_id,
+            STEP_COMPOSE,
+            version,
+            "bside_result.png",
+            rendered["master"],
+            "image/png",
+        )
+        preview_uri = _store_bytes(
+            session_id,
+            STEP_COMPOSE,
+            version,
+            "bside_preview.webp",
+            rendered["preview"],
+            "image/webp",
+        )
+        rendered_metadata = dict(rendered["metadata"])
+        rendered_metadata["source_uri"] = steps[STEP_OUTLINE].output_uri
+        rendered_metadata["standardized_uri"] = steps[STEP_STANDARDIZE].output_uri
+        rendered_metadata["outlined_uri"] = steps[STEP_OUTLINE].output_uri
+        rendered_metadata["bside_result_uri"] = master_uri
+        row.output_uri = master_uri
+        row.preview_uri = preview_uri
+        row.metadata_json = json.dumps(rendered_metadata, ensure_ascii=False)
         row.template_id = template.template_id
         row.style_id = style.style_id
         row.version = version
@@ -363,7 +410,7 @@ def run_bside_compose(
     except Exception as exc:
         code = getattr(exc, "code", "COMPOSE_FAILED")
         _fail_step(db, session, row, code, str(exc))
-        status_code = 422 if code.startswith("STANDARDIZED_FISH") else 500
+        status_code = 422 if code.startswith(("STANDARDIZED_FISH", "POSE_")) else 500
         raise HTTPException(status_code=status_code, detail={"error": code, "message": str(exc), "session_id": session_id}) from exc
     return _serialize_session(db, session)
 
@@ -391,7 +438,7 @@ def bside_visual_media(session_id: str, asset: str, db: Session = Depends(get_db
     return Response(
         content=content,
         media_type=media_type or mimetypes.guess_type(str(uri))[0] or "application/octet-stream",
-        headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"},
+        headers={"Cache-Control": "private, no-cache, must-revalidate", "X-Content-Type-Options": "nosniff"},
     )
 
 
