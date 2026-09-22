@@ -63,11 +63,19 @@ def _fit_fish(image: Image.Image, template: WaterTemplate) -> tuple[Image.Image,
     return resized, scale
 
 
-def compose_bside(standardized_fish: bytes, style: OutlineStyle, template: WaterTemplate) -> dict[str, Any]:
+def compose_bside(
+    standardized_fish: bytes,
+    style: OutlineStyle,
+    template: WaterTemplate,
+    *,
+    outlined_fish: bytes | None = None,
+) -> dict[str, Any]:
     """Compose a transparent fish into a deterministic water template."""
 
+    source_asset = "outlined_fish_rgba" if outlined_fish is not None else "standardized_fish_rgba"
+    fish_bytes = outlined_fish if outlined_fish is not None else standardized_fish
     try:
-        fish = Image.open(io.BytesIO(standardized_fish)).convert("RGBA")
+        fish = Image.open(io.BytesIO(fish_bytes)).convert("RGBA")
     except Exception as exc:
         raise BsideVisualError("STANDARDIZED_FISH_UNREADABLE", "标准姿态鱼图片不可读取") from exc
     fish_alpha = np.asarray(fish, dtype=np.uint8)[:, :, 3]
@@ -75,8 +83,11 @@ def compose_bside(standardized_fish: bytes, style: OutlineStyle, template: Water
         raise BsideVisualError("STANDARDIZED_FISH_EMPTY", "标准姿态鱼没有有效 Alpha")
 
     fitted_fish, scale = _fit_fish(fish, template)
-    outline_artifact = outline(standardized_fish, style)
-    outlined = Image.open(io.BytesIO(outline_artifact.data)).convert("RGBA")
+    if outlined_fish is None:
+        outline_artifact = outline(standardized_fish, style)
+        outlined = Image.open(io.BytesIO(outline_artifact.data)).convert("RGBA")
+    else:
+        outlined = fish.copy()
     outlined = outlined.resize(fitted_fish.size, Image.Resampling.LANCZOS)
     canvas = _gradient(template)
     left = round(template.canvas_width * template.anchor_x - fitted_fish.width / 2)
@@ -135,5 +146,7 @@ def compose_bside(standardized_fish: bytes, style: OutlineStyle, template: Water
         "anchor_y": template.anchor_y,
         "fit_scale": round(scale, 6),
         "foreground_object_count": 0,
+        "source_asset": source_asset,
+        "real_fish_rgba_preserved": True,
     }
     return {"master": master.getvalue(), "preview": preview.getvalue(), "metadata": metadata}

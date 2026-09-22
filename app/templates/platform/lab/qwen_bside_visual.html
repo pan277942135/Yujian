@@ -39,7 +39,7 @@
           <div id="bsideAssets" class="bside-assets" aria-label="四个资产槽位"></div>
         </section>
         <section class="bside-panel bside-controls" aria-label="B面视觉参数">
-          <div class="bside-control-group"><h3>① 姿态标准化</h3><p>仅处理已有透明 PNG 的方向、紧边裁剪和透明留白；不翻转、不重新识别。</p><div class="bside-field"><label for="bsideRotationOffset">演示旋转偏移（-15° 到 +15°，步进 0.5°）</label><input id="bsideRotationOffset" type="number" min="-15" max="15" step="0.5" value="0"></div></div>
+          <div class="bside-control-group"><h3>① 姿态标准化</h3><p>仅处理已有透明 PNG；自动摆正后可进行 ±15° 微调，不翻转、不重新识别。0° 表示不附加人工偏移。</p><div class="bside-field"><label for="bsideRotationOffset">姿态微调（-15° 到 +15°，步进 0.5°）</label><input id="bsideRotationOffset" type="number" min="-15" max="15" step="0.5" value="0"></div></div>
           <div class="bside-control-group"><h3>② 特色描边样式</h3><p>样式来自 Backend Registry；鱼体原始 RGB 像素保持在最上层。</p><div id="bsideStyles" class="bside-style-grid"></div></div>
           <div class="bside-control-group"><h3>③ 水体模板</h3><p>模板来自 Backend Registry；使用仓库内确定性程序化水体，不抓取外部图片。</p><div id="bsideTemplates" class="bside-template-grid"></div></div>
         </section>
@@ -81,18 +81,33 @@
     function statusClass(value){return String(value||'').toLowerCase()}
     function showError(message){errorBox.textContent=message||'';errorBox.classList.toggle('visible',Boolean(message))}
     function stepByKey(key){return (state?.steps||[]).find(item=>item.step===key)}
+    function poseDiagnostic(step){
+      if(step.step!=='standardize')return step.error?.message||'';
+      const metadata=step.metadata||{};
+      const number=(key)=>Number.isFinite(Number(metadata[key]))?Number(metadata[key]).toFixed(1)+'°':null;
+      const parts=[
+        number('detected_axis_angle_deg')&&'检测主轴 '+number('detected_axis_angle_deg'),
+        number('auto_rotation_deg')&&'自动旋转 '+number('auto_rotation_deg'),
+        number('manual_rotation_offset_deg')&&'人工微调 '+number('manual_rotation_offset_deg'),
+        number('applied_rotation_deg')&&'最终旋转 '+number('applied_rotation_deg'),
+        number('residual_axis_angle_deg')&&'最终残差 '+number('residual_axis_angle_deg'),
+      ].filter(Boolean);
+      return parts.join(' · ')||metadata.orientation_message||'';
+    }
     function renderStepper(){
       stepper.innerHTML=(state?.steps||[]).map(step=>{
         const canRun=Boolean(step.can_run)&&!busy;
         const action=step.status==='COMPLETE'?'再次运行':step.status==='STALE'?'重跑':'开始';
-        return '<div class="bside-step '+statusClass(step.status)+'"><span class="bside-step-status">'+esc(statusText(step.status))+'</span><strong>'+esc(step.label)+'</strong><small>'+esc(step.error?.message||step.metadata?.orientation_message||'')+'</small><button type="button" data-run-step="'+esc(step.step)+'" '+(canRun?'':'disabled')+'>'+esc(action)+'</button></div>';
+        return '<div class="bside-step '+statusClass(step.status)+'"><span class="bside-step-status">'+esc(statusText(step.status))+'</span><strong>'+esc(step.label)+'</strong><small>'+esc(poseDiagnostic(step))+'</small><button type="button" data-run-step="'+esc(step.step)+'" '+(canRun?'':'disabled')+'>'+esc(action)+'</button></div>';
       }).join('');
       stepper.querySelectorAll('[data-run-step]').forEach(button=>button.addEventListener('click',()=>runStep(button.dataset.runStep)));
     }
     function renderAssets(){
       assets.innerHTML=(state?.assets||[]).map(item=>{
         const isActive=item.key===selectedAsset;
-        const src=item.url||'';
+        const cacheVersion=state?.updated_at||Date.now();
+        const src=item.url?(item.url+(item.url.includes('?')?'&':'?')+'v='+encodeURIComponent(cacheVersion)):'';
+
         return '<button type="button" class="bside-asset '+(isActive?'active':'')+'" data-asset="'+esc(item.key)+'" '+(item.available?'':'disabled')+'><span class="bside-asset-image">'+(src?'<img loading="lazy" decoding="async" src="'+esc(src)+'" alt="'+esc(item.label)+'">':'')+'</span><strong>'+esc(item.label)+'</strong><small>'+esc(item.available?statusText(item.status):'尚未生成')+'</small></button>';
       }).join('');
       assets.querySelectorAll('[data-asset]').forEach(button=>button.addEventListener('click',()=>{selectedAsset=button.dataset.asset;renderAssets();renderPreview()}));
