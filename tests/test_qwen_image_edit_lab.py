@@ -69,6 +69,7 @@ def test_qwen_image_edit_lab_routes_are_additive():
     assert "/api/fish-portrait/qwen-lab/runs" in paths
     assert "/api/fish-portrait/qwen-lab/runs/{run_id}" in paths
     assert "/api/fish-portrait/qwen-lab/runs/{run_id}/media/{kind}" in paths
+    assert "/api/fish-portrait/qwen-lab/runs/{run_id}/extract-transparent" in paths
     assert lab.PIPELINE_TYPE == "QWEN_IMAGE_EDIT_LAB"
     assert lab.MODEL_ID == "qwen-image-edit-2511"
 
@@ -198,6 +199,10 @@ def test_qwen_image_edit_lab_template_supports_dataset_selection():
     assert "dataset_item_id" in template
     assert "selectedDatasetSource" in template
     assert "new File([blob]" not in template
+    assert 'id="qwenLabTransparentFishButton"' in template
+    assert "/extract-transparent" in template
+    assert "transparent_status" in template
+    assert "B面视觉生成" in template
 
 
 def test_qwen_image_edit_lab_template_inline_script_has_no_doubled_string_terminator():
@@ -242,6 +247,7 @@ def test_qwen_image_edit_lab_dataset_source_reads_server_side(tmp_path, monkeypa
         db.commit()
 
         stored = {}
+        processed = []
 
         def fake_store(run_id, kind, data, media_type, extension):
             uri = "local://qwen-image-edit-lab/" + run_id + "/" + kind + extension
@@ -249,13 +255,20 @@ def test_qwen_image_edit_lab_dataset_source_reads_server_side(tmp_path, monkeypa
             return uri
 
         def fake_managed(uri):
-            assert uri == "gs://bucket/IMG00012.jpg"
-            return b"dataset-image", "image/jpeg"
+            if uri == "gs://bucket/IMG00012.jpg":
+                return b"dataset-image", "image/jpeg"
+            if uri.endswith("/qwen_result_rgb.png"):
+                return _generated_png(), "image/png"
+            raise AssertionError(f"unexpected managed URI: {uri}")
 
         def fake_read(uri, *, label):
             assert uri == "http://worker/output.png"
             assert label == "qwen_lab_output"
             return _generated_png(), "image/png"
+
+        def fake_process(data):
+            processed.append(data)
+            return _fake_qwen_artifacts(data)
 
         def fake_worker(**kwargs):
             assert kwargs["visible_fish_refined_image_uri"].startswith("local://qwen-image-edit-lab/")
@@ -271,7 +284,7 @@ def test_qwen_image_edit_lab_dataset_source_reads_server_side(tmp_path, monkeypa
         monkeypatch.setattr(lab, "_store_bytes", fake_store)
         monkeypatch.setattr(lab, "_read_managed_uri", fake_managed)
         monkeypatch.setattr(lab, "_read_image_uri", fake_read)
-        monkeypatch.setattr(lab, "process_qwen_output", lambda data: _fake_qwen_artifacts(data))
+        monkeypatch.setattr(lab, "process_qwen_output", fake_process)
         monkeypatch.setattr(lab, "invoke_qwen_refine_worker", fake_worker)
 
         response = asyncio.run(
@@ -287,37 +300,39 @@ def test_qwen_image_edit_lab_dataset_source_reads_server_side(tmp_path, monkeypa
         )
 
         assert response["status"] == "SUCCESS"
-        assert response["input_source"] == "DATASET"
-        assert response["dataset_id"] == "DS_TEST"
-        assert response["dataset_item_id"] == 1
-        assert response["image_id"] == "IMG00012"
-        run = db.get(PipelineRun, response["run_id"])
-        state = json.loads(run.stage_json)
-        assert state["request"]["input_source"] == "DATASET"
-        assert state["request"]["dataset_id"] == "DS_TEST"
-        assert state["request"]["dataset_item_id"] == 1
-        assert state["request"]["image_id"] == "IMG00012"
-        assert stored["input"][1] == b"dataset-image"
-    finally:
-        db.close()
-
-
-def test_qwen_image_edit_lab_direct_original_to_worker_and_records_run(tmp_path, monkeypatch):
+        assert response["qwen_status"] == "SUCCESS"
+        assert response["transparent_status"] == "NOT_STARTED"
+        assert response["transparent_asset_status"] == "NOT_STARTED"
+        assert response["transparent_fish_uri"] is None
+        assert "qwen_fish_rgba" not in stored
+        assert processed == []
+        assert respodef test_qwen_image_edit_lab_direct_original_to_worker_and_records_run(tmp_path, monkeypatch):
     db = _session(tmp_path)
     try:
         stored = {}
+        worker_calls = []
+        processed = []
 
         def fake_store(run_id, kind, data, media_type, extension):
             uri = "local://qwen-image-edit-lab/" + run_id + "/" + kind + extension
             stored[kind] = (uri, data, media_type)
             return uri
 
+        def fake_managed(uri):
+            assert uri.endswith("/qwen_result_rgb.png")
+            return _generated_png(), "image/png"
+
         def fake_read(uri, *, label):
             assert uri == "http://worker/output.png"
             assert label == "qwen_lab_output"
             return _generated_png(), "image/png"
 
+        def fake_process(data):
+            processed.append(data)
+            return _fake_qwen_artifacts(data)
+
         def fake_worker(**kwargs):
+            worker_calls.append(kwargs)
             assert kwargs["visible_fish_refined_image_uri"].startswith("local://qwen-image-edit-lab/")
             assert kwargs["prompt"] == "test prompt"
             assert kwargs["negative_prompt"] == "avoid fish change"
@@ -332,11 +347,12 @@ def test_qwen_image_edit_lab_direct_original_to_worker_and_records_run(tmp_path,
             }
 
         monkeypatch.setattr(lab, "_store_bytes", fake_store)
+        monkeypatch.setattr(lab, "_read_managed_uri", fake_managed)
         monkeypatch.setattr(lab, "_read_image_uri", fake_read)
-        monkeypatch.setattr(lab, "process_qwen_output", lambda data: _fake_qwen_artifacts(data))
+        monkeypatch.setattr(lab, "process_qwen_output", fake_process)
         monkeypatch.setattr(lab, "invoke_qwen_refine_worker", fake_worker)
 
-        response = asyncio.run(
+        qwen_response = asyncio.run(
             lab.generate_qwen_image_edit_lab(
                 _upload(),
                 prompt="test prompt",
@@ -346,16 +362,30 @@ def test_qwen_image_edit_lab_direct_original_to_worker_and_records_run(tmp_path,
             )
         )
 
-        assert response["status"] == "SUCCESS"
-        assert response["model"] == "qwen-image-edit-2511"
-        assert response["seed"] == 123
-        assert response["time_ms"] == 456
-        assert response["output_image_uri"] == stored["qwen_result_rgb"][0]
-        assert response["transparent_asset_status"] == "SUCCESS"
-        assert response["transparent_fish_uri"] == stored["qwen_fish_rgba"][0]
-        assert response["fish_mask_uri"] == stored["qwen_fish_mask"][0]
+        assert qwen_response["status"] == "SUCCESS"
+        assert qwen_response["qwen_status"] == "SUCCESS"
+        assert qwen_response["transparent_status"] == "NOT_STARTED"
+        assert qwen_response["transparent_fish_uri"] is None
+        assert "qwen_fish_rgba" not in stored
+        assert processed == []
+        assert len(worker_calls) == 1
 
-        run = db.get(PipelineRun, response["run_id"])
+        transparent_response = lab.extract_qwen_image_edit_lab_transparent(
+            qwen_response["run_id"],
+            db=db,
+        )
+
+        assert transparent_response["status"] == "SUCCESS"
+        assert transparent_response["qwen_status"] == "SUCCESS"
+        assert transparent_response["transparent_status"] == "SUCCESS"
+        assert transparent_response["transparent_asset_status"] == "SUCCESS"
+        assert transparent_response["output_image_uri"] == stored["qwen_result_rgb"][0]
+        assert transparent_response["transparent_fish_uri"] == stored["qwen_fish_rgba"][0]
+        assert transparent_response["fish_mask_uri"] == stored["qwen_fish_mask"][0]
+        assert len(worker_calls) == 1
+        assert len(processed) == 1
+
+        run = db.get(PipelineRun, qwen_response["run_id"])
         assert run is not None
         assert run.pipeline_type == "QWEN_IMAGE_EDIT_LAB"
         assert run.model_version == "qwen-image-edit-2511"
@@ -363,6 +393,8 @@ def test_qwen_image_edit_lab_direct_original_to_worker_and_records_run(tmp_path,
         state = json.loads(run.stage_json)
         assert state["request"]["input_image_uri"] == stored["input"][0]
         assert state["result"]["output_image_uri"] == stored["qwen_result_rgb"][0]
+        assert state["result"]["qwen_status"] == "SUCCESS"
+        assert state["result"]["transparent_status"] == "SUCCESS"
         assert state["result"]["seed"] == 123
         assert state["stages"][-1]["status"] == "DONE"
         assert all("visible" not in json.dumps(item).lower() for item in state["stages"])
