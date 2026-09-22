@@ -200,6 +200,20 @@ def test_qwen_image_edit_lab_template_supports_dataset_selection():
     assert "new File([blob]" not in template
 
 
+def test_qwen_image_edit_lab_template_inline_script_has_no_doubled_string_terminator():
+    template = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "templates"
+        / "platform"
+        / "lab"
+        / "qwen_image_edit.html"
+    ).read_text(encoding="utf-8")
+
+    # A duplicated quote here prevents every page initializer from executing.
+    assert "</div>'' +" not in template
+
+
 def test_qwen_image_edit_lab_dataset_source_reads_server_side(tmp_path, monkeypatch):
     db = _session(tmp_path)
     try:
