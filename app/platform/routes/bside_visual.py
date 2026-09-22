@@ -4,7 +4,6 @@ import json
 import mimetypes
 import os
 import secrets
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -20,7 +19,7 @@ from starlette.requests import Request
 from app.db import get_db
 from app.platform.models import BsideVisualSession, BsideVisualStep, PipelineRun
 from app.platform.routes import qwen_image_edit_lab as qwen_lab
-from app.platform.services.bside_visual import compose_bside, outline, standardize, validate_transparent_fish
+from app.platform.services.bside_visual import compose_bside, outline, standardize
 from app.platform.services.bside_visual.repository import (
     create_steps,
     get_session,
@@ -37,12 +36,14 @@ from app.platform.services.bside_visual.schemas import (
     STEP_ORDER,
     STEP_OUTLINE,
     STEP_STANDARDIZE,
+    STEP_TRANSPARENT,
     ComposeRequest,
     OutlineRequest,
     StandardizeRequest,
 )
 from app.platform.services.bside_visual.style_registry import get_style, list_styles
 from app.platform.services.bside_visual.template_registry import get_template, list_templates
+from app.platform.services.qwen_output import process_qwen_output
 
 
 api_router = APIRouter(prefix="/api/qwen-lab", tags=["qwen-bside-visual"])
@@ -51,12 +52,14 @@ templates = Jinja2Templates(directory="app/templates")
 
 SESSION_STATUS = "ACTIVE"
 STEP_LABELS = {
+    STEP_TRANSPARENT: "透明背景鱼体",
     STEP_STANDARDIZE: "姿态标准化",
     STEP_OUTLINE: "特色描边",
     STEP_COMPOSE: "融入水体背景",
 }
 ASSET_LABELS = {
-    "source": "Qwen完整鱼体",
+    "source": "Qwen Result · RGB",
+    "transparent": "透明背景鱼体",
     "standardized": "标准姿态鱼",
     "outlined": "特色描边鱼",
     "final": "B面最终视觉",
@@ -86,14 +89,21 @@ def _page_url(session_id: str) -> str:
 
 
 def _source_url(run_id: str) -> str:
-    return f"/api/fish-portrait/qwen-lab/runs/{run_id}/media/transparent_fish"
+    return f"/api/fish-portrait/qwen-lab/runs/{run_id}/media/qwen_result_rgb"
 
 
 def _asset_url(session_id: str, asset: str) -> str:
     return f"/api/qwen-lab/bside-visual/{session_id}/media/{asset}"
 
 
-def _store_bytes(session_id: str, step_key: str, version: int, filename: str, data: bytes, media_type: str) -> str:
+def _store_bytes(
+    session_id: str,
+    step_key: str,
+    version: int,
+    filename: str,
+    data: bytes,
+    media_type: str,
+) -> str:
     object_name = f"experiments/qwen_image_edit_lab/bside/{session_id}/{step_key}/v{version}/{filename}"
     bucket_name = os.getenv("GCS_BUCKET", "").strip()
     if bucket_name:
@@ -103,7 +113,16 @@ def _store_bytes(session_id: str, step_key: str, version: int, filename: str, da
         except Exception as exc:
             raise RuntimeError(f"无法保存 B 面视觉资源：{exc}") from exc
         return f"gs://{bucket_name}/{object_name}"
-    path = Path("/tmp") / "yujian" / "qwen_image_edit_lab" / "bside" / session_id / step_key / f"v{version}" / filename
+    path = (
+        Path("/tmp")
+        / "yujian"
+        / "qwen_image_edit_lab"
+        / "bside"
+        / session_id
+        / step_key
+        / f"v{version}"
+        / filename
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
     return str(path)
@@ -113,25 +132,102 @@ def _read_uri(uri: str) -> tuple[bytes, str]:
     return qwen_lab._read_managed_uri(uri)
 
 
-def _qwen_output(db: Session, run_id: str) -> tuple[PipelineRun, str, bytes]:
+def _qwen_output(
+    db: Session,
+    run_id: str,
+) -> tuple[PipelineRun, str, bytes, str | None]:
+    """Resolve only the saved Qwen RGB asset; never start post-processing."""
+
     run = db.get(PipelineRun, str(run_id))
     if run is None or run.pipeline_type != qwen_lab.PIPELINE_TYPE:
         raise HTTPException(status_code=404, detail="Qwen Image Edit Run 不存在")
     if str(run.status or "").upper() != "SUCCESS":
-        raise HTTPException(status_code=409, detail={"error": "QWEN_RUN_NOT_SUCCESS", "message": "只有成功的 Qwen Run 才能进入 B 面视觉生成"})
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "QWEN_RUN_NOT_SUCCESS",
+                "message": "只有成功的 Qwen Run 才能进入 B 面视觉生成",
+            },
+        )
     state = qwen_lab._state_for_run(run)
     result = state.get("result") if isinstance(state.get("result"), dict) else {}
-    uri = str(result.get("transparent_fish_uri") or result.get("output_image_uri") or "").strip()
-    if not uri:
-        raise HTTPException(status_code=409, detail={"error": "QWEN_TRANSPARENT_ASSET_MISSING", "message": "该 Qwen Run 没有可用的透明鱼输出"})
+    rgb_uri = str(
+        result.get("qwen_result_rgb_uri") or result.get("output_image_uri") or ""
+    ).strip()
+    if not rgb_uri:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "QWEN_RGB_RESULT_MISSING",
+                "message": "该 Qwen Run 没有可用的 RGB 结果",
+            },
+        )
     try:
-        data, _media_type = _read_uri(uri)
-        validate_transparent_fish(data)
+        data, _media_type = _read_uri(rgb_uri)
+        qwen_lab.normalise_qwen_rgb(data)
     except Exception as exc:
-        if getattr(exc, "code", None) == "INVALID_TRANSPARENT_FISH":
-            raise HTTPException(status_code=422, detail={"error": "INVALID_TRANSPARENT_FISH", "message": str(exc)}) from exc
-        raise HTTPException(status_code=503, detail={"error": "QWEN_OUTPUT_UNREADABLE", "message": "Qwen 输出暂时不可读取"}) from exc
-    return run, uri, data
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "QWEN_RGB_RESULT_UNREADABLE",
+                "message": "Qwen RGB 结果暂时不可读取",
+            },
+        ) from exc
+    legacy_transparent_uri = str(result.get("transparent_fish_uri") or "").strip() or None
+    return run, rgb_uri, data, legacy_transparent_uri
+
+
+def _legacy_transparent_uri(db: Session, run_id: str) -> str | None:
+    run = db.get(PipelineRun, str(run_id))
+    if run is None:
+        return None
+    state = qwen_lab._state_for_run(run)
+    result = state.get("result") if isinstance(state.get("result"), dict) else {}
+    return str(result.get("transparent_fish_uri") or "").strip() or None
+
+
+def _hydrate_legacy_session(db: Session, session: BsideVisualSession) -> dict[str, BsideVisualStep]:
+    """Expose pre-four-step sessions without deleting their existing assets."""
+
+    steps = get_steps(db, session.session_id)
+    run = db.get(PipelineRun, session.source_qwen_run_id)
+    if run is not None:
+        state = qwen_lab._state_for_run(run)
+        result = state.get("result") if isinstance(state.get("result"), dict) else {}
+        rgb_uri = str(
+            result.get("qwen_result_rgb_uri") or result.get("output_image_uri") or ""
+        ).strip()
+        if not session.source_qwen_rgb_uri and rgb_uri:
+            session.source_qwen_rgb_uri = rgb_uri
+        transparent_uri = str(result.get("transparent_fish_uri") or "").strip() or None
+    else:
+        transparent_uri = None
+    transparent_uri = (
+        transparent_uri
+        or (str(session.source_transparent_fish_uri or "").strip() or None)
+    )
+    transparent_step = steps[STEP_TRANSPARENT]
+    if transparent_uri and not transparent_step.output_uri:
+        result = qwen_lab._state_for_run(run) if run is not None else {}
+        result_data = result.get("result") if isinstance(result.get("result"), dict) else {}
+        transparent_step.output_uri = transparent_uri
+        transparent_step.status = COMPLETE
+        transparent_step.version = max(1, int(transparent_step.version or 0))
+        transparent_step.metadata_json = json.dumps(
+            {
+                "legacy_qwen_transparent_asset": True,
+                "source_qwen_rgb_uri": session.source_qwen_rgb_uri,
+                "fish_mask_uri": result_data.get("fish_mask_uri"),
+                "transparent_fish_rgba_uri": transparent_uri,
+            },
+            ensure_ascii=False,
+        )
+    return steps
+
+
+def _qwen_rgb_uri(db: Session, session: BsideVisualSession) -> str | None:
+    _hydrate_legacy_session(db, session)
+    return str(session.source_qwen_rgb_uri or "").strip() or None
 
 
 def _step_response(session_id: str, row: BsideVisualStep) -> dict[str, Any]:
@@ -148,43 +244,70 @@ def _step_response(session_id: str, row: BsideVisualStep) -> dict[str, Any]:
         "output_url": _asset_url(session_id, row.step_key),
         "preview_url": _asset_url(session_id, preview_asset) if preview_asset else None,
         "available": bool(row.output_uri),
-        "error": {"code": row.error_code, "message": row.error_message} if row.error_code or row.error_message else None,
+        "error": (
+            {"code": row.error_code, "message": row.error_message}
+            if row.error_code or row.error_message
+            else None
+        ),
     }
 
 
 def _serialize_session(db: Session, session: BsideVisualSession) -> dict[str, Any]:
-    steps = get_steps(db, session.session_id)
+    steps = _hydrate_legacy_session(db, session)
     step_items = [_step_response(session.session_id, steps[key]) for key in STEP_ORDER]
     step_by_key = {item["step"]: item for item in step_items}
-    step_by_key[STEP_STANDARDIZE]["can_run"] = True
-    step_by_key[STEP_OUTLINE]["can_run"] = steps[STEP_STANDARDIZE].status == COMPLETE
+    step_by_key[STEP_TRANSPARENT]["can_run"] = (
+        bool(_qwen_rgb_uri(db, session)) and steps[STEP_TRANSPARENT].status != RUNNING
+    )
+    step_by_key[STEP_STANDARDIZE]["can_run"] = (
+        steps[STEP_TRANSPARENT].status == COMPLETE and steps[STEP_STANDARDIZE].status != RUNNING
+    )
+    step_by_key[STEP_OUTLINE]["can_run"] = (
+        steps[STEP_STANDARDIZE].status == COMPLETE and steps[STEP_OUTLINE].status != RUNNING
+    )
     step_by_key[STEP_COMPOSE]["can_run"] = (
-        steps[STEP_STANDARDIZE].status == COMPLETE and steps[STEP_OUTLINE].status == COMPLETE
+        steps[STEP_OUTLINE].status == COMPLETE and steps[STEP_COMPOSE].status != RUNNING
     )
     assets = []
     source_url = _source_url(session.source_qwen_run_id)
+    asset_step_map = {
+        "transparent": STEP_TRANSPARENT,
+        "standardized": STEP_STANDARDIZE,
+        "outlined": STEP_OUTLINE,
+        "final": STEP_COMPOSE,
+    }
     for key, label in ASSET_LABELS.items():
         if key == "source":
-            available = True
-            url = source_url
-            status = COMPLETE
+            available = bool(_qwen_rgb_uri(db, session))
+            url = source_url if available else None
+            status = COMPLETE if available else NOT_STARTED
         else:
-            step_key = {"standardized": STEP_STANDARDIZE, "outlined": STEP_OUTLINE, "final": STEP_COMPOSE}[key]
+            step_key = asset_step_map[key]
             row = steps[step_key]
             available = bool(row.output_uri)
             url = _asset_url(session.session_id, step_key) if available else None
             status = row.status
         assets.append({"key": key, "label": label, "available": available, "url": url, "status": status})
     completed = sum(1 for row in steps.values() if row.status == COMPLETE)
+    status_values = {key: steps[key].status for key in STEP_ORDER}
     return {
         "session_id": session.session_id,
         "source_qwen_run_id": session.source_qwen_run_id,
-        "source_transparent_fish_url": source_url,
+        "source_qwen_rgb_uri": session.source_qwen_rgb_uri,
+        "source_qwen_rgb_url": source_url if _qwen_rgb_uri(db, session) else None,
+        # Compatibility name for clients that displayed the old source field.
+        "source_transparent_fish_url": _asset_url(session.session_id, STEP_TRANSPARENT)
+        if steps[STEP_TRANSPARENT].output_uri
+        else None,
         "page_url": _page_url(session.session_id),
         "status": session.status,
-        "progress": {"completed": completed, "total": 3},
+        "progress": {"completed": completed, "total": 4},
         "steps": step_items,
         "assets": assets,
+        "transparent_status": status_values[STEP_TRANSPARENT],
+        "standardize_status": status_values[STEP_STANDARDIZE],
+        "outline_status": status_values[STEP_OUTLINE],
+        "bside_status": status_values[STEP_COMPOSE],
         "created_at": session.created_at.isoformat() if session.created_at else None,
         "updated_at": session.updated_at.isoformat() if session.updated_at else None,
     }
@@ -200,7 +323,7 @@ def _session_or_404(db: Session, session_id: str) -> BsideVisualSession:
 def _mark_stale(steps: dict[str, BsideVisualStep], keys: tuple[str, ...]) -> None:
     for key in keys:
         row = steps[key]
-        if row.output_uri:
+        if row.output_uri or row.status == COMPLETE:
             row.status = STALE
             row.error_code = None
             row.error_message = None
@@ -215,13 +338,23 @@ def _begin_step(db: Session, session: BsideVisualSession, row: BsideVisualStep) 
     db.commit()
 
 
-def _fail_step(db: Session, session: BsideVisualSession, row: BsideVisualStep, code: str, message: str) -> None:
+def _fail_step(
+    db: Session,
+    session: BsideVisualSession,
+    row: BsideVisualStep,
+    code: str,
+    message: str,
+) -> None:
     row.status = FAILED
     row.error_code = code
     row.error_message = str(message)[:2000]
     session.status = SESSION_STATUS
     session.updated_at = _utcnow()
     db.commit()
+
+
+def _step_error_status(code: str) -> int:
+    return 422 if code.startswith(("QWEN_", "POSE_", "STANDARDIZED_FISH", "INVALID_")) else 500
 
 
 @api_router.get("/bside-visual/options")
@@ -231,10 +364,10 @@ def bside_visual_options() -> dict[str, Any]:
         "styles": list_styles(),
         "templates": list_templates(),
         "source_contract": {
-            "type": "QWEN_TRANSPARENT_FISH_PNG",
+            "type": "QWEN_RGB_PNG",
             "alpha_threshold": 16,
             "gpu_required": False,
-            "analysis": "ALPHA_PCA_ONLY",
+            "step_1": "DETECTOR_SAM_ALPHA",
             "formal_output": "RGBA_REAL_FISH",
         },
     }
@@ -245,16 +378,20 @@ def create_or_get_bside_visual(run_id: str, db: Session = Depends(get_db)) -> di
     existing = get_session_for_qwen_run(db, run_id)
     if existing is not None:
         return {"created": False, **_serialize_session(db, existing)}
-    _run, source_uri, _source_data = _qwen_output(db, run_id)
+    _run, rgb_uri, _rgb_data, legacy_transparent_uri = _qwen_output(db, run_id)
     session = BsideVisualSession(
         session_id=_new_session_id(),
         source_qwen_run_id=run_id,
-        source_transparent_fish_uri=source_uri,
+        source_qwen_rgb_uri=rgb_uri,
+        # Existing installations may still have this column NOT NULL.
+        source_transparent_fish_uri=legacy_transparent_uri or "",
         status=SESSION_STATUS,
     )
     db.add(session)
     db.flush()
     create_steps(db, session.session_id)
+    if legacy_transparent_uri:
+        _hydrate_legacy_session(db, session)
     try:
         db.commit()
     except IntegrityError:
@@ -271,21 +408,98 @@ def get_bside_visual(session_id: str, db: Session = Depends(get_db)) -> dict[str
     return _serialize_session(db, _session_or_404(db, session_id))
 
 
+@api_router.post("/bside-visual/{session_id}/extract-transparent")
+def run_bside_transparent(
+    session_id: str,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    session = _session_or_404(db, session_id)
+    steps = get_steps(db, session_id)
+    row = steps[STEP_TRANSPARENT]
+    source_uri = _qwen_rgb_uri(db, session)
+    if not source_uri:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "QWEN_RGB_RESULT_MISSING", "message": "Qwen RGB 结果不存在"},
+        )
+    _begin_step(db, session, row)
+    try:
+        source_data, _media_type = _read_uri(source_uri)
+        artifacts = process_qwen_output(source_data)
+        version = row.version + 1
+        raw_mask_uri = _store_bytes(
+            session_id,
+            STEP_TRANSPARENT,
+            version,
+            "fish_mask_raw.png",
+            artifacts.fish_mask_raw,
+            "image/png",
+        )
+        mask_uri = _store_bytes(
+            session_id,
+            STEP_TRANSPARENT,
+            version,
+            "fish_mask.png",
+            artifacts.fish_mask,
+            "image/png",
+        )
+        transparent_uri = _store_bytes(
+            session_id,
+            STEP_TRANSPARENT,
+            version,
+            "transparent_fish_rgba.png",
+            artifacts.transparent_fish,
+            "image/png",
+        )
+        metadata = dict(artifacts.metadata)
+        metadata.update(
+            {
+                "source_qwen_rgb_uri": source_uri,
+                "fish_mask_raw_uri": raw_mask_uri,
+                "fish_mask_uri": mask_uri,
+                "transparent_fish_rgba_uri": transparent_uri,
+            }
+        )
+        row.output_uri = transparent_uri
+        row.preview_uri = None
+        row.metadata_json = json.dumps(metadata, ensure_ascii=False)
+        row.version = version
+        row.status = COMPLETE
+        session.source_qwen_rgb_uri = source_uri
+        session.updated_at = _utcnow()
+        _mark_stale(steps, (STEP_STANDARDIZE, STEP_OUTLINE, STEP_COMPOSE))
+        db.commit()
+    except Exception as exc:
+        code = getattr(exc, "error_code", None) or getattr(exc, "code", None) or "TRANSPARENT_FAILED"
+        _fail_step(db, session, row, code, str(exc))
+        raise HTTPException(
+            status_code=_step_error_status(str(code)),
+            detail={"error": code, "message": str(exc), "session_id": session_id},
+        ) from exc
+    return _serialize_session(db, session)
+
+
 @api_router.post("/bside-visual/{session_id}/standardize")
 def run_bside_standardize(
     session_id: str,
     payload: StandardizeRequest = Body(default=StandardizeRequest()),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    del payload
     session = _session_or_404(db, session_id)
     steps = get_steps(db, session_id)
+    if steps[STEP_TRANSPARENT].status != COMPLETE:
+        raise HTTPException(status_code=409, detail={"error": "STEP_LOCKED", "message": "请先完成透明背景鱼体"})
     row = steps[STEP_STANDARDIZE]
     _begin_step(db, session, row)
     try:
-        source_data, _media_type = _read_uri(session.source_transparent_fish_uri)
-        artifact = standardize(source_data, payload.manual_rotation_offset_deg)
+        source_uri = steps[STEP_TRANSPARENT].output_uri or ""
+        source_data, _media_type = _read_uri(source_uri)
+        # Step 2 is automatic in V1. The service's legacy offset parameter is
+        # kept for direct compatibility, but the route never accepts a user angle.
+        artifact = standardize(source_data, 0.0)
         artifact_metadata = dict(artifact.metadata)
-        artifact_metadata["source_uri"] = session.source_transparent_fish_uri
+        artifact_metadata["source_uri"] = source_uri
         version = row.version + 1
         row.output_uri = _store_bytes(
             session_id,
@@ -306,8 +520,10 @@ def run_bside_standardize(
     except Exception as exc:
         code = getattr(exc, "code", "STANDARDIZE_FAILED")
         _fail_step(db, session, row, code, str(exc))
-        status_code = 422 if code in {"INVALID_TRANSPARENT_FISH", "ROTATION_OFFSET_INVALID"} or code.startswith("POSE_") else 500
-        raise HTTPException(status_code=status_code, detail={"error": code, "message": str(exc), "session_id": session_id}) from exc
+        raise HTTPException(
+            status_code=_step_error_status(str(code)),
+            detail={"error": code, "message": str(exc), "session_id": session_id},
+        ) from exc
     return _serialize_session(db, session)
 
 
@@ -350,8 +566,10 @@ def run_bside_outline(
     except Exception as exc:
         code = getattr(exc, "code", "OUTLINE_FAILED")
         _fail_step(db, session, row, code, str(exc))
-        status_code = 422 if code.startswith(("STANDARDIZED_FISH", "POSE_")) else 500
-        raise HTTPException(status_code=status_code, detail={"error": code, "message": str(exc), "session_id": session_id}) from exc
+        raise HTTPException(
+            status_code=_step_error_status(str(code)),
+            detail={"error": code, "message": str(exc), "session_id": session_id},
+        ) from exc
     return _serialize_session(db, session)
 
 
@@ -363,8 +581,8 @@ def run_bside_compose(
 ) -> dict[str, Any]:
     session = _session_or_404(db, session_id)
     steps = get_steps(db, session_id)
-    if steps[STEP_STANDARDIZE].status != COMPLETE or steps[STEP_OUTLINE].status != COMPLETE:
-        raise HTTPException(status_code=409, detail={"error": "STEP_LOCKED", "message": "请先完成姿态标准化和特色描边"})
+    if steps[STEP_OUTLINE].status != COMPLETE:
+        raise HTTPException(status_code=409, detail={"error": "STEP_LOCKED", "message": "请先完成特色描边"})
     row = steps[STEP_COMPOSE]
     _begin_step(db, session, row)
     try:
@@ -412,8 +630,10 @@ def run_bside_compose(
     except Exception as exc:
         code = getattr(exc, "code", "COMPOSE_FAILED")
         _fail_step(db, session, row, code, str(exc))
-        status_code = 422 if code.startswith(("STANDARDIZED_FISH", "POSE_")) else 500
-        raise HTTPException(status_code=status_code, detail={"error": code, "message": str(exc), "session_id": session_id}) from exc
+        raise HTTPException(
+            status_code=_step_error_status(str(code)),
+            detail={"error": code, "message": str(exc), "session_id": session_id},
+        ) from exc
     return _serialize_session(db, session)
 
 
@@ -422,8 +642,8 @@ def bside_visual_media(session_id: str, asset: str, db: Session = Depends(get_db
     session = _session_or_404(db, session_id)
     steps = get_steps(db, session_id)
     if asset == "source":
-        uri = session.source_transparent_fish_uri
-    elif asset in {STEP_STANDARDIZE, STEP_OUTLINE, STEP_COMPOSE}:
+        uri = _qwen_rgb_uri(db, session)
+    elif asset in {STEP_TRANSPARENT, STEP_STANDARDIZE, STEP_OUTLINE, STEP_COMPOSE}:
         uri = steps[asset].output_uri
     elif asset == "compose_preview":
         uri = steps[STEP_COMPOSE].preview_uri
@@ -440,11 +660,18 @@ def bside_visual_media(session_id: str, asset: str, db: Session = Depends(get_db
     return Response(
         content=content,
         media_type=media_type or mimetypes.guess_type(str(uri))[0] or "application/octet-stream",
-        headers={"Cache-Control": "private, no-cache, must-revalidate", "X-Content-Type-Options": "nosniff"},
+        headers={
+            "Cache-Control": "private, no-cache, must-revalidate",
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 
-@page_router.get("/platform/fish-portrait/qwen-lab/bside-visual/{session_id}", response_class=HTMLResponse, include_in_schema=False)
+@page_router.get(
+    "/platform/fish-portrait/qwen-lab/bside-visual/{session_id}",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
 def bside_visual_page(request: Request, session_id: str) -> HTMLResponse:
     return templates.TemplateResponse(
         request=request,
