@@ -6,12 +6,15 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-from PIL import Image, ImageFilter
+from PIL import Image
 
 
 ALPHA_THRESHOLD = 16
 MAX_LONG_EDGE = 1600
 PADDING_RATIO = 0.08
+RESIDUAL_PASS_DEG = 2.0
+RESIDUAL_WARN_DEG = 4.0
+MIN_FOREGROUND_PIXELS = 8
 
 
 class BsideVisualError(ValueError):
@@ -41,9 +44,12 @@ def _open_source(data: bytes) -> Image.Image:
         raise
     except Exception as exc:
         raise BsideVisualError("INVALID_TRANSPARENT_FISH", "源图片不是可读取的透明 PNG") from exc
+
     alpha = np.asarray(image, dtype=np.uint8)[:, :, 3]
     if int(np.count_nonzero(alpha >= ALPHA_THRESHOLD)) == 0:
-        raise BsideVisualError("INVALID_TRANSPARENT_FISH", "源图片没有有效的非透明鱼体像素")
+        raise BsideVisualError("POSE_ALPHA_EMPTY", "源图片 Alpha 没有有效鱼体像素")
+    if int(np.count_nonzero(alpha >= ALPHA_THRESHOLD)) < MIN_FOREGROUND_PIXELS:
+        raise BsideVisualError("POSE_FOREGROUND_TOO_SMALL", "源图片有效鱼体像素过少")
     return image
 
 
@@ -56,64 +62,141 @@ def validate_transparent_fish(data: bytes) -> dict[str, Any]:
         "has_alpha": True,
         "nontransparent_pixels": int(np.count_nonzero(alpha >= ALPHA_THRESHOLD)),
         "alpha_threshold": ALPHA_THRESHOLD,
+        "mode": "RGBA",
+        "format": "PNG",
     }
 
 
-def _orientation(mask: np.ndarray) -> tuple[float, float, float, str]:
-    """Return auto rotation, axis ratio, confidence and a human message."""
+def _normalize_axis_angle(angle_deg: float) -> float:
+    """Normalize an undirected PCA axis to [-90, 90)."""
 
-    mask_image = Image.fromarray((mask.astype(np.uint8) * 255), mode="L")
-    eroded = np.asarray(mask_image.filter(ImageFilter.MinFilter(3)), dtype=np.uint8) >= 128
-    if int(eroded.sum()) < max(24, int(mask.sum() * 0.08)):
-        eroded = mask
-    yx = np.column_stack(np.nonzero(eroded))
-    if len(yx) < 8:
-        return 0.0, 1.0, 0.0, "有效像素过少，保留原始方向"
+    return ((float(angle_deg) + 90.0) % 180.0) - 90.0
+
+
+def _analysis_mask(alpha: np.ndarray) -> np.ndarray:
+    """Build an analysis-only mask from Alpha without changing formal RGB."""
+
+    mask = np.asarray(alpha, dtype=np.uint8) >= ALPHA_THRESHOLD
+    foreground_count = int(mask.sum())
+    if foreground_count == 0:
+        raise BsideVisualError("POSE_ALPHA_EMPTY", "源图片 Alpha 没有有效鱼体像素")
+    if foreground_count < MIN_FOREGROUND_PIXELS:
+        raise BsideVisualError("POSE_FOREGROUND_TOO_SMALL", "源图片有效鱼体像素过少")
+    # The Qwen transparent asset already has its segmentation mask applied.
+    # Keep the thresholded Alpha intact so thin fins and tails participate in
+    # the axis calculation; this array is never used to render the output.
+    return mask
+
+
+def _principal_axis(mask: np.ndarray) -> tuple[float, float, float, tuple[float, float]]:
+    """Return axis angle, anisotropy, confidence and Alpha centroid."""
+
+    yx = np.column_stack(np.nonzero(np.asarray(mask, dtype=bool)))
+    if len(yx) < MIN_FOREGROUND_PIXELS:
+        raise BsideVisualError("POSE_FOREGROUND_TOO_SMALL", "姿态分析前景像素过少")
 
     xy = yx[:, [1, 0]].astype(np.float64)
-    centered = xy - xy.mean(axis=0, keepdims=True)
-    covariance = np.cov(centered, rowvar=False)
+    centroid = (float(xy[:, 0].mean()), float(xy[:, 1].mean()))
+    centered = xy - np.asarray(centroid, dtype=np.float64)
+    covariance = np.cov(centered, rowvar=False, bias=True)
+    if np.asarray(covariance).shape != (2, 2) or not np.all(np.isfinite(covariance)):
+        raise BsideVisualError("POSE_AXIS_DETECTION_FAILED", "无法计算鱼体主轴协方差")
+
     eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+    if not np.all(np.isfinite(eigenvalues)) or not np.all(np.isfinite(eigenvectors)):
+        raise BsideVisualError("POSE_AXIS_DETECTION_FAILED", "鱼体主轴计算结果无效")
+
     order = np.argsort(eigenvalues)
     minor = max(float(eigenvalues[order[0]]), 1e-9)
     major = max(float(eigenvalues[order[-1]]), minor)
     axis_ratio = math.sqrt(major / minor)
-    confidence = max(0.0, min(1.0, (axis_ratio - 1.0) / 2.0))
-    if axis_ratio < 1.15:
-        return 0.0, axis_ratio, confidence, "方向置信度较低，未强制旋转"
+    if not math.isfinite(axis_ratio) or axis_ratio <= 0:
+        raise BsideVisualError("POSE_AXIS_DETECTION_FAILED", "鱼体主轴比例无效")
 
     vector = eigenvectors[:, order[-1]]
-    axis_angle = math.degrees(math.atan2(float(vector[1]), float(vector[0])))
-    # PCA has a 180-degree ambiguity.  Normalize the rotation to the smallest
-    # correction without flipping the image or changing the head direction.
-    axis_angle = ((axis_angle + 90.0) % 180.0) - 90.0
-    rotation = 0.0 if abs(axis_angle) < 3.0 else -axis_angle
-    return rotation, axis_ratio, confidence, "依据主体主轴完成水平归一化"
+    detected_angle = _normalize_axis_angle(
+        math.degrees(math.atan2(float(vector[1]), float(vector[0])))
+    )
+    confidence = max(0.0, min(1.0, (axis_ratio - 1.0) / 2.0))
+    return detected_angle, axis_ratio, confidence, centroid
 
 
-def _rotate_premultiplied(image: Image.Image, angle: float) -> Image.Image:
-    rgba = np.asarray(image, dtype=np.float32) / 255.0
-    alpha = rgba[:, :, 3:4]
-    premultiplied = np.clip(rgba[:, :, :3] * alpha, 0.0, 1.0)
-    rgb_image = Image.fromarray(np.round(premultiplied * 255.0).astype(np.uint8), mode="RGB")
-    alpha_image = image.getchannel("A")
+def _foreground_metrics(image: Image.Image) -> dict[str, Any]:
+    rgba = np.asarray(image.convert("RGBA"), dtype=np.uint8)
+    alpha = rgba[:, :, 3]
+    foreground = rgba[alpha >= ALPHA_THRESHOLD, :3].astype(np.float64)
+    if len(foreground) == 0:
+        raise BsideVisualError("POSE_ALPHA_EMPTY", "输出没有有效鱼体像素")
+    channel_variance = np.var(foreground, axis=0)
+    return {
+        "alpha_min": int(alpha.min()),
+        "alpha_max": int(alpha.max()),
+        "alpha_coverage": round(float(np.count_nonzero(alpha)) / alpha.size, 6),
+        "foreground_ratio": round(float(np.count_nonzero(alpha >= ALPHA_THRESHOLD)) / alpha.size, 6),
+        "foreground_rgb_mean": [round(float(value), 3) for value in foreground.mean(axis=0)],
+        "foreground_rgb_variance": round(float(channel_variance.mean()), 6),
+    }
+
+
+def _rotate_premultiplied(
+    image: Image.Image,
+    angle: float,
+    center: tuple[float, float],
+) -> Image.Image:
+    """Rotate RGB and Alpha together while avoiding transparent-edge color bleed."""
+
+    rgba = np.asarray(image.convert("RGBA"), dtype=np.float32) / 255.0
+    alpha_fraction = rgba[:, :, 3:4]
+    premultiplied = np.clip(rgba[:, :, :3] * alpha_fraction, 0.0, 1.0)
+    rgb_image = Image.fromarray(
+        np.round(premultiplied * 255.0).astype(np.uint8),
+        mode="RGB",
+    )
+    alpha_image = image.convert("RGBA").getchannel("A")
+
     if abs(angle) >= 1e-6:
-        rgb_image = rgb_image.rotate(angle, resample=Image.Resampling.BICUBIC, expand=True, fillcolor=(0, 0, 0))
-        alpha_image = alpha_image.rotate(angle, resample=Image.Resampling.BICUBIC, expand=True, fillcolor=0)
-    rgb = np.asarray(rgb_image, dtype=np.float32)
-    alpha_array = np.asarray(alpha_image, dtype=np.float32)
-    alpha_fraction = alpha_array / 255.0
-    restored = np.zeros_like(rgb)
-    np.divide(rgb, alpha_fraction[:, :, None], out=restored, where=alpha_fraction[:, :, None] > 1e-5)
-    restored = np.clip(restored * 255.0, 0.0, 255.0).astype(np.uint8)
-    return Image.fromarray(np.dstack((restored, alpha_array.astype(np.uint8))), mode="RGBA")
+        rotate_kwargs = {
+            "resample": Image.Resampling.BICUBIC,
+            "expand": True,
+            "fillcolor": (0, 0, 0),
+            "center": center,
+        }
+        rgb_image = rgb_image.rotate(angle, **rotate_kwargs)
+        alpha_image = alpha_image.rotate(
+            angle,
+            resample=Image.Resampling.BICUBIC,
+            expand=True,
+            fillcolor=0,
+            center=center,
+        )
+
+    rotated_rgb = np.asarray(rgb_image, dtype=np.float32)
+    rotated_alpha = np.clip(
+        np.rint(np.asarray(alpha_image, dtype=np.float32)),
+        0.0,
+        255.0,
+    ).astype(np.uint8)
+    rotated_alpha_fraction = rotated_alpha.astype(np.float32) / 255.0
+    restored_rgb = np.zeros_like(rotated_rgb)
+    np.divide(
+        rotated_rgb,
+        rotated_alpha_fraction[:, :, None],
+        out=restored_rgb,
+        where=rotated_alpha_fraction[:, :, None] > 1e-5,
+    )
+    restored_rgb = np.clip(np.rint(restored_rgb * 255.0), 0.0, 255.0).astype(np.uint8)
+    return Image.fromarray(
+        np.dstack((restored_rgb, rotated_alpha)),
+        mode="RGBA",
+    )
 
 
 def _tight_crop(image: Image.Image) -> Image.Image:
-    alpha = np.asarray(image, dtype=np.uint8)[:, :, 3]
+    alpha = np.asarray(image.convert("RGBA"), dtype=np.uint8)[:, :, 3]
     yx = np.column_stack(np.nonzero(alpha >= ALPHA_THRESHOLD))
     if len(yx) == 0:
-        raise BsideVisualError("INVALID_TRANSPARENT_FISH", "旋转后没有有效鱼体像素")
+        raise BsideVisualError("POSE_RGBA_EXPORT_FAILED", "旋转后没有有效鱼体像素")
+
     top, left = yx.min(axis=0)
     bottom, right = yx.max(axis=0) + 1
     width = int(right - left)
@@ -127,45 +210,126 @@ def _tight_crop(image: Image.Image) -> Image.Image:
 
 
 def standardize(source_fish: bytes, manual_rotation_offset_deg: float = 0.0) -> ImageArtifact:
-    """Standardize a transparent Qwen fish PNG without segmentation or generation."""
+    """Rotate the original Qwen RGBA fish into a horizontal CPU-only pose."""
 
     image = _open_source(source_fish)
     source_width, source_height = image.size
-    alpha = np.asarray(image, dtype=np.uint8)[:, :, 3]
-    mask = alpha >= ALPHA_THRESHOLD
-    auto_rotation, axis_ratio, confidence, confidence_message = _orientation(mask)
+    source_alpha = np.asarray(image, dtype=np.uint8)[:, :, 3]
+    analysis_mask = _analysis_mask(source_alpha)
+    detected_axis_angle, axis_ratio, confidence, centroid = _principal_axis(analysis_mask)
+
     offset = float(manual_rotation_offset_deg)
-    if not -15.0 <= offset <= 15.0 or abs(offset * 2 - round(offset * 2)) > 1e-6:
-        raise BsideVisualError("ROTATION_OFFSET_INVALID", "手动旋转偏移必须在 -15 到 +15 度之间，步进 0.5 度")
-    actual_rotation = auto_rotation + offset if confidence >= 0.075 else offset
-    if abs(actual_rotation) < 3.0:
-        actual_rotation = 0.0
-    rotated = _rotate_premultiplied(image, actual_rotation)
+    if not math.isfinite(offset) or not -15.0 <= offset <= 15.0 or abs(offset * 2 - round(offset * 2)) > 1e-6:
+        raise BsideVisualError(
+            "ROTATION_OFFSET_INVALID",
+            "手动旋转偏移必须在 -15 到 +15 度之间，步进 0.5 度",
+        )
+
+    # PIL's Image.rotate uses the opposite visual sign from the y-down image
+    # coordinate angle returned by atan2. Applying the detected angle (not its
+    # negation) is verified below by the residual PCA pass.
+    auto_rotation = detected_axis_angle
+    applied_rotation = auto_rotation + offset
+    rotated = _rotate_premultiplied(image, applied_rotation, centroid)
     cropped = _tight_crop(rotated)
+
     pre_resize_width, pre_resize_height = cropped.size
-    long_edge = max(cropped.size)
-    if long_edge > MAX_LONG_EDGE:
-        scale = MAX_LONG_EDGE / long_edge
+    if max(cropped.size) > MAX_LONG_EDGE:
+        scale = MAX_LONG_EDGE / max(cropped.size)
         cropped = cropped.resize(
-            (max(1, round(cropped.width * scale)), max(1, round(cropped.height * scale))),
+            (
+                max(1, round(cropped.width * scale)),
+                max(1, round(cropped.height * scale)),
+            ),
             Image.Resampling.LANCZOS,
         )
+
+    output_metrics = _foreground_metrics(cropped)
+    source_metrics = _foreground_metrics(image)
+    if (
+        source_metrics["foreground_rgb_variance"] > 1.0
+        and output_metrics["foreground_rgb_variance"] < 0.05
+    ):
+        raise BsideVisualError(
+            "POSE_RGBA_EXPORT_FAILED",
+            "姿态标准化后前景 RGB 纹理丢失，拒绝输出白色/纯色 silhouette",
+        )
+
+    residual_mask = _analysis_mask(
+        np.asarray(cropped.convert("RGBA"), dtype=np.uint8)[:, :, 3]
+    )
+    residual_axis_angle, _residual_ratio, _residual_confidence, _residual_centroid = _principal_axis(
+        residual_mask
+    )
+    expected_residual = _normalize_axis_angle(-offset)
+    residual_error = _normalize_axis_angle(residual_axis_angle - expected_residual)
+    absolute_error = abs(residual_error)
+    if absolute_error <= RESIDUAL_PASS_DEG:
+        pose_validation = "PASS"
+    elif absolute_error <= RESIDUAL_WARN_DEG:
+        pose_validation = "WARN"
+    else:
+        raise BsideVisualError(
+            "POSE_AXIS_DETECTION_FAILED",
+            f"姿态标准化残差 {residual_error:.2f}° 超过 4°",
+        )
+
     output = io.BytesIO()
     cropped.save(output, format="PNG", optimize=True)
-    metadata = {
-        "rotation_deg": round(actual_rotation, 3),
-        "auto_rotation_deg": round(auto_rotation, 3),
-        "manual_rotation_offset_deg": round(offset, 3),
-        "axis_ratio": round(axis_ratio, 4),
-        "orientation_confidence": round(confidence, 4),
-        "orientation_message": confidence_message,
+    metadata: dict[str, Any] = {
+        "format": "PNG",
+        "mode": "RGBA",
+        "channels": 4,
         "source_width": source_width,
         "source_height": source_height,
+        "detected_axis_angle_deg": round(detected_axis_angle, 3),
+        "target_axis_angle_deg": 0.0,
+        "auto_rotation_deg": round(auto_rotation, 3),
+        "manual_rotation_offset_deg": round(offset, 3),
+        "applied_rotation_deg": round(applied_rotation, 3),
+        # Keep the old field for existing consumers while making the new
+        # semantics explicit.
+        "rotation_deg": round(applied_rotation, 3),
+        "residual_axis_angle_deg": round(residual_axis_angle, 3),
+        "expected_residual_axis_angle_deg": round(expected_residual, 3),
+        "residual_axis_error_deg": round(residual_error, 3),
+        "pose_validation": pose_validation,
+        "axis_ratio": round(axis_ratio, 4),
+        "orientation_confidence": round(confidence, 4),
+        "orientation_message": (
+            "PCA 主轴已自动摆平；人工偏移作为最终旋转角叠加"
+            if offset == 0
+            else "PCA 主轴已自动摆平；已叠加人工微调"
+        ),
+        "source_alpha_min": source_metrics["alpha_min"],
+        "source_alpha_max": source_metrics["alpha_max"],
+        "source_foreground_rgb_variance": source_metrics["foreground_rgb_variance"],
+        "output_alpha_min": output_metrics["alpha_min"],
+        "output_alpha_max": output_metrics["alpha_max"],
+        "alpha_min": output_metrics["alpha_min"],
+        "alpha_max": output_metrics["alpha_max"],
+        "alpha_coverage": output_metrics["alpha_coverage"],
+        "foreground_ratio": output_metrics["foreground_ratio"],
+        "foreground_rgb_mean": output_metrics["foreground_rgb_mean"],
+        "foreground_rgb_variance": output_metrics["foreground_rgb_variance"],
+        "rgb_preserved_inside_fish": True,
+        "transparent_background": output_metrics["alpha_min"] == 0,
+        "expanded_rotation_canvas": True,
+        "uniform_scale": True,
+        "direction_flipped": False,
+        "head_direction_changed": False,
         "pre_resize_width": pre_resize_width,
         "pre_resize_height": pre_resize_height,
         "output_width": cropped.width,
         "output_height": cropped.height,
         "alpha_threshold": ALPHA_THRESHOLD,
-        "direction_flipped": False,
     }
     return ImageArtifact(output.getvalue(), metadata)
+
+
+__all__ = [
+    "BsideVisualError",
+    "ImageArtifact",
+    "standardize",
+    "validate_transparent_fish",
+]
