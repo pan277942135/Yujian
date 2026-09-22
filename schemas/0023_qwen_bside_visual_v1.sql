@@ -6,7 +6,9 @@
 CREATE TABLE IF NOT EXISTS qwen_bside_visual_session (
   session_id VARCHAR(128) PRIMARY KEY,
   source_qwen_run_id VARCHAR(128) NOT NULL UNIQUE REFERENCES pipeline_run(run_id) ON DELETE CASCADE,
-  source_transparent_fish_uri TEXT NOT NULL,
+  source_qwen_rgb_uri TEXT,
+  -- Kept for historical sessions created before Step 1 moved into B-side.
+  source_transparent_fish_uri TEXT,
   status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
   created_at TIMESTAMP WITH TIME ZONE NOT NULL,
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL
