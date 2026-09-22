@@ -6,42 +6,43 @@
   <title>B面视觉生成 · 渔见</title>
   <style>
     :root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color:#17252b;background:#f3f7f5;--ink:#17252b;--muted:#71817d;--line:#dfe8e4;--brand:#164f48;--soft:#edf5f1;--gold:#b07b2a}
-    *{box-sizing:border-box}body{margin:0;min-height:100vh;background:linear-gradient(135deg,#eef5f2,#fbfaf5)}button,input{font:inherit}button{-webkit-tap-highlight-color:transparent}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;background:linear-gradient(135deg,#eef5f2,#fbfaf5)}button{font:inherit;-webkit-tap-highlight-color:transparent}
     .bside-shell{min-height:100vh}.bside-header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:15px;padding:15px 28px;border-bottom:1px solid var(--line);background:rgba(248,252,250,.94);backdrop-filter:blur(12px)}.bside-close{border:0;background:transparent;color:#315c51;font-size:28px;line-height:1;cursor:pointer;padding:2px 6px}.bside-heading{min-width:0}.bside-heading h1{margin:0;font-size:20px;letter-spacing:-.03em}.bside-heading p{margin:4px 0 0;color:var(--muted);font-size:12px}.bside-header-spacer{flex:1}.bside-run{color:var(--muted);font-size:12px;white-space:nowrap}.bside-badge{border:1px solid #e8d39b;border-radius:999px;background:#fff8e8;color:#825e1d;padding:5px 9px;font-weight:750;font-size:11px;white-space:nowrap}.bside-progress{font-weight:800;color:#315c51;font-size:13px;white-space:nowrap}
     .bside-main{width:min(1440px,100%);margin:0 auto;padding:24px 28px 48px}.bside-notice{border:1px solid #cfe1d8;border-radius:12px;background:#edf7f1;color:#315e51;padding:11px 13px;line-height:1.55;font-size:12px;margin-bottom:16px}.bside-grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(360px,.85fr);gap:16px;align-items:start}.bside-panel{border:1px solid var(--line);border-radius:16px;background:rgba(255,255,255,.9);box-shadow:0 8px 24px rgba(39,75,65,.04);padding:18px}.bside-panel h2{margin:0;font-size:17px}.bside-panel p{margin:5px 0 0;color:var(--muted);line-height:1.5;font-size:12px}.bside-panel-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}.bside-preview-toolbar{display:flex;gap:6px;flex-wrap:wrap}.bside-preview-toolbar button{border:1px solid #cddfd7;border-radius:8px;background:#fff;color:#48685e;padding:6px 9px;cursor:pointer;font-size:12px}.bside-preview-toolbar button.active{border-color:#2a8068;background:#edf8f2;color:#185e4c}.bside-preview-stage{display:grid;place-items:center;min-height:560px;border:1px solid #d5e5df;border-radius:12px;overflow:hidden;background-color:#edf4f1;background-image:linear-gradient(45deg,#d9e3df 25%,transparent 25%),linear-gradient(-45deg,#d9e3df 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#d9e3df 75%),linear-gradient(-45deg,transparent 75%,#d9e3df 75%);background-size:24px 24px;background-position:0 0,0 12px,12px -12px,-12px 0}.bside-preview-stage.dark{background:#173936;background-image:none}.bside-preview-stage.light{background:#f8fbfa;background-image:none}.bside-preview-stage img{display:block;width:100%;height:auto;max-height:760px;object-fit:contain}.bside-preview-empty{padding:40px;text-align:center;color:var(--muted);font-size:13px}.bside-preview-empty[hidden]{display:none}
-    .bside-assets{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:12px}.bside-asset{border:1px solid #d5e5df;border-radius:10px;background:#fbfefd;padding:7px;text-align:left;cursor:pointer;color:inherit}.bside-asset:hover:not(:disabled),.bside-asset.active{border-color:#2a8068;background:#eff9f4;box-shadow:0 0 0 2px rgba(42,128,104,.12)}.bside-asset:disabled{opacity:.45;cursor:not-allowed}.bside-asset img{display:block;width:100%;aspect-ratio:1/1;object-fit:contain;border-radius:7px;background:#edf4f1}.bside-asset strong{display:block;font-size:11px;line-height:1.35;margin-top:6px}.bside-asset small{display:block;color:var(--muted);font-size:10px;margin-top:3px}
-    .bside-stepper{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:16px}.bside-step{position:relative;border:1px solid #d5e5df;border-radius:10px;background:#fbfefd;padding:11px;min-height:92px}.bside-step.complete{border-color:#9bcbb6;background:#eff9f4}.bside-step.running{border-color:#dfc27f;background:#fff9e9}.bside-step.failed{border-color:#e4b3ad;background:#fff4f1}.bside-step.stale{border-color:#d8c895;background:#fffaed}.bside-step strong{display:block;font-size:13px}.bside-step small{display:block;color:var(--muted);font-size:11px;line-height:1.4;margin-top:5px}.bside-step button{margin-top:9px;border:1px solid #cddfd7;border-radius:8px;background:#fff;color:#315c51;padding:5px 8px;cursor:pointer;font-size:11px;font-weight:750}.bside-step button:disabled{opacity:.45;cursor:not-allowed}.bside-step-status{position:absolute;right:9px;top:10px;color:#6c817a;font-size:10px;font-weight:800}
-    .bside-controls{display:grid;gap:14px}.bside-control-group{border-top:1px solid #e3ece8;padding-top:13px}.bside-control-group h3{margin:0;font-size:14px}.bside-control-group p{margin-top:4px}.bside-style-grid,.bside-template-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}.bside-choice{border:1px solid #d5e5df;border-radius:10px;background:#fff;text-align:left;padding:10px;cursor:pointer;color:#315c51}.bside-choice:hover,.bside-choice.selected{border-color:#2a8068;background:#eff9f4;box-shadow:0 0 0 2px rgba(42,128,104,.1)}.bside-choice strong{display:block;font-size:12px}.bside-choice small{display:block;margin-top:4px;color:var(--muted);font-size:10px;line-height:1.4}.bside-color{display:inline-block;width:12px;height:12px;border-radius:50%;vertical-align:-2px;margin-right:4px;border:1px solid rgba(0,0,0,.12)}.bside-field{display:grid;gap:6px;margin-top:10px}.bside-field label{font-size:12px;color:#48685e;font-weight:750}.bside-field input{width:100%;border:1px solid #cddfd7;border-radius:8px;background:#fff;padding:8px 9px;color:var(--ink)}.bside-hint{font-size:11px;color:var(--muted);line-height:1.5}.bside-error{display:none;border:1px solid #efc0b9;border-radius:9px;background:#fff3f1;color:#9e3f36;padding:10px 11px;white-space:pre-wrap;line-height:1.5;font-size:12px}.bside-error.visible{display:block}
-    @media(max-width:980px){.bside-grid{grid-template-columns:1fr}.bside-preview-stage{min-height:360px}.bside-header{padding-left:16px;padding-right:16px}.bside-main{padding-left:16px;padding-right:16px}}@media(max-width:620px){.bside-run,.bside-badge{display:none}.bside-header{gap:9px}.bside-heading h1{font-size:18px}.bside-progress{font-size:12px}.bside-stepper{grid-template-columns:1fr}.bside-assets{grid-template-columns:repeat(2,minmax(0,1fr))}.bside-style-grid,.bside-template-grid{grid-template-columns:1fr}.bside-preview-stage{min-height:300px}}
+    .bside-assets{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:9px;margin-top:12px}.bside-asset{border:1px solid #d5e5df;border-radius:10px;background:#fbfefd;padding:7px;text-align:left;cursor:pointer;color:inherit}.bside-asset:hover:not(:disabled),.bside-asset.active{border-color:#2a8068;background:#eff9f4;box-shadow:0 0 0 2px rgba(42,128,104,.12)}.bside-asset:disabled{opacity:.45;cursor:not-allowed}.bside-asset img{display:block;width:100%;aspect-ratio:1/1;object-fit:contain;border-radius:7px;background:#edf4f1}.bside-asset strong{display:block;font-size:11px;line-height:1.35;margin-top:6px}.bside-asset small{display:block;color:var(--muted);font-size:10px;line-height:1.35;margin-top:3px}
+    .bside-stepper{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:16px}.bside-step{position:relative;border:1px solid #d5e5df;border-radius:10px;background:#fbfefd;padding:11px;min-height:126px}.bside-step.complete{border-color:#9bcbb6;background:#eff9f4}.bside-step.running{border-color:#dfc27f;background:#fff9e9}.bside-step.failed{border-color:#e4b3ad;background:#fff4f1}.bside-step.stale{border-color:#d8c895;background:#fffaed}.bside-step strong{display:block;font-size:13px;padding-right:45px}.bside-step small{display:block;color:var(--muted);font-size:11px;line-height:1.4;margin-top:5px;min-height:31px}.bside-step button{margin-top:9px;border:1px solid #cddfd7;border-radius:8px;background:#fff;color:#315c51;padding:5px 8px;cursor:pointer;font-size:11px;font-weight:750}.bside-step button:disabled{opacity:.45;cursor:not-allowed}.bside-step-status{position:absolute;right:9px;top:10px;color:#6c817a;font-size:10px;font-weight:800}
+    .bside-controls{display:grid;gap:14px}.bside-control-group{border-top:1px solid #e3ece8;padding-top:13px}.bside-control-group h3{margin:0;font-size:14px}.bside-control-group p{margin-top:4px}.bside-style-grid,.bside-template-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}.bside-choice{border:1px solid #d5e5df;border-radius:10px;background:#fff;text-align:left;padding:10px;cursor:pointer;color:#315c51}.bside-choice:hover,.bside-choice.selected{border-color:#2a8068;background:#eff9f4;box-shadow:0 0 0 2px rgba(42,128,104,.1)}.bside-choice strong{display:block;font-size:12px}.bside-choice small{display:block;margin-top:4px;color:var(--muted);font-size:10px;line-height:1.4}.bside-color{display:inline-block;width:12px;height:12px;border-radius:50%;vertical-align:-2px;margin-right:4px;border:1px solid rgba(0,0,0,.12)}.bside-hint{font-size:11px;color:var(--muted);line-height:1.5}.bside-error{display:none;border:1px solid #efc0b9;border-radius:9px;background:#fff3f1;color:#9e3f36;padding:10px 11px;white-space:pre-wrap;line-height:1.5;font-size:12px}.bside-error.visible{display:block}
+    @media(max-width:1100px){.bside-assets{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:980px){.bside-grid{grid-template-columns:1fr}.bside-preview-stage{min-height:360px}.bside-header{padding-left:16px;padding-right:16px}.bside-main{padding-left:16px;padding-right:16px}}@media(max-width:620px){.bside-run,.bside-badge{display:none}.bside-header{gap:9px}.bside-heading h1{font-size:18px}.bside-progress{font-size:12px}.bside-stepper{grid-template-columns:1fr}.bside-assets{grid-template-columns:repeat(2,minmax(0,1fr))}.bside-style-grid,.bside-template-grid{grid-template-columns:1fr}.bside-preview-stage{min-height:300px}}
   </style>
 </head>
 <body>
   <div class="bside-shell">
     <header class="bside-header">
       <a class="bside-close" href="/fish-portrait/qwen-lab#qwenLabHistory" aria-label="返回 Qwen Image Edit Lab">×</a>
-      <div class="bside-heading"><h1>B面视觉生成</h1><p>基于 Qwen 透明鱼体 PNG 的确定性 CPU Demo</p></div>
+      <div class="bside-heading"><h1>B面视觉生成</h1><p>从 Qwen RGB 开始的四步确定性 CPU 处理</p></div>
       <div class="bside-header-spacer"></div>
       <span id="bsideRun" class="bside-run">Qwen Run #读取中</span>
-      <span class="bside-badge">Demo验证</span>
-      <span id="bsideProgress" class="bside-progress">0/3</span>
+      <span class="bside-badge">四步 Demo</span>
+      <span id="bsideProgress" class="bside-progress">0/4</span>
     </header>
     <main class="bside-main">
-      <div class="bside-notice">本页面只使用已有 Qwen 透明鱼体 PNG；不重新调用 Detector、SAM、分割、背景移除、Qwen 或其他生成模型。处理失败会保留当前 Session，可从对应步骤重跑。</div>
+      <div class="bside-notice">本页面读取已保存的 Qwen Result · RGB。只有用户点击对应步骤按钮后，才会执行该步骤；不自动级联、不重新执行 Qwen。Step 1 使用现有 Detector / SAM / Alpha 能力生成真实鱼体 RGBA。</div>
       <div id="bsideError" class="bside-error"></div>
       <section class="bside-panel" style="margin-bottom:16px" aria-label="B面视觉生成步骤">
-        <div class="bside-panel-heading"><div><h2>三步处理</h2><p>后续步骤依赖前一步的成功结果；改动上游会标记下游旧结果为 STALE。</p></div><span id="bsideSessionStatus" class="bside-hint">读取中…</span></div>
+        <div class="bside-panel-heading"><div><h2>四步处理</h2><p>每一步都是独立资产节点；改动上游会标记下游旧结果为 STALE。</p></div><span id="bsideSessionStatus" class="bside-hint">读取中…</span></div>
         <div id="bsideStepper" class="bside-stepper"></div>
       </section>
       <div class="bside-grid">
         <section class="bside-panel" aria-label="B面视觉预览">
-          <div class="bside-panel-heading"><div><h2>资产预览</h2><p id="bsidePreviewLabel">Qwen完整鱼体</p></div><div class="bside-preview-toolbar"><button type="button" data-bg="checker" class="active">棋盘格</button><button type="button" data-bg="light">浅色</button><button type="button" data-bg="dark">深色</button></div></div>
-          <div id="bsidePreviewStage" class="bside-preview-stage"><div id="bsidePreviewEmpty" class="bside-preview-empty">加载透明鱼体…</div><img id="bsidePreviewImage" alt="B面视觉资产预览" hidden></div>
-          <div id="bsideAssets" class="bside-assets" aria-label="四个资产槽位"></div>
+          <div class="bside-panel-heading"><div><h2>资产预览</h2><p id="bsidePreviewLabel">Qwen Result · RGB</p></div><div class="bside-preview-toolbar"><button type="button" data-bg="checker" class="active">棋盘格</button><button type="button" data-bg="light">浅色</button><button type="button" data-bg="dark">深色</button></div></div>
+          <div id="bsidePreviewStage" class="bside-preview-stage"><div id="bsidePreviewEmpty" class="bside-preview-empty">正在读取 Qwen RGB…</div><img id="bsidePreviewImage" alt="B面视觉资产预览" hidden></div>
+          <div id="bsideAssets" class="bside-assets" aria-label="五个资产槽位"></div>
         </section>
         <section class="bside-panel bside-controls" aria-label="B面视觉参数">
-          <div class="bside-control-group"><h3>① 姿态标准化</h3><p>仅处理已有透明 PNG；自动摆正后可进行 ±15° 微调，不翻转、不重新识别。0° 表示不附加人工偏移。</p><div class="bside-field"><label for="bsideRotationOffset">姿态微调（-15° 到 +15°，步进 0.5°）</label><input id="bsideRotationOffset" type="number" min="-15" max="15" step="0.5" value="0"></div></div>
-          <div class="bside-control-group"><h3>② 特色描边样式</h3><p>样式来自 Backend Registry；鱼体原始 RGB 像素保持在最上层。</p><div id="bsideStyles" class="bside-style-grid"></div></div>
-          <div class="bside-control-group"><h3>③ 水体模板</h3><p>模板来自 Backend Registry；使用仓库内确定性程序化水体，不抓取外部图片。</p><div id="bsideTemplates" class="bside-template-grid"></div></div>
+          <div class="bside-control-group"><h3>① 透明背景鱼体</h3><p>从 Qwen RGB 中提取完整鱼体；鱼体保持真实、不透明，仅移除背景。请在上方 Step 1 点击生成。</p></div>
+          <div class="bside-control-group"><h3>② 姿态标准化</h3><p>自动识别鱼体主轴，将完整 RGBA 鱼体调整至水平姿态。不要求填写角度，不自动镜像。</p></div>
+          <div class="bside-control-group"><h3>③ 特色描边</h3><p>样式来自 Backend Registry；描边位于真实鱼体后方，不覆盖鱼体 RGB。</p><div id="bsideStyles" class="bside-style-grid"></div></div>
+          <div class="bside-control-group"><h3>④ 融入水体背景</h3><p>模板来自 Backend Registry；只合成已有的真实鱼体 RGBA，不重新生成鱼。</p><div id="bsideTemplates" class="bside-template-grid"></div></div>
         </section>
       </div>
     </main>
@@ -49,8 +50,9 @@
   <script>
   (() => {
     const sessionId = {{ session_id|tojson }};
-    const stepOrder = ['standardize','outline','compose'];
-    const stepLabels = {standardize:'姿态标准化', outline:'特色描边', compose:'融入水体背景'};
+    const stepOrder = ['transparent','standardize','outline','compose'];
+    const stepLabels = {transparent:'透明背景鱼体',standardize:'姿态标准化',outline:'特色描边',compose:'融入水体背景'};
+    const stepEndpoints = {transparent:'extract-transparent',standardize:'standardize',outline:'outline',compose:'compose'};
     const stepper = document.getElementById('bsideStepper');
     const assets = document.getElementById('bsideAssets');
     const previewStage = document.getElementById('bsidePreviewStage');
@@ -61,7 +63,6 @@
     const progress = document.getElementById('bsideProgress');
     const runLabel = document.getElementById('bsideRun');
     const sessionStatus = document.getElementById('bsideSessionStatus');
-    const rotationOffset = document.getElementById('bsideRotationOffset');
     let state = null;
     let options = {styles:[],templates:[]};
     let selectedAsset = 'source';
@@ -74,31 +75,42 @@
       const response = await fetch(url, init);
       const body = await response.text(); let data={};
       try{data=body?JSON.parse(body):{}}catch(_){data={detail:body}}
-      if(!response.ok){const detail=data.detail;const message=typeof detail==='string'?detail:(detail&& (detail.message||detail.error))||data.message||'请求失败';throw new Error(message)}
+      if(!response.ok){
+        const detail=data.detail;
+        const message=typeof detail==='string'?detail:(detail&& (detail.message||detail.error))||data.message||'请求失败';
+        const error=new Error(message);
+        error.code=detail&&detail.error?detail.error:(data.error||'REQUEST_FAILED');
+        throw error;
+      }
       return data;
     }
-    function statusText(value){return ({NOT_STARTED:'未开始',RUNNING:'处理中',COMPLETE:'完成',FAILED:'失败',STALE:'需重跑'})[value]||value||'未知'}
-    function statusClass(value){return String(value||'').toLowerCase()}
+    function statusText(value){return ({NOT_STARTED:'未开始',PROCESSING:'处理中',RUNNING:'处理中',SUCCESS:'完成',COMPLETE:'完成',ERROR:'失败',FAILED:'失败',STALE:'需重跑'})[value]||value||'未知'}
+    function statusClass(value){return String(value||'').toLowerCase().replace('processing','running').replace('success','complete').replace('error','failed')}
     function showError(message){errorBox.textContent=message||'';errorBox.classList.toggle('visible',Boolean(message))}
     function stepByKey(key){return (state?.steps||[]).find(item=>item.step===key)}
-    function poseDiagnostic(step){
-      if(step.step!=='standardize')return step.error?.message||'';
+    function number(metadata,key){return Number.isFinite(Number(metadata[key]))?Number(metadata[key]).toFixed(1)+'°':null}
+    function stepDiagnostic(step){
+      if(step.error?.message)return (step.error.code?step.error.code+' · ':'')+step.error.message;
       const metadata=step.metadata||{};
-      const number=(key)=>Number.isFinite(Number(metadata[key]))?Number(metadata[key]).toFixed(1)+'°':null;
+      if(step.step==='transparent'){
+        const median=metadata.fish_interior_alpha_median;
+        const ratio=metadata.fish_interior_opaque_ratio;
+        return median!=null?'鱼体 Alpha 中位数 '+Number(median).toFixed(0)+' · 实体占比 '+(Number(ratio||0)*100).toFixed(1)+'%':'等待用户生成';
+      }
+      if(step.step!=='standardize')return '';
       const parts=[
-        number('detected_axis_angle_deg')&&'检测主轴 '+number('detected_axis_angle_deg'),
-        number('auto_rotation_deg')&&'自动旋转 '+number('auto_rotation_deg'),
-        number('manual_rotation_offset_deg')&&'人工微调 '+number('manual_rotation_offset_deg'),
-        number('applied_rotation_deg')&&'最终旋转 '+number('applied_rotation_deg'),
-        number('residual_axis_angle_deg')&&'最终残差 '+number('residual_axis_angle_deg'),
+        number(metadata,'detected_axis_angle_deg')&&'检测主轴 '+number(metadata,'detected_axis_angle_deg'),
+        number(metadata,'auto_rotation_deg')&&'自动旋转 '+number(metadata,'auto_rotation_deg'),
+        number(metadata,'applied_rotation_deg')&&'应用旋转 '+number(metadata,'applied_rotation_deg'),
+        number(metadata,'residual_axis_angle_deg')&&'最终残差 '+number(metadata,'residual_axis_angle_deg'),
       ].filter(Boolean);
-      return parts.join(' · ')||metadata.orientation_message||'';
+      return parts.join(' · ')||metadata.orientation_message||'等待上一步完成';
     }
     function renderStepper(){
       stepper.innerHTML=(state?.steps||[]).map(step=>{
         const canRun=Boolean(step.can_run)&&!busy;
-        const action=step.status==='COMPLETE'?'再次运行':step.status==='STALE'?'重跑':'开始';
-        return '<div class="bside-step '+statusClass(step.status)+'"><span class="bside-step-status">'+esc(statusText(step.status))+'</span><strong>'+esc(step.label)+'</strong><small>'+esc(poseDiagnostic(step))+'</small><button type="button" data-run-step="'+esc(step.step)+'" '+(canRun?'':'disabled')+'>'+esc(action)+'</button></div>';
+        const action=step.status==='SUCCESS'||step.status==='COMPLETE'?'再次运行':step.status==='STALE'?'重跑':'开始';
+        return '<div class="bside-step '+statusClass(step.status)+'"><span class="bside-step-status">'+esc(statusText(step.status))+'</span><strong>'+esc(step.label||stepLabels[step.step]||step.step)+'</strong><small>'+esc(stepDiagnostic(step))+'</small><button type="button" data-run-step="'+esc(step.step)+'" '+(canRun?'':'disabled')+'>'+esc(action)+'</button></div>';
       }).join('');
       stepper.querySelectorAll('[data-run-step]').forEach(button=>button.addEventListener('click',()=>runStep(button.dataset.runStep)));
     }
@@ -107,7 +119,6 @@
         const isActive=item.key===selectedAsset;
         const cacheVersion=state?.updated_at||Date.now();
         const src=item.url?(item.url+(item.url.includes('?')?'&':'?')+'v='+encodeURIComponent(cacheVersion)):'';
-
         return '<button type="button" class="bside-asset '+(isActive?'active':'')+'" data-asset="'+esc(item.key)+'" '+(item.available?'':'disabled')+'><span class="bside-asset-image">'+(src?'<img loading="lazy" decoding="async" src="'+esc(src)+'" alt="'+esc(item.label)+'">':'')+'</span><strong>'+esc(item.label)+'</strong><small>'+esc(item.available?statusText(item.status):'尚未生成')+'</small></button>';
       }).join('');
       assets.querySelectorAll('[data-asset]').forEach(button=>button.addEventListener('click',()=>{selectedAsset=button.dataset.asset;renderAssets();renderPreview()}));
@@ -128,15 +139,28 @@
       document.querySelectorAll('[data-template]').forEach(button=>button.addEventListener('click',()=>{selectedTemplate=button.dataset.template;renderTemplates()}));
     }
     function render(){
-      if(!state)return;runLabel.textContent='Qwen Run #'+String(state.source_qwen_run_id||'').replace(/^QWEN_LAB_/,'');sessionStatus.textContent=state.status==='ACTIVE'?'Session 已保存':state.status;progress.textContent=(state.progress?.completed||0)+'/3';renderStepper();renderAssets();renderPreview();renderStyles();renderTemplates();
+      if(!state)return;
+      runLabel.textContent='Qwen Run #'+String(state.source_qwen_run_id||'').replace(/^QWEN_LAB_/,'');
+      sessionStatus.textContent=state.status==='ACTIVE'?'Session 已保存':state.status;
+      progress.textContent=(state.progress?.completed||0)+'/4';
+      renderStepper();renderAssets();renderPreview();renderStyles();renderTemplates();
     }
     async function load(){
       try{const values=await Promise.all([api('/api/qwen-lab/bside-visual/'+encodeURIComponent(sessionId)),api('/api/qwen-lab/bside-visual/options')]);state=values[0];options=values[1];render()}catch(error){showError(error instanceof Error?error.message:String(error))}
     }
     async function runStep(step){
-      if(busy)return; const current=stepByKey(step); if(!current?.can_run)return; busy=true;showError('');renderStepper();
-      const bodies={standardize:{manual_rotation_offset_deg:Number(rotationOffset.value||0)},outline:{style_id:selectedStyle},compose:{template_id:selectedTemplate}};
-      try{state=await api('/api/qwen-lab/bside-visual/'+encodeURIComponent(sessionId)+'/'+step,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(bodies[step])});selectedAsset=step==='standardize'?'standardized':step==='outline'?'outlined':'final';render()}catch(error){showError(error instanceof Error?error.message:String(error));await load()}finally{busy=false;renderStepper()}
+      if(busy)return;
+      const current=stepByKey(step);
+      if(!current?.can_run)return;
+      busy=true;showError('');renderStepper();
+      const bodies={transparent:{},standardize:{},outline:{style_id:selectedStyle},compose:{template_id:selectedTemplate}};
+      const endpoint=stepEndpoints[step]||step;
+      try{
+        state=await api('/api/qwen-lab/bside-visual/'+encodeURIComponent(sessionId)+'/'+endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(bodies[step]||{})});
+        selectedAsset=step==='transparent'?'transparent':step==='standardize'?'standardized':step==='outline'?'outlined':'final';
+        render();
+      }catch(error){showError(error instanceof Error?((error.code?error.code+' · ':'')+error.message):String(error));await load()}
+      finally{busy=false;renderStepper()}
     }
     document.querySelectorAll('[data-bg]').forEach(button=>button.addEventListener('click',()=>{document.querySelectorAll('[data-bg]').forEach(item=>item.classList.remove('active'));button.classList.add('active');previewStage.classList.remove('light','dark');if(button.dataset.bg!=='checker')previewStage.classList.add(button.dataset.bg)}));
     load();
