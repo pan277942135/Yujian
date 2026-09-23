@@ -165,14 +165,36 @@ def outline_renderer_style(
     params = _profile_params(profile)
     code = str(outline_style.code or "")
     defaults = {
-        "none": {"color": "#000000", "opacity": 0.0, "width_ratio": 0.001, "coverage_ratio": 0.0},
-        "directional_rim": {"color": "#D5E1DC", "opacity": 0.42, "width_ratio": 0.003, "coverage_ratio": 0.32},
-        "bottom_water_glow": {"color": "#C4E4DD", "opacity": 0.36, "width_ratio": 0.004, "coverage_ratio": 0.28},
+        "none": {
+            "color": "#000000",
+            "opacity": 0.0,
+            "width_ratio": 0.001,
+            "coverage_ratio": 0.0,
+            "mode": "none",
+        },
+        "directional_rim": {
+            "color": "#D5E1DC",
+            "opacity": 0.42,
+            "width_ratio": 0.003,
+            "coverage_ratio": 0.32,
+            "mode": "directional_rim",
+        },
+        "bottom_water_glow": {
+            "color": "#C4E4DD",
+            "opacity": 0.36,
+            "width_ratio": 0.004,
+            "coverage_ratio": 0.28,
+            "mode": "bottom_water_glow",
+        },
     }.get(code, {"color": "#D5E1DC", "opacity": 0.42, "width_ratio": 0.003, "coverage_ratio": 0.32})
     color = str(params.get("color") or defaults["color"])
     opacity = min(1.0, max(0.0, float(params.get("opacity", defaults["opacity"]))))
     width_ratio = max(0.0005, float(params.get("width_ratio", defaults["width_ratio"])))
     coverage_ratio = min(1.0, max(0.0, float(params.get("coverage_ratio", defaults["coverage_ratio"]))))
+    mode = str(params.get("mode") or defaults.get("mode") or (code if code in {"directional_rim", "bottom_water_glow"} else "surrounding"))
+    if code == "none":
+        mode = "none"
+    light_direction = str(params.get("light_direction") or defaults.get("light_direction") or "UPPER_LEFT")
     base_outline_px = max(1, round(width_ratio * 1600))
     return OutlineStyle(
         style_id=code,
@@ -183,6 +205,9 @@ def outline_renderer_style(
         blur_px=0.5 if code == "none" else 10 if code == "directional_rim" else 12,
         glow_opacity=0.0 if code == "none" else min(0.35, opacity * max(coverage_ratio, 0.25)),
         description=outline_style.description,
+        mode=mode,
+        coverage_ratio=coverage_ratio,
+        light_direction=light_direction,
     )
 
 

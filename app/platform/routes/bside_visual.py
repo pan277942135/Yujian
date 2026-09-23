@@ -337,6 +337,12 @@ def _persisted_style_plan(db: Session, session: BsideVisualSession) -> dict[str,
         plan = get_bside_style_plan(session, db)
     except BsideStylePlanError:
         return None
+    return _style_plan_payload(plan)
+
+
+def _style_plan_payload(plan: dict[str, Any]) -> dict[str, Any]:
+    """Serialize one plan identically for session state and step metadata."""
+
     return {
         "background_id": plan["background"].id,
         "background_code": plan["background"].code,
@@ -647,14 +653,7 @@ def run_bside_outline(
         artifact_metadata = dict(artifact.metadata)
         artifact_metadata["source_uri"] = steps[STEP_STANDARDIZE].output_uri
         if plan is not None:
-            artifact_metadata["style_plan"] = {
-                "background_id": plan["background"].id,
-                "background_code": plan["background"].code,
-                "outline_style_id": plan["outline_style"].id,
-                "outline_code": plan["outline_style"].code,
-                "outline_profile_id": plan["profile"].id,
-                "style_seed": plan["style_seed"],
-            }
+            artifact_metadata["style_plan"] = _style_plan_payload(plan)
         version = row.version + 1
         row.output_uri = _store_bytes(
             session_id,
@@ -754,14 +753,7 @@ def run_bside_compose(
         rendered_metadata["outlined_uri"] = steps[STEP_OUTLINE].output_uri
         rendered_metadata["bside_result_uri"] = master_uri
         if plan is not None:
-            rendered_metadata["style_plan"] = {
-                "background_id": plan["background"].id,
-                "background_code": plan["background"].code,
-                "outline_style_id": plan["outline_style"].id,
-                "outline_code": plan["outline_style"].code,
-                "outline_profile_id": plan["profile"].id,
-                "style_seed": plan["style_seed"],
-            }
+            rendered_metadata["style_plan"] = _style_plan_payload(plan)
         row.output_uri = master_uri
         row.preview_uri = preview_uri
         row.metadata_json = json.dumps(rendered_metadata, ensure_ascii=False)

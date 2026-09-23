@@ -13,10 +13,14 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
 from app.entry import app
-from app.platform.models import BsideVisualStep, PipelineRun
+from app.platform.models import BsideBackground, BsideVisualSession, BsideVisualStep, PipelineRun
 from app.platform.routes import bside_visual as lab
+from app.platform.services.bside_assets import seed_bside_asset_registry
 from app.platform.services.bside_visual import outline, standardize
+from app.platform.services.bside_visual.asset_registry import outline_renderer_style
 from app.platform.services.bside_visual.style_registry import STYLES
+from app.platform.services.bside_visual.water_renderer import compose_bside
+from app.platform.services.bside_visual.template_registry import get_template
 
 
 def _session(tmp_path):
@@ -218,6 +222,72 @@ def test_all_outline_styles_preserve_source_fish_pixels():
         assert result.metadata["source_rgb_preserved"] is True
 
 
+def test_registry_outline_modes_are_local_and_none_is_a_successful_passthrough(tmp_path):
+    from app.platform.models import BsideBackgroundOutlineProfile, BsideOutlineStyle
+
+    db = _session(tmp_path)
+    try:
+        seed_bside_asset_registry(db)
+        source = standardize(_fish_bytes()).data
+        source_rgba = np.asarray(Image.open(io.BytesIO(source)).convert("RGBA"))
+        for code in ("directional_rim", "bottom_water_glow", "none"):
+            style_row = db.query(BsideOutlineStyle).filter_by(code=code).one()
+            profile = db.query(BsideBackgroundOutlineProfile).filter_by(
+                outline_style_id=style_row.id
+            ).first()
+            assert profile is not None
+            style = outline_renderer_style(style_row, profile)
+            result = outline(source, style)
+            output_rgba = np.asarray(Image.open(io.BytesIO(result.data)).convert("RGBA"))
+            mask = source_rgba[:, :, 3] > 0
+            assert np.array_equal(output_rgba[mask], source_rgba[mask])
+            if code == "none":
+                assert result.metadata["effect_edge_ratio"] == 0.0
+            else:
+                assert 0.20 <= result.metadata["effect_edge_ratio"] <= 0.45
+                assert result.metadata["outline_mode"] == code
+    finally:
+        db.close()
+
+
+def test_compose_uses_formal_rgba_layers_in_locked_order_and_canvas():
+    standardized = standardize(_fish_bytes()).data
+    style = STYLES[0]
+    outlined = outline(standardized, style).data
+    background = Image.new("RGB", (1080, 1350), (30, 90, 88))
+    light = Image.new("RGBA", (1080, 1350), (255, 255, 255, 48))
+    foreground = Image.new("RGBA", (1080, 1350), (15, 45, 52, 24))
+
+    def encode(image: Image.Image, image_format: str) -> bytes:
+        output = io.BytesIO()
+        image.save(output, format=image_format)
+        return output.getvalue()
+
+    rendered = compose_bside(
+        standardized,
+        style,
+        get_template("lake_dawn_01"),
+        outlined_fish=outlined,
+        background_bytes=encode(background, "WEBP"),
+        light_bytes=encode(light, "PNG"),
+        foreground_bytes=encode(foreground, "PNG"),
+    )
+    result = Image.open(io.BytesIO(rendered["master"])).convert("RGBA")
+    assert result.size == (1080, 1350)
+    assert rendered["metadata"]["layer_order"] == [
+        "Background",
+        "Light",
+        "Fish Depth Shadow",
+        "outlined_fish_rgba",
+        "Foreground",
+    ]
+    assert rendered["metadata"]["fish_opacity"] == 1.0
+    assert rendered["metadata"]["fish_transform"] == "uniform_scale_translate"
+    assert rendered["metadata"]["light_asset_used"] is True
+    assert rendered["metadata"]["foreground_asset_used"] is True
+    assert rendered["metadata"]["fish_width"] == round(1080 * 0.72)
+
+
 def test_bside_session_starts_from_saved_qwen_rgb_without_auto_transparent_processing(tmp_path, monkeypatch):
     db = _session(tmp_path)
     try:
@@ -269,6 +339,61 @@ def test_step_dependencies_and_rerun_invalidation(tmp_path, monkeypatch):
         db.close()
 
 
+def test_step3_and_step4_consume_one_persisted_registry_plan(tmp_path, monkeypatch):
+    db = _session(tmp_path)
+    try:
+        _add_qwen_run(db, tmp_path)
+        seed_bside_asset_registry(db)
+        background = db.query(BsideBackground).filter_by(code="lake_dawn_01").one()
+
+        def save_layer(filename: str, mode: str, image_format: str) -> str:
+            image = Image.new(mode, (1080, 1350), (36, 96, 92, 255) if mode == "RGBA" else (36, 96, 92))
+            path = tmp_path / filename
+            image.save(path, format=image_format)
+            return str(path)
+
+        background.background_uri = save_layer("registry-background.webp", "RGB", "WEBP")
+        background.foreground_uri = save_layer("registry-foreground.png", "RGBA", "PNG")
+        background.light_uri = save_layer("registry-light.png", "RGBA", "PNG")
+        background.status = "ACTIVE"
+        db.commit()
+
+        monkeypatch.setattr(lab, "_store_bytes", lambda *args: _local_store(tmp_path, *args))
+        monkeypatch.setattr(lab, "process_qwen_output", lambda data: _fake_transparent_artifacts(data))
+        session_payload = lab.create_or_get_bside_visual("QWEN_TEST_RUN", db)
+        session = db.get(BsideVisualSession, session_payload["session_id"])
+        assert session is not None
+        session.style_seed = 12345
+        db.commit()
+
+        session_id = session.session_id
+        lab.run_bside_transparent(session_id, db)
+        lab.run_bside_standardize(session_id, lab.StandardizeRequest(), db)
+        outlined = lab.run_bside_outline(session_id, lab.OutlineRequest(style_id="soft_gold"), db)
+        first_plan = outlined["style_plan"]
+        assert first_plan["background_code"] == "lake_dawn_01"
+        assert first_plan["outline_code"] in {"directional_rim", "bottom_water_glow", "none"}
+
+        rerun = lab.run_bside_outline(session_id, lab.OutlineRequest(style_id="mist_white"), db)
+        assert rerun["style_plan"] == first_plan
+        assert next(item for item in rerun["steps"] if item["step"] == "compose")["status"] == "NOT_STARTED"
+
+        composed = lab.run_bside_compose(session_id, lab.ComposeRequest(template_id="night_fishing_01"), db)
+        final_step = next(item for item in composed["steps"] if item["step"] == "compose")
+        assert final_step["status"] == "SUCCESS"
+        assert final_step["metadata"]["template_id"] == "lake_dawn_01"
+        assert final_step["metadata"]["style_plan"] == first_plan
+        assert final_step["metadata"]["layer_order"] == [
+            "Background",
+            "Light",
+            "Fish Depth Shadow",
+            "outlined_fish_rgba",
+            "Foreground",
+        ]
+    finally:
+        db.close()
+
+
 def test_bside_page_contains_locked_four_step_ui_without_angle_input_or_gpu_dependency():
     template = (
         Path(__file__).resolve().parents[1]
@@ -295,3 +420,9 @@ def test_bside_page_contains_locked_four_step_ui_without_angle_input_or_gpu_depe
     assert "/api/qwen-lab/bside-visual/" in template
     assert "Detector" in template
     assert "GPU" not in template
+    assert "bsideStyles" not in template
+    assert "bsideTemplates" not in template
+    assert "selectedStyle" not in template
+    assert "selectedTemplate" not in template
+    assert "背景 × 描边权重" in template
+    assert "同一 Style Plan" in template

@@ -13,6 +13,11 @@ class OutlineStyle:
     blur_px: float
     glow_opacity: float
     description: str
+    # Registry-backed V1 styles can constrain the effect to a local part of
+    # the outer alpha. Legacy styles keep the original surrounding behavior.
+    mode: str = "surrounding"
+    coverage_ratio: float = 1.0
+    light_direction: str = "UPPER_LEFT"
 
 
 STYLES: tuple[OutlineStyle, ...] = (
