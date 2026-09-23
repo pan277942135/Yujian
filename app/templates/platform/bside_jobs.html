@@ -1,0 +1,15 @@
+{% extends "platform/base.html" %}
+{% block content %}
+<div class="page-heading"><div><h1>B-side Jobs</h1><p>查看用户主动触发的渔获卡生成；原图、阶段产物和最终卡片都保存在既有 GCS。</p></div><div class="page-actions"><button class="button" onclick="loadJobs()">刷新</button></div></div>
+<section class="panel"><div class="panel-heading"><div><h2>生成任务</h2><p>PENDING / PROCESSING 为队列中；FAILED 保留错误，用户可从 App 重新生成。</p></div></div><div id="bsideJobsState"><div class="loading">加载中…</div></div></section>
+{% endblock %}
+{% block scripts %}
+<script>
+function tag(value){return `<span class="status-tag status-${esc(String(value||'').toLowerCase())}"><span class="status-dot"></span>${esc(value||'—')}</span>`}
+function time(value){return value?new Date(value).toLocaleString():'—'}
+function assets(row){return Object.entries(row.assets||{}).filter(([,url])=>url).map(([kind,url])=>`<a href="${esc(url)}" target="_blank" rel="noopener">${esc(kind)}</a>`).join(' · ')||'—'}
+function renderJobs(items){const target=document.getElementById('bsideJobsState');if(!items.length){target.innerHTML='<div class="empty">暂无 B-side 生成任务。</div>';return}target.innerHTML=`<div class="table-wrap"><table class="data-table"><thead><tr><th>任务 / 鱼获</th><th>状态</th><th>组合</th><th>时间</th><th>输入 / 输出</th><th>错误</th></tr></thead><tbody>${items.map(row=>`<tr><td><span class="code">${esc(row.id)}</span><br><small class="muted">鱼获 ${esc(row.fish_record_id)} · 用户 ${esc(row.user_id)}</small></td><td>${tag(row.status)}</td><td>背景 #${esc(row.background_id??'—')}<br>描边 #${esc(row.outline_style_id??'—')}</td><td><small>创建 ${esc(time(row.created_at))}</small><br><small>完成 ${esc(time(row.completed_at))}</small></td><td>${assets(row)}</td><td>${row.error_code?`<strong>${esc(row.error_code)}</strong><br><small>${esc(row.error_message||'')}</small>`:'—'}</td></tr>`).join('')}</tbody></table></div>`}
+async function loadJobs(){renderState('bsideJobsState','loading');try{const result=await platformFetch('/api/platform/bside-jobs');renderJobs(result.items||[])}catch(error){renderState('bsideJobsState','error',platformError(error))}}
+loadJobs();
+</script>
+{% endblock %}

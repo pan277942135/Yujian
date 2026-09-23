@@ -158,17 +158,26 @@ def _ensure_user_catch_columns() -> None:
     """Keep the additive MVP tables safe for deployments upgraded in place.
 
     New installs receive these tables through SQLAlchemy metadata.  The guard is
-    intentionally non-destructive and only adds the internal object path to an
-    early MVP table should a deployment have created it before this migration.
+    intentionally non-destructive and only adds fields introduced after the
+    initial MVP table was already live.
     """
 
     inspector = inspect(engine)
     if not inspector.has_table("fish_catches"):
         return
     existing = {column["name"] for column in inspector.get_columns("fish_catches")}
-    if "image_object_name" not in existing:
-        with engine.begin() as connection:
-            connection.exec_driver_sql('ALTER TABLE "fish_catches" ADD COLUMN "image_object_name" TEXT')
+    additions = {
+        "image_object_name": "TEXT",
+        "bside_status": "VARCHAR(16) NOT NULL DEFAULT 'NONE'",
+        "bside_result_uri": "TEXT",
+        "bside_result_object_name": "TEXT",
+        "bside_generated_at": "TIMESTAMP WITH TIME ZONE",
+        "bside_job_id": "VARCHAR(36)",
+    }
+    with engine.begin() as connection:
+        for name, definition in additions.items():
+            if name not in existing:
+                connection.exec_driver_sql(f'ALTER TABLE "fish_catches" ADD COLUMN "{name}" {definition}')
 
 
 def _ensure_bside_visual_columns() -> None:
