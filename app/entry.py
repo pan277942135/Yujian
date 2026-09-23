@@ -11,6 +11,7 @@ from app.platform.routes.qwen_image_edit_lab import router as qwen_image_edit_la
 from app.platform.routes.qwen_gpu import router as qwen_gpu_router
 from app.platform.routes.bside_visual import api_router as bside_visual_api_router, page_router as bside_visual_page_router
 from app.platform.routes.bside_assets import router as bside_assets_router
+from app.platform.routes.bside_jobs import router as bside_jobs_router
 from app.model_publish_api import router as model_publish_router
 from app.presence import router as presence_router
 from app.dedupe import router as dedupe_router
@@ -51,6 +52,7 @@ from app.unified_nav import install_unified_nav
 from app.db import SessionLocal
 from app.species_policy import ensure_target_species
 from app.platform.routes.pages import router as platform_pages_router
+from app.services.fish_bside_jobs import recover_pending_bside_jobs
 
 
 logger = logging.getLogger(__name__)
@@ -98,6 +100,8 @@ def seed_target_species_catalog() -> None:
         seed_fish_knowledge_content(db)
     finally:
         db.close()
+    recovered = recover_pending_bside_jobs()
+    logger.info("B-side durable queue recovery dispatched=%s", recovered)
 
 
 @app.get("/health/deploy")
@@ -156,6 +160,7 @@ app.include_router(feedback_ingest_router)
 app.include_router(inference_upload_router)
 app.include_router(auth_router)
 app.include_router(catches_router)
+app.include_router(bside_jobs_router)
 app.include_router(batch_upload_router)
 app.include_router(automation_router)
 app.include_router(intelligence_router)

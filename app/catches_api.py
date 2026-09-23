@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response
 from google.cloud import storage
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -21,7 +21,9 @@ from sqlalchemy.orm import Session
 from app.auth_api import get_current_user
 from app.db import get_db
 from app.factory import DOWNLOAD_RETRY, get_bucket_name
-from app.models import AppUser, FishCatch, utcnow
+from app.models import AppUser, FishBsideJob, FishCatch, utcnow
+from app.platform.models import PlatformOperationLog
+from app.services.fish_bside_jobs import PENDING, PROCESSING, enqueue_fish_bside_job
 
 
 router = APIRouter(prefix="/api/v1/catches", tags=["user-catches"])
@@ -62,6 +64,8 @@ class CatchOut(BaseModel):
     model_version: str
     captured_at: datetime
     created_at: datetime
+    bside_status: str = "NONE"
+    bside_uri: str | None = None
 
 
 class CatchCreateResponse(BaseModel):
@@ -81,6 +85,12 @@ class SpeciesCount(BaseModel):
     count: int
 
 
+class BsideJobOut(BaseModel):
+    job_id: str | None = None
+    status: str
+    result_uri: str | None = None
+
+
 class CatchStatisticsOut(BaseModel):
     total_catches: int
     species_count: int
@@ -98,6 +108,10 @@ def _upload_media_url(upload_id: str) -> str:
 
 def _catch_media_url(catch_id: str) -> str:
     return f"/api/v1/catches/{catch_id}/media"
+
+
+def _bside_media_url(catch_id: str) -> str:
+    return f"/api/v1/catches/{catch_id}/bside-media"
 
 
 def _safe_upload_id(value: str) -> str:
@@ -155,6 +169,8 @@ def _catch_out(row: FishCatch) -> CatchOut:
         model_version=row.model_version,
         captured_at=row.captured_at,
         created_at=row.created_at,
+        bside_status=str(row.bside_status or "NONE"),
+        bside_uri=_bside_media_url(row.id) if row.bside_status == "READY" and row.bside_result_object_name else None,
     )
 
 
@@ -281,6 +297,104 @@ def catch_statistics(
         species_count=int(species_count),
         top_species=[SpeciesCount(species_id=row.species_id, species=row.species_name, count=int(row.count)) for row in top_rows],
         recent_species=recent,
+    )
+
+
+def _owned_catch_or_404(catch_id: str, user: AppUser, db: Session) -> FishCatch:
+    row = db.get(FishCatch, catch_id)
+    if row is None or row.user_id != user.id:
+        raise HTTPException(status_code=404, detail="鱼获记录不存在")
+    return row
+
+
+@router.post("/{catch_id}/bside", response_model=BsideJobOut)
+def create_bside_job(
+    catch_id: str,
+    background_tasks: BackgroundTasks,
+    user: AppUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BsideJobOut:
+    """Create one durable B-side job, or return the in-flight one on repeats."""
+
+    row = _owned_catch_or_404(catch_id, user, db)
+    active = db.scalar(
+        select(FishBsideJob)
+        .where(
+            FishBsideJob.fish_record_id == row.id,
+            FishBsideJob.status.in_([PENDING, PROCESSING]),
+        )
+        .order_by(FishBsideJob.created_at.desc())
+    )
+    if active is not None:
+        return BsideJobOut(job_id=active.id, status="GENERATING")
+    if row.bside_status == "READY" and row.bside_job_id:
+        return BsideJobOut(job_id=row.bside_job_id, status="READY", result_uri=_bside_media_url(row.id))
+
+    job = FishBsideJob(
+        id=str(uuid.uuid4()),
+        fish_record_id=row.id,
+        user_id=user.id,
+        status=PENDING,
+    )
+    row.bside_status = "GENERATING"
+    row.bside_result_uri = None
+    row.bside_result_object_name = None
+    row.bside_generated_at = None
+    row.bside_job_id = job.id
+    db.add(job)
+    db.add(
+        PlatformOperationLog(
+            operation_type="BSIDE_JOB_CREATED",
+            resource_type="fish_bside_job",
+            resource_id=job.id,
+            status=PENDING,
+            message="用户主动触发渔获 B 面生成",
+            actor=f"user:{user.id}",
+        )
+    )
+    db.commit()
+    # The task is first committed to the durable DB queue.  Dispatch is
+    # intentionally post-commit so duplicate taps cannot create duplicate work.
+    background_tasks.add_task(enqueue_fish_bside_job, job.id)
+    return BsideJobOut(job_id=job.id, status="GENERATING")
+
+
+@router.get("/{catch_id}/bside-status", response_model=BsideJobOut)
+def get_bside_status(
+    catch_id: str,
+    user: AppUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BsideJobOut:
+    row = _owned_catch_or_404(catch_id, user, db)
+    return BsideJobOut(
+        job_id=row.bside_job_id,
+        status=str(row.bside_status or "NONE"),
+        result_uri=_bside_media_url(row.id) if row.bside_status == "READY" and row.bside_result_object_name else None,
+    )
+
+
+@router.get("/{catch_id}/bside-media")
+def get_bside_result(
+    catch_id: str,
+    user: AppUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    row = _owned_catch_or_404(catch_id, user, db)
+    if row.bside_status != "READY" or not row.bside_result_object_name:
+        raise HTTPException(status_code=404, detail="B 面结果尚未生成")
+    try:
+        blob = storage.Client().bucket(get_bucket_name()).blob(row.bside_result_object_name)
+        if not blob.exists():
+            raise HTTPException(status_code=404, detail="B 面结果不存在")
+        content = blob.download_as_bytes(timeout=120, retry=DOWNLOAD_RETRY)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="B 面结果暂时无法读取") from exc
+    return Response(
+        content=content,
+        media_type="image/png",
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
     )
 
 

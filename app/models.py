@@ -57,6 +57,7 @@ class AppUser(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
 
     catches = relationship("FishCatch", back_populates="user", cascade="all, delete-orphan")
+    bside_jobs = relationship("FishBsideJob", back_populates="user", cascade="all, delete-orphan")
 
 
 class FishCatch(Base):
@@ -78,8 +79,45 @@ class FishCatch(Base):
     classifier_result_json = Column(Text)
     captured_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+    # The record remains the product-facing source of truth; the job stores
+    # the detailed per-stage trace for the asynchronous B-side pipeline.
+    bside_status = Column(String(16), nullable=False, default="NONE", index=True)
+    bside_result_uri = Column(Text)
+    bside_result_object_name = Column(Text)
+    bside_generated_at = Column(DateTime(timezone=True))
+    bside_job_id = Column(String(36), index=True)
 
     user = relationship("AppUser", back_populates="catches")
+    bside_jobs = relationship("FishBsideJob", back_populates="fish_record", cascade="all, delete-orphan")
+
+
+class FishBsideJob(Base):
+    """Durable, user-owned work item for the existing B-side visual pipeline."""
+
+    __tablename__ = "fish_bside_job"
+
+    id = Column(String(36), primary_key=True)
+    fish_record_id = Column(String(36), ForeignKey("fish_catches.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    status = Column(String(16), nullable=False, default="PENDING", index=True)
+    input_image_uri = Column(Text)
+    transparent_fish_uri = Column(Text)
+    standardized_fish_uri = Column(Text)
+    outlined_fish_uri = Column(Text)
+    background_id = Column(Integer, ForeignKey("bside_background.id", ondelete="SET NULL"), index=True)
+    outline_style_id = Column(Integer, ForeignKey("bside_outline_style.id", ondelete="SET NULL"), index=True)
+    outline_profile_id = Column(Integer, ForeignKey("bside_background_outline_profile.id", ondelete="SET NULL"), index=True)
+    style_seed = Column(Integer)
+    result_uri = Column(Text)
+    result_object_name = Column(Text)
+    error_code = Column(String(128))
+    error_message = Column(Text)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+    started_at = Column(DateTime(timezone=True))
+    completed_at = Column(DateTime(timezone=True))
+
+    fish_record = relationship("FishCatch", back_populates="bside_jobs")
+    user = relationship("AppUser", back_populates="bside_jobs")
 
 
 class ImageAsset(Base):

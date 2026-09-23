@@ -95,6 +95,36 @@ def _width_ratio(background: BsideBackground, seed: int) -> float:
     return round(minimum + (maximum - minimum) * ratio_rng.random(), 6)
 
 
+def select_active_bside_style_plan(db: Session, *, style_seed: int | None = None) -> dict[str, Any]:
+    """Select one weighted plan from the formal ACTIVE asset pool.
+
+    Consumers such as the fish-memory worker persist the returned ids on their
+    own durable job.  This keeps the database registry as the only random
+    source without manufacturing a Qwen-Lab session for an unrelated flow.
+    """
+
+    backgrounds = get_active_bside_backgrounds(db)
+    if not backgrounds:
+        raise BsideStylePlanError(
+            "BSIDE_ASSET_POOL_EMPTY",
+            "没有可用的 ACTIVE B 面背景，请先上传资产并启用背景",
+        )
+    seed = int(style_seed or 0) or secrets.randbelow(2**31 - 1) + 1
+    rng = random.Random(seed)
+    background = backgrounds[rng.randrange(len(backgrounds))]
+    profile = _weighted_choice(rng, get_outline_profiles(db, int(background.id)))
+    outline_style = db.get(BsideOutlineStyle, int(profile.outline_style_id))
+    if outline_style is None:
+        raise BsideStylePlanError("OUTLINE_STYLE_MISSING", "描边样式不存在")
+    return {
+        "background": background,
+        "outline_style": outline_style,
+        "profile": profile,
+        "style_seed": seed,
+        "fish_width_ratio": _width_ratio(background, seed),
+    }
+
+
 def get_bside_style_plan(session: BsideVisualSession, db: Session) -> dict[str, Any]:
     """Get or persist one weighted B-side plan for a session.
 
@@ -121,20 +151,11 @@ def get_bside_style_plan(session: BsideVisualSession, db: Session) -> dict[str, 
                 "fish_width_ratio": _width_ratio(background, seed),
             }
 
-    backgrounds = get_active_bside_backgrounds(db)
-    if not backgrounds:
-        raise BsideStylePlanError(
-            "BSIDE_ASSET_POOL_EMPTY",
-            "没有可用的 ACTIVE B 面背景，请先上传资产并启用背景",
-        )
-    seed = int(session.style_seed or 0) or secrets.randbelow(2**31 - 1) + 1
-    rng = random.Random(seed)
-    background = backgrounds[rng.randrange(len(backgrounds))]
-    profiles = get_outline_profiles(db, int(background.id))
-    profile = _weighted_choice(rng, profiles)
-    outline_style = db.get(BsideOutlineStyle, int(profile.outline_style_id))
-    if outline_style is None:
-        raise BsideStylePlanError("OUTLINE_STYLE_MISSING", "描边样式不存在")
+    selected = select_active_bside_style_plan(db, style_seed=session.style_seed)
+    background = selected["background"]
+    outline_style = selected["outline_style"]
+    profile = selected["profile"]
+    seed = int(selected["style_seed"])
     session.background_id = background.id
     session.outline_style_id = outline_style.id
     session.outline_profile_id = profile.id
@@ -254,4 +275,5 @@ __all__ = [
     "get_bside_style_plan",
     "get_outline_profiles",
     "outline_renderer_style",
+    "select_active_bside_style_plan",
 ]

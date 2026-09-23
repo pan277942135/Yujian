@@ -35,6 +35,7 @@ PLATFORM_PAGES = (
     PlatformPage("/fish-portrait/qwen-lab", "platform/lab/qwen_image_edit.html", "Qwen Image Edit Lab", "智能流水线", "测试 Qwen 对真实鱼获图片的编辑能力。", "/api/fish-portrait/qwen-lab/generate"),
     PlatformPage("/platform/assets", "platform/assets.html", "数字资产工厂", "数字资产工厂", "查看原图、Mask、透明鱼和 Sticker 资产。", "/api/platform/assets"),
     PlatformPage("/platform/assets/bside", "platform/bside_assets.html", "B面视觉资产", "数字资产工厂", "管理 B 面背景、描边样式和组合规则。", "/api/platform/assets/bside/backgrounds"),
+    PlatformPage("/platform/assets/bside/jobs", "platform/bside_jobs.html", "B-side Jobs", "数字资产工厂", "查看用户渔获 B 面卡异步生成任务。", "/api/platform/bside-jobs"),
     PlatformPage("/platform/knowledge", "platform/knowledge.html", "鱼类知识库", "鱼类知识库", "复用现有 Fish Knowledge CMS 数据。", "/api/platform/knowledge"),
     PlatformPage("/platform/habitat", "platform/habitat.html", "渔境生态", "渔境生态", "管理鱼缸、鱼塘、湖湾等渔境生态配置。", "/api/platform/habitat"),
     PlatformPage("/platform/system/tasks", "platform/system_tasks.html", "任务中心", "系统管理", "统一查看训练、流水线和资产任务。", "/api/platform/system/tasks"),
