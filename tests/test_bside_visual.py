@@ -17,6 +17,7 @@ from app.platform.models import BsideBackground, BsideVisualSession, BsideVisual
 from app.platform.routes import bside_visual as lab
 from app.platform.services.bside_assets import seed_bside_asset_registry
 from app.platform.services.bside_visual import outline, standardize
+from app.platform.services.bside_visual.standardizer import _detect_head_direction
 from app.platform.services.bside_visual.asset_registry import outline_renderer_style
 from app.platform.services.bside_visual.style_registry import STYLES
 from app.platform.services.bside_visual.water_renderer import compose_bside
@@ -53,6 +54,22 @@ def _slanted_fish_bytes(angle: float) -> bytes:
     rotated = image.rotate(angle, resample=Image.Resampling.NEAREST, expand=True, fillcolor=(0, 0, 0, 0))
     output = io.BytesIO()
     rotated.save(output, format="PNG")
+    return output.getvalue()
+
+
+def _head_tail_fish_bytes(*, head_side: str = "left") -> bytes:
+    """A deliberately asymmetric RGBA fish: broad rounded head, narrow tail."""
+
+    image = Image.new("RGBA", (360, 180), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((28, 34, 144, 146), fill=(214, 155, 59, 255))
+    draw.rectangle((106, 58, 276, 122), fill=(214, 155, 59, 255))
+    draw.polygon([(270, 90), (334, 66), (334, 114)], fill=(214, 155, 59, 255))
+    draw.ellipse((62, 72, 78, 88), fill=(18, 18, 18, 255))
+    if head_side == "right":
+        image = image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+    output = io.BytesIO()
+    image.save(output, format="PNG")
     return output.getvalue()
 
 
@@ -157,13 +174,47 @@ def test_session_get_or_create_is_unique_and_accepts_qwen_rgb_source(tmp_path):
         db.close()
 
 
-def test_standardize_preserves_alpha_and_does_not_flip_direction():
-    artifact = standardize(_fish_bytes())
+def test_standardize_flips_confident_left_head_to_right_and_preserves_rgba_pixels():
+    source = Image.open(io.BytesIO(_head_tail_fish_bytes(head_side="left"))).convert("RGBA")
+    artifact = standardize(_head_tail_fish_bytes(head_side="left"))
     image = Image.open(io.BytesIO(artifact.data)).convert("RGBA")
+    source_rgba = np.asarray(source, dtype=np.uint8)
+    output_rgba = np.asarray(image, dtype=np.uint8)
+    source_foreground = source_rgba[source_rgba[:, :, 3] > 0]
+    output_foreground = output_rgba[output_rgba[:, :, 3] > 0]
+
     assert image.mode == "RGBA"
-    assert artifact.metadata["direction_flipped"] is False
+    assert artifact.metadata["head_side_before_flip"] == "left"
+    assert artifact.metadata["head_direction_after"] == "right"
+    assert artifact.metadata["head_confidence"] >= 0.75
+    assert artifact.metadata["flip_horizontal"] is True
+    assert artifact.metadata["flip_vertical"] is False
+    assert artifact.metadata["direction_flipped"] is True
+    assert artifact.metadata["pose_status"] == "PASS"
+    assert sorted(map(tuple, output_foreground)) == sorted(map(tuple, source_foreground))
     assert artifact.metadata["output_width"] <= 1600
-    assert np.asarray(image)[:, :, 3].max() > 0
+    assert output_rgba[:, :, 3].max() > 0
+
+
+def test_standardize_keeps_confident_right_head_without_flip():
+    artifact = standardize(_head_tail_fish_bytes(head_side="right"))
+
+    assert artifact.metadata["head_side_before_flip"] == "right"
+    assert artifact.metadata["head_direction_after"] == "right"
+    assert artifact.metadata["head_confidence"] >= 0.75
+    assert artifact.metadata["flip_horizontal"] is False
+    assert artifact.metadata["flip_vertical"] is False
+    assert artifact.metadata["pose_status"] == "PASS"
+
+
+def test_head_direction_low_confidence_warns_without_forcing_flip():
+    symmetric_mask = np.zeros((100, 240), dtype=bool)
+    symmetric_mask[28:72, 20:220] = True
+    detection = _detect_head_direction(symmetric_mask)
+
+    assert detection["head_side"] == "unknown"
+    assert detection["confidence"] < 0.75
+    assert detection["reason"] == "HEAD_DIRECTION_LOW_CONFIDENCE"
 
 
 @pytest.mark.parametrize("source_angle", [60.0, -45.0, 0.0])
@@ -407,6 +458,9 @@ def test_bside_page_contains_locked_four_step_ui_without_angle_input_or_gpu_depe
     assert "透明背景鱼体" in template
     assert "姿态标准化" in template
     assert "检测主轴" in template
+    assert "鱼头方向" in template
+    assert "水平翻转" in template
+    assert "方向置信度" in template
     assert "特色描边" in template
     assert "融入水体背景" in template
     assert "Qwen Result · RGB" in template
@@ -416,6 +470,7 @@ def test_bside_page_contains_locked_four_step_ui_without_angle_input_or_gpu_depe
     assert "stepOrder = ['transparent','standardize','outline','compose']" in template
     assert "姿态微调" not in template
     assert "bsideRotationOffset" not in template
+    assert "不自动镜像" not in template
     assert "三步处理" not in template
     assert "/api/qwen-lab/bside-visual/" in template
     assert "Detector" in template

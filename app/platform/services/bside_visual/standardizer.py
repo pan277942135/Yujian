@@ -15,6 +15,9 @@ PADDING_RATIO = 0.08
 RESIDUAL_PASS_DEG = 2.0
 RESIDUAL_WARN_DEG = 4.0
 MIN_FOREGROUND_PIXELS = 8
+HEAD_DIRECTION_CONFIDENCE_PASS = 0.75
+HEAD_ENDPOINT_RATIO = 0.22
+HEAD_MIN_AXIS_PIXELS = 20
 
 
 class BsideVisualError(ValueError):
@@ -212,6 +215,78 @@ def _tight_crop(image: Image.Image) -> Image.Image:
     return image.crop((left, top, right, bottom))
 
 
+def _detect_head_direction(mask: np.ndarray) -> dict[str, Any]:
+    """Infer head side from the two horizontal Alpha endpoints.
+
+    PCA has already made the fish horizontal at this point, but it does not
+    provide an axis direction.  V1 intentionally uses only the existing Alpha
+    mask: a fish head is normally both wider and has more mask area than its
+    tail endpoint.  Ambiguous geometry is reported as a warning rather than
+    forcing an incorrect mirror.
+    """
+
+    alpha_mask = np.asarray(mask, dtype=bool)
+    yx = np.column_stack(np.nonzero(alpha_mask))
+    if len(yx) < MIN_FOREGROUND_PIXELS:
+        return {
+            "head_side": "unknown",
+            "confidence": 0.0,
+            "left_score": 0.0,
+            "right_score": 0.0,
+            "reason": "HEAD_DIRECTION_LOW_CONFIDENCE",
+        }
+
+    _top, left = yx.min(axis=0)
+    _bottom, right = yx.max(axis=0)
+    axis_pixels = int(right - left + 1)
+    if axis_pixels < HEAD_MIN_AXIS_PIXELS:
+        return {
+            "head_side": "unknown",
+            "confidence": 0.0,
+            "left_score": 0.0,
+            "right_score": 0.0,
+            "reason": "HEAD_DIRECTION_LOW_CONFIDENCE",
+        }
+
+    column_area = alpha_mask[:, int(left) : int(right) + 1].sum(axis=0).astype(np.float64)
+    endpoint_width = max(3, int(round(axis_pixels * HEAD_ENDPOINT_RATIO)))
+    left_columns = column_area[:endpoint_width]
+    right_columns = column_area[-endpoint_width:]
+    left_area = float(left_columns.sum())
+    right_area = float(right_columns.sum())
+    # The upper quartile remains responsive to the broad head while avoiding a
+    # single tail-fin tip deciding the direction.
+    left_width = float(np.percentile(left_columns, 75))
+    right_width = float(np.percentile(right_columns, 75))
+
+    area_total = max(left_area + right_area, 1e-9)
+    width_total = max(left_width + right_width, 1e-9)
+    left_score = 0.55 * (left_area / area_total) + 0.45 * (left_width / width_total)
+    right_score = 0.55 * (right_area / area_total) + 0.45 * (right_width / width_total)
+    direction_margin = abs(right_score - left_score)
+
+    # Confidence is deliberately calibrated around a neutral 0.50 baseline:
+    # only a clear, consistent endpoint asymmetry crosses the product gate.
+    confidence = min(0.99, 0.5 + 0.5 * direction_margin * 2.0)
+    if (right_area - left_area) * (right_width - left_width) < 0:
+        confidence *= 0.7
+    confidence = max(0.0, min(0.99, confidence))
+
+    if confidence < HEAD_DIRECTION_CONFIDENCE_PASS:
+        head_side = "unknown"
+        reason = "HEAD_DIRECTION_LOW_CONFIDENCE"
+    else:
+        head_side = "right" if right_score > left_score else "left"
+        reason = None
+    return {
+        "head_side": head_side,
+        "confidence": float(confidence),
+        "left_score": float(left_score),
+        "right_score": float(right_score),
+        "reason": reason,
+    }
+
+
 def standardize(source_fish: bytes, manual_rotation_offset_deg: float = 0.0) -> ImageArtifact:
     """Rotate the original Qwen RGBA fish into a horizontal CPU-only pose."""
 
@@ -246,6 +321,27 @@ def standardize(source_fish: bytes, manual_rotation_offset_deg: float = 0.0) -> 
             ),
             Image.Resampling.LANCZOS,
         )
+
+    head_detection = _detect_head_direction(
+        _analysis_mask(np.asarray(cropped.convert("RGBA"), dtype=np.uint8)[:, :, 3])
+    )
+    head_side_before_flip = str(head_detection["head_side"])
+    head_confidence = float(head_detection["confidence"])
+    flip_horizontal = head_side_before_flip == "left"
+    if flip_horizontal:
+        # Deliberately no vertical flip: it would make natural dorsal/ventral
+        # orientation ambiguous.  Mirroring the complete RGBA image retains
+        # every fish pixel and its Alpha while putting the detected head right.
+        cropped = cropped.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+    if head_side_before_flip in {"left", "right"}:
+        post_flip_detection = _detect_head_direction(
+            _analysis_mask(np.asarray(cropped.convert("RGBA"), dtype=np.uint8)[:, :, 3])
+        )
+        head_direction_after = str(post_flip_detection["head_side"])
+    else:
+        head_direction_after = "unknown"
+    if head_side_before_flip in {"left", "right"} and head_direction_after != "right":
+        raise BsideVisualError("POSE_DIRECTION_FAILED", "鱼头方向校正后未能朝右")
 
     source_metrics = _foreground_metrics(image)
     source_mean = np.asarray(source_metrics["foreground_rgb_mean"], dtype=np.float64)
@@ -287,6 +383,11 @@ def standardize(source_fish: bytes, manual_rotation_offset_deg: float = 0.0) -> 
             f"姿态标准化残差 {residual_error:.2f}° 超过 4°",
         )
 
+    pose_warning_reason = head_detection["reason"]
+    if pose_validation != "PASS" and not pose_warning_reason:
+        pose_warning_reason = "POSE_AXIS_RESIDUAL_WARNING"
+    pose_status = "WARNING" if pose_warning_reason else "PASS"
+
     output = io.BytesIO()
     cropped.save(output, format="PNG", optimize=True)
     metadata: dict[str, Any] = {
@@ -296,17 +397,22 @@ def standardize(source_fish: bytes, manual_rotation_offset_deg: float = 0.0) -> 
         "source_width": source_width,
         "source_height": source_height,
         "detected_axis_angle_deg": round(detected_axis_angle, 3),
+        "pca_angle": round(detected_axis_angle, 3),
         "target_axis_angle_deg": 0.0,
         "auto_rotation_deg": round(auto_rotation, 3),
         "manual_rotation_offset_deg": round(offset, 3),
         "applied_rotation_deg": round(applied_rotation, 3),
+        "rotation_applied": round(applied_rotation, 3),
         # Keep the old field for existing consumers while making the new
         # semantics explicit.
         "rotation_deg": round(applied_rotation, 3),
         "residual_axis_angle_deg": round(residual_axis_angle, 3),
         "expected_residual_axis_angle_deg": round(expected_residual, 3),
         "residual_axis_error_deg": round(residual_error, 3),
+        "final_axis_error": round(residual_error, 3),
         "pose_validation": pose_validation,
+        "pose_status": pose_status,
+        "pose_warning_reason": pose_warning_reason,
         "axis_ratio": round(axis_ratio, 4),
         "orientation_confidence": round(confidence, 4),
         "orientation_message": (
@@ -330,8 +436,16 @@ def standardize(source_fish: bytes, manual_rotation_offset_deg: float = 0.0) -> 
         "transparent_background": output_metrics["alpha_min"] == 0,
         "expanded_rotation_canvas": True,
         "uniform_scale": True,
-        "direction_flipped": False,
-        "head_direction_changed": False,
+        "head_side_before_flip": head_side_before_flip,
+        "head_direction_after": head_direction_after,
+        "head_confidence": round(head_confidence, 4),
+        "head_left_score": round(float(head_detection["left_score"]), 4),
+        "head_right_score": round(float(head_detection["right_score"]), 4),
+        "head_detection_method": "alpha_geometry_endpoints",
+        "flip_horizontal": flip_horizontal,
+        "flip_vertical": False,
+        "direction_flipped": flip_horizontal,
+        "head_direction_changed": flip_horizontal,
         "pre_resize_width": pre_resize_width,
         "pre_resize_height": pre_resize_height,
         "output_width": cropped.width,
