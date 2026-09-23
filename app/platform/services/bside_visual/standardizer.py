@@ -18,6 +18,10 @@ MIN_FOREGROUND_PIXELS = 8
 HEAD_DIRECTION_CONFIDENCE_PASS = 0.75
 HEAD_ENDPOINT_RATIO = 0.22
 HEAD_MIN_AXIS_PIXELS = 20
+ORIENTATION_CONFIDENCE_PASS = 0.75
+ORIENTATION_BODY_START_RATIO = 0.18
+ORIENTATION_BODY_END_RATIO = 0.82
+ORIENTATION_MIN_COLUMNS = 16
 
 
 class BsideVisualError(ValueError):
@@ -287,6 +291,112 @@ def _detect_head_direction(mask: np.ndarray) -> dict[str, Any]:
     }
 
 
+def _detect_natural_orientation(mask: np.ndarray) -> dict[str, Any]:
+    """Classify dorsal/ventral orientation from the horizontal Alpha contour.
+
+    This deliberately remains an Alpha-geometry heuristic: no new model and no
+    RGB repainting are involved.  Across the central body region, the dorsal
+    side tends to have a sharper / less area-dense contour from the back fin,
+    while the belly is broader and smoother.  The gate is intentionally
+    conservative: ambiguous, cropped, or near-symmetric fish are warnings and
+    never receive a speculative 180-degree correction.
+    """
+
+    alpha_mask = np.asarray(mask, dtype=bool)
+    yx = np.column_stack(np.nonzero(alpha_mask))
+    if len(yx) < MIN_FOREGROUND_PIXELS:
+        return {
+            "orientation": "WARNING",
+            "back_side": "unknown",
+            "belly_side": "unknown",
+            "confidence": 0.0,
+            "top_score": 0.0,
+            "bottom_score": 0.0,
+            "reason": "ORIENTATION_LOW_CONFIDENCE",
+        }
+
+    top, left = yx.min(axis=0)
+    bottom, right = yx.max(axis=0)
+    axis_pixels = int(right - left + 1)
+    if axis_pixels < HEAD_MIN_AXIS_PIXELS:
+        return {
+            "orientation": "WARNING",
+            "back_side": "unknown",
+            "belly_side": "unknown",
+            "confidence": 0.0,
+            "top_score": 0.0,
+            "bottom_score": 0.0,
+            "reason": "ORIENTATION_LOW_CONFIDENCE",
+        }
+
+    start = int(left + round(axis_pixels * ORIENTATION_BODY_START_RATIO))
+    end = int(left + round(axis_pixels * ORIENTATION_BODY_END_RATIO))
+    midline = (float(top) + float(bottom)) / 2.0
+    top_depths: list[float] = []
+    bottom_depths: list[float] = []
+    top_area = 0.0
+    bottom_area = 0.0
+    for x in range(max(int(left), start), min(int(right) + 1, end)):
+        ys = np.flatnonzero(alpha_mask[:, x])
+        if len(ys) == 0:
+            continue
+        top_depths.append(max(0.0, midline - float(ys.min())))
+        bottom_depths.append(max(0.0, float(ys.max()) - midline))
+        top_area += float(np.count_nonzero(ys < midline))
+        bottom_area += float(np.count_nonzero(ys > midline))
+
+    if len(top_depths) < ORIENTATION_MIN_COLUMNS or len(bottom_depths) < ORIENTATION_MIN_COLUMNS:
+        return {
+            "orientation": "WARNING",
+            "back_side": "unknown",
+            "belly_side": "unknown",
+            "confidence": 0.0,
+            "top_score": 0.0,
+            "bottom_score": 0.0,
+            "reason": "ORIENTATION_LOW_CONFIDENCE",
+        }
+
+    def dorsal_likelihood(depths: list[float], side_area: float) -> float:
+        values = np.asarray(depths, dtype=np.float64)
+        body_height = max(float(bottom - top + 1), 1.0)
+        # A back fin produces a local peak and sharper changes than a belly.
+        peakiness = max(0.0, float(values.max() - np.percentile(values, 60))) / body_height
+        if len(values) >= 3:
+            curvature = float(np.mean(np.abs(np.diff(values, n=2)))) / body_height
+        else:
+            curvature = 0.0
+        area_total = max(top_area + bottom_area, 1.0)
+        sparse_area = 1.0 - min(1.0, side_area / area_total * 2.0)
+        return 0.50 * peakiness + 0.35 * curvature + 0.15 * sparse_area
+
+    top_score = dorsal_likelihood(top_depths, top_area)
+    bottom_score = dorsal_likelihood(bottom_depths, bottom_area)
+    score_total = max(top_score + bottom_score, 1e-9)
+    confidence = min(0.99, 0.5 + 0.5 * abs(top_score - bottom_score) / score_total)
+    if confidence < ORIENTATION_CONFIDENCE_PASS:
+        return {
+            "orientation": "WARNING",
+            "back_side": "unknown",
+            "belly_side": "unknown",
+            "confidence": float(confidence),
+            "top_score": float(top_score),
+            "bottom_score": float(bottom_score),
+            "reason": "ORIENTATION_LOW_CONFIDENCE",
+        }
+
+    back_side = "TOP" if top_score > bottom_score else "BOTTOM"
+    belly_side = "BOTTOM" if back_side == "TOP" else "TOP"
+    return {
+        "orientation": "NORMAL" if belly_side == "BOTTOM" else "UPSIDE_DOWN",
+        "back_side": back_side,
+        "belly_side": belly_side,
+        "confidence": float(confidence),
+        "top_score": float(top_score),
+        "bottom_score": float(bottom_score),
+        "reason": None,
+    }
+
+
 def standardize(source_fish: bytes, manual_rotation_offset_deg: float = 0.0) -> ImageArtifact:
     """Rotate the original Qwen RGBA fish into a horizontal CPU-only pose."""
 
@@ -322,26 +432,25 @@ def standardize(source_fish: bytes, manual_rotation_offset_deg: float = 0.0) -> 
             Image.Resampling.LANCZOS,
         )
 
+    orientation_detection = _detect_natural_orientation(
+        _analysis_mask(np.asarray(cropped.convert("RGBA"), dtype=np.uint8)[:, :, 3])
+    )
+    rotate_180_applied = orientation_detection["orientation"] == "UPSIDE_DOWN"
+    if rotate_180_applied:
+        # This is a physical half-turn, not a horizontal mirror.  It keeps
+        # every RGBA pixel intact and is only used to restore back-up/belly-down.
+        cropped = cropped.transpose(Image.Transpose.ROTATE_180)
+        orientation_detection = _detect_natural_orientation(
+            _analysis_mask(np.asarray(cropped.convert("RGBA"), dtype=np.uint8)[:, :, 3])
+        )
+        if orientation_detection["orientation"] != "NORMAL":
+            raise BsideVisualError("POSE_ORIENTATION_FAILED", "180° 修正后鱼体仍未恢复自然背腹方向")
+
     head_detection = _detect_head_direction(
         _analysis_mask(np.asarray(cropped.convert("RGBA"), dtype=np.uint8)[:, :, 3])
     )
-    head_side_before_flip = str(head_detection["head_side"])
+    head_direction = str(head_detection["head_side"])
     head_confidence = float(head_detection["confidence"])
-    flip_horizontal = head_side_before_flip == "left"
-    if flip_horizontal:
-        # Deliberately no vertical flip: it would make natural dorsal/ventral
-        # orientation ambiguous.  Mirroring the complete RGBA image retains
-        # every fish pixel and its Alpha while putting the detected head right.
-        cropped = cropped.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
-    if head_side_before_flip in {"left", "right"}:
-        post_flip_detection = _detect_head_direction(
-            _analysis_mask(np.asarray(cropped.convert("RGBA"), dtype=np.uint8)[:, :, 3])
-        )
-        head_direction_after = str(post_flip_detection["head_side"])
-    else:
-        head_direction_after = "unknown"
-    if head_side_before_flip in {"left", "right"} and head_direction_after != "right":
-        raise BsideVisualError("POSE_DIRECTION_FAILED", "鱼头方向校正后未能朝右")
 
     source_metrics = _foreground_metrics(image)
     source_mean = np.asarray(source_metrics["foreground_rgb_mean"], dtype=np.float64)
@@ -383,7 +492,7 @@ def standardize(source_fish: bytes, manual_rotation_offset_deg: float = 0.0) -> 
             f"姿态标准化残差 {residual_error:.2f}° 超过 4°",
         )
 
-    pose_warning_reason = head_detection["reason"]
+    pose_warning_reason = orientation_detection["reason"] or head_detection["reason"]
     if pose_validation != "PASS" and not pose_warning_reason:
         pose_warning_reason = "POSE_AXIS_RESIDUAL_WARNING"
     pose_status = "WARNING" if pose_warning_reason else "PASS"
@@ -414,11 +523,11 @@ def standardize(source_fish: bytes, manual_rotation_offset_deg: float = 0.0) -> 
         "pose_status": pose_status,
         "pose_warning_reason": pose_warning_reason,
         "axis_ratio": round(axis_ratio, 4),
-        "orientation_confidence": round(confidence, 4),
+        "axis_confidence": round(confidence, 4),
         "orientation_message": (
-            "PCA 主轴已自动摆平；人工偏移作为最终旋转角叠加"
+            "PCA 主轴已自动摆平；已检查并保持鱼背朝上、鱼腹朝下"
             if offset == 0
-            else "PCA 主轴已自动摆平；已叠加人工微调"
+            else "PCA 主轴已自动摆平并完成自然背腹检查；已叠加人工微调"
         ),
         "source_alpha_min": source_metrics["alpha_min"],
         "source_alpha_max": source_metrics["alpha_max"],
@@ -436,16 +545,26 @@ def standardize(source_fish: bytes, manual_rotation_offset_deg: float = 0.0) -> 
         "transparent_background": output_metrics["alpha_min"] == 0,
         "expanded_rotation_canvas": True,
         "uniform_scale": True,
-        "head_side_before_flip": head_side_before_flip,
-        "head_direction_after": head_direction_after,
+        "orientation": str(orientation_detection["orientation"]),
+        "back_side": str(orientation_detection["back_side"]),
+        "belly_side": str(orientation_detection["belly_side"]),
+        "orientation_confidence": round(float(orientation_detection["confidence"]), 4),
+        "orientation_top_score": round(float(orientation_detection["top_score"]), 4),
+        "orientation_bottom_score": round(float(orientation_detection["bottom_score"]), 4),
+        "rotate_180_applied": rotate_180_applied,
+        "head_direction": head_direction,
+        # Compatibility aliases: V2 records the final actual direction and
+        # never changes it merely to force a right-facing fish.
+        "head_side_before_flip": head_direction,
+        "head_direction_after": head_direction,
         "head_confidence": round(head_confidence, 4),
         "head_left_score": round(float(head_detection["left_score"]), 4),
         "head_right_score": round(float(head_detection["right_score"]), 4),
         "head_detection_method": "alpha_geometry_endpoints",
-        "flip_horizontal": flip_horizontal,
+        "flip_horizontal": False,
         "flip_vertical": False,
-        "direction_flipped": flip_horizontal,
-        "head_direction_changed": flip_horizontal,
+        "direction_flipped": False,
+        "head_direction_changed": False,
         "pre_resize_width": pre_resize_width,
         "pre_resize_height": pre_resize_height,
         "output_width": cropped.width,
@@ -458,6 +577,7 @@ def standardize(source_fish: bytes, manual_rotation_offset_deg: float = 0.0) -> 
 __all__ = [
     "BsideVisualError",
     "ImageArtifact",
+    "_detect_natural_orientation",
     "standardize",
     "validate_transparent_fish",
 ]

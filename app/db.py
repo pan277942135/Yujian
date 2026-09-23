@@ -179,6 +179,16 @@ def _ensure_user_catch_columns() -> None:
             if name not in existing:
                 connection.exec_driver_sql(f'ALTER TABLE "fish_catches" ADD COLUMN "{name}" {definition}')
 
+    job_table = "fish_bside_job"
+    if not inspect(engine).has_table(job_table):
+        return
+    job_existing = {column["name"] for column in inspect(engine).get_columns(job_table)}
+    if "pose_metadata_json" not in job_existing:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                f'ALTER TABLE "{job_table}" ADD COLUMN "pose_metadata_json" TEXT'
+            )
+
 
 def _ensure_bside_visual_columns() -> None:
     """Add the Qwen RGB source pointer for the four-step B-side workflow.

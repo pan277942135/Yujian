@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 from types import SimpleNamespace
 
 from fastapi import BackgroundTasks
@@ -124,8 +125,12 @@ def test_durable_bside_job_reuses_duplicate_and_runs_existing_pipeline(tmp_path,
     job = db.get(FishBsideJob, first.job_id)
     assert row.bside_status == "READY"
     assert job.status == "SUCCESS"
+    assert job.pose_metadata_json
+    assert json.loads(job.pose_metadata_json)["mode"] == "RGBA"
     assert job.result_object_name
     assert bucket.blob(job.result_object_name).data
+    metadata_object_name = job.result_object_name.replace("bside_result.png", "standardized_fish_metadata.json")
+    assert bucket.blob(metadata_object_name).data
     status = get_bside_status(record.id, user, db)
     assert status.status == "READY"
     assert status.result_uri.endswith("/bside-media")

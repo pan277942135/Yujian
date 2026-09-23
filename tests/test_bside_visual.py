@@ -73,6 +73,24 @@ def _head_tail_fish_bytes(*, head_side: str = "left") -> bytes:
     return output.getvalue()
 
 
+def _natural_orientation_fish_bytes(*, upside_down: bool = False) -> bytes:
+    """Fish with an intentionally asymmetric dorsal contour for orientation QA."""
+
+    image = Image.new("RGBA", (360, 180), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    body = (214, 155, 59, 255)
+    draw.ellipse((20, 45, 120, 135), fill=body)
+    draw.rectangle((90, 76, 285, 104), fill=body)
+    draw.polygon([(280, 90), (340, 70), (340, 110)], fill=body)
+    draw.polygon([(160, 76), (205, 2), (245, 76)], fill=(54, 132, 151, 255))
+    draw.ellipse((48, 70, 64, 86), fill=(18, 18, 18, 255))
+    if upside_down:
+        image = image.transpose(Image.Transpose.ROTATE_180)
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
+
+
 def _axis_angle(image: Image.Image) -> float:
     rgba = np.asarray(image.convert("RGBA"), dtype=np.uint8)
     yx = np.column_stack(np.nonzero(rgba[:, :, 3] >= 16))
@@ -174,7 +192,7 @@ def test_session_get_or_create_is_unique_and_accepts_qwen_rgb_source(tmp_path):
         db.close()
 
 
-def test_standardize_flips_confident_left_head_to_right_and_preserves_rgba_pixels():
+def test_standardize_preserves_confident_left_head_without_mirroring():
     source = Image.open(io.BytesIO(_head_tail_fish_bytes(head_side="left"))).convert("RGBA")
     artifact = standardize(_head_tail_fish_bytes(head_side="left"))
     image = Image.open(io.BytesIO(artifact.data)).convert("RGBA")
@@ -185,12 +203,13 @@ def test_standardize_flips_confident_left_head_to_right_and_preserves_rgba_pixel
 
     assert image.mode == "RGBA"
     assert artifact.metadata["head_side_before_flip"] == "left"
-    assert artifact.metadata["head_direction_after"] == "right"
+    assert artifact.metadata["head_direction_after"] == "left"
+    assert artifact.metadata["head_direction"] == "left"
     assert artifact.metadata["head_confidence"] >= 0.75
-    assert artifact.metadata["flip_horizontal"] is True
+    assert artifact.metadata["flip_horizontal"] is False
     assert artifact.metadata["flip_vertical"] is False
-    assert artifact.metadata["direction_flipped"] is True
-    assert artifact.metadata["pose_status"] == "PASS"
+    assert artifact.metadata["direction_flipped"] is False
+    assert artifact.metadata["head_direction_changed"] is False
     assert sorted(map(tuple, output_foreground)) == sorted(map(tuple, source_foreground))
     assert artifact.metadata["output_width"] <= 1600
     assert output_rgba[:, :, 3].max() > 0
@@ -204,7 +223,36 @@ def test_standardize_keeps_confident_right_head_without_flip():
     assert artifact.metadata["head_confidence"] >= 0.75
     assert artifact.metadata["flip_horizontal"] is False
     assert artifact.metadata["flip_vertical"] is False
-    assert artifact.metadata["pose_status"] == "PASS"
+    assert artifact.metadata["direction_flipped"] is False
+    assert artifact.metadata["head_direction_changed"] is False
+
+
+def test_standardize_restores_natural_back_belly_orientation_with_physical_half_turn():
+    normal = standardize(_natural_orientation_fish_bytes())
+    upside_down = standardize(_natural_orientation_fish_bytes(upside_down=True))
+
+    assert normal.metadata["orientation"] == "NORMAL"
+    assert normal.metadata["back_side"] == "TOP"
+    assert normal.metadata["belly_side"] == "BOTTOM"
+    assert normal.metadata["rotate_180_applied"] is False
+    assert normal.metadata["orientation_confidence"] >= 0.75
+
+    assert upside_down.metadata["orientation"] == "NORMAL"
+    assert upside_down.metadata["back_side"] == "TOP"
+    assert upside_down.metadata["belly_side"] == "BOTTOM"
+    assert upside_down.metadata["rotate_180_applied"] is True
+    assert upside_down.metadata["orientation_confidence"] >= 0.75
+    assert upside_down.metadata["flip_horizontal"] is False
+    assert upside_down.metadata["flip_vertical"] is False
+
+
+def test_standardize_records_warning_for_ambiguous_back_belly_orientation():
+    artifact = standardize(_head_tail_fish_bytes(head_side="right"))
+
+    assert artifact.metadata["orientation"] == "WARNING"
+    assert artifact.metadata["pose_status"] == "WARNING"
+    assert artifact.metadata["pose_warning_reason"] == "ORIENTATION_LOW_CONFIDENCE"
+    assert artifact.metadata["rotate_180_applied"] is False
 
 
 def test_head_direction_low_confidence_warns_without_forcing_flip():
@@ -373,6 +421,17 @@ def test_step_dependencies_and_rerun_invalidation(tmp_path, monkeypatch):
         transparent = lab.run_bside_transparent(session_id, db)
         assert transparent["transparent_status"] == "SUCCESS"
         lab.run_bside_standardize(session_id, lab.StandardizeRequest(), db)
+        standardize_step = db.query(BsideVisualStep).filter(
+            BsideVisualStep.session_id == session_id,
+            BsideVisualStep.step_key == "standardize",
+        ).one()
+        standardize_metadata = json.loads(standardize_step.metadata_json)
+        assert standardize_metadata["standardized_metadata_uri"].endswith(
+            "/standardized_fish_metadata.json"
+        )
+        assert json.loads(
+            Path(standardize_metadata["standardized_metadata_uri"]).read_text(encoding="utf-8")
+        )["mode"] == "RGBA"
         lab.run_bside_outline(session_id, lab.OutlineRequest(style_id="lake_mist"), db)
         composed = lab.run_bside_compose(session_id, lab.ComposeRequest(template_id="lake_dawn_01"), db)
         final_step = next(item for item in composed["steps"] if item["step"] == "compose")
@@ -459,7 +518,7 @@ def test_bside_page_contains_locked_four_step_ui_without_angle_input_or_gpu_depe
     assert "姿态标准化" in template
     assert "检测主轴" in template
     assert "鱼头方向" in template
-    assert "水平翻转" in template
+    assert "180° 修正" in template
     assert "方向置信度" in template
     assert "特色描边" in template
     assert "融入水体背景" in template

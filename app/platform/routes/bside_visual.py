@@ -607,6 +607,14 @@ def run_bside_standardize(
             "image/png",
         )
         artifact_metadata["standardized_uri"] = row.output_uri
+        artifact_metadata["standardized_metadata_uri"] = _store_bytes(
+            session_id,
+            STEP_STANDARDIZE,
+            version,
+            "standardized_fish_metadata.json",
+            json.dumps(artifact.metadata, ensure_ascii=False, indent=2).encode("utf-8"),
+            "application/json",
+        )
         row.preview_uri = None
         row.metadata_json = json.dumps(artifact_metadata, ensure_ascii=False)
         row.version = version
