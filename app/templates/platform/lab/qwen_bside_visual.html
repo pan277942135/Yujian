@@ -40,7 +40,7 @@
         </section>
         <section class="bside-panel bside-controls" aria-label="B面视觉参数">
           <div class="bside-control-group"><h3>① 透明背景鱼体</h3><p>从 Qwen RGB 中提取完整鱼体；鱼体保持真实、不透明，仅移除背景。请在上方 Step 1 点击生成。</p></div>
-          <div class="bside-control-group"><h3>② 姿态标准化</h3><p>自动识别鱼体主轴，将完整 RGBA 鱼体调整至水平姿态；必要时仅做水平翻转，统一鱼头朝右。</p></div>
+          <div class="bside-control-group"><h3>② 姿态标准化</h3><p>自动识别鱼体主轴并恢复自然背腹方向；保留鱼头真实的左右朝向，不做水平镜像。</p></div>
           <div class="bside-control-group"><h3>③ 特色描边</h3><p>系统将根据 ACTIVE 水体场景与背景 × 描边权重自动匹配，描边位于真实鱼体后方，不覆盖鱼体 RGB。</p><div id="bsideMatchedOutline" class="bside-matched">点击“开始”后自动匹配</div></div>
           <div class="bside-control-group"><h3>④ 融入水体背景</h3><p>使用 Step 3 已持久化的同一背景资产合成，不再次随机、不重新生成鱼。</p><div id="bsideMatchedBackground" class="bside-matched">等待 Step 3 完成</div></div>
         </section>
@@ -100,8 +100,11 @@
         number(metadata,'auto_rotation_deg')&&'自动旋转 '+number(metadata,'auto_rotation_deg'),
         number(metadata,'applied_rotation_deg')&&'应用旋转 '+number(metadata,'applied_rotation_deg'),
         number(metadata,'residual_axis_angle_deg')&&'最终残差 '+number(metadata,'residual_axis_angle_deg'),
-        metadata.head_direction_after==='right'&&'鱼头方向 右 →',
-        typeof metadata.flip_horizontal==='boolean'&&'水平翻转 '+(metadata.flip_horizontal?'YES':'NO'),
+        metadata.orientation==='NORMAL'&&'鱼体姿态 正常（鱼背↑ · 鱼腹↓）',
+        metadata.orientation==='WARNING'&&'鱼体姿态 需复核',
+        metadata.head_direction==='left'&&'鱼头方向 左 ←',
+        metadata.head_direction==='right'&&'鱼头方向 右 →',
+        typeof metadata.rotate_180_applied==='boolean'&&'180° 修正 '+(metadata.rotate_180_applied?'YES':'NO'),
         Number.isFinite(Number(metadata.head_confidence))&&'方向置信度 '+(Number(metadata.head_confidence)*100).toFixed(0)+'%',
         metadata.pose_status==='WARNING'&&'方向判断需复核',
       ].filter(Boolean);

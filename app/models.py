@@ -103,6 +103,7 @@ class FishBsideJob(Base):
     input_image_uri = Column(Text)
     transparent_fish_uri = Column(Text)
     standardized_fish_uri = Column(Text)
+    pose_metadata_json = Column(Text)
     outlined_fish_uri = Column(Text)
     background_id = Column(Integer, ForeignKey("bside_background.id", ondelete="SET NULL"), index=True)
     outline_style_id = Column(Integer, ForeignKey("bside_outline_style.id", ondelete="SET NULL"), index=True)

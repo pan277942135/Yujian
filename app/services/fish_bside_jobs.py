@@ -6,6 +6,7 @@ does not contain a second fish, pose, outline, or background implementation.
 
 from __future__ import annotations
 
+import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -164,6 +165,13 @@ def process_fish_bside_job(job_id: str) -> None:
             standardized = standardize(transparent)
             job.standardized_fish_uri, _ = _store_job_asset(
                 job, "standardized_fish_rgba.png", standardized.data, standardized.media_type
+            )
+            job.pose_metadata_json = json.dumps(standardized.metadata, ensure_ascii=False)
+            _store_job_asset(
+                job,
+                "standardized_fish_metadata.json",
+                json.dumps(standardized.metadata, ensure_ascii=False, indent=2).encode("utf-8"),
+                "application/json",
             )
 
             plan = select_active_bside_style_plan(db, style_seed=job.style_seed)
