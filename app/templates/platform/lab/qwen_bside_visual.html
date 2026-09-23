@@ -11,8 +11,8 @@
     .bside-main{width:min(1440px,100%);margin:0 auto;padding:24px 28px 48px}.bside-notice{border:1px solid #cfe1d8;border-radius:12px;background:#edf7f1;color:#315e51;padding:11px 13px;line-height:1.55;font-size:12px;margin-bottom:16px}.bside-grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(360px,.85fr);gap:16px;align-items:start}.bside-panel{border:1px solid var(--line);border-radius:16px;background:rgba(255,255,255,.9);box-shadow:0 8px 24px rgba(39,75,65,.04);padding:18px}.bside-panel h2{margin:0;font-size:17px}.bside-panel p{margin:5px 0 0;color:var(--muted);line-height:1.5;font-size:12px}.bside-panel-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}.bside-preview-toolbar{display:flex;gap:6px;flex-wrap:wrap}.bside-preview-toolbar button{border:1px solid #cddfd7;border-radius:8px;background:#fff;color:#48685e;padding:6px 9px;cursor:pointer;font-size:12px}.bside-preview-toolbar button.active{border-color:#2a8068;background:#edf8f2;color:#185e4c}.bside-preview-stage{display:grid;place-items:center;min-height:560px;border:1px solid #d5e5df;border-radius:12px;overflow:hidden;background-color:#edf4f1;background-image:linear-gradient(45deg,#d9e3df 25%,transparent 25%),linear-gradient(-45deg,#d9e3df 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#d9e3df 75%),linear-gradient(-45deg,transparent 75%,#d9e3df 75%);background-size:24px 24px;background-position:0 0,0 12px,12px -12px,-12px 0}.bside-preview-stage.dark{background:#173936;background-image:none}.bside-preview-stage.light{background:#f8fbfa;background-image:none}.bside-preview-stage img{display:block;width:100%;height:auto;max-height:760px;object-fit:contain}.bside-preview-empty{padding:40px;text-align:center;color:var(--muted);font-size:13px}.bside-preview-empty[hidden]{display:none}
     .bside-assets{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:9px;margin-top:12px}.bside-asset{border:1px solid #d5e5df;border-radius:10px;background:#fbfefd;padding:7px;text-align:left;cursor:pointer;color:inherit}.bside-asset:hover:not(:disabled),.bside-asset.active{border-color:#2a8068;background:#eff9f4;box-shadow:0 0 0 2px rgba(42,128,104,.12)}.bside-asset:disabled{opacity:.45;cursor:not-allowed}.bside-asset img{display:block;width:100%;aspect-ratio:1/1;object-fit:contain;border-radius:7px;background:#edf4f1}.bside-asset strong{display:block;font-size:11px;line-height:1.35;margin-top:6px}.bside-asset small{display:block;color:var(--muted);font-size:10px;line-height:1.35;margin-top:3px}
     .bside-stepper{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:16px}.bside-step{position:relative;border:1px solid #d5e5df;border-radius:10px;background:#fbfefd;padding:11px;min-height:126px}.bside-step.complete{border-color:#9bcbb6;background:#eff9f4}.bside-step.running{border-color:#dfc27f;background:#fff9e9}.bside-step.failed{border-color:#e4b3ad;background:#fff4f1}.bside-step.stale{border-color:#d8c895;background:#fffaed}.bside-step strong{display:block;font-size:13px;padding-right:45px}.bside-step small{display:block;color:var(--muted);font-size:11px;line-height:1.4;margin-top:5px;min-height:31px}.bside-step button{margin-top:9px;border:1px solid #cddfd7;border-radius:8px;background:#fff;color:#315c51;padding:5px 8px;cursor:pointer;font-size:11px;font-weight:750}.bside-step button:disabled{opacity:.45;cursor:not-allowed}.bside-step-status{position:absolute;right:9px;top:10px;color:#6c817a;font-size:10px;font-weight:800}
-    .bside-controls{display:grid;gap:14px}.bside-control-group{border-top:1px solid #e3ece8;padding-top:13px}.bside-control-group h3{margin:0;font-size:14px}.bside-control-group p{margin-top:4px}.bside-style-grid,.bside-template-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}.bside-choice{border:1px solid #d5e5df;border-radius:10px;background:#fff;text-align:left;padding:10px;cursor:pointer;color:#315c51}.bside-choice:hover,.bside-choice.selected{border-color:#2a8068;background:#eff9f4;box-shadow:0 0 0 2px rgba(42,128,104,.1)}.bside-choice strong{display:block;font-size:12px}.bside-choice small{display:block;margin-top:4px;color:var(--muted);font-size:10px;line-height:1.4}.bside-color{display:inline-block;width:12px;height:12px;border-radius:50%;vertical-align:-2px;margin-right:4px;border:1px solid rgba(0,0,0,.12)}.bside-hint{font-size:11px;color:var(--muted);line-height:1.5}.bside-error{display:none;border:1px solid #efc0b9;border-radius:9px;background:#fff3f1;color:#9e3f36;padding:10px 11px;white-space:pre-wrap;line-height:1.5;font-size:12px}.bside-error.visible{display:block}
-    @media(max-width:1100px){.bside-assets{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:980px){.bside-grid{grid-template-columns:1fr}.bside-preview-stage{min-height:360px}.bside-header{padding-left:16px;padding-right:16px}.bside-main{padding-left:16px;padding-right:16px}}@media(max-width:620px){.bside-run,.bside-badge{display:none}.bside-header{gap:9px}.bside-heading h1{font-size:18px}.bside-progress{font-size:12px}.bside-stepper{grid-template-columns:1fr}.bside-assets{grid-template-columns:repeat(2,minmax(0,1fr))}.bside-style-grid,.bside-template-grid{grid-template-columns:1fr}.bside-preview-stage{min-height:300px}}
+    .bside-controls{display:grid;gap:14px}.bside-control-group{border-top:1px solid #e3ece8;padding-top:13px}.bside-control-group h3{margin:0;font-size:14px}.bside-control-group p{margin-top:4px}.bside-matched{margin-top:10px;border:1px solid #cfe1d8;border-radius:10px;background:#f1f8f4;color:#315e51;padding:10px 11px;font-size:12px;line-height:1.5}.bside-matched strong{display:block;font-size:13px}.bside-hint{font-size:11px;color:var(--muted);line-height:1.5}.bside-error{display:none;border:1px solid #efc0b9;border-radius:9px;background:#fff3f1;color:#9e3f36;padding:10px 11px;white-space:pre-wrap;line-height:1.5;font-size:12px}.bside-error.visible{display:block}
+    @media(max-width:1100px){.bside-assets{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:980px){.bside-grid{grid-template-columns:1fr}.bside-preview-stage{min-height:360px}.bside-header{padding-left:16px;padding-right:16px}.bside-main{padding-left:16px;padding-right:16px}}@media(max-width:620px){.bside-run,.bside-badge{display:none}.bside-header{gap:9px}.bside-heading h1{font-size:18px}.bside-progress{font-size:12px}.bside-stepper{grid-template-columns:1fr}.bside-assets{grid-template-columns:repeat(2,minmax(0,1fr))}.bside-preview-stage{min-height:300px}}
   </style>
 </head>
 <body>
@@ -41,8 +41,8 @@
         <section class="bside-panel bside-controls" aria-label="B面视觉参数">
           <div class="bside-control-group"><h3>① 透明背景鱼体</h3><p>从 Qwen RGB 中提取完整鱼体；鱼体保持真实、不透明，仅移除背景。请在上方 Step 1 点击生成。</p></div>
           <div class="bside-control-group"><h3>② 姿态标准化</h3><p>自动识别鱼体主轴，将完整 RGBA 鱼体调整至水平姿态。不要求填写角度，不自动镜像。</p></div>
-          <div class="bside-control-group"><h3>③ 特色描边</h3><p>样式来自 Backend Registry；描边位于真实鱼体后方，不覆盖鱼体 RGB。</p><div id="bsideStyles" class="bside-style-grid"></div></div>
-          <div class="bside-control-group"><h3>④ 融入水体背景</h3><p>模板来自 Backend Registry；只合成已有的真实鱼体 RGBA，不重新生成鱼。</p><div id="bsideTemplates" class="bside-template-grid"></div></div>
+          <div class="bside-control-group"><h3>③ 特色描边</h3><p>系统将根据 ACTIVE 水体场景与背景 × 描边权重自动匹配，描边位于真实鱼体后方，不覆盖鱼体 RGB。</p><div id="bsideMatchedOutline" class="bside-matched">点击“开始”后自动匹配</div></div>
+          <div class="bside-control-group"><h3>④ 融入水体背景</h3><p>使用 Step 3 已持久化的同一背景资产合成，不再次随机、不重新生成鱼。</p><div id="bsideMatchedBackground" class="bside-matched">等待 Step 3 完成</div></div>
         </section>
       </div>
     </main>
@@ -64,10 +64,7 @@
     const runLabel = document.getElementById('bsideRun');
     const sessionStatus = document.getElementById('bsideSessionStatus');
     let state = null;
-    let options = {styles:[],templates:[]};
     let selectedAsset = 'source';
-    let selectedStyle = 'lake_mist';
-    let selectedTemplate = 'lake_dawn_01';
     let busy = false;
 
     function esc(value){return String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -128,25 +125,27 @@
       if(!item||!item.url){previewImage.hidden=true;previewEmpty.hidden=false;previewLabel.textContent='暂无可用资产';return}
       selectedAsset=item.key;previewLabel.textContent=item.label;previewImage.src=item.url+(item.url.includes('?')?'&':'?')+'v='+(state.updated_at||Date.now());previewImage.hidden=false;previewEmpty.hidden=true;
     }
-    function renderStyles(){
-      const current=stepByKey('outline'); if(current?.style_id)selectedStyle=current.style_id;
-      document.getElementById('bsideStyles').innerHTML=(options.styles||[]).map(style=>'<button type="button" class="bside-choice '+(style.style_id===selectedStyle?'selected':'')+'" data-style="'+esc(style.style_id)+'"><strong><span class="bside-color" style="background:'+esc(style.color)+'"></span>'+esc(style.name)+'</strong><small>'+esc(style.description)+' · '+esc(style.style_id)+'</small></button>').join('');
-      document.querySelectorAll('[data-style]').forEach(button=>button.addEventListener('click',()=>{selectedStyle=button.dataset.style;renderStyles()}));
-    }
-    function renderTemplates(){
-      const current=stepByKey('compose'); if(current?.template_id)selectedTemplate=current.template_id;
-      document.getElementById('bsideTemplates').innerHTML=(options.templates||[]).map(template=>'<button type="button" class="bside-choice '+(template.template_id===selectedTemplate?'selected':'')+'" data-template="'+esc(template.template_id)+'"><strong>'+esc(template.name)+'</strong><small>'+esc(template.description)+' · '+esc(template.template_id)+'</small></button>').join('');
-      document.querySelectorAll('[data-template]').forEach(button=>button.addEventListener('click',()=>{selectedTemplate=button.dataset.template;renderTemplates()}));
+    function renderMatchedPlan(){
+      const outlineBox=document.getElementById('bsideMatchedOutline');
+      const backgroundBox=document.getElementById('bsideMatchedBackground');
+      const plan=state?.style_plan;
+      if(!plan){
+        outlineBox.textContent='点击“开始”后，系统将从 ACTIVE 背景池按权重自动匹配';
+        backgroundBox.textContent='等待 Step 3 完成';
+        return;
+      }
+      outlineBox.innerHTML='<strong>已匹配：'+esc(plan.outline_name||plan.outline_code||'原生')+'</strong>同一 Style Plan 将在刷新与 Step 4 中复用';
+      backgroundBox.innerHTML='<strong>已匹配：'+esc(plan.background_name||plan.background_code||'水体背景')+'</strong>Step 4 将使用这一背景的正式 Background / Light / Foreground 资产';
     }
     function render(){
       if(!state)return;
       runLabel.textContent='Qwen Run #'+String(state.source_qwen_run_id||'').replace(/^QWEN_LAB_/,'');
       sessionStatus.textContent=state.status==='ACTIVE'?'Session 已保存':state.status;
       progress.textContent=(state.progress?.completed||0)+'/4';
-      renderStepper();renderAssets();renderPreview();renderStyles();renderTemplates();
+      renderStepper();renderAssets();renderPreview();renderMatchedPlan();
     }
     async function load(){
-      try{const values=await Promise.all([api('/api/qwen-lab/bside-visual/'+encodeURIComponent(sessionId)),api('/api/qwen-lab/bside-visual/options')]);state=values[0];options=values[1];render()}catch(error){showError(error instanceof Error?error.message:String(error))}
+      try{state=await api('/api/qwen-lab/bside-visual/'+encodeURIComponent(sessionId));render()}catch(error){showError(error instanceof Error?error.message:String(error))}
     }
     async function runStep(step){
       if(busy)return;
@@ -155,7 +154,7 @@
       busy=true;showError('');
       current.status='PROCESSING';
       renderStepper();
-      const bodies={transparent:{},standardize:{},outline:{style_id:selectedStyle},compose:{template_id:selectedTemplate}};
+      const bodies={transparent:{},standardize:{},outline:{},compose:{}};
       const endpoint=stepEndpoints[step]||step;
       try{
         state=await api('/api/qwen-lab/bside-visual/'+encodeURIComponent(sessionId)+'/'+endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(bodies[step]||{})});
