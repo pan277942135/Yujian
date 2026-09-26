@@ -53,11 +53,46 @@ class AppUser(Base):
     password_hash = Column(String(255), nullable=False)
     nickname = Column(String(64), nullable=False)
     avatar_url = Column(Text)
+    # The object name stays server-side.  The App receives only its
+    # authenticated media gateway URL, never a bucket path or public GCS URL.
+    avatar_object_name = Column(Text)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
 
     catches = relationship("FishCatch", back_populates="user", cascade="all, delete-orphan")
     bside_jobs = relationship("FishBsideJob", back_populates="user", cascade="all, delete-orphan")
+    privacy_setting = relationship(
+        "UserPrivacySetting", back_populates="user", uselist=False, cascade="all, delete-orphan"
+    )
+    privacy_audits = relationship("UserPrivacyAudit", back_populates="user", cascade="all, delete-orphan")
+
+
+class UserPrivacySetting(Base):
+    """Current server-side privacy state for one consumer App account."""
+
+    __tablename__ = "user_privacy_settings"
+
+    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    ai_model_improvement_enabled = Column(Boolean, nullable=False, default=False)
+    ai_model_improvement_updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    ai_model_improvement_consent_version = Column(String(128))
+
+    user = relationship("AppUser", back_populates="privacy_setting")
+
+
+class UserPrivacyAudit(Base):
+    """Append-only consent and withdrawal record; never overwrite history."""
+
+    __tablename__ = "user_privacy_audit"
+
+    id = Column(String(36), primary_key=True)
+    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    ai_model_improvement_enabled = Column(Boolean, nullable=False)
+    consent_version = Column(String(128), nullable=False)
+    source = Column(String(64), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+
+    user = relationship("AppUser", back_populates="privacy_audits")
 
 
 class FishCatch(Base):

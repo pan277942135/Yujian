@@ -62,6 +62,7 @@ def init_db():
     _ensure_user_catch_columns()
     _ensure_bside_visual_columns()
     _ensure_bside_asset_registry_columns()
+    _ensure_account_privacy_columns()
     from app.platform.services.bside_assets import seed_bside_asset_registry
 
     seed_db = SessionLocal()
@@ -230,3 +231,15 @@ def _ensure_bside_asset_registry_columns() -> None:
             connection.exec_driver_sql(
                 f'ALTER TABLE "{table}" ADD COLUMN "{name}" {definition}'
             )
+
+
+def _ensure_account_privacy_columns() -> None:
+    """Apply Account & Privacy v1 additively to existing Cloud SQL installs."""
+
+    inspector = inspect(engine)
+    if not inspector.has_table("users"):
+        return
+    existing = {column["name"] for column in inspector.get_columns("users")}
+    if "avatar_object_name" not in existing:
+        with engine.begin() as connection:
+            connection.exec_driver_sql('ALTER TABLE "users" ADD COLUMN "avatar_object_name" TEXT')
