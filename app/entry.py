@@ -22,7 +22,7 @@ from app.training_api import router as training_router, templates as training_te
 from app.inference_api import router as inference_router, templates as inference_templates
 from app.feedback_ingest_api import router as feedback_ingest_router
 from app.inference_upload_api import router as inference_upload_router
-from app.auth_api import router as auth_router
+from app.auth_api import me_router, router as auth_router
 from app.catches_api import router as catches_router
 from app.batch_upload_api import router as batch_upload_router, templates as batch_upload_templates
 from app.intelligence_api import router as intelligence_router, templates as intelligence_templates
@@ -121,6 +121,8 @@ def deployment_health() -> dict:
         "feedback_ingest_path": "/api/feedback/ingest",
         "inference_upload_path": "/api/v1/inference/upload",
         "user_auth_path": "/api/v1/auth/login",
+        "account_profile_path": "/api/v1/me",
+        "account_privacy_path": "/api/v1/me/privacy",
         "user_catches_path": "/api/v1/catches",
         "feedback_ingest_key_configured": feedback_ingest_key_configured,
         "model_publish_path": "/api/models/{model_id}/publish",
@@ -159,6 +161,7 @@ app.include_router(inference_router)
 app.include_router(feedback_ingest_router)
 app.include_router(inference_upload_router)
 app.include_router(auth_router)
+app.include_router(me_router)
 app.include_router(catches_router)
 app.include_router(bside_jobs_router)
 app.include_router(batch_upload_router)
