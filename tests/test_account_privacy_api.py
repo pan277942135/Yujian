@@ -28,6 +28,7 @@ from app.auth_api import (
 )
 from app.db import Base
 from app.models import AppUser, UserPrivacyAudit
+from app.secure import is_app_api_path
 # Register the existing platform tables referenced by FishBsideJob before the
 # test database is created, matching the consumer catch test's import graph.
 from app.platform import models as _platform_models  # noqa: F401
@@ -155,3 +156,11 @@ def test_ai_consent_is_server_persistent_and_audited(tmp_path):
     assert [audit.ai_model_improvement_enabled for audit in audits] == [True, False]
     assert all(audit.consent_version == AI_CONSENT_VERSION for audit in audits)
     db.close()
+
+
+def test_profile_and_privacy_paths_bypass_console_cookie_guard():
+    """App Bearer routes cannot be shadowed by the Model Factory console guard."""
+    assert is_app_api_path("/api/v1/me")
+    assert is_app_api_path("/api/v1/me/profile")
+    assert is_app_api_path("/api/v1/me/privacy")
+    assert not is_app_api_path("/api/private")
