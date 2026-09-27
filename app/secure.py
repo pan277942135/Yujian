@@ -11,6 +11,7 @@ PUBLIC_API_PATH_PREFIXES = (
     # These routes authenticate App users with their own Bearer token.  They
     # must not be intercepted by the Model Factory console-cookie middleware.
     "/api/v1/auth",
+    "/api/v1/me",
     "/api/v1/catches",
 )
 PUBLIC_GET_PATH_PREFIXES = (
@@ -39,6 +40,11 @@ def _cookie_value(key: str) -> str:
     return hashlib.sha256(("yujian-console:" + key).encode("utf-8")).hexdigest()
 
 
+def is_app_api_path(path: str) -> bool:
+    """Whether an App Bearer-token route must bypass the console cookie guard."""
+    return any(path == prefix or path.startswith(prefix + "/") for prefix in PUBLIC_API_PATH_PREFIXES)
+
+
 def install_access_guard(app: FastAPI) -> None:
     @app.middleware("http")
     async def console_access_guard(request: Request, call_next):
@@ -47,10 +53,7 @@ def install_access_guard(app: FastAPI) -> None:
             request.url.path == prefix or request.url.path.startswith(prefix + "/")
             for prefix in PUBLIC_GET_PATH_PREFIXES
         )
-        app_api_request = any(
-            request.url.path == prefix or request.url.path.startswith(prefix + "/")
-            for prefix in PUBLIC_API_PATH_PREFIXES
-        )
+        app_api_request = is_app_api_path(request.url.path)
         if not key or request.url.path in PUBLIC_PATHS or public_fish_read or app_api_request:
             return await call_next(request)
 
