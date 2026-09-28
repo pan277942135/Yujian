@@ -499,8 +499,9 @@ async def edit_image(
     db.commit()
     db.refresh(run)
 
+    payload = _response_with_queue(db, run)
     enqueue_image_studio_queue()
-    return _response_with_queue(db, run)
+    return payload
 
 
 @router.get("/runs")
