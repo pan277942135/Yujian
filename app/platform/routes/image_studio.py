@@ -1,9 +1,4 @@
-"""Private Qwen Image Studio V1 API.
-
-This is additive to the existing fish-specific Qwen Lab. It reuses the same
-Qwen-Image-Edit-2511 worker and model cache while exposing generic image-edit
-controls and reference roles.
-"""
+"""Private Qwen Image Studio V1 API with isolated persistence."""
 from __future__ import annotations
 
 import io
@@ -23,14 +18,13 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.image_studio_worker_client import invoke_image_studio_worker
-from app.platform.models import PipelineRun
-from app.platform.routes.qwen_image_edit_lab import _read_managed_uri
+from app.platform.models import ImageStudioRun
 from app.platform.services.image_studio_prompt import compile_image_studio_prompt
 from app.portrait_worker_client import PortraitWorkerError, _read_image_uri
 
 router = APIRouter(prefix="/api/image-studio/v1", tags=["image-studio"])
 
-PIPELINE_TYPE = "IMAGE_STUDIO_V1"
+STORAGE_TYPE = "IMAGE_STUDIO_V1"
 MODEL_ID = "qwen-image-edit-2511"
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 ALLOWED_MEDIA_TYPES = {
@@ -65,13 +59,18 @@ def _read_upload_sync(upload: UploadFile, label: str) -> tuple[bytes, str, str]:
 
 
 def _store_bytes(run_id: str, kind: str, data: bytes, media_type: str, extension: str) -> str:
-    object_name = f"experiments/image_studio_v1/{run_id}/{kind}{extension}"
-    bucket_name = os.getenv("GCS_BUCKET", "").strip()
+    # Image Studio has a dedicated object namespace. It never writes under
+    # experiments/qwen_image_edit_lab or fish/B-side storage prefixes.
+    object_name = f"image_studio/v1/runs/{run_id}/{kind}{extension}"
+    bucket_name = (
+        os.getenv("IMAGE_STUDIO_GCS_BUCKET", "").strip()
+        or os.getenv("GCS_BUCKET", "").strip()
+    )
     if bucket_name:
         blob = storage.Client().bucket(bucket_name).blob(object_name)
         blob.upload_from_string(data, content_type=media_type)
         return f"gs://{bucket_name}/{object_name}"
-    path = Path("/tmp") / "yujian" / "image_studio_v1" / run_id / f"{kind}{extension}"
+    path = Path("/tmp") / "yujian" / "image_studio" / "v1" / "runs" / run_id / f"{kind}{extension}"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
     return str(path)
@@ -111,40 +110,68 @@ def _parse_roles(raw: str, mode: str, reference_count: int) -> list[str]:
     return roles
 
 
-def _response(run: PipelineRun) -> dict[str, Any]:
-    state = json.loads(run.stage_json or "{}")
-    request = state.get("request") or {}
-    result = state.get("result") or {}
+def _request_for(run: ImageStudioRun) -> dict[str, Any]:
+    try:
+        value = json.loads(run.request_json or "{}")
+    except json.JSONDecodeError:
+        value = {}
+    return value if isinstance(value, dict) else {}
+
+
+def _result_for(run: ImageStudioRun) -> dict[str, Any]:
+    try:
+        value = json.loads(run.result_json or "{}")
+    except json.JSONDecodeError:
+        value = {}
+    return value if isinstance(value, dict) else {}
+
+
+def _reference_uris_for(run: ImageStudioRun) -> list[str]:
+    try:
+        value = json.loads(run.reference_uris_json or "[]")
+    except json.JSONDecodeError:
+        value = []
+    return [str(uri) for uri in value] if isinstance(value, list) else []
+
+
+def _response(run: ImageStudioRun) -> dict[str, Any]:
+    request = _request_for(run)
+    result = _result_for(run)
+    reference_uris = _reference_uris_for(run)
+    error = None
+    if run.error_code or run.error_message:
+        error = {"code": run.error_code, "message": run.error_message}
     return {
         "run_id": run.run_id,
         "status": run.status,
-        "pipeline_type": run.pipeline_type,
+        "storage_type": STORAGE_TYPE,
         "model": run.model_version,
-        "mode": request.get("mode"),
-        "preservation": request.get("preservation"),
+        "mode": run.mode,
+        "preservation": run.preservation,
         "reference_roles": request.get("reference_roles") or [],
-        "seed": result.get("seed", request.get("seed")),
-        "steps": request.get("steps"),
+        "seed": run.seed,
+        "steps": run.steps,
         "compiled_prompt": request.get("compiled_prompt"),
         "negative_prompt": request.get("negative_prompt"),
         "base_image_url": f"/api/image-studio/v1/runs/{run.run_id}/media/base",
         "reference_urls": [
             f"/api/image-studio/v1/runs/{run.run_id}/media/reference_{index + 1}"
-            for index, _ in enumerate(request.get("reference_image_uris") or [])
+            for index, _ in enumerate(reference_uris)
         ],
         "mask_url": (
             f"/api/image-studio/v1/runs/{run.run_id}/media/mask"
-            if request.get("mask_uri")
+            if run.mask_uri
             else None
         ),
         "output_image_url": (
             f"/api/image-studio/v1/runs/{run.run_id}/media/output"
-            if result.get("output_image_uri")
+            if run.output_image_uri
             else None
         ),
-        "elapsed_ms": result.get("elapsed_ms"),
+        "elapsed_ms": run.elapsed_ms,
         "worker_protocol": result.get("worker_protocol"),
-        "error": state.get("error"),
+        "mask_composited": result.get("mask_composited", False),
+        "error": error,
         "created_at": run.created_at.isoformat() if run.created_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
     }
@@ -210,33 +237,30 @@ async def edit_image(
         if mask_payload
         else None
     )
-    state: dict[str, Any] = {
-        "request": {
-            "base_image_uri": base_uri,
-            "reference_image_uris": reference_uris,
-            "reference_roles": list(compiled.reference_roles),
-            "mask_uri": mask_uri,
-            "mode": compiled.mode,
-            "preservation": compiled.preservation,
-            "compiled_prompt": compiled.prompt,
-            "negative_prompt": compiled.negative_prompt,
-            "seed": seed_value,
-            "steps": int(steps),
-            "resolution_mode": resolution_mode,
-        },
+    request_state = {
+        "reference_roles": list(compiled.reference_roles),
+        "compiled_prompt": compiled.prompt,
+        "negative_prompt": compiled.negative_prompt,
+        "resolution_mode": resolution_mode,
         "stages": [
             {"name": "input", "status": "DONE"},
             {"name": "prompt_compile", "status": "DONE"},
             {"name": "qwen_generation", "status": "RUNNING"},
         ],
     }
-    run = PipelineRun(
+    run = ImageStudioRun(
         run_id=run_id,
-        pipeline_type=PIPELINE_TYPE,
         status="RUNNING",
-        current_stage="qwen_generation",
-        stage_json=json.dumps(state, ensure_ascii=False),
+        mode=compiled.mode,
+        preservation=compiled.preservation,
         model_version=MODEL_ID,
+        request_json=json.dumps(request_state, ensure_ascii=False),
+        result_json="{}",
+        base_image_uri=base_uri,
+        reference_uris_json=json.dumps(reference_uris, ensure_ascii=False),
+        mask_uri=mask_uri,
+        seed=seed_value,
+        steps=int(steps),
         started_at=_utcnow(),
     )
     db.add(run)
@@ -254,70 +278,65 @@ async def edit_image(
             resolution_mode=resolution_mode,
         )
         generated_bytes, _ = _read_image_uri(worker["result_uri"], label="image_studio_output")
-        qwen_stage = next(
-            (stage for stage in state["stages"] if stage.get("name") == "qwen_generation"),
-            None,
-        )
+        stages = request_state["stages"]
+        qwen_stage = next((stage for stage in stages if stage.get("name") == "qwen_generation"), None)
         if qwen_stage is not None:
             qwen_stage["status"] = "DONE"
+
         if mask_payload is not None:
-            state["stages"].append({"name": "mask_composite", "status": "RUNNING"})
+            stages.append({"name": "mask_composite", "status": "RUNNING"})
             final_bytes = _mask_composite(base_bytes, generated_bytes, mask_payload[0])
-            state["stages"][-1]["status"] = "DONE"
+            stages[-1]["status"] = "DONE"
         else:
             with Image.open(io.BytesIO(generated_bytes)) as generated_source:
                 rgb = generated_source.convert("RGB")
                 output = io.BytesIO()
                 rgb.save(output, format="PNG")
                 final_bytes = output.getvalue()
+
         output_uri = _store_bytes(run_id, "output", final_bytes, "image/png", ".png")
-        state["result"] = {
-            "output_image_uri": output_uri,
-            "worker_result_uri": worker.get("result_uri"),
-            "seed": worker.get("seed", seed_value),
-            "elapsed_ms": worker.get("elapsed_ms"),
-            "worker_protocol": worker.get("worker_protocol"),
-            "reference_count": len(reference_uris),
-            "mask_composited": mask_payload is not None,
-        }
+        run.output_image_uri = output_uri
+        run.seed = worker.get("seed", seed_value)
+        run.elapsed_ms = worker.get("elapsed_ms")
+        run.request_json = json.dumps(request_state, ensure_ascii=False)
+        run.result_json = json.dumps(
+            {
+                "worker_result_uri": worker.get("result_uri"),
+                "worker_protocol": worker.get("worker_protocol"),
+                "reference_count": len(reference_uris),
+                "mask_composited": mask_payload is not None,
+            },
+            ensure_ascii=False,
+        )
         run.status = "SUCCESS"
-        run.current_stage = "done"
         run.finished_at = _utcnow()
-        run.duration_ms = max(0, int((run.finished_at - run.started_at).total_seconds() * 1000))
-        run.stage_json = json.dumps(state, ensure_ascii=False)
         db.commit()
         db.refresh(run)
         return _response(run)
     except PortraitWorkerError as exc:
-        active_stage = state["stages"][-1] if state.get("stages") else None
-        if active_stage is not None:
-            active_stage["status"] = "FAILED"
-        state["error"] = {"code": exc.error_code, "message": str(exc)}
+        stages = request_state.get("stages") or []
+        if stages:
+            stages[-1]["status"] = "FAILED"
         run.status = "FAILED"
-        run.current_stage = active_stage.get("name") if active_stage else "qwen_generation"
-        run.error_stage = run.current_stage
-        run.error_message = f"{exc.error_code}: {str(exc)}"
+        run.error_code = exc.error_code
+        run.error_message = str(exc)[:3000]
         run.finished_at = _utcnow()
-        run.duration_ms = max(0, int((run.finished_at - run.started_at).total_seconds() * 1000))
-        run.stage_json = json.dumps(state, ensure_ascii=False)
+        run.request_json = json.dumps(request_state, ensure_ascii=False)
         db.commit()
         raise HTTPException(
             status_code=exc.status_code or 502,
             detail={"code": exc.error_code, "message": str(exc)},
         ) from exc
     except Exception as exc:
-        active_stage = state["stages"][-1] if state.get("stages") else None
-        if active_stage is not None:
-            active_stage["status"] = "FAILED"
+        stages = request_state.get("stages") or []
+        if stages:
+            stages[-1]["status"] = "FAILED"
         safe_message = f"{exc.__class__.__name__}: {exc}"[:2000]
-        state["error"] = {"code": "IMAGE_STUDIO_FAILED", "message": safe_message}
         run.status = "FAILED"
-        run.current_stage = active_stage.get("name") if active_stage else "image_studio"
-        run.error_stage = run.current_stage
-        run.error_message = f"IMAGE_STUDIO_FAILED: {safe_message}"
+        run.error_code = "IMAGE_STUDIO_FAILED"
+        run.error_message = safe_message
         run.finished_at = _utcnow()
-        run.duration_ms = max(0, int((run.finished_at - run.started_at).total_seconds() * 1000))
-        run.stage_json = json.dumps(state, ensure_ascii=False)
+        run.request_json = json.dumps(request_state, ensure_ascii=False)
         db.commit()
         raise HTTPException(
             status_code=500,
@@ -329,9 +348,8 @@ async def edit_image(
 def list_runs(db: Session = Depends(get_db)) -> dict[str, Any]:
     rows = list(
         db.scalars(
-            select(PipelineRun)
-            .where(PipelineRun.pipeline_type == PIPELINE_TYPE)
-            .order_by(PipelineRun.created_at.desc())
+            select(ImageStudioRun)
+            .order_by(ImageStudioRun.created_at.desc())
             .limit(50)
         )
     )
@@ -340,40 +358,38 @@ def list_runs(db: Session = Depends(get_db)) -> dict[str, Any]:
 
 @router.get("/runs/{run_id}")
 def get_run(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
-    run = db.get(PipelineRun, run_id)
-    if run is None or run.pipeline_type != PIPELINE_TYPE:
+    run = db.get(ImageStudioRun, run_id)
+    if run is None:
         raise HTTPException(status_code=404, detail="Image Studio run 不存在")
     return _response(run)
 
 
 @router.get("/runs/{run_id}/media/{kind}")
 def get_media(run_id: str, kind: str, db: Session = Depends(get_db)) -> Response:
-    run = db.get(PipelineRun, run_id)
-    if run is None or run.pipeline_type != PIPELINE_TYPE:
+    run = db.get(ImageStudioRun, run_id)
+    if run is None:
         raise HTTPException(status_code=404, detail="Image Studio run 不存在")
-    state = json.loads(run.stage_json or "{}")
-    request = state.get("request") or {}
-    result = state.get("result") or {}
+    reference_uris = _reference_uris_for(run)
     uri: str | None = None
     if kind == "base":
-        uri = request.get("base_image_uri")
+        uri = run.base_image_uri
     elif kind == "mask":
-        uri = request.get("mask_uri")
+        uri = run.mask_uri
     elif kind.startswith("reference_"):
         try:
             index = int(kind.split("_", 1)[1]) - 1
-            uri = (request.get("reference_image_uris") or [])[index]
+            uri = reference_uris[index]
         except (ValueError, IndexError):
             uri = None
     elif kind == "output":
-        uri = result.get("output_image_uri")
+        uri = run.output_image_uri
     if not uri:
         raise HTTPException(status_code=404, detail="媒体资源不存在")
     try:
-        data, media_type = _read_managed_uri(uri)
+        data, media_type = _read_image_uri(uri, label=f"image_studio_{kind}")
     except Exception as exc:
         raise HTTPException(status_code=404, detail="媒体资源不可读取") from exc
     return Response(content=data, media_type=media_type or "application/octet-stream")
 
 
-__all__ = ["PIPELINE_TYPE", "router", "_mask_composite"]
+__all__ = ["STORAGE_TYPE", "router", "_mask_composite"]
