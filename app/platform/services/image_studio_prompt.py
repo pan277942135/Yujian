@@ -25,7 +25,7 @@ ALLOWED_REFERENCE_ROLES = {
 }
 
 _ROLE_RULES = {
-    "IDENTITY": "Use the identity reference as the authoritative source for facial identity and stable personal features.",
+    "IDENTITY": "Use this picture as the sole authoritative source for the target person's facial identity and stable personal features. The base image person is not identity authority.",
     "FACE_ANGLE": "Use the face-angle reference only to resolve facial geometry for the requested camera angle.",
     "POSE": "Use the pose reference for body pose and gesture, without replacing identity.",
     "BODY": "Use the body reference for body proportions and silhouette, without replacing facial identity.",
@@ -91,26 +91,63 @@ def compile_image_studio_prompt(
     if len(roles) > 2:
         raise ValueError("Image Studio V1 supports at most two reference images")
 
+    identity_indexes = [
+        index
+        for index, role in enumerate(roles, start=2)
+        if role == "IDENTITY"
+    ]
+    identity_picture = identity_indexes[0] if identity_indexes else None
+
+    if mode_value == "IDENTITY_LOCK" and identity_picture is not None:
+        base_authority = (
+            "Picture 1 / Base is authoritative only for camera, crop, body pose, hands, clothing, lighting, "
+            "background, scene geometry, and other non-identity details. It is NOT authoritative for the person's "
+            "face or identity. The original Base face must not be preserved when it conflicts with the IDENTITY reference."
+        )
+    else:
+        base_authority = _PRESERVE_RULES[preservation_value]
+
     sections = [
         "IMAGE STUDIO EDIT INSTRUCTION:",
         instruction_value,
         "",
         "BASE IMAGE AUTHORITY:",
-        _PRESERVE_RULES[preservation_value],
+        base_authority,
     ]
 
     if mode_value == "IDENTITY_LOCK":
-        sections.extend(
-            [
-                "",
-                "IDENTITY LOCK:",
-                (
-                    "Keep the same person. Do not blend, average, reinterpret, or replace facial identity with "
-                    "the person from the base image or other references. Preserve stable face proportions, eye "
-                    "geometry, nose, mouth, jawline, forehead proportion, hairline, and skin tone unless explicitly edited."
-                ),
-            ]
-        )
+        if identity_picture is not None:
+            sections.extend(
+                [
+                    "",
+                    "IDENTITY REPLACEMENT AUTHORITY:",
+                    (
+                        f"Picture {identity_picture} is the SOLE identity authority. Rebuild the person in Picture 1 / Base "
+                        f"so the result unmistakably depicts the same person as Picture {identity_picture}. Do not preserve "
+                        "the original Base person's facial identity. Do not blend or average the Base face with the identity "
+                        "reference. Match the identity reference's stable facial structure, eye shape and spacing, brows, "
+                        "nose, lips, jawline, forehead proportion, hairline, skin tone, and age impression, while preserving "
+                        "the Base pose, camera, body, clothing, lighting, and scene unless the edit instruction says otherwise."
+                    ),
+                    "",
+                    "IDENTITY PRIORITY:",
+                    (
+                        "If identity preservation conflicts with Base-image facial appearance, IDENTITY wins. "
+                        "If pose/composition conflicts with the identity reference, Base wins for pose/composition only."
+                    ),
+                ]
+            )
+        else:
+            sections.extend(
+                [
+                    "",
+                    "IDENTITY LOCK:",
+                    (
+                        "Preserve the Base person's existing identity because no IDENTITY reference was supplied. "
+                        "Do not drift or average facial identity."
+                    ),
+                ]
+            )
     elif mode_value == "LOCAL_EDIT":
         sections.extend(
             [
@@ -134,7 +171,6 @@ def compile_image_studio_prompt(
             sections.append(f"Picture {index} role = {role}. {_ROLE_RULES[role]}")
 
     negative_parts = [
-        "unrequested identity change",
         "face averaging",
         "duplicate person",
         "deformed anatomy",
@@ -144,6 +180,16 @@ def compile_image_studio_prompt(
         "unrequested crop change",
         "unrequested background change",
     ]
+    if mode_value == "IDENTITY_LOCK" and identity_picture is not None:
+        negative_parts.extend(
+            [
+                "preserving the original Base face identity",
+                f"identity drift away from Picture {identity_picture}",
+                "hybrid face between Base and identity reference",
+            ]
+        )
+    else:
+        negative_parts.insert(0, "unrequested identity change")
     supplied_negative = str(negative_prompt or "").strip()
     if supplied_negative:
         negative_parts.append(supplied_negative)
