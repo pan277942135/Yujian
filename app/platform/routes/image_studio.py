@@ -254,9 +254,16 @@ async def edit_image(
             resolution_mode=resolution_mode,
         )
         generated_bytes, _ = _read_image_uri(worker["result_uri"], label="image_studio_output")
+        qwen_stage = next(
+            (stage for stage in state["stages"] if stage.get("name") == "qwen_generation"),
+            None,
+        )
+        if qwen_stage is not None:
+            qwen_stage["status"] = "DONE"
         if mask_payload is not None:
+            state["stages"].append({"name": "mask_composite", "status": "RUNNING"})
             final_bytes = _mask_composite(base_bytes, generated_bytes, mask_payload[0])
-            state["stages"].append({"name": "mask_composite", "status": "DONE"})
+            state["stages"][-1]["status"] = "DONE"
         else:
             with Image.open(io.BytesIO(generated_bytes)) as generated_source:
                 rgb = generated_source.convert("RGB")
@@ -264,7 +271,6 @@ async def edit_image(
                 rgb.save(output, format="PNG")
                 final_bytes = output.getvalue()
         output_uri = _store_bytes(run_id, "output", final_bytes, "image/png", ".png")
-        state["stages"][-1]["status"] = "DONE"
         state["result"] = {
             "output_image_uri": output_uri,
             "worker_result_uri": worker.get("result_uri"),
@@ -283,18 +289,39 @@ async def edit_image(
         db.refresh(run)
         return _response(run)
     except PortraitWorkerError as exc:
-        state["stages"][-1]["status"] = "FAILED"
+        active_stage = state["stages"][-1] if state.get("stages") else None
+        if active_stage is not None:
+            active_stage["status"] = "FAILED"
         state["error"] = {"code": exc.error_code, "message": str(exc)}
         run.status = "FAILED"
-        run.current_stage = "qwen_generation"
-        run.error_stage = "qwen_generation"
+        run.current_stage = active_stage.get("name") if active_stage else "qwen_generation"
+        run.error_stage = run.current_stage
         run.error_message = f"{exc.error_code}: {str(exc)}"
         run.finished_at = _utcnow()
+        run.duration_ms = max(0, int((run.finished_at - run.started_at).total_seconds() * 1000))
         run.stage_json = json.dumps(state, ensure_ascii=False)
         db.commit()
         raise HTTPException(
             status_code=exc.status_code or 502,
             detail={"code": exc.error_code, "message": str(exc)},
+        ) from exc
+    except Exception as exc:
+        active_stage = state["stages"][-1] if state.get("stages") else None
+        if active_stage is not None:
+            active_stage["status"] = "FAILED"
+        safe_message = f"{exc.__class__.__name__}: {exc}"[:2000]
+        state["error"] = {"code": "IMAGE_STUDIO_FAILED", "message": safe_message}
+        run.status = "FAILED"
+        run.current_stage = active_stage.get("name") if active_stage else "image_studio"
+        run.error_stage = run.current_stage
+        run.error_message = f"IMAGE_STUDIO_FAILED: {safe_message}"
+        run.finished_at = _utcnow()
+        run.duration_ms = max(0, int((run.finished_at - run.started_at).total_seconds() * 1000))
+        run.stage_json = json.dumps(state, ensure_ascii=False)
+        db.commit()
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "IMAGE_STUDIO_FAILED", "message": safe_message},
         ) from exc
 
 
