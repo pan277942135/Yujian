@@ -182,6 +182,7 @@ def _response(run: ImageStudioRun) -> dict[str, Any]:
         "steps": run.steps,
         "compiled_prompt": request.get("compiled_prompt"),
         "negative_prompt": request.get("negative_prompt"),
+        "stages": request.get("stages") or [],
         "base_image_url": f"/api/image-studio/v1/runs/{run.run_id}/media/base",
         "reference_urls": [
             f"/api/image-studio/v1/runs/{run.run_id}/media/reference_{index + 1}"
@@ -202,6 +203,7 @@ def _response(run: ImageStudioRun) -> dict[str, Any]:
         "mask_composited": result.get("mask_composited", False),
         "error": error,
         "created_at": run.created_at.isoformat() if run.created_at else None,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
     }
 
@@ -529,25 +531,39 @@ def get_queue(db: Session = Depends(get_db)) -> dict[str, Any]:
     return _queue_snapshot(db)
 
 
+def _media_uri_for(run: ImageStudioRun, kind: str) -> str | None:
+    reference_uris = _reference_uris_for(run)
+    if kind == "base":
+        return run.base_image_uri
+    if kind == "mask":
+        return run.mask_uri
+    if kind.startswith("reference_"):
+        try:
+            index = int(kind.split("_", 1)[1]) - 1
+            return reference_uris[index]
+        except (ValueError, IndexError):
+            return None
+    if kind == "output":
+        return run.output_image_uri
+    return None
+
+
+def _download_filename(run: ImageStudioRun, kind: str, media_type: str | None) -> str:
+    extension = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+    }.get(str(media_type or "").lower(), ".bin")
+    safe_kind = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in kind)
+    return f"{run.run_id}_{safe_kind}{extension}"
+
+
 @router.get("/runs/{run_id}/media/{kind}")
 def get_media(run_id: str, kind: str, db: Session = Depends(get_db)) -> Response:
     run = db.get(ImageStudioRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Image Studio run 不存在")
-    reference_uris = _reference_uris_for(run)
-    uri: str | None = None
-    if kind == "base":
-        uri = run.base_image_uri
-    elif kind == "mask":
-        uri = run.mask_uri
-    elif kind.startswith("reference_"):
-        try:
-            index = int(kind.split("_", 1)[1]) - 1
-            uri = reference_uris[index]
-        except (ValueError, IndexError):
-            uri = None
-    elif kind == "output":
-        uri = run.output_image_uri
+    uri = _media_uri_for(run, kind)
     if not uri:
         raise HTTPException(status_code=404, detail="媒体资源不存在")
     try:
@@ -555,6 +571,27 @@ def get_media(run_id: str, kind: str, db: Session = Depends(get_db)) -> Response
     except Exception as exc:
         raise HTTPException(status_code=404, detail="媒体资源不可读取") from exc
     return Response(content=data, media_type=media_type or "application/octet-stream")
+
+
+@router.get("/runs/{run_id}/download/{kind}")
+def download_media(run_id: str, kind: str, db: Session = Depends(get_db)) -> Response:
+    run = db.get(ImageStudioRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Image Studio run 不存在")
+    uri = _media_uri_for(run, kind)
+    if not uri:
+        raise HTTPException(status_code=404, detail="媒体资源不存在")
+    try:
+        data, media_type = _read_image_uri(uri, label=f"image_studio_{kind}")
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="媒体资源不可读取") from exc
+    resolved_type = media_type or "application/octet-stream"
+    filename = _download_filename(run, kind, resolved_type)
+    return Response(
+        content=data,
+        media_type=resolved_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 __all__ = ["STORAGE_TYPE", "router", "_mask_composite"]
