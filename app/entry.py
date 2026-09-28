@@ -8,6 +8,7 @@ from app.main import app, templates as main_templates
 from app.platform.routes.api import router as platform_api_router
 from app.platform.routes.portrait import router as platform_portrait_router
 from app.platform.routes.qwen_image_edit_lab import router as qwen_image_edit_lab_router
+from app.platform.routes.image_studio import router as image_studio_router
 from app.platform.routes.qwen_gpu import router as qwen_gpu_router
 from app.platform.routes.bside_visual import api_router as bside_visual_api_router, page_router as bside_visual_page_router
 from app.platform.routes.bside_assets import router as bside_assets_router
@@ -188,6 +189,7 @@ app.include_router(fish_asset_import_page_router)
 app.include_router(platform_pages_router)
 app.include_router(platform_portrait_router)
 app.include_router(qwen_image_edit_lab_router)
+app.include_router(image_studio_router)
 app.include_router(qwen_gpu_router)
 app.include_router(bside_visual_page_router)
 app.include_router(bside_visual_api_router)
