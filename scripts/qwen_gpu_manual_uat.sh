@@ -282,6 +282,77 @@ assert payload.get("output_image_url") or payload.get("output_image_uri"), paylo
 PY
 wait_for_display READY 24 "post-generate"
 
+# Image Studio V1 runtime gate: reuse the successful Qwen Lab result as both
+# Base and an IDENTITY reference. This proves the new worker mode, reference
+# multipart protocol, isolated image_studio_run persistence and media route on
+# the exact deployed L4 worker before the VM is stopped.
+IMAGE_STUDIO_BASE="$OUT_DIR/image_studio_base.png"
+IMAGE_STUDIO_RUN_JSON="$OUT_DIR/image_studio_run.json"
+QWEN_OUTPUT_URL="$(python3 - "$GENERATE_JSON" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+value = str(payload.get("output_image_url") or "").strip()
+if not value:
+    raise SystemExit("Qwen Lab did not return output_image_url")
+print(value)
+PY
+)"
+curl --retry 3 --retry-all-errors --retry-delay 2 \
+  --connect-timeout 10 --max-time 120 -fsS \
+  -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
+  "$SERVICE_URL$QWEN_OUTPUT_URL" -o "$IMAGE_STUDIO_BASE"
+
+IMAGE_STUDIO_HTTP="$(
+  curl --retry 2 --retry-all-errors --retry-delay 2 \
+    --connect-timeout 10 --max-time 1500 -sS \
+    -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
+    -o "$IMAGE_STUDIO_RUN_JSON" -w '%{http_code}' \
+    -X POST "$SERVICE_URL/api/image-studio/v1/edit" \
+    -F "base_image=@$IMAGE_STUDIO_BASE;type=image/png" \
+    -F "references=@$IMAGE_STUDIO_BASE;type=image/png" \
+    -F 'reference_roles=["IDENTITY"]' \
+    -F "mode=IDENTITY_LOCK" \
+    -F "preservation=MAX" \
+    -F "steps=4" \
+    -F "resolution_mode=current" \
+    -F "prompt=Keep the same subject identity and preserve the base composition. This is a runtime protocol verification."
+)"
+test "$IMAGE_STUDIO_HTTP" = "200"
+IMAGE_STUDIO_RUN_ID="$(python3 - "$IMAGE_STUDIO_RUN_JSON" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+assert payload.get("status") == "SUCCESS", payload
+assert payload.get("storage_type") == "IMAGE_STUDIO_V1", payload
+assert payload.get("mode") == "IDENTITY_LOCK", payload
+assert payload.get("reference_roles") == ["IDENTITY"], payload
+assert payload.get("output_image_url"), payload
+run_id = str(payload.get("run_id") or "").strip()
+if not run_id:
+    raise SystemExit("Image Studio did not return run_id")
+print(run_id)
+PY
+)"
+test -n "$IMAGE_STUDIO_RUN_ID"
+curl --retry 3 --retry-all-errors --retry-delay 2 \
+  --connect-timeout 10 --max-time 60 -fsS \
+  -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
+  "$SERVICE_URL/api/image-studio/v1/runs/$IMAGE_STUDIO_RUN_ID" \
+  -o "$OUT_DIR/image_studio_run_readback.json"
+python3 - "$OUT_DIR/image_studio_run_readback.json" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+assert payload.get("status") == "SUCCESS", payload
+assert payload.get("storage_type") == "IMAGE_STUDIO_V1", payload
+assert payload.get("output_image_url"), payload
+PY
+wait_for_display READY 24 "post-image-studio"
+
 FINAL_STOP_JSON="$OUT_DIR/final-stop.json"
 FINAL_STOP_HTTP="$(request POST "$SERVICE_URL/api/qwen-lab/gpu/stop" "$FINAL_STOP_JSON")"
 test "$FINAL_STOP_HTTP" = "200"
@@ -324,6 +395,7 @@ test "$VM_STATUS" = "TERMINATED"
   echo "- READY -> STOPPING -> STOPPED: **PASS**"
   echo "- BUSY blocks stop: **PASS**"
   echo "- Dataset Qwen generation: **PASS**"
+  echo "- Image Studio Identity Lock runtime + isolated storage: **PASS**"
   echo "- Second page-driven START -> ComfyUI -> Qwen READY: **PASS**"
   echo "- Final VM status: `$VM_STATUS`"
 } >> "$GITHUB_STEP_SUMMARY"
