@@ -41,6 +41,67 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 PY
 }
 
+worker_loaded() {
+  python3 - "$STATUS_JSON" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+print("true" if payload.get("model_loaded") is True else "false")
+PY
+}
+
+wait_for_idle_before_restart() {
+  local attempt
+  local http_code
+  local state
+  local loaded
+  for attempt in $(seq 1 720); do
+    http_code="$(request GET "$SERVICE_URL/api/qwen-lab/gpu/status?restart_wait_ts=$RANDOM" "$STATUS_JSON" || true)"
+    if [[ "$http_code" == "200" ]]; then
+      state="$(display_status)"
+      loaded="$(worker_loaded)"
+      echo "worker-update wait attempt=$attempt display_status=$state model_loaded=$loaded"
+      if [[ "$state" == "READY" && "$loaded" == "true" ]]; then
+        return 0
+      fi
+      if [[ "$state" == "ERROR" ]]; then
+        cat "$STATUS_JSON"
+        return 1
+      fi
+    fi
+    sleep 5
+  done
+  echo "Timed out waiting for live Qwen workload to drain; worker restart was NOT performed." >&2
+  cat "$STATUS_JSON" || true
+  return 1
+}
+
+wait_for_worker_healthy() {
+  local attempt
+  local http_code
+  local state
+  local loaded
+  for attempt in $(seq 1 180); do
+    http_code="$(request GET "$SERVICE_URL/api/qwen-lab/gpu/status?healthy_ts=$RANDOM" "$STATUS_JSON" || true)"
+    if [[ "$http_code" == "200" ]]; then
+      state="$(display_status)"
+      loaded="$(worker_loaded)"
+      echo "worker-health attempt=$attempt display_status=$state model_loaded=$loaded"
+      if [[ "$loaded" == "true" && ( "$state" == "READY" || "$state" == "BUSY" ) ]]; then
+        return 0
+      fi
+      if [[ "$state" == "ERROR" ]]; then
+        cat "$STATUS_JSON"
+        return 1
+      fi
+    fi
+    sleep 5
+  done
+  echo "Timed out waiting for healthy Qwen worker." >&2
+  return 1
+}
+
 CONSOLE_KEY="$(gcloud secrets versions access latest --secret=yujian-console-access-key --project="$PROJECT_ID")"
 test -n "$CONSOLE_KEY"
 if [[ -n "${GITHUB_ACTIONS:-}" ]]; then echo "::add-mask::$CONSOLE_KEY"; fi
@@ -101,7 +162,33 @@ for attempt in $(seq 1 6); do
 done
 
 STAGE_PATH="$REMOTE_PARENT/fish-qwen-refine-worker"
-remote_ssh "
+WORKER_CHANGED="$(remote_ssh "
+set -euo pipefail
+same=true
+for pair in \
+  '$STAGE_PATH/worker.py:/opt/fish-qwen-refine-worker/worker.py' \
+  '$STAGE_PATH/config.yaml:/opt/fish-qwen-refine-worker/config.yaml' \
+  '$STAGE_PATH/qwen2511_api.json:/opt/fish-qwen-refine-worker/qwen2511_api.json' \
+  '$STAGE_PATH/fish-qwen-comfyui.service:/etc/systemd/system/fish-qwen-comfyui.service' \
+  '$STAGE_PATH/fish-qwen-refine-worker.service:/etc/systemd/system/fish-qwen-refine-worker.service' \
+  '$STAGE_PATH/wait-for-comfyui.sh:/opt/fish-qwen-refine-worker/wait-for-comfyui.sh'
+do
+  src=${pair%%:*}
+  dst=${pair#*:}
+  if [[ ! -f "$dst" ]] || ! cmp -s "$src" "$dst"; then
+    same=false
+    break
+  fi
+done
+if [[ "$same" == "true" ]]; then echo false; else echo true; fi
+")"
+echo "worker_changed=$WORKER_CHANGED"
+
+if [[ "$WORKER_CHANGED" == "true" ]]; then
+  echo "Worker files changed. Waiting for live Image Studio/Qwen workload to drain before restart."
+  wait_for_idle_before_restart
+
+  remote_ssh "
 set -euo pipefail
 sudo install -d -o pan277942135 -g pan277942135 /opt/fish-qwen-refine-worker
 sudo install -o pan277942135 -g pan277942135 -m 0644 $STAGE_PATH/worker.py /opt/fish-qwen-refine-worker/worker.py
@@ -117,33 +204,19 @@ sudo systemctl restart fish-qwen-comfyui.service
 sudo systemctl restart fish-qwen-refine-worker.service
 sudo systemctl is-enabled fish-qwen-comfyui.service fish-qwen-refine-worker.service
 "
+else
+  echo "Worker files are unchanged. Skipping ComfyUI/Qwen restart to preserve live generation."
+fi
 
-for attempt in $(seq 1 180); do
-  STATUS_HTTP="$(request GET "$SERVICE_URL/api/qwen-lab/gpu/status?boot_ready_ts=$RANDOM" "$STATUS_JSON" || true)"
-  if [[ "$STATUS_HTTP" == "200" ]]; then
-    CURRENT_STATUS="$(display_status)"
-    echo "worker bootstrap attempt=$attempt display_status=$CURRENT_STATUS"
-    if [[ "$CURRENT_STATUS" == "READY" ]]; then
-      echo "Qwen worker boot configuration installed and Ready."
-      break
-    fi
-    if [[ "$CURRENT_STATUS" == "ERROR" ]]; then
-      cat "$STATUS_JSON"
-      remote_ssh "sudo systemctl status fish-qwen-comfyui.service fish-qwen-refine-worker.service --no-pager -l; sudo journalctl -u fish-qwen-comfyui.service -u fish-qwen-refine-worker.service -n 120 --no-pager" || true
-      exit 1
-    fi
-  else
-    echo "worker bootstrap status_http=$STATUS_HTTP"
-  fi
-  sleep 5
-done
-[[ "${CURRENT_STATUS:-}" == "READY" ]]
+wait_for_worker_healthy
+echo "Qwen worker bootstrap is healthy. Restart performed only when worker files changed and queue was idle."
 
 {
   echo "### Qwen VM boot dependency bootstrap"
   echo "- ComfyUI service installed: **PASS**"
   echo "- Qwen Worker Requires/After ComfyUI: **PASS**"
-  echo "- Worker readiness gate: **PASS**"
-  echo "- Worker health: **READY**"
+  echo "- Worker change detection: **PASS** (`$WORKER_CHANGED`)"
+  echo "- Non-invasive live-queue restart policy: **PASS**"
+  echo "- Worker health: **READY/BUSY with model loaded**"
   echo "- VM intentionally left RUNNING for the following page-driven UAT"
 } >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"

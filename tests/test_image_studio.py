@@ -509,3 +509,20 @@ def test_qwen_uat_accepts_busy_loaded_worker_after_studio_success():
     assert '"$current" == "READY" || "$current" == "BUSY"' in uat
     assert '"$model_loaded" == "true"' in uat
     assert 'wait_for_worker_healthy 24 "post-image-studio"' in uat
+
+
+
+def test_qwen_deploy_is_noninvasive_for_live_image_studio_queue():
+    root = Path(__file__).resolve().parents[1]
+    boot = (root / "scripts" / "deploy_qwen_worker_boot.sh").read_text(encoding="utf-8")
+    uat = (root / "scripts" / "qwen_gpu_manual_uat.sh").read_text(encoding="utf-8")
+
+    assert "worker_changed=$WORKER_CHANGED" in boot
+    assert "cmp -s" in boot
+    assert "Skipping ComfyUI/Qwen restart to preserve live generation" in boot
+    assert "Waiting for live Image Studio/Qwen workload to drain before restart" in boot
+    assert "wait_for_idle_before_restart" in boot
+    assert "sudo systemctl restart fish-qwen-comfyui.service" in boot
+    assert 'wait_for_worker_healthy 24 "post-generate"' in uat
+    assert 'wait_for_worker_healthy 24 "post-image-studio"' in uat
+    assert 'wait_for_display READY 24 "post-generate"' not in uat
