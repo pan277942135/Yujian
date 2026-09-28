@@ -236,7 +236,8 @@ def test_image_studio_durable_fifo_queue_contract():
     assert "ThreadPoolExecutor(max_workers=1" in queue
     assert ".order_by(ImageStudioRun.created_at.asc(), ImageStudioRun.run_id.asc())" in queue
     assert "pg_try_advisory_lock" in queue
-    assert "IMAGE_STUDIO_PROCESSING_LEASE_SECONDS" in queue
+    assert "_requeue_orphaned_running_jobs()" in queue
+    assert "ImageStudioRun.status.in_([QUEUED, RUNNING])" in queue
     assert "recover_pending_image_studio_jobs()" in entry
     assert 'ImageStudioRun.status.in_(["QUEUED", "RUNNING"])' in gpu
 
@@ -413,3 +414,18 @@ def test_image_studio_failed_cleanup_deletes_managed_run_namespace():
     assert "删除失败任务" in task_detail
     assert 'method: "DELETE"' in task_detail
     assert "Reference、Mask、生成结果" in task_detail
+
+
+
+def test_image_studio_reclaims_orphaned_running_only_under_global_lock():
+    root = Path(__file__).resolve().parents[1]
+    queue = (root / "app" / "services" / "image_studio_jobs.py").read_text(encoding="utf-8")
+
+    acquire = queue.index("token = _acquire_cross_instance_lock()")
+    reclaim = queue.index("_requeue_orphaned_running_jobs()", acquire)
+    claim = queue.index("run_id = _claim_next_job()", reclaim)
+
+    assert acquire < reclaim < claim
+    assert "any RUNNING row" in queue
+    assert "lease timeout" in queue
+    assert "timedelta" not in queue
