@@ -144,7 +144,7 @@ assert payload.get("accepted") is True, payload
 assert payload.get("display_status") == "STARTING", payload
 PY
   wait_for_display READY 180 "start-worker-ready"
-elif [[ "$INITIAL_DISPLAY" == "STARTING" || "$INITIAL_DISPLAY" == "LOADING" ]]; then
+elif [[ "$INITIAL_DISPLAY" == "STARTING" || "$INITIAL_DISPLAY" == "LOADING" || "$INITIAL_DISPLAY" == "BUSY" ]]; then
   wait_for_display READY 180 "initial-ready"
 else
   cat "$STATUS_JSON"
