@@ -15,6 +15,7 @@ from google.cloud import storage
 from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.db import get_db
 from app.image_studio_worker_client import invoke_image_studio_worker
@@ -267,7 +268,8 @@ async def edit_image(
     db.commit()
 
     try:
-        worker = invoke_image_studio_worker(
+        worker = await run_in_threadpool(
+            invoke_image_studio_worker,
             base_image_uri=base_uri,
             reference_image_uris=reference_uris,
             source_run_id=run_id,
