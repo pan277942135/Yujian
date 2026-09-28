@@ -54,6 +54,7 @@ from app.db import SessionLocal
 from app.species_policy import ensure_target_species
 from app.platform.routes.pages import router as platform_pages_router
 from app.services.fish_bside_jobs import recover_pending_bside_jobs
+from app.services.image_studio_jobs import recover_pending_image_studio_jobs
 
 
 logger = logging.getLogger(__name__)
@@ -103,6 +104,8 @@ def seed_target_species_catalog() -> None:
         db.close()
     recovered = recover_pending_bside_jobs()
     logger.info("B-side durable queue recovery dispatched=%s", recovered)
+    studio_recovered = recover_pending_image_studio_jobs()
+    logger.info("Image Studio durable queue recovery pending=%s", studio_recovered)
 
 
 @app.get("/health/deploy")
