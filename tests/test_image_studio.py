@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
@@ -11,7 +12,7 @@ from app.platform.models import ImageStudioRun
 from fastapi import HTTPException
 
 import app.platform.routes.image_studio as image_studio_route
-from app.platform.routes.image_studio import STORAGE_TYPE, _mask_composite, _require_worker_ready
+from app.platform.routes.image_studio import STORAGE_TYPE, _delete_failed_run, _mask_composite, _require_worker_ready
 from app.platform.services.image_studio_prompt import compile_image_studio_prompt
 
 
@@ -326,3 +327,89 @@ def test_image_studio_task_list_menu_pages_and_download_contract():
     assert "Base 原图" in task_detail
     assert "生成结果" in task_detail
     assert "/download/" in task_detail
+
+
+
+def test_delete_failed_run_removes_assets_before_db_record(monkeypatch):
+    events = []
+
+    class FakeDb:
+        def delete(self, run):
+            events.append(("db_delete", run.run_id))
+
+        def commit(self):
+            events.append(("db_commit", None))
+
+    run = SimpleNamespace(run_id="IMAGE_STUDIO_20260928_120000_deadbeef", status="FAILED")
+    monkeypatch.setattr(
+        image_studio_route,
+        "_delete_run_assets",
+        lambda run_id: events.append(("assets", run_id)) or 4,
+    )
+
+    payload = _delete_failed_run(FakeDb(), run)
+
+    assert payload == {
+        "deleted": True,
+        "run_id": run.run_id,
+        "deleted_assets": 4,
+    }
+    assert events == [
+        ("assets", run.run_id),
+        ("db_delete", run.run_id),
+        ("db_commit", None),
+    ]
+
+
+def test_delete_failed_run_rejects_non_failed_status(monkeypatch):
+    called = []
+    run = SimpleNamespace(run_id="IMAGE_STUDIO_20260928_120001_feedface", status="SUCCESS")
+    monkeypatch.setattr(
+        image_studio_route,
+        "_delete_run_assets",
+        lambda run_id: called.append(run_id) or 0,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _delete_failed_run(SimpleNamespace(), run)
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["code"] == "IMAGE_STUDIO_DELETE_REQUIRES_FAILED"
+    assert called == []
+
+
+def test_image_studio_failed_cleanup_deletes_managed_run_namespace():
+    root = Path(__file__).resolve().parents[1]
+    route = (root / "app" / "platform" / "routes" / "image_studio.py").read_text(encoding="utf-8")
+    task_list = (
+        root
+        / "app"
+        / "templates"
+        / "platform"
+        / "lab"
+        / "image_studio_tasks.html"
+    ).read_text(encoding="utf-8")
+    task_detail = (
+        root
+        / "app"
+        / "templates"
+        / "platform"
+        / "lab"
+        / "image_studio_task_detail.html"
+    ).read_text(encoding="utf-8")
+
+    assert 'prefix = f"image_studio/v1/runs/{safe_run_id}/"' in route
+    assert "client.list_blobs(bucket, prefix=prefix)" in route
+    assert "shutil.rmtree(run_dir)" in route
+    assert '@router.delete("/runs/{run_id}")' in route
+    assert '@router.delete("/runs/failed")' in route
+    assert "仅 FAILED 任务允许使用失败任务清理" in route
+
+    assert "清理全部失败任务" in task_list
+    assert 'data-delete-run="' in task_list
+    assert 'method: "DELETE"' in task_list
+    assert "Reference、Mask、生成结果" in task_list
+
+    assert "删除失败任务" in task_detail
+    assert 'method: "DELETE"' in task_detail
+    assert "Reference、Mask、生成结果" in task_detail
