@@ -290,7 +290,7 @@ curl --retry 3 --retry-all-errors --retry-delay 2 \
 
 IMAGE_STUDIO_HTTP="$(
   curl --retry 2 --retry-all-errors --retry-delay 2 \
-    --connect-timeout 10 --max-time 1500 -sS \
+    --connect-timeout 10 --max-time 180 -sS \
     -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
     -o "$IMAGE_STUDIO_RUN_JSON" -w '%{http_code}' \
     -X POST "$SERVICE_URL/api/image-studio/v1/edit" \
@@ -309,11 +309,13 @@ import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     payload = json.load(handle)
-assert payload.get("status") == "SUCCESS", payload
+assert payload.get("status") in {"QUEUED", "RUNNING", "SUCCESS"}, payload
 assert payload.get("storage_type") == "IMAGE_STUDIO_V1", payload
 assert payload.get("mode") == "IDENTITY_LOCK", payload
 assert payload.get("reference_roles") == ["IDENTITY"], payload
-assert payload.get("output_image_url"), payload
+queue = payload.get("queue") or {}
+assert queue.get("concurrency") == 1, payload
+assert queue.get("policy") == "FIFO_SINGLE_L4", payload
 run_id = str(payload.get("run_id") or "").strip()
 if not run_id:
     raise SystemExit("Image Studio did not return run_id")
@@ -321,12 +323,32 @@ print(run_id)
 PY
 )"
 test -n "$IMAGE_STUDIO_RUN_ID"
-curl --retry 3 --retry-all-errors --retry-delay 2 \
-  --connect-timeout 10 --max-time 60 -fsS \
-  -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
-  "$SERVICE_URL/api/image-studio/v1/runs/$IMAGE_STUDIO_RUN_ID" \
-  -o "$OUT_DIR/image_studio_run_readback.json"
-python3 - "$OUT_DIR/image_studio_run_readback.json" <<'PY'
+
+IMAGE_STUDIO_READBACK="$OUT_DIR/image_studio_run_readback.json"
+IMAGE_STUDIO_FINAL_STATUS=""
+for attempt in $(seq 1 240); do
+  READBACK_HTTP="$(request GET "$SERVICE_URL/api/image-studio/v1/runs/$IMAGE_STUDIO_RUN_ID?uat_ts=$RANDOM" "$IMAGE_STUDIO_READBACK")"
+  test "$READBACK_HTTP" = "200"
+  IMAGE_STUDIO_FINAL_STATUS="$(python3 - "$IMAGE_STUDIO_READBACK" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+print(str(payload.get("status") or "").upper())
+PY
+)"
+  echo "image-studio queue attempt=$attempt status=$IMAGE_STUDIO_FINAL_STATUS"
+  if [[ "$IMAGE_STUDIO_FINAL_STATUS" == "SUCCESS" ]]; then
+    break
+  fi
+  if [[ "$IMAGE_STUDIO_FINAL_STATUS" == "FAILED" ]]; then
+    cat "$IMAGE_STUDIO_READBACK"
+    exit 1
+  fi
+  sleep 5
+done
+test "$IMAGE_STUDIO_FINAL_STATUS" = "SUCCESS"
+python3 - "$IMAGE_STUDIO_READBACK" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
@@ -334,6 +356,7 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 assert payload.get("status") == "SUCCESS", payload
 assert payload.get("storage_type") == "IMAGE_STUDIO_V1", payload
 assert payload.get("output_image_url"), payload
+assert payload.get("queue_position") is None, payload
 PY
 wait_for_display READY 24 "post-image-studio"
 
@@ -345,7 +368,7 @@ test "$VM_STATUS" = "RUNNING"
   echo "- STOPPED (if needed) -> STARTING -> LOADING -> READY: **PASS**"
   echo "- BUSY blocks manual stop: **PASS**"
   echo "- Dataset Qwen generation: **PASS**"
-  echo "- Image Studio Identity Lock runtime + isolated storage: **PASS**"
+  echo "- Image Studio durable FIFO queue + Identity Lock runtime + isolated storage: **PASS**"
   echo "- Automatic GPU stop during UAT: **DISABLED**"
   echo "- Final VM status: `$VM_STATUS` (expected RUNNING)"
 } >> "$GITHUB_STEP_SUMMARY"

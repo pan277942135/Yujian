@@ -123,9 +123,14 @@ def test_image_studio_uses_independent_menu_and_storage_namespace():
 def test_long_qwen_calls_do_not_block_fastapi_event_loop():
     root = Path(__file__).resolve().parents[1]
     studio = (root / "app" / "platform" / "routes" / "image_studio.py").read_text(encoding="utf-8")
+    queue = (root / "app" / "services" / "image_studio_jobs.py").read_text(encoding="utf-8")
     qwen_lab = (root / "app" / "platform" / "routes" / "qwen_image_edit_lab.py").read_text(encoding="utf-8")
 
-    assert "await run_in_threadpool(\n            invoke_image_studio_worker," in studio
+    assert 'status="QUEUED"' in studio
+    assert "enqueue_image_studio_queue()" in studio
+    assert "invoke_image_studio_worker(" in studio
+    assert "ThreadPoolExecutor(max_workers=1" in queue
+    assert "pg_try_advisory_lock" in queue
     assert "await run_in_threadpool(\n            invoke_qwen_refine_worker," in qwen_lab
 
 
@@ -172,8 +177,10 @@ def test_image_studio_ui_disables_generate_until_gpu_ready():
     assert 'id="studioGpuStart"' in template
     assert '"/api/qwen-lab/gpu/status?studio_ts="' in template
     assert '"/api/qwen-lab/gpu/start"' in template
-    assert 'state === "READY" && payload?.model_loaded === true' in template
+    assert '(state === "READY" || state === "BUSY") && payload?.model_loaded === true' in template
+    assert '"BUSY · GPU 正在生成；仍可继续提交"' in template
     assert '"LOADING · Qwen 尚未 Ready，生成未提交"' in template
+    assert '"/api/image-studio/v1/queue?ts="' in template
 
 
 
@@ -211,3 +218,42 @@ def test_qwen_runtime_has_no_automatic_vm_shutdown_policy():
     assert "SECOND_STOP_JSON" not in uat
     assert "expected RUNNING" in uat
     assert "Temporary GPU cleanup after failed Qwen UAT" not in workflow
+
+
+
+def test_image_studio_durable_fifo_queue_contract():
+    root = Path(__file__).resolve().parents[1]
+    route = (root / "app" / "platform" / "routes" / "image_studio.py").read_text(encoding="utf-8")
+    queue = (root / "app" / "services" / "image_studio_jobs.py").read_text(encoding="utf-8")
+    entry = (root / "app" / "entry.py").read_text(encoding="utf-8")
+    gpu = (root / "app" / "platform" / "routes" / "qwen_gpu.py").read_text(encoding="utf-8")
+
+    assert '"queue_policy": "FIFO_SINGLE_L4"' in route
+    assert '@router.get("/queue")' in route
+    assert '"queue_position"' in route
+    assert 'run.status = "QUEUED"' in route
+    assert "ThreadPoolExecutor(max_workers=1" in queue
+    assert ".order_by(ImageStudioRun.created_at.asc(), ImageStudioRun.run_id.asc())" in queue
+    assert "pg_try_advisory_lock" in queue
+    assert "IMAGE_STUDIO_PROCESSING_LEASE_SECONDS" in queue
+    assert "recover_pending_image_studio_jobs()" in entry
+    assert 'ImageStudioRun.status.in_(["QUEUED", "RUNNING"])' in gpu
+
+
+def test_image_studio_queue_keeps_cloud_run_background_cpu_active():
+    root = Path(__file__).resolve().parents[1]
+    deploy = (root / "scripts" / "deploy_console_runtime.sh").read_text(encoding="utf-8")
+
+    assert "--min 1" in deploy
+    assert "--no-cpu-throttling" in deploy
+
+
+def test_image_studio_runtime_uat_polls_queued_job_to_success():
+    root = Path(__file__).resolve().parents[1]
+    uat = (root / "scripts" / "qwen_gpu_manual_uat.sh").read_text(encoding="utf-8")
+
+    assert 'payload.get("status") in {"QUEUED", "RUNNING", "SUCCESS"}' in uat
+    assert 'queue.get("concurrency") == 1' in uat
+    assert 'queue.get("policy") == "FIFO_SINGLE_L4"' in uat
+    assert 'IMAGE_STUDIO_FINAL_STATUS' in uat
+    assert 'test "$IMAGE_STUDIO_FINAL_STATUS" = "SUCCESS"' in uat
