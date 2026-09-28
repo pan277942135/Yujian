@@ -19,6 +19,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.db import get_db
 from app.image_studio_worker_client import invoke_image_studio_worker
+from app.qwen_refine_worker_client import check_qwen_refine_worker
 from app.platform.models import ImageStudioRun
 from app.platform.services.image_studio_prompt import compile_image_studio_prompt
 from app.portrait_worker_client import PortraitWorkerError, _read_image_uri
@@ -88,6 +89,33 @@ def _mask_composite(base_bytes: bytes, generated_bytes: bytes, mask_bytes: bytes
     output = io.BytesIO()
     result.save(output, format="PNG")
     return output.getvalue()
+
+
+def _require_worker_ready() -> dict[str, Any]:
+    """Reject transient GPU warmup before creating an Image Studio run."""
+
+    try:
+        snapshot = check_qwen_refine_worker()
+    except PortraitWorkerError as exc:
+        raise HTTPException(
+            status_code=exc.status_code or 503,
+            detail={"code": exc.error_code, "message": str(exc)},
+        ) from exc
+
+    health = snapshot.get("health") if isinstance(snapshot.get("health"), dict) else {}
+    worker_status = str(health.get("status") or "").strip().lower()
+    model_loaded = health.get("model_loaded") is True
+    if worker_status != "ready" or not model_loaded:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "QWEN_WORKER_NOT_READY",
+                "status": worker_status or "unavailable",
+                "model_loaded": model_loaded,
+                "message": "Qwen 模型正在启动或预热，Ready 后再开始生成。",
+            },
+        )
+    return health
 
 
 def _parse_roles(raw: str, mode: str, reference_count: int) -> list[str]:
@@ -207,6 +235,7 @@ async def edit_image(
         raise HTTPException(status_code=422, detail="seed 必须是整数") from exc
 
     roles = _parse_roles(reference_roles, mode, len(reference_uploads))
+    _require_worker_ready()
     try:
         compiled = compile_image_studio_prompt(
             prompt,
