@@ -5,12 +5,14 @@ import io
 import json
 import os
 import secrets
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
+from google.api_core.exceptions import NotFound
 from google.cloud import storage
 from PIL import Image
 from sqlalchemy import func, select
@@ -76,6 +78,82 @@ def _store_bytes(run_id: str, kind: str, data: bytes, media_type: str, extension
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
     return str(path)
+
+
+def _delete_run_assets(run_id: str) -> int:
+    """Delete every Image Studio-managed asset for one run.
+
+    Storage deletion is scoped to the run namespace rather than individual DB
+    columns so uploaded references, masks and any partially-written outputs are
+    removed together.
+    """
+
+    safe_run_id = str(run_id or "").strip()
+    if not safe_run_id.startswith("IMAGE_STUDIO_"):
+        raise RuntimeError("invalid Image Studio run id")
+
+    prefix = f"image_studio/v1/runs/{safe_run_id}/"
+    bucket_name = (
+        os.getenv("IMAGE_STUDIO_GCS_BUCKET", "").strip()
+        or os.getenv("GCS_BUCKET", "").strip()
+    )
+    if bucket_name:
+        client = storage.Client()
+        bucket = client.bucket(bucket_name)
+        deleted = 0
+        for blob in client.list_blobs(bucket, prefix=prefix):
+            try:
+                blob.delete()
+                deleted += 1
+            except NotFound:
+                continue
+        return deleted
+
+    run_dir = (
+        Path("/tmp")
+        / "yujian"
+        / "image_studio"
+        / "v1"
+        / "runs"
+        / safe_run_id
+    )
+    if not run_dir.exists():
+        return 0
+    file_count = sum(1 for path in run_dir.rglob("*") if path.is_file())
+    shutil.rmtree(run_dir)
+    return file_count
+
+
+def _delete_failed_run(db: Session, run: ImageStudioRun) -> dict[str, Any]:
+    if run.status != "FAILED":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "IMAGE_STUDIO_DELETE_REQUIRES_FAILED",
+                "message": "仅 FAILED 任务允许使用失败任务清理。",
+                "status": run.status,
+            },
+        )
+
+    try:
+        deleted_assets = _delete_run_assets(run.run_id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "IMAGE_STUDIO_ASSET_DELETE_FAILED",
+                "message": f"任务图片清理失败，数据库记录已保留：{exc}",
+            },
+        ) from exc
+
+    run_id = run.run_id
+    db.delete(run)
+    db.commit()
+    return {
+        "deleted": True,
+        "run_id": run_id,
+        "deleted_assets": deleted_assets,
+    }
 
 
 def _mask_composite(base_bytes: bytes, generated_bytes: bytes, mask_bytes: bytes) -> bytes:
@@ -529,6 +607,36 @@ def get_run(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
 @router.get("/queue")
 def get_queue(db: Session = Depends(get_db)) -> dict[str, Any]:
     return _queue_snapshot(db)
+
+
+@router.delete("/runs/failed")
+def delete_all_failed_runs(db: Session = Depends(get_db)) -> dict[str, Any]:
+    failed_runs = list(
+        db.scalars(
+            select(ImageStudioRun)
+            .where(ImageStudioRun.status == "FAILED")
+            .order_by(ImageStudioRun.created_at.asc(), ImageStudioRun.run_id.asc())
+        )
+    )
+    deleted_runs = 0
+    deleted_assets = 0
+    for run in failed_runs:
+        result = _delete_failed_run(db, run)
+        deleted_runs += 1
+        deleted_assets += int(result.get("deleted_assets") or 0)
+    return {
+        "deleted": True,
+        "deleted_runs": deleted_runs,
+        "deleted_assets": deleted_assets,
+    }
+
+
+@router.delete("/runs/{run_id}")
+def delete_failed_run(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    run = db.get(ImageStudioRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Image Studio run 不存在")
+    return _delete_failed_run(db, run)
 
 
 def _media_uri_for(run: ImageStudioRun, kind: str) -> str | None:
