@@ -298,7 +298,7 @@ assert payload.get("status") == "SUCCESS", payload
 assert payload.get("run_id"), payload
 assert payload.get("output_image_url") or payload.get("output_image_uri"), payload
 PY
-wait_for_display READY 24 "post-generate"
+wait_for_worker_healthy 24 "post-generate"
 
 # Image Studio V1 runtime gate: reuse the successful Qwen Lab result as both
 # Base and an IDENTITY reference. This proves the new worker mode, reference
