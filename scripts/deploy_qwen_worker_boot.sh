@@ -16,9 +16,8 @@ START_REQUESTED=false
 
 cleanup() {
   local rc=$?
-  if [[ "$rc" -ne 0 && "$START_REQUESTED" == "true" ]]; then
-    echo "Bootstrap failed; stopping the VM through Compute API to avoid leaving GPU running."
-    gcloud compute instances stop "$GPU_INSTANCE"       --project "$GPU_PROJECT_ID" --zone "$GPU_ZONE" --quiet || true
+  if [[ "$rc" -ne 0 ]]; then
+    echo "Bootstrap failed; persistent GPU policy leaves the VM unchanged for diagnosis and interactive use."
   fi
   rm -rf "$OUT_DIR"
   exit "$rc"

@@ -174,3 +174,40 @@ def test_image_studio_ui_disables_generate_until_gpu_ready():
     assert '"/api/qwen-lab/gpu/start"' in template
     assert 'state === "READY" && payload?.model_loaded === true' in template
     assert '"LOADING · Qwen 尚未 Ready，生成未提交"' in template
+
+
+
+def test_image_studio_common_presets_are_primary_ui():
+    root = Path(__file__).resolve().parents[1]
+    template = (
+        root
+        / "app"
+        / "templates"
+        / "platform"
+        / "lab"
+        / "image_studio.html"
+    ).read_text(encoding="utf-8")
+
+    for preset in ["HEAD_SWAP", "CHARACTER_FUSION", "HEAD_SCENE", "OUTFIT", "HD"]:
+        assert f'data-preset="{preset}"' in template
+    assert "角色换头" in template
+    assert "角色融合" in template
+    assert "换头 + 换背景" in template
+    assert "只换穿搭" in template
+    assert "高清增强" in template
+    assert "<summary>高级设置</summary>" in template
+
+
+def test_qwen_runtime_has_no_automatic_vm_shutdown_policy():
+    root = Path(__file__).resolve().parents[1]
+    uat = (root / "scripts" / "qwen_gpu_manual_uat.sh").read_text(encoding="utf-8")
+    boot = (root / "scripts" / "deploy_qwen_worker_boot.sh").read_text(encoding="utf-8")
+    workflow = (root / ".github" / "workflows" / "uat-deploy.yml").read_text(encoding="utf-8")
+
+    assert 'gcloud compute instances stop "$GPU_INSTANCE"' not in uat
+    assert 'gcloud compute instances stop "$GPU_INSTANCE"' not in boot
+    assert 'gcloud compute instances stop "$GPU_INSTANCE"' not in workflow
+    assert "FINAL_STOP_JSON" not in uat
+    assert "SECOND_STOP_JSON" not in uat
+    assert "expected RUNNING" in uat
+    assert "Temporary GPU cleanup after failed Qwen UAT" not in workflow

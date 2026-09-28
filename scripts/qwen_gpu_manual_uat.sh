@@ -48,18 +48,9 @@ diagnose_worker() {
 
 cleanup_uat_vm() {
   local rc=$?
-  if [[ "$START_REQUESTED" == "true" && "$rc" -ne 0 ]]; then
+  if [[ "$rc" -ne 0 ]]; then
     diagnose_worker
-    echo "UAT failed; stopping the exact test VM to leave it TERMINATED"
-    gcloud compute instances stop "$GPU_INSTANCE" \
-      --project "$GPU_PROJECT_ID" --zone "$GPU_ZONE" --quiet || true
-    for _ in $(seq 1 36); do
-      VM_STATUS="$(gcloud compute instances describe "$GPU_INSTANCE" \
-        --project "$GPU_PROJECT_ID" --zone "$GPU_ZONE" --format='value(status)' 2>/dev/null || true)"
-      echo "failure-cleanup vm_status=$VM_STATUS"
-      [[ "$VM_STATUS" == "TERMINATED" ]] && break
-      sleep 5
-    done
+    echo "UAT failed; persistent GPU policy keeps the VM unchanged for diagnosis and interactive use."
   fi
   trap - EXIT
   exit "$rc"
@@ -138,27 +129,13 @@ test "$INITIAL_STATUS_HTTP" = "200"
 INITIAL_DISPLAY="$(display_status)"
 echo "initial display_status=$INITIAL_DISPLAY"
 if [[ "$INITIAL_DISPLAY" == "READY" ]]; then
-  STOP_JSON="$OUT_DIR/initial-stop.json"
-  STOP_HTTP="$(request POST "$SERVICE_URL/api/qwen-lab/gpu/stop" "$STOP_JSON")"
-  test "$STOP_HTTP" = "200"
-  wait_for_display STOPPED 48 "initial-stop"
+  echo "initial GPU is already READY; persistent GPU policy leaves it running"
 elif [[ "$INITIAL_DISPLAY" == "STOPPED" ]]; then
-  echo "initial VM is already TERMINATED"
-elif [[ "$INITIAL_DISPLAY" == "STARTING" || "$INITIAL_DISPLAY" == "LOADING" ]]; then
-  wait_for_display READY 180 "initial-ready"
-else
-  cat "$STATUS_JSON"
-  echo "Unexpected initial GPU state: $INITIAL_DISPLAY" >&2
-  exit 1
-fi
-VM_STATUS="$(gcloud compute instances describe "$GPU_INSTANCE"   --project "$GPU_PROJECT_ID" --zone "$GPU_ZONE" --format='value(status)')"
-test "$VM_STATUS" = "TERMINATED"
-
-START_JSON="$OUT_DIR/start.json"
-START_HTTP="$(request POST "$SERVICE_URL/api/qwen-lab/gpu/start" "$START_JSON")"
-START_REQUESTED=true
-test "$START_HTTP" = "200"
-python3 - "$START_JSON" <<'PY'
+  START_JSON="$OUT_DIR/start.json"
+  START_HTTP="$(request POST "$SERVICE_URL/api/qwen-lab/gpu/start" "$START_JSON")"
+  START_REQUESTED=true
+  test "$START_HTTP" = "200"
+  python3 - "$START_JSON" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
@@ -166,7 +143,14 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 assert payload.get("accepted") is True, payload
 assert payload.get("display_status") == "STARTING", payload
 PY
-wait_for_display READY 180 "start-worker-ready"
+  wait_for_display READY 180 "start-worker-ready"
+elif [[ "$INITIAL_DISPLAY" == "STARTING" || "$INITIAL_DISPLAY" == "LOADING" || "$INITIAL_DISPLAY" == "BUSY" ]]; then
+  wait_for_display READY 180 "initial-ready"
+else
+  cat "$STATUS_JSON"
+  echo "Unexpected initial GPU state: $INITIAL_DISPLAY" >&2
+  exit 1
+fi
 collect_boot_evidence
 VM_STATUS="$(gcloud compute instances describe "$GPU_INSTANCE"   --project "$GPU_PROJECT_ID" --zone "$GPU_ZONE" --format='value(status)')"
 test "$VM_STATUS" = "RUNNING"
@@ -353,49 +337,15 @@ assert payload.get("output_image_url"), payload
 PY
 wait_for_display READY 24 "post-image-studio"
 
-FINAL_STOP_JSON="$OUT_DIR/final-stop.json"
-FINAL_STOP_HTTP="$(request POST "$SERVICE_URL/api/qwen-lab/gpu/stop" "$FINAL_STOP_JSON")"
-test "$FINAL_STOP_HTTP" = "200"
-python3 - "$FINAL_STOP_JSON" <<'PY'
-import json
-import sys
-with open(sys.argv[1], encoding="utf-8") as handle:
-    payload = json.load(handle)
-assert payload.get("accepted") is True, payload
-assert payload.get("display_status") == "STOPPING", payload
-PY
-wait_for_display STOPPED 48 "final-stop"
 VM_STATUS="$(gcloud compute instances describe "$GPU_INSTANCE"   --project "$GPU_PROJECT_ID" --zone "$GPU_ZONE" --format='value(status)')"
-test "$VM_STATUS" = "TERMINATED"
-
-SECOND_START_JSON="$OUT_DIR/second-start.json"
-SECOND_START_HTTP="$(request POST "$SERVICE_URL/api/qwen-lab/gpu/start" "$SECOND_START_JSON")"
-test "$SECOND_START_HTTP" = "200"
-python3 - "$SECOND_START_JSON" <<'PY'
-import json
-import sys
-with open(sys.argv[1], encoding="utf-8") as handle:
-    payload = json.load(handle)
-assert payload.get("accepted") is True, payload
-assert payload.get("display_status") == "STARTING", payload
-PY
-wait_for_display READY 180 "second-start-worker-ready"
-collect_boot_evidence
-
-SECOND_STOP_JSON="$OUT_DIR/second-stop.json"
-SECOND_STOP_HTTP="$(request POST "$SERVICE_URL/api/qwen-lab/gpu/stop" "$SECOND_STOP_JSON")"
-test "$SECOND_STOP_HTTP" = "200"
-wait_for_display STOPPED 48 "second-stop"
-VM_STATUS="$(gcloud compute instances describe "$GPU_INSTANCE"   --project "$GPU_PROJECT_ID" --zone "$GPU_ZONE" --format='value(status)')"
-test "$VM_STATUS" = "TERMINATED"
+test "$VM_STATUS" = "RUNNING"
 
 {
-  echo "### Qwen Lab GPU Manual Control Runtime UAT"
-  echo "- STOPPED -> STARTING -> LOADING -> READY: **PASS**"
-  echo "- READY -> STOPPING -> STOPPED: **PASS**"
-  echo "- BUSY blocks stop: **PASS**"
+  echo "### Qwen / Image Studio persistent GPU Runtime UAT"
+  echo "- STOPPED (if needed) -> STARTING -> LOADING -> READY: **PASS**"
+  echo "- BUSY blocks manual stop: **PASS**"
   echo "- Dataset Qwen generation: **PASS**"
   echo "- Image Studio Identity Lock runtime + isolated storage: **PASS**"
-  echo "- Second page-driven START -> ComfyUI -> Qwen READY: **PASS**"
-  echo "- Final VM status: `$VM_STATUS`"
+  echo "- Automatic GPU stop during UAT: **DISABLED**"
+  echo "- Final VM status: `$VM_STATUS` (expected RUNNING)"
 } >> "$GITHUB_STEP_SUMMARY"

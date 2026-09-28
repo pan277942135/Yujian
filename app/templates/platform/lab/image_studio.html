@@ -2,24 +2,37 @@
 
 {% block head %}
 <style>
-  .studio-grid{display:grid;grid-template-columns:minmax(340px,460px) minmax(0,1fr);gap:18px;align-items:start}
+  .studio-shell{display:grid;gap:16px}
+  .studio-presets{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
+  .studio-preset{border:1px solid #d5e3dd;border-radius:12px;background:#fff;padding:12px;text-align:left;cursor:pointer;color:#294f43;min-height:92px}
+  .studio-preset strong{display:block;font-size:14px;margin-bottom:5px}
+  .studio-preset span{display:block;font-size:11px;line-height:1.45;color:var(--muted)}
+  .studio-preset.active{border-color:#2a8068;background:#eff8f4;box-shadow:0 0 0 2px rgba(42,128,104,.10)}
+  .studio-grid{display:grid;grid-template-columns:minmax(350px,480px) minmax(0,1fr);gap:18px;align-items:start}
   .studio-panel{display:grid;gap:14px}
   .studio-field{display:grid;gap:6px}
   .studio-field label{font-size:13px;font-weight:750;color:#36574d}
   .studio-field input,.studio-field select,.studio-field textarea{width:100%;box-sizing:border-box;border:1px solid #cddfd7;border-radius:9px;background:#fff;color:#24483d;padding:10px 11px;font:inherit}
-  .studio-field textarea{min-height:150px;resize:vertical;line-height:1.5}
+  .studio-field textarea{min-height:138px;resize:vertical;line-height:1.5}
   .studio-pair{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   .studio-upload{border:1px dashed #b9d2c7;border-radius:11px;background:#f8fcfa;padding:11px}
+  .studio-upload[hidden],.studio-pair[hidden]{display:none}
+  .studio-help{font-size:12px;color:var(--muted);line-height:1.55}
+  .studio-mode-note{border:1px solid #dce9e3;border-radius:10px;background:#fbfefd;padding:10px 12px}
+  .studio-mode-note strong{display:block;color:#2b594b;font-size:13px;margin-bottom:3px}
   .studio-actions{display:flex;gap:9px;flex-wrap:wrap}
   .studio-actions button{border:0;border-radius:9px;padding:10px 14px;font-weight:750;cursor:pointer}
   .studio-primary{background:#245f50;color:white}
   .studio-secondary{background:#edf5f1;color:#245f50}
-  .studio-help{font-size:12px;color:var(--muted);line-height:1.5}
+  .studio-actions button:disabled{opacity:.48;cursor:not-allowed}
   .studio-status{border-radius:9px;padding:10px 12px;background:#f4f8f6;color:#36574d;font-size:13px;white-space:pre-wrap}
   .studio-gpu{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;border:1px solid #d7e5df;border-radius:10px;background:#fbfefd;padding:10px 12px}
   .studio-gpu strong{font-size:12px;color:#36574d}.studio-gpu span{font-size:12px;color:var(--muted)}
   .studio-gpu button{border:1px solid #b9d2c7;border-radius:8px;background:#fff;color:#245f50;padding:7px 10px;font-weight:750;cursor:pointer}
-  .studio-gpu button[hidden]{display:none}.studio-actions button:disabled{opacity:.48;cursor:not-allowed}
+  .studio-gpu button[hidden]{display:none}
+  .studio-advanced{border:1px solid #dce7e2;border-radius:10px;background:#fbfdfc;padding:0 12px}
+  .studio-advanced summary{cursor:pointer;padding:11px 0;font-size:13px;font-weight:750;color:#36574d}
+  .studio-advanced-body{display:grid;gap:12px;padding:0 0 12px}
   .studio-result{display:grid;gap:12px}
   .studio-result img{display:block;width:100%;max-height:72vh;object-fit:contain;background:#eef4f1;border-radius:12px;border:1px solid #d7e4de}
   .studio-empty{min-height:420px;border:1px dashed #c9d9d2;border-radius:12px;display:grid;place-items:center;color:var(--muted);background:#fbfdfc}
@@ -27,133 +40,176 @@
   .studio-history button{border:1px solid #d3e1db;background:white;border-radius:9px;padding:6px;text-align:left;cursor:pointer}
   .studio-history img{width:100%;aspect-ratio:9/12;object-fit:cover;border-radius:6px;background:#eef4f1}
   .studio-history small{display:block;margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  @media(max-width:1100px){.studio-presets{grid-template-columns:repeat(3,minmax(0,1fr))}}
   @media(max-width:980px){.studio-grid{grid-template-columns:1fr}.studio-history{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media(max-width:620px){.studio-presets{grid-template-columns:repeat(2,minmax(0,1fr))}.studio-pair{grid-template-columns:1fr}}
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="studio-grid">
-  <section class="panel studio-panel">
+<div class="studio-shell">
+  <section class="panel">
     <div>
-      <h2 style="margin:0">Image Studio · Qwen 2511</h2>
-      <p class="studio-help">复用现有 L4 / Qwen Image Edit Worker。Base 决定编辑底图；Reference 通过角色告诉模型“这张图负责什么”。</p>
+      <h1 style="margin:0 0 5px">Image Studio</h1>
+      <p class="studio-help" style="margin:0">先选你要做什么。系统自动配置 Qwen Mode、Reference Role 和原图保持度；需要时再展开高级设置。</p>
     </div>
-
-    <div class="studio-field studio-upload">
-      <label for="studioBase">Base Image *</label>
-      <input id="studioBase" type="file" accept="image/jpeg,image/png,image/webp">
+    <div class="studio-presets" id="studioPresets">
+      <button class="studio-preset active" type="button" data-preset="HEAD_SWAP">
+        <strong>角色换头</strong>
+        <span>原图身体/服装/背景尽量不动，只替换人物身份。</span>
+      </button>
+      <button class="studio-preset" type="button" data-preset="CHARACTER_FUSION">
+        <strong>角色融合</strong>
+        <span>角色母板负责身份，Base 负责动作、穿搭和场景。</span>
+      </button>
+      <button class="studio-preset" type="button" data-preset="HEAD_SCENE">
+        <strong>换头 + 换背景</strong>
+        <span>保留 Base 的身体与姿势，同时替换身份和环境。</span>
+      </button>
+      <button class="studio-preset" type="button" data-preset="OUTFIT">
+        <strong>只换穿搭</strong>
+        <span>人物身份、姿势与场景保持，只迁移参考服装。</span>
+      </button>
+      <button class="studio-preset" type="button" data-preset="HD">
+        <strong>高清增强</strong>
+        <span>不改人物和构图，提升真实摄影细节与清晰度。</span>
+      </button>
     </div>
-
-    <div class="studio-pair">
-      <div class="studio-field studio-upload">
-        <label for="studioRef1">Reference 1</label>
-        <input id="studioRef1" type="file" accept="image/jpeg,image/png,image/webp">
-        <select id="studioRole1">
-          <option value="IDENTITY">Identity</option>
-          <option value="FACE_ANGLE">Face Angle</option>
-          <option value="OUTFIT">Outfit</option>
-          <option value="POSE">Pose</option>
-          <option value="BODY">Body</option>
-          <option value="HAIR">Hair</option>
-          <option value="SCENE">Scene</option>
-          <option value="STYLE">Style</option>
-          <option value="OBJECT">Object</option>
-        </select>
-      </div>
-      <div class="studio-field studio-upload">
-        <label for="studioRef2">Reference 2</label>
-        <input id="studioRef2" type="file" accept="image/jpeg,image/png,image/webp">
-        <select id="studioRole2">
-          <option value="FACE_ANGLE">Face Angle</option>
-          <option value="IDENTITY">Identity</option>
-          <option value="OUTFIT">Outfit</option>
-          <option value="POSE">Pose</option>
-          <option value="BODY">Body</option>
-          <option value="HAIR">Hair</option>
-          <option value="SCENE">Scene</option>
-          <option value="STYLE">Style</option>
-          <option value="OBJECT">Object</option>
-        </select>
-      </div>
-    </div>
-
-    <div class="studio-pair">
-      <div class="studio-field">
-        <label for="studioMode">Edit Mode</label>
-        <select id="studioMode">
-          <option value="IDENTITY_LOCK">Identity Lock</option>
-          <option value="BASE_EDIT">Base Edit</option>
-          <option value="LOCAL_EDIT">Local Edit</option>
-          <option value="MULTI_REFERENCE">Multi Reference</option>
-          <option value="SCENE_TRANSFER">Scene Transfer</option>
-        </select>
-      </div>
-      <div class="studio-field">
-        <label for="studioPreservation">原图保持度</label>
-        <select id="studioPreservation">
-          <option value="MAX">极强保持</option>
-          <option value="STRONG" selected>强保持</option>
-          <option value="NORMAL">均衡</option>
-        </select>
-      </div>
-    </div>
-
-    <div class="studio-field studio-upload" id="studioMaskField" hidden>
-      <label for="studioMask">Mask · 白色区域允许修改</label>
-      <input id="studioMask" type="file" accept="image/png,image/jpeg,image/webp">
-      <div class="studio-help">LOCAL_EDIT 会在生成后执行硬合成：Mask 外直接恢复 Base 像素。</div>
-    </div>
-
-    <div class="studio-field">
-      <label for="studioPrompt">编辑指令 *</label>
-      <textarea id="studioPrompt" placeholder="例如：保持人物身份、构图、身体和背景不变，只把服装替换为 Reference 2 的黑色职业装。"></textarea>
-    </div>
-
-    <div class="studio-field">
-      <label for="studioNegative">附加 Negative Prompt</label>
-      <textarea id="studioNegative" style="min-height:82px" placeholder="可留空；系统会自动加入身份漂移、构图漂移等基础负向约束。"></textarea>
-    </div>
-
-    <div class="studio-pair">
-      <div class="studio-field">
-        <label for="studioSeed">Seed</label>
-        <input id="studioSeed" type="number" min="0" placeholder="留空随机">
-      </div>
-      <div class="studio-field">
-        <label for="studioSteps">Steps</label>
-        <input id="studioSteps" type="number" min="1" max="100" value="25">
-      </div>
-    </div>
-
-    <div class="studio-gpu">
-      <div>
-        <strong>Qwen GPU</strong>
-        <span id="studioGpuStatus">CHECKING · 正在检查 L4 / Qwen 状态</span>
-      </div>
-      <button id="studioGpuStart" type="button" hidden>启动 GPU</button>
-    </div>
-    <div class="studio-actions">
-      <button id="studioGenerate" class="studio-primary" type="button" disabled>Generate</button>
-      <button id="studioRefreshHistory" class="studio-secondary" type="button">刷新历史</button>
-    </div>
-    <div id="studioStatus" class="studio-status">CHECKING · 等待 Qwen Ready</div>
   </section>
 
-  <section class="panel studio-result">
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-      <div>
-        <h2 style="margin:0">Result</h2>
-        <div id="studioMeta" class="studio-help">尚未生成</div>
+  <div class="studio-grid">
+    <section class="panel studio-panel">
+      <div id="studioModeNote" class="studio-mode-note">
+        <strong>角色换头</strong>
+        <div class="studio-help">Base 上传原照片；Reference 1 上传角色身份母板；Reference 2 可上传对应脸部角度。</div>
       </div>
-      <button id="studioUseAsBase" class="studio-secondary" type="button" hidden>作为新 Base</button>
-    </div>
-    <div id="studioEmpty" class="studio-empty">生成结果将在这里显示</div>
-    <img id="studioResult" alt="Image Studio Result" hidden>
-    <div>
-      <h3 style="margin:8px 0">History</h3>
-      <div id="studioHistory" class="studio-history"></div>
-    </div>
-  </section>
+
+      <div class="studio-field studio-upload">
+        <label id="studioBaseLabel" for="studioBase">Base · 原照片 *</label>
+        <input id="studioBase" type="file" accept="image/jpeg,image/png,image/webp">
+        <div id="studioBaseHelp" class="studio-help">Base 决定身体、姿势、服装、构图和背景。</div>
+      </div>
+
+      <div class="studio-pair" id="studioReferences">
+        <div class="studio-field studio-upload" id="studioRef1Box">
+          <label id="studioRef1Label" for="studioRef1">Reference 1 · 角色身份母板</label>
+          <input id="studioRef1" type="file" accept="image/jpeg,image/png,image/webp">
+          <div id="studioRef1Help" class="studio-help">建议使用 M01 或最稳定的 Identity Master。</div>
+          <select id="studioRole1">
+            <option value="IDENTITY">Identity</option>
+            <option value="FACE_ANGLE">Face Angle</option>
+            <option value="OUTFIT">Outfit</option>
+            <option value="POSE">Pose</option>
+            <option value="BODY">Body</option>
+            <option value="HAIR">Hair</option>
+            <option value="SCENE">Scene</option>
+            <option value="STYLE">Style</option>
+            <option value="OBJECT">Object</option>
+          </select>
+        </div>
+        <div class="studio-field studio-upload" id="studioRef2Box">
+          <label id="studioRef2Label" for="studioRef2">Reference 2 · 脸部角度（可选）</label>
+          <input id="studioRef2" type="file" accept="image/jpeg,image/png,image/webp">
+          <div id="studioRef2Help" class="studio-help">例如正面、左45°、右45°、90°侧脸。</div>
+          <select id="studioRole2">
+            <option value="FACE_ANGLE">Face Angle</option>
+            <option value="IDENTITY">Identity</option>
+            <option value="OUTFIT">Outfit</option>
+            <option value="POSE">Pose</option>
+            <option value="BODY">Body</option>
+            <option value="HAIR">Hair</option>
+            <option value="SCENE">Scene</option>
+            <option value="STYLE">Style</option>
+            <option value="OBJECT">Object</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="studio-field">
+        <label for="studioPrompt">编辑要求 *</label>
+        <textarea id="studioPrompt"></textarea>
+        <div class="studio-help">预设会填入基础指令，你可以直接修改。系统还会追加身份/构图保护约束。</div>
+      </div>
+
+      <details class="studio-advanced">
+        <summary>高级设置</summary>
+        <div class="studio-advanced-body">
+          <div class="studio-pair">
+            <div class="studio-field">
+              <label for="studioMode">Engine Mode</label>
+              <select id="studioMode">
+                <option value="IDENTITY_LOCK">Identity Lock</option>
+                <option value="BASE_EDIT">Base Edit</option>
+                <option value="LOCAL_EDIT">Local Edit</option>
+                <option value="MULTI_REFERENCE">Multi Reference</option>
+                <option value="SCENE_TRANSFER">Scene Transfer</option>
+              </select>
+            </div>
+            <div class="studio-field">
+              <label for="studioPreservation">原图保持度</label>
+              <select id="studioPreservation">
+                <option value="MAX">极强保持</option>
+                <option value="STRONG">强保持</option>
+                <option value="NORMAL">均衡</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="studio-field studio-upload" id="studioMaskField" hidden>
+            <label for="studioMask">Mask · 白色区域允许修改</label>
+            <input id="studioMask" type="file" accept="image/png,image/jpeg,image/webp">
+            <div class="studio-help">仅 LOCAL_EDIT 必须上传。Mask 外会在生成后直接恢复 Base 像素。</div>
+          </div>
+
+          <div class="studio-field">
+            <label for="studioNegative">附加 Negative Prompt</label>
+            <textarea id="studioNegative" style="min-height:72px" placeholder="可留空"></textarea>
+          </div>
+
+          <div class="studio-pair">
+            <div class="studio-field">
+              <label for="studioSeed">Seed</label>
+              <input id="studioSeed" type="number" min="0" placeholder="留空随机">
+            </div>
+            <div class="studio-field">
+              <label for="studioSteps">Steps</label>
+              <input id="studioSteps" type="number" min="1" max="100" value="25">
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <div class="studio-gpu">
+        <div>
+          <strong>Qwen GPU · NVIDIA L4</strong>
+          <span id="studioGpuStatus">CHECKING · 正在检查模型状态</span>
+        </div>
+        <button id="studioGpuStart" type="button" hidden>启动 GPU</button>
+      </div>
+
+      <div class="studio-actions">
+        <button id="studioGenerate" class="studio-primary" type="button" disabled>Generate</button>
+        <button id="studioRefreshHistory" class="studio-secondary" type="button">刷新历史</button>
+      </div>
+      <div id="studioStatus" class="studio-status">CHECKING · 等待 Qwen Ready</div>
+    </section>
+
+    <section class="panel studio-result">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+        <div>
+          <h2 style="margin:0">Result</h2>
+          <div id="studioMeta" class="studio-help">尚未生成</div>
+        </div>
+        <button id="studioUseAsBase" class="studio-secondary" type="button" hidden>作为新 Base</button>
+      </div>
+      <div id="studioEmpty" class="studio-empty">生成结果将在这里显示</div>
+      <img id="studioResult" alt="Image Studio Result" hidden>
+      <div>
+        <h3 style="margin:8px 0">History</h3>
+        <div id="studioHistory" class="studio-history"></div>
+      </div>
+    </section>
+  </div>
 </div>
 
 <script>
@@ -163,6 +219,7 @@
   const refs = [$("studioRef1"), $("studioRef2")];
   const roles = [$("studioRole1"), $("studioRole2")];
   const mode = $("studioMode");
+  const preservation = $("studioPreservation");
   const maskField = $("studioMaskField");
   const mask = $("studioMask");
   const result = $("studioResult");
@@ -173,19 +230,127 @@
   const generateButton = $("studioGenerate");
   const meta = $("studioMeta");
   const useAsBase = $("studioUseAsBase");
+  const promptInput = $("studioPrompt");
   let currentResultUrl = "";
   let gpuReady = false;
   let generating = false;
   let gpuPollTimer = null;
+  let activePreset = "HEAD_SWAP";
+  let presetPrompt = "";
+
+  const presets = {
+    HEAD_SWAP: {
+      title: "角色换头",
+      note: "Base 上传原照片；Reference 1 上传角色身份母板；Reference 2 可上传对应脸部角度。",
+      mode: "IDENTITY_LOCK",
+      preservation: "MAX",
+      baseLabel: "Base · 原照片 *",
+      baseHelp: "Base 决定身体、姿势、服装、构图和背景。",
+      ref1: ["Reference 1 · 角色身份母板", "建议使用 M01 或最稳定的 Identity Master。", "IDENTITY"],
+      ref2: ["Reference 2 · 脸部角度（可选）", "例如正面、左45°、右45°、90°侧脸。", "FACE_ANGLE"],
+      refs: 2,
+      prompt: "以 Reference 1 作为唯一人物身份来源。保持 Base 中身体、肩颈以下、服装、姿势、手部、构图、光线和背景不变，只替换人物头部身份。若提供 Reference 2，它只负责当前脸部角度与几何，不要融合或平均 Base 原人物的脸。"
+    },
+    CHARACTER_FUSION: {
+      title: "角色融合",
+      note: "Base 直接使用动作/神态/姿态/穿搭参考图；Reference 1 只负责把人物替换成角色母板身份。",
+      mode: "IDENTITY_LOCK",
+      preservation: "STRONG",
+      baseLabel: "Base · 动作 / 穿搭 / 场景参考图 *",
+      baseHelp: "Base 提供姿势、表情、穿搭、身体、镜头和场景。",
+      ref1: ["Reference 1 · 角色身份母板", "只负责人物身份，不复制母板姿势和场景。", "IDENTITY"],
+      ref2: ["Reference 2 · 脸部角度（可选）", "只有角度复杂时才需要。", "FACE_ANGLE"],
+      refs: 2,
+      prompt: "Reference 1 只作为人物身份母板。完整保留 Base 的动作、神态、身体姿态、穿搭、手部、镜头、构图和场景，把 Base 中的人物重建为 Reference 1 的同一角色。不要把 Reference 1 的姿势、服装或背景带入结果。"
+    },
+    HEAD_SCENE: {
+      title: "换头 + 换背景",
+      note: "Base 保留人物身体与动作；Reference 1 负责身份；Reference 2 负责新背景。",
+      mode: "MULTI_REFERENCE",
+      preservation: "STRONG",
+      baseLabel: "Base · 原人物照片 *",
+      baseHelp: "Base 决定人物身体、姿势、服装和主体构图。",
+      ref1: ["Reference 1 · 角色身份母板", "作为唯一人物身份来源。", "IDENTITY"],
+      ref2: ["Reference 2 · 新背景 / 场景", "只负责环境、空间与背景。", "SCENE"],
+      refs: 2,
+      prompt: "保留 Base 中人物的身体、姿势、手部、服装和主体构图；将人物头部身份替换为 Reference 1 的角色身份，同时把背景替换为 Reference 2 的场景。Reference 2 不得影响人物身份、身体或服装，并让人物与新场景的透视、光线和接触关系自然融合。"
+    },
+    OUTFIT: {
+      title: "只换穿搭",
+      note: "Base 保留人物与场景；Reference 1 只提供服装。",
+      mode: "MULTI_REFERENCE",
+      preservation: "MAX",
+      baseLabel: "Base · 原人物照片 *",
+      baseHelp: "人物身份、脸、发型、姿势、身体、背景以 Base 为准。",
+      ref1: ["Reference 1 · 穿搭参考", "只复制服装，不复制参考人物。", "OUTFIT"],
+      ref2: ["Reference 2", "此模式通常不需要。", "FACE_ANGLE"],
+      refs: 1,
+      prompt: "保持 Base 的人物身份、脸、发型、身体比例、姿势、手部、场景、镜头和构图不变，只把服装替换为 Reference 1 中的穿搭。不要复制 Reference 1 人物的脸、发型、身体、姿势或背景。"
+    },
+    HD: {
+      title: "高清增强",
+      note: "只上传 Base。增强真实摄影细节与清晰度，不重新设计人物。",
+      mode: "BASE_EDIT",
+      preservation: "MAX",
+      baseLabel: "Base · 待增强图片 *",
+      baseHelp: "保持身份、表情、姿势、服装、构图和场景。",
+      ref1: ["Reference 1", "此模式不需要参考图。", "IDENTITY"],
+      ref2: ["Reference 2", "此模式不需要参考图。", "FACE_ANGLE"],
+      refs: 0,
+      prompt: "提升原图真实摄影清晰度、面部细节、头发纹理、服装纹理和整体画面质感。保持人物身份、五官比例、表情、姿势、身体比例、服装、场景、构图、镜头和光线不变，不重新设计人物。"
+    }
+  };
+
+  function setText(id, value) {
+    const node = $(id);
+    if (node) node.textContent = value;
+  }
+
+  function applyPreset(name, forcePrompt=false) {
+    const preset = presets[name];
+    if (!preset) return;
+    activePreset = name;
+    document.querySelectorAll(".studio-preset").forEach((button) => {
+      button.classList.toggle("active", button.dataset.preset === name);
+    });
+    mode.value = preset.mode;
+    preservation.value = preset.preservation;
+    roles[0].value = preset.ref1[2];
+    roles[1].value = preset.ref2[2];
+    setText("studioModeNote", "");
+    $("studioModeNote").innerHTML = "<strong>" + preset.title + "</strong><div class=\"studio-help\"></div>";
+    $("studioModeNote").querySelector(".studio-help").textContent = preset.note;
+    setText("studioBaseLabel", preset.baseLabel);
+    setText("studioBaseHelp", preset.baseHelp);
+    setText("studioRef1Label", preset.ref1[0]);
+    setText("studioRef1Help", preset.ref1[1]);
+    setText("studioRef2Label", preset.ref2[0]);
+    setText("studioRef2Help", preset.ref2[1]);
+    $("studioReferences").hidden = preset.refs === 0;
+    $("studioRef1Box").hidden = preset.refs < 1;
+    $("studioRef2Box").hidden = preset.refs < 2;
+    maskField.hidden = mode.value !== "LOCAL_EDIT";
+
+    if (forcePrompt || !promptInput.value.trim() || promptInput.value === presetPrompt) {
+      promptInput.value = preset.prompt;
+    }
+    presetPrompt = preset.prompt;
+  }
+
+  document.querySelectorAll(".studio-preset").forEach((button) => {
+    button.addEventListener("click", () => applyPreset(button.dataset.preset, false));
+  });
 
   mode.addEventListener("change", () => {
     maskField.hidden = mode.value !== "LOCAL_EDIT";
+    document.querySelectorAll(".studio-preset").forEach((button) => button.classList.remove("active"));
+    activePreset = "CUSTOM";
   });
 
   function selectedReferences(form) {
     const selectedRoles = [];
     refs.forEach((input, index) => {
-      if (input.files && input.files[0]) {
+      if (!input.closest(".studio-upload").hidden && input.files && input.files[0]) {
         form.append("references", input.files[0]);
         selectedRoles.push(roles[index].value);
       }
@@ -201,9 +366,7 @@
 
     if (gpuReady) {
       gpuStatus.textContent = "READY · Qwen 模型已加载";
-      if (!generating && !status.textContent.startsWith("SUCCESS")) {
-        status.textContent = "READY · 可以开始生成";
-      }
+      if (!generating && !status.textContent.startsWith("SUCCESS")) status.textContent = "READY · 可以开始生成";
       return;
     }
     if (state === "STARTING" || state === "LOADING") {
@@ -268,9 +431,9 @@
       status.textContent = "ERROR · 请选择 Base Image";
       return;
     }
-    const prompt = $("studioPrompt").value.trim();
+    const prompt = promptInput.value.trim();
     if (!prompt) {
-      status.textContent = "ERROR · 请输入编辑指令";
+      status.textContent = "ERROR · 请输入编辑要求";
       return;
     }
     if (mode.value === "LOCAL_EDIT" && (!mask.files || !mask.files[0])) {
@@ -286,7 +449,7 @@
     form.append("prompt", prompt);
     form.append("negative_prompt", $("studioNegative").value.trim());
     form.append("mode", mode.value);
-    form.append("preservation", $("studioPreservation").value);
+    form.append("preservation", preservation.value);
     form.append("steps", $("studioSteps").value || "25");
     form.append("resolution_mode", "real_768");
     if ($("studioSeed").value.trim()) form.append("seed", $("studioSeed").value.trim());
@@ -299,8 +462,7 @@
       const payload = await response.json();
       if (!response.ok) {
         const detail = payload?.detail || payload || {};
-        const code = detail?.code || "";
-        if (code === "QWEN_WORKER_NOT_READY") {
+        if (detail?.code === "QWEN_WORKER_NOT_READY") {
           gpuReady = false;
           status.textContent = "LOADING · Qwen 模型仍在预热，本次生成未创建";
           await refreshGpuStatus();
@@ -327,7 +489,7 @@
     useAsBase.hidden = false;
     status.textContent = run.status + " · " + run.run_id;
     meta.textContent = [
-      run.mode,
+      activePreset !== "CUSTOM" && presets[activePreset] ? presets[activePreset].title : run.mode,
       run.preservation,
       "seed=" + (run.seed ?? "random"),
       "steps=" + run.steps,
@@ -351,9 +513,7 @@
         button.addEventListener("click", () => showRun(run));
         history.appendChild(button);
       });
-    } catch (_) {
-      // History failure must not change GPU/generation state.
-    }
+    } catch (_) {}
   }
 
   async function reuseResult() {
@@ -372,6 +532,7 @@
   gpuStart.addEventListener("click", startGpu);
   useAsBase.addEventListener("click", reuseResult);
 
+  applyPreset("HEAD_SWAP", true);
   loadHistory();
   refreshGpuStatus();
   gpuPollTimer = window.setInterval(refreshGpuStatus, 5000);
