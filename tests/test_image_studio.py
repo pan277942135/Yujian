@@ -519,6 +519,10 @@ def test_qwen_deploy_is_noninvasive_for_live_image_studio_queue():
 
     assert "worker_changed=$WORKER_CHANGED" in boot
     assert "cmp -s" in boot
+    assert r"src=\${pair%%:*}" in boot
+    assert r"dst=\${pair#*:}" in boot
+    assert r'if [[ ! -f "\$dst" ]] || ! cmp -s "\$src" "\$dst"; then' in boot
+    assert r'if [[ "\$same" == "true" ]]' in boot
     assert "Skipping ComfyUI/Qwen restart to preserve live generation" in boot
     assert "Waiting for live Image Studio/Qwen workload to drain before restart" in boot
     assert "wait_for_idle_before_restart" in boot

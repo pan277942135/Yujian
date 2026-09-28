@@ -173,14 +173,14 @@ for pair in \
   '$STAGE_PATH/fish-qwen-refine-worker.service:/etc/systemd/system/fish-qwen-refine-worker.service' \
   '$STAGE_PATH/wait-for-comfyui.sh:/opt/fish-qwen-refine-worker/wait-for-comfyui.sh'
 do
-  src=${pair%%:*}
-  dst=${pair#*:}
-  if [[ ! -f "$dst" ]] || ! cmp -s "$src" "$dst"; then
+  src=\${pair%%:*}
+  dst=\${pair#*:}
+  if [[ ! -f "\$dst" ]] || ! cmp -s "\$src" "\$dst"; then
     same=false
     break
   fi
 done
-if [[ "$same" == "true" ]]; then echo false; else echo true; fi
+if [[ "\$same" == "true" ]]; then echo false; else echo true; fi
 ")"
 echo "worker_changed=$WORKER_CHANGED"
 
