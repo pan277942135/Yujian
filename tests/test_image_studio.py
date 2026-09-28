@@ -40,7 +40,8 @@ def test_identity_lock_compiler_assigns_reference_authority():
     assert compiled.mode == "IDENTITY_LOCK"
     assert compiled.preservation == "MAX"
     assert compiled.reference_roles == ("IDENTITY", "OUTFIT")
-    assert "Do not blend, average" in compiled.prompt
+    assert "SOLE identity authority" in compiled.prompt
+    assert "original Base person" in compiled.prompt
     assert "Picture 2 role = IDENTITY" in compiled.prompt
     assert "Picture 3 role = OUTFIT" in compiled.prompt
     assert "face averaging" in compiled.negative_prompt
@@ -429,3 +430,71 @@ def test_image_studio_reclaims_orphaned_running_only_under_global_lock():
     assert "any RUNNING row" in queue
     assert "lease timeout" in queue
     assert "timedelta" not in queue
+
+
+
+def test_identity_reference_overrides_base_face_and_negative_does_not_block_swap():
+    compiled = compile_image_studio_prompt(
+        "Replace the person identity while preserving pose and scene.",
+        mode="IDENTITY_LOCK",
+        preservation="MAX",
+        reference_roles=["IDENTITY", "FACE_ANGLE"],
+    )
+
+    assert "Picture 2 is the SOLE identity authority" in compiled.prompt
+    assert "Picture 1 / Base is authoritative only for camera, crop, body pose" in compiled.prompt
+    assert "It is NOT authoritative for the person's face or identity" in compiled.prompt
+    assert "Do not preserve the original Base person's facial identity" in compiled.prompt
+    assert "IDENTITY wins" in compiled.prompt
+    assert "unrequested identity change" not in compiled.negative_prompt
+    assert "preserving the original Base face identity" in compiled.negative_prompt
+    assert "identity drift away from Picture 2" in compiled.negative_prompt
+
+
+def test_identity_authority_also_applies_to_multi_reference_scene_workflow():
+    compiled = compile_image_studio_prompt(
+        "Replace the subject identity and move the subject into the reference scene.",
+        mode="MULTI_REFERENCE",
+        preservation="STRONG",
+        reference_roles=["IDENTITY", "SCENE"],
+    )
+
+    assert "Picture 2 is the SOLE identity authority" in compiled.prompt
+    assert "Picture 3 role = SCENE" in compiled.prompt
+    assert "original Base face must not be preserved" in compiled.prompt
+    assert "hybrid face between Base and identity reference" in compiled.negative_prompt
+
+
+def test_image_studio_detail_images_do_not_reload_every_poll():
+    root = Path(__file__).resolve().parents[1]
+    detail = (
+        root
+        / "app"
+        / "templates"
+        / "platform"
+        / "lab"
+        / "image_studio_task_detail.html"
+    ).read_text(encoding="utf-8")
+
+    assert "lastAssetSignature" in detail
+    assert "assetSignature !== lastAssetSignature" in detail
+    assert "preview + '?t=' + Date.now()" not in detail
+    assert 'run.status === "SUCCESS" || run.status === "FAILED"' in detail
+    assert "window.clearInterval(pollTimer)" in detail
+
+
+def test_identity_presets_require_reference_uploads_before_submit():
+    root = Path(__file__).resolve().parents[1]
+    template = (
+        root
+        / "app"
+        / "templates"
+        / "platform"
+        / "lab"
+        / "image_studio.html"
+    ).read_text(encoding="utf-8")
+
+    assert '["HEAD_SWAP", "CHARACTER_FUSION", "HEAD_SCENE"].includes(activePreset)' in template
+    assert "当前模式必须上传 Reference 1 角色身份母板" in template
+    assert "换头 + 换背景必须上传 Reference 2 场景参考" in template
+    assert "只换穿搭必须上传 Reference 1 穿搭参考" in template
