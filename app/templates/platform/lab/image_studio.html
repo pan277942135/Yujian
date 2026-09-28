@@ -439,6 +439,21 @@
       status.textContent = "ERROR · 请输入编辑要求";
       return;
     }
+    if (["HEAD_SWAP", "CHARACTER_FUSION", "HEAD_SCENE"].includes(activePreset) &&
+        (!refs[0].files || !refs[0].files[0])) {
+      status.textContent = "ERROR · 当前模式必须上传 Reference 1 角色身份母板";
+      return;
+    }
+    if (activePreset === "HEAD_SCENE" &&
+        (!refs[1].files || !refs[1].files[0])) {
+      status.textContent = "ERROR · 换头 + 换背景必须上传 Reference 2 场景参考";
+      return;
+    }
+    if (activePreset === "OUTFIT" &&
+        (!refs[0].files || !refs[0].files[0])) {
+      status.textContent = "ERROR · 只换穿搭必须上传 Reference 1 穿搭参考";
+      return;
+    }
     if (mode.value === "LOCAL_EDIT" && (!mask.files || !mask.files[0])) {
       status.textContent = "ERROR · LOCAL_EDIT 必须提供 Mask";
       return;
