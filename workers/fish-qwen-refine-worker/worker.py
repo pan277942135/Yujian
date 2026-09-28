@@ -35,6 +35,8 @@ logger = logging.getLogger("fish-qwen-refine-worker")
 SERVICE_NAME = "fish-qwen-refine-worker"
 MODEL_LABEL = "Qwen-Image-Edit-2511"
 QWEN_MODE = "fish_preserve_refine_qwen_v1"
+IMAGE_STUDIO_MODE = "image_studio_v1"
+SUPPORTED_MODES = {QWEN_MODE, IMAGE_STUDIO_MODE}
 DEFAULT_CONFIG_PATH = "/opt/fish-qwen-refine-worker/config.yaml"
 DEFAULT_WORKFLOW_PATH = "/opt/fish-qwen-refine-worker/qwen2511_api.json"
 DEFAULT_OUTPUT_DIR = "/opt/fish-qwen-refine-worker/output"
@@ -535,6 +537,7 @@ def _patch_workflow(
     workflow: dict[str, Any],
     *,
     uploaded_file: str,
+    reference_files: list[str] | None = None,
     prompt: str,
     negative_prompt: str,
     seed: int,
@@ -549,6 +552,18 @@ def _patch_workflow(
     diffusion_height: int | None,
 ) -> None:
     _set_input(workflow, "41", "image", uploaded_file)
+    reference_files = list(reference_files or [])
+    if len(reference_files) > 2:
+        raise WorkerError("Qwen Image Studio supports at most two reference images", 422)
+    for offset, reference_file in enumerate(reference_files, start=2):
+        node_id = str(195 + offset)
+        workflow[node_id] = {
+            "inputs": {"image": reference_file},
+            "class_type": "LoadImage",
+            "_meta": {"title": f"Image Studio Reference {offset - 1}"},
+        }
+        _set_input(workflow, "170:151", f"image{offset}", [node_id, 0])
+        _set_input(workflow, "170:149", f"image{offset}", [node_id, 0])
     _set_input(workflow, "170:151", "prompt", prompt)
     _set_input(
         workflow,
@@ -683,6 +698,7 @@ def _execute_generation(
     content: bytes,
     content_type: str,
     filename: str,
+    reference_images: list[tuple[bytes, str, str]] | None = None,
     prompt: str,
     negative_prompt: str,
     seed: int,
@@ -704,10 +720,23 @@ def _execute_generation(
     if uploaded.get("subfolder"):
         uploaded_file = str(uploaded["subfolder"]).strip("/") + "/" + uploaded_file
 
+    reference_files: list[str] = []
+    for index, (ref_content, ref_content_type, ref_filename) in enumerate(reference_images or [], start=1):
+        uploaded_ref = _multipart_upload(
+            "QWEN_REF_" + request_id + "_" + str(index) + "_" + Path(ref_filename).name,
+            ref_content,
+            ref_content_type,
+        )
+        uploaded_ref_file = uploaded_ref["name"]
+        if uploaded_ref.get("subfolder"):
+            uploaded_ref_file = str(uploaded_ref["subfolder"]).strip("/") + "/" + uploaded_ref_file
+        reference_files.append(uploaded_ref_file)
+
     workflow = _load_workflow()
     _patch_workflow(
         workflow,
         uploaded_file=uploaded_file,
+        reference_files=reference_files,
         prompt=prompt,
         negative_prompt=negative_prompt,
         seed=seed,
@@ -874,6 +903,7 @@ def health() -> JSONResponse:
 @app.post("/refine", dependencies=[Depends(_require_token)])
 def refine(
     image: UploadFile = File(...),
+    references: list[UploadFile] | None = File(default=None),
     params: str = Form(default="{}"),
     mode: str = Form(default=QWEN_MODE),
     source_run_id: str = Form(default=""),
@@ -899,7 +929,7 @@ def refine(
         raise HTTPException(status_code=422, detail="params must be a JSON object")
 
     requested_mode = str(options.get("mode") or mode or QWEN_MODE)
-    if requested_mode != QWEN_MODE:
+    if requested_mode not in SUPPORTED_MODES:
         raise HTTPException(status_code=422, detail="unsupported mode: " + requested_mode)
     try:
         steps = _bounded_int(
@@ -958,6 +988,23 @@ def refine(
         raise HTTPException(status_code=422, detail="image is empty")
     content_type = image.content_type or "image/png"
     original_filename = Path(image.filename or "visible_fish.png").name
+    reference_inputs: list[tuple[bytes, str, str]] = []
+    reference_uploads = list(references or [])
+    if len(reference_uploads) > 2:
+        raise HTTPException(status_code=422, detail="at most two reference images are supported")
+    if requested_mode == QWEN_MODE and reference_uploads:
+        raise HTTPException(status_code=422, detail="reference images require image_studio_v1 mode")
+    for index, reference in enumerate(reference_uploads, start=1):
+        reference_content = reference.file.read()
+        if not reference_content:
+            raise HTTPException(status_code=422, detail=f"reference image {index} is empty")
+        reference_inputs.append(
+            (
+                reference_content,
+                reference.content_type or "image/png",
+                Path(reference.filename or f"reference_{index}.png").name,
+            )
+        )
     diffusion_width = None
     diffusion_height = None
     if resolution_mode == "real_768":
@@ -971,6 +1018,7 @@ def refine(
             content=content,
             content_type=content_type,
             filename=original_filename,
+            reference_images=reference_inputs,
             prompt=prompt,
             negative_prompt=negative_prompt,
             seed=seed,
@@ -1026,7 +1074,7 @@ def refine(
         payload = {
             "status": "success",
             "service": SERVICE_NAME,
-            "mode": QWEN_MODE,
+            "mode": requested_mode,
             "request_id": request_id,
             "source_run_id": source_id,
             "refine_result_uri": result_uri,
@@ -1043,6 +1091,7 @@ def refine(
             "saved_size": decoded_size,
             "auto_straighten": auto_straighten,
             "auto_straighten_applied": False,
+            "reference_count": len(reference_inputs),
             "worker_model": MODEL_LABEL,
             "prompt_id": result["prompt_id"],
             "elapsed_ms": round(total_seconds * 1000, 2),
