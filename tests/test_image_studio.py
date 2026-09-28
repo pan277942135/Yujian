@@ -7,7 +7,8 @@ import pytest
 from PIL import Image
 
 from app.image_studio_worker_client import IMAGE_STUDIO_MODE, MAX_REFERENCES
-from app.platform.routes.image_studio import PIPELINE_TYPE, _mask_composite
+from app.platform.models import ImageStudioRun
+from app.platform.routes.image_studio import STORAGE_TYPE, _mask_composite
 from app.platform.services.image_studio_prompt import compile_image_studio_prompt
 
 
@@ -19,7 +20,8 @@ def _png(size=(4, 4), color=(0, 0, 0), mode="RGB") -> bytes:
 
 
 def test_image_studio_contract_is_separate_from_fish_lab():
-    assert PIPELINE_TYPE == "IMAGE_STUDIO_V1"
+    assert STORAGE_TYPE == "IMAGE_STUDIO_V1"
+    assert ImageStudioRun.__tablename__ == "image_studio_run"
     assert IMAGE_STUDIO_MODE == "image_studio_v1"
     assert MAX_REFERENCES == 2
 
@@ -82,3 +84,34 @@ def test_worker_source_keeps_legacy_mode_and_adds_multi_reference_inputs():
     assert "references: list[UploadFile] | None" in worker
     assert 'f"image{offset}"' in worker
     assert '"reference_count": len(reference_inputs)' in worker
+
+
+def test_image_studio_uses_independent_menu_and_storage_namespace():
+    sidebar = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "templates"
+        / "platform"
+        / "sidebar.html"
+    ).read_text(encoding="utf-8")
+    route = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "platform"
+        / "routes"
+        / "image_studio.py"
+    ).read_text(encoding="utf-8")
+    pages = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "platform"
+        / "routes"
+        / "pages.py"
+    ).read_text(encoding="utf-8")
+
+    assert '<div class="nav-group-title">Image Studio</div>' in sidebar
+    assert 'href="/platform/image-studio"' in sidebar
+    assert 'image_studio/v1/runs/' in route
+    assert 'select(ImageStudioRun)' in route
+    assert 'PipelineRun' not in route
+    assert 'PlatformPage("/platform/image-studio"' in pages
