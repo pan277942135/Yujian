@@ -98,7 +98,7 @@ def compile_image_studio_prompt(
     ]
     identity_picture = identity_indexes[0] if identity_indexes else None
 
-    if mode_value == "IDENTITY_LOCK" and identity_picture is not None:
+    if identity_picture is not None:
         base_authority = (
             "Picture 1 / Base is authoritative only for camera, crop, body pose, hands, clothing, lighting, "
             "background, scene geometry, and other non-identity details. It is NOT authoritative for the person's "
@@ -115,40 +115,40 @@ def compile_image_studio_prompt(
         base_authority,
     ]
 
-    if mode_value == "IDENTITY_LOCK":
-        if identity_picture is not None:
-            sections.extend(
-                [
-                    "",
-                    "IDENTITY REPLACEMENT AUTHORITY:",
-                    (
-                        f"Picture {identity_picture} is the SOLE identity authority. Rebuild the person in Picture 1 / Base "
-                        f"so the result unmistakably depicts the same person as Picture {identity_picture}. Do not preserve "
-                        "the original Base person's facial identity. Do not blend or average the Base face with the identity "
-                        "reference. Match the identity reference's stable facial structure, eye shape and spacing, brows, "
-                        "nose, lips, jawline, forehead proportion, hairline, skin tone, and age impression, while preserving "
-                        "the Base pose, camera, body, clothing, lighting, and scene unless the edit instruction says otherwise."
-                    ),
-                    "",
-                    "IDENTITY PRIORITY:",
-                    (
-                        "If identity preservation conflicts with Base-image facial appearance, IDENTITY wins. "
-                        "If pose/composition conflicts with the identity reference, Base wins for pose/composition only."
-                    ),
-                ]
-            )
-        else:
-            sections.extend(
-                [
-                    "",
-                    "IDENTITY LOCK:",
-                    (
-                        "Preserve the Base person's existing identity because no IDENTITY reference was supplied. "
-                        "Do not drift or average facial identity."
-                    ),
-                ]
-            )
-    elif mode_value == "LOCAL_EDIT":
+    if identity_picture is not None:
+        sections.extend(
+            [
+                "",
+                "IDENTITY REPLACEMENT AUTHORITY:",
+                (
+                    f"Picture {identity_picture} is the SOLE identity authority. Rebuild the person in Picture 1 / Base "
+                    f"so the result unmistakably depicts the same person as Picture {identity_picture}. Do not preserve "
+                    "the original Base person's facial identity. Do not blend or average the Base face with the identity "
+                    "reference. Match the identity reference's stable facial structure, eye shape and spacing, brows, "
+                    "nose, lips, jawline, forehead proportion, hairline, skin tone, and age impression, while preserving "
+                    "the Base pose, camera, body, clothing, lighting, and scene unless the edit instruction says otherwise."
+                ),
+                "",
+                "IDENTITY PRIORITY:",
+                (
+                    "If identity conflicts with Base-image facial appearance, IDENTITY wins. "
+                    "If pose/composition conflicts with the identity reference, Base wins for pose/composition only."
+                ),
+            ]
+        )
+    elif mode_value == "IDENTITY_LOCK":
+        sections.extend(
+            [
+                "",
+                "IDENTITY LOCK:",
+                (
+                    "Preserve the Base person's existing identity because no IDENTITY reference was supplied. "
+                    "Do not drift or average facial identity."
+                ),
+            ]
+        )
+
+    if mode_value == "LOCAL_EDIT":
         sections.extend(
             [
                 "",
@@ -161,7 +161,7 @@ def compile_image_studio_prompt(
             [
                 "",
                 "SCENE TRANSFER:",
-                "Keep the subject identity stable while applying the requested scene or environment change.",
+                "Keep the target identity stable while applying the requested scene or environment change.",
             ]
         )
 
@@ -180,7 +180,7 @@ def compile_image_studio_prompt(
         "unrequested crop change",
         "unrequested background change",
     ]
-    if mode_value == "IDENTITY_LOCK" and identity_picture is not None:
+    if identity_picture is not None:
         negative_parts.extend(
             [
                 "preserving the original Base face identity",
