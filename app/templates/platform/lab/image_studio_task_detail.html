@@ -6,6 +6,7 @@
   .detail-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap}
   .detail-actions{display:flex;gap:8px;flex-wrap:wrap}
   .detail-actions a,.detail-actions button{border:1px solid #cddfd7;border-radius:9px;background:#fff;color:#285247;padding:9px 12px;text-decoration:none;font:inherit;font-weight:700;cursor:pointer}
+  .detail-actions button.danger{border-color:#efc7c7;color:#9a3838;background:#fff7f7}
   .detail-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
   .metric{border:1px solid #dce8e3;border-radius:10px;background:#fbfefd;padding:10px 12px}
   .metric span{display:block;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
@@ -39,6 +40,7 @@
     </div>
     <div class="detail-actions">
       <button id="detailRefresh" type="button">刷新</button>
+      <button id="detailDeleteFailed" class="danger" type="button" hidden>删除失败任务</button>
       <a href="/platform/image-studio/tasks">返回任务列表</a>
       <a href="/platform/image-studio">图生图工作台</a>
     </div>
@@ -123,6 +125,7 @@
   }
 
   function render(run) {
+    $("detailDeleteFailed").hidden = run.status !== "FAILED";
     const statusHtml = '<span class="status-badge ' + statusClass(run.status) + '">' + escapeHtml(run.status) + '</span>';
     $("detailMetrics").innerHTML =
       metric("状态", statusHtml, true) +
@@ -163,6 +166,21 @@
     $("detailAssets").innerHTML = assets || '<div style="color:var(--muted)">暂无可用图片资产</div>';
   }
 
+  async function deleteFailedRun() {
+    const ok = window.confirm("确定删除这个失败任务吗？\n\nBase、Reference、Mask、生成结果等该任务图片会同步永久删除。");
+    if (!ok) return;
+    const response = await fetch("/api/image-studio/v1/runs/" + encodeURIComponent(runId), {
+      method: "DELETE"
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const detail = payload?.detail || payload || {};
+      window.alert(detail?.message || "删除失败");
+      return;
+    }
+    window.location.href = "/platform/image-studio/tasks";
+  }
+
   async function load() {
     try {
       const response = await fetch("/api/image-studio/v1/runs/" + encodeURIComponent(runId) + "?ts=" + Date.now(), {cache:"no-store"});
@@ -174,6 +192,7 @@
   }
 
   $("detailRefresh").addEventListener("click", load);
+  $("detailDeleteFailed").addEventListener("click", deleteFailedRun);
   load();
   window.setInterval(load, 3000);
 })();
