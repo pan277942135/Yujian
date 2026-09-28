@@ -77,6 +77,8 @@
 (() => {
   const runId = {{ run_id | tojson }};
   const $ = (id) => document.getElementById(id);
+  let lastAssetSignature = "";
+  let pollTimer = null;
 
   function escapeHtml(value) {
     return String(value ?? "")
@@ -118,7 +120,7 @@
     const preview = "/api/image-studio/v1/runs/" + encodedRun + "/media/" + encodeURIComponent(kind);
     const download = "/api/image-studio/v1/runs/" + encodedRun + "/download/" + encodeURIComponent(kind);
     return '<article class="asset-card">' +
-      '<img src="' + preview + '?t=' + Date.now() + '" alt="' + escapeHtml(label) + '">' +
+      '<img src="' + preview + '" alt="' + escapeHtml(label) + '">' +
       '<div class="asset-meta"><strong>' + escapeHtml(label) + '</strong>' +
       '<div class="asset-links"><a href="' + preview + '" target="_blank" rel="noopener">预览</a>' +
       '<a class="primary" href="' + download + '">下载</a></div></div></article>';
@@ -156,14 +158,29 @@
       $("detailErrorPanel").hidden = true;
     }
 
-    let assets = assetCard("Base 原图", "base", run.base_image_url);
-    (run.reference_urls || []).forEach((url, index) => {
-      const role = (run.reference_roles || [])[index];
-      assets += assetCard("Reference " + (index + 1) + (role ? " · " + role : ""), "reference_" + (index + 1), url);
+    const assetSignature = JSON.stringify({
+      base: run.base_image_url || null,
+      references: run.reference_urls || [],
+      roles: run.reference_roles || [],
+      mask: run.mask_url || null,
+      output: run.output_image_url || null
     });
-    if (run.mask_url) assets += assetCard("Mask", "mask", run.mask_url);
-    if (run.output_image_url) assets += assetCard("生成结果", "output", run.output_image_url);
-    $("detailAssets").innerHTML = assets || '<div style="color:var(--muted)">暂无可用图片资产</div>';
+    if (assetSignature !== lastAssetSignature) {
+      let assets = assetCard("Base 原图", "base", run.base_image_url);
+      (run.reference_urls || []).forEach((url, index) => {
+        const role = (run.reference_roles || [])[index];
+        assets += assetCard("Reference " + (index + 1) + (role ? " · " + role : ""), "reference_" + (index + 1), url);
+      });
+      if (run.mask_url) assets += assetCard("Mask", "mask", run.mask_url);
+      if (run.output_image_url) assets += assetCard("生成结果", "output", run.output_image_url);
+      $("detailAssets").innerHTML = assets || '<div style="color:var(--muted)">暂无可用图片资产</div>';
+      lastAssetSignature = assetSignature;
+    }
+
+    if ((run.status === "SUCCESS" || run.status === "FAILED") && pollTimer) {
+      window.clearInterval(pollTimer);
+      pollTimer = null;
+    }
   }
 
   async function deleteFailedRun() {
@@ -194,7 +211,10 @@
   $("detailRefresh").addEventListener("click", load);
   $("detailDeleteFailed").addEventListener("click", deleteFailedRun);
   load();
-  window.setInterval(load, 3000);
+  pollTimer = window.setInterval(load, 3000);
+  window.addEventListener("beforeunload", () => {
+    if (pollTimer) window.clearInterval(pollTimer);
+  });
 })();
 </script>
 {% endblock %}
