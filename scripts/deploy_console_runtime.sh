@@ -214,6 +214,8 @@ gcloud run deploy "$SERVICE" \
   --build-service-account "$BUILD_SA_RESOURCE" \
   --memory "$MEMORY" \
   --timeout=1200s \
+  --min 1 \
+  --no-cpu-throttling \
   --update-env-vars="$DEPLOY_ENV_VARS" \
   --quiet
 DEPLOY_RC=$?
