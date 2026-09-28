@@ -23,6 +23,7 @@ from fastapi.responses import Response
 from google.cloud import storage
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.dataset_models import DatasetItem
 from app.db import get_db
@@ -569,7 +570,8 @@ async def generate_qwen_image_edit_lab(
     started = time.perf_counter()
     active_stage = "qwen_generate"
     try:
-        worker_result = invoke_qwen_refine_worker(
+        worker_result = await run_in_threadpool(
+            invoke_qwen_refine_worker,
             visible_fish_refined_image_uri=input_uri,
             source_run_id=run_id,
             prompt=prompt_value,

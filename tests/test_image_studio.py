@@ -115,3 +115,12 @@ def test_image_studio_uses_independent_menu_and_storage_namespace():
     assert 'select(ImageStudioRun)' in route
     assert 'PipelineRun' not in route
     assert 'PlatformPage("/platform/image-studio"' in pages
+
+
+def test_long_qwen_calls_do_not_block_fastapi_event_loop():
+    root = Path(__file__).resolve().parents[1]
+    studio = (root / "app" / "platform" / "routes" / "image_studio.py").read_text(encoding="utf-8")
+    qwen_lab = (root / "app" / "platform" / "routes" / "qwen_image_edit_lab.py").read_text(encoding="utf-8")
+
+    assert "await run_in_threadpool(\n            invoke_image_studio_worker," in studio
+    assert "await run_in_threadpool(\n            invoke_qwen_refine_worker," in qwen_lab
