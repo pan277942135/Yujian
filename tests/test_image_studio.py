@@ -8,7 +8,10 @@ from PIL import Image
 
 from app.image_studio_worker_client import IMAGE_STUDIO_MODE, MAX_REFERENCES
 from app.platform.models import ImageStudioRun
-from app.platform.routes.image_studio import STORAGE_TYPE, _mask_composite
+from fastapi import HTTPException
+
+import app.platform.routes.image_studio as image_studio_route
+from app.platform.routes.image_studio import STORAGE_TYPE, _mask_composite, _require_worker_ready
 from app.platform.services.image_studio_prompt import compile_image_studio_prompt
 
 
@@ -124,3 +127,50 @@ def test_long_qwen_calls_do_not_block_fastapi_event_loop():
 
     assert "await run_in_threadpool(\n            invoke_image_studio_worker," in studio
     assert "await run_in_threadpool(\n            invoke_qwen_refine_worker," in qwen_lab
+
+
+def test_worker_readiness_gate_blocks_warmup_before_run_creation(monkeypatch):
+    monkeypatch.setattr(
+        image_studio_route,
+        "check_qwen_refine_worker",
+        lambda: {
+            "health": {
+                "status": "loading",
+                "model_loaded": False,
+            }
+        },
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        _require_worker_ready()
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail["code"] == "QWEN_WORKER_NOT_READY"
+    assert exc_info.value.detail["status"] == "loading"
+    assert exc_info.value.detail["model_loaded"] is False
+
+
+def test_worker_readiness_gate_accepts_ready_loaded_model(monkeypatch):
+    health = {"status": "ready", "model_loaded": True, "model": "Qwen-Image-Edit-2511"}
+    monkeypatch.setattr(
+        image_studio_route,
+        "check_qwen_refine_worker",
+        lambda: {"health": health},
+    )
+    assert _require_worker_ready() == health
+
+
+def test_image_studio_ui_disables_generate_until_gpu_ready():
+    template = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "templates"
+        / "platform"
+        / "lab"
+        / "image_studio.html"
+    ).read_text(encoding="utf-8")
+
+    assert 'id="studioGenerate" class="studio-primary" type="button" disabled' in template
+    assert 'id="studioGpuStart"' in template
+    assert '"/api/qwen-lab/gpu/status?studio_ts="' in template
+    assert '"/api/qwen-lab/gpu/start"' in template
+    assert 'state === "READY" && payload?.model_loaded === true' in template
+    assert '"LOADING · Qwen 尚未 Ready，生成未提交"' in template
