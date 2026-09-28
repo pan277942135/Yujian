@@ -1,0 +1,273 @@
+{% extends "platform/base.html" %}
+
+{% block head %}
+<style>
+  .studio-grid{display:grid;grid-template-columns:minmax(340px,460px) minmax(0,1fr);gap:18px;align-items:start}
+  .studio-panel{display:grid;gap:14px}
+  .studio-field{display:grid;gap:6px}
+  .studio-field label{font-size:13px;font-weight:750;color:#36574d}
+  .studio-field input,.studio-field select,.studio-field textarea{width:100%;box-sizing:border-box;border:1px solid #cddfd7;border-radius:9px;background:#fff;color:#24483d;padding:10px 11px;font:inherit}
+  .studio-field textarea{min-height:150px;resize:vertical;line-height:1.5}
+  .studio-pair{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .studio-upload{border:1px dashed #b9d2c7;border-radius:11px;background:#f8fcfa;padding:11px}
+  .studio-actions{display:flex;gap:9px;flex-wrap:wrap}
+  .studio-actions button{border:0;border-radius:9px;padding:10px 14px;font-weight:750;cursor:pointer}
+  .studio-primary{background:#245f50;color:white}
+  .studio-secondary{background:#edf5f1;color:#245f50}
+  .studio-help{font-size:12px;color:var(--muted);line-height:1.5}
+  .studio-status{border-radius:9px;padding:10px 12px;background:#f4f8f6;color:#36574d;font-size:13px;white-space:pre-wrap}
+  .studio-result{display:grid;gap:12px}
+  .studio-result img{display:block;width:100%;max-height:72vh;object-fit:contain;background:#eef4f1;border-radius:12px;border:1px solid #d7e4de}
+  .studio-empty{min-height:420px;border:1px dashed #c9d9d2;border-radius:12px;display:grid;place-items:center;color:var(--muted);background:#fbfdfc}
+  .studio-history{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}
+  .studio-history button{border:1px solid #d3e1db;background:white;border-radius:9px;padding:6px;text-align:left;cursor:pointer}
+  .studio-history img{width:100%;aspect-ratio:9/12;object-fit:cover;border-radius:6px;background:#eef4f1}
+  .studio-history small{display:block;margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  @media(max-width:980px){.studio-grid{grid-template-columns:1fr}.studio-history{grid-template-columns:repeat(2,minmax(0,1fr))}}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="studio-grid">
+  <section class="panel studio-panel">
+    <div>
+      <h2 style="margin:0">Image Studio · Qwen 2511</h2>
+      <p class="studio-help">复用现有 L4 / Qwen Image Edit Worker。Base 决定编辑底图；Reference 通过角色告诉模型“这张图负责什么”。</p>
+    </div>
+
+    <div class="studio-field studio-upload">
+      <label for="studioBase">Base Image *</label>
+      <input id="studioBase" type="file" accept="image/jpeg,image/png,image/webp">
+    </div>
+
+    <div class="studio-pair">
+      <div class="studio-field studio-upload">
+        <label for="studioRef1">Reference 1</label>
+        <input id="studioRef1" type="file" accept="image/jpeg,image/png,image/webp">
+        <select id="studioRole1">
+          <option value="IDENTITY">Identity</option>
+          <option value="FACE_ANGLE">Face Angle</option>
+          <option value="OUTFIT">Outfit</option>
+          <option value="POSE">Pose</option>
+          <option value="BODY">Body</option>
+          <option value="HAIR">Hair</option>
+          <option value="SCENE">Scene</option>
+          <option value="STYLE">Style</option>
+          <option value="OBJECT">Object</option>
+        </select>
+      </div>
+      <div class="studio-field studio-upload">
+        <label for="studioRef2">Reference 2</label>
+        <input id="studioRef2" type="file" accept="image/jpeg,image/png,image/webp">
+        <select id="studioRole2">
+          <option value="FACE_ANGLE">Face Angle</option>
+          <option value="IDENTITY">Identity</option>
+          <option value="OUTFIT">Outfit</option>
+          <option value="POSE">Pose</option>
+          <option value="BODY">Body</option>
+          <option value="HAIR">Hair</option>
+          <option value="SCENE">Scene</option>
+          <option value="STYLE">Style</option>
+          <option value="OBJECT">Object</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="studio-pair">
+      <div class="studio-field">
+        <label for="studioMode">Edit Mode</label>
+        <select id="studioMode">
+          <option value="IDENTITY_LOCK">Identity Lock</option>
+          <option value="BASE_EDIT">Base Edit</option>
+          <option value="LOCAL_EDIT">Local Edit</option>
+          <option value="MULTI_REFERENCE">Multi Reference</option>
+          <option value="SCENE_TRANSFER">Scene Transfer</option>
+        </select>
+      </div>
+      <div class="studio-field">
+        <label for="studioPreservation">原图保持度</label>
+        <select id="studioPreservation">
+          <option value="MAX">极强保持</option>
+          <option value="STRONG" selected>强保持</option>
+          <option value="NORMAL">均衡</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="studio-field studio-upload" id="studioMaskField" hidden>
+      <label for="studioMask">Mask · 白色区域允许修改</label>
+      <input id="studioMask" type="file" accept="image/png,image/jpeg,image/webp">
+      <div class="studio-help">LOCAL_EDIT 会在生成后执行硬合成：Mask 外直接恢复 Base 像素。</div>
+    </div>
+
+    <div class="studio-field">
+      <label for="studioPrompt">编辑指令 *</label>
+      <textarea id="studioPrompt" placeholder="例如：保持人物身份、构图、身体和背景不变，只把服装替换为 Reference 2 的黑色职业装。"></textarea>
+    </div>
+
+    <div class="studio-field">
+      <label for="studioNegative">附加 Negative Prompt</label>
+      <textarea id="studioNegative" style="min-height:82px" placeholder="可留空；系统会自动加入身份漂移、构图漂移等基础负向约束。"></textarea>
+    </div>
+
+    <div class="studio-pair">
+      <div class="studio-field">
+        <label for="studioSeed">Seed</label>
+        <input id="studioSeed" type="number" min="0" placeholder="留空随机">
+      </div>
+      <div class="studio-field">
+        <label for="studioSteps">Steps</label>
+        <input id="studioSteps" type="number" min="1" max="100" value="25">
+      </div>
+    </div>
+
+    <div class="studio-actions">
+      <button id="studioGenerate" class="studio-primary" type="button">Generate</button>
+      <button id="studioRefreshHistory" class="studio-secondary" type="button">刷新历史</button>
+    </div>
+    <div id="studioStatus" class="studio-status">READY</div>
+  </section>
+
+  <section class="panel studio-result">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+      <div>
+        <h2 style="margin:0">Result</h2>
+        <div id="studioMeta" class="studio-help">尚未生成</div>
+      </div>
+      <button id="studioUseAsBase" class="studio-secondary" type="button" hidden>作为新 Base</button>
+    </div>
+    <div id="studioEmpty" class="studio-empty">生成结果将在这里显示</div>
+    <img id="studioResult" alt="Image Studio Result" hidden>
+    <div>
+      <h3 style="margin:8px 0">History</h3>
+      <div id="studioHistory" class="studio-history"></div>
+    </div>
+  </section>
+</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const base = $("studioBase");
+  const refs = [$("studioRef1"), $("studioRef2")];
+  const roles = [$("studioRole1"), $("studioRole2")];
+  const mode = $("studioMode");
+  const maskField = $("studioMaskField");
+  const mask = $("studioMask");
+  const result = $("studioResult");
+  const empty = $("studioEmpty");
+  const status = $("studioStatus");
+  const meta = $("studioMeta");
+  const useAsBase = $("studioUseAsBase");
+  let currentResultUrl = "";
+
+  mode.addEventListener("change", () => {
+    maskField.hidden = mode.value !== "LOCAL_EDIT";
+  });
+
+  function selectedReferences(form) {
+    const selectedRoles = [];
+    refs.forEach((input, index) => {
+      if (input.files && input.files[0]) {
+        form.append("references", input.files[0]);
+        selectedRoles.push(roles[index].value);
+      }
+    });
+    return selectedRoles;
+  }
+
+  async function generate() {
+    if (!base.files || !base.files[0]) {
+      status.textContent = "ERROR · 请选择 Base Image";
+      return;
+    }
+    const prompt = $("studioPrompt").value.trim();
+    if (!prompt) {
+      status.textContent = "ERROR · 请输入编辑指令";
+      return;
+    }
+    if (mode.value === "LOCAL_EDIT" && (!mask.files || !mask.files[0])) {
+      status.textContent = "ERROR · LOCAL_EDIT 必须提供 Mask";
+      return;
+    }
+
+    const form = new FormData();
+    form.append("base_image", base.files[0]);
+    const selectedRoles = selectedReferences(form);
+    form.append("reference_roles", JSON.stringify(selectedRoles));
+    if (mask.files && mask.files[0]) form.append("mask", mask.files[0]);
+    form.append("prompt", prompt);
+    form.append("negative_prompt", $("studioNegative").value.trim());
+    form.append("mode", mode.value);
+    form.append("preservation", $("studioPreservation").value);
+    form.append("steps", $("studioSteps").value || "25");
+    form.append("resolution_mode", "real_768");
+    if ($("studioSeed").value.trim()) form.append("seed", $("studioSeed").value.trim());
+
+    $("studioGenerate").disabled = true;
+    status.textContent = "GENERATING · Qwen Worker 正在处理";
+    try {
+      const response = await fetch("/api/image-studio/v1/edit", {method:"POST", body:form});
+      const payload = await response.json();
+      if (!response.ok) throw new Error(JSON.stringify(payload.detail || payload));
+      showRun(payload);
+      await loadHistory();
+    } catch (error) {
+      status.textContent = "FAILED · " + error.message;
+    } finally {
+      $("studioGenerate").disabled = false;
+    }
+  }
+
+  function showRun(run) {
+    if (!run.output_image_url) return;
+    currentResultUrl = run.output_image_url + "?t=" + Date.now();
+    result.src = currentResultUrl;
+    result.hidden = false;
+    empty.hidden = true;
+    useAsBase.hidden = false;
+    status.textContent = run.status + " · " + run.run_id;
+    meta.textContent = [
+      run.mode,
+      run.preservation,
+      "seed=" + (run.seed ?? "random"),
+      "steps=" + run.steps,
+      run.elapsed_ms != null ? run.elapsed_ms + " ms" : null
+    ].filter(Boolean).join(" · ");
+  }
+
+  async function loadHistory() {
+    const response = await fetch("/api/image-studio/v1/runs");
+    if (!response.ok) return;
+    const payload = await response.json();
+    const history = $("studioHistory");
+    history.innerHTML = "";
+    (payload.items || []).filter((run) => run.output_image_url).slice(0, 12).forEach((run) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.innerHTML = '<img alt=""><small></small>';
+      button.querySelector("img").src = run.output_image_url;
+      button.querySelector("small").textContent = run.mode + " · " + run.run_id;
+      button.addEventListener("click", () => showRun(run));
+      history.appendChild(button);
+    });
+  }
+
+  async function reuseResult() {
+    if (!currentResultUrl) return;
+    const response = await fetch(currentResultUrl);
+    const blob = await response.blob();
+    const file = new File([blob], "image_studio_result.png", {type: blob.type || "image/png"});
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    base.files = transfer.files;
+    status.textContent = "READY · 当前结果已设为新 Base";
+  }
+
+  $("studioGenerate").addEventListener("click", generate);
+  $("studioRefreshHistory").addEventListener("click", loadHistory);
+  useAsBase.addEventListener("click", reuseResult);
+  loadHistory();
+})();
+</script>
+{% endblock %}
