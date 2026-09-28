@@ -88,6 +88,22 @@ def invoke_image_studio_worker(
             status_code, result = _json_response(response)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")[:2000] or f"HTTP {exc.code}"
+        worker_code = ""
+        worker_message = detail
+        try:
+            payload = json.loads(detail)
+            nested = payload.get("detail") if isinstance(payload, dict) else None
+            if isinstance(nested, dict):
+                worker_code = str(nested.get("code") or "")
+                worker_message = str(nested.get("message") or detail)
+        except json.JSONDecodeError:
+            pass
+        if worker_code == "QWEN_WORKER_NOT_READY":
+            raise PortraitWorkerError(
+                "QWEN_WORKER_NOT_READY",
+                worker_message,
+                status_code=503,
+            ) from exc
         code = "IMAGE_STUDIO_WORKER_PARAMETER_ERROR" if exc.code == 422 else (
             "IMAGE_STUDIO_WORKER_INFERENCE_ERROR" if exc.code >= 500 else "IMAGE_STUDIO_WORKER_HTTP_ERROR"
         )
