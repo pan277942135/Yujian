@@ -27,7 +27,7 @@
   .studio-actions button:disabled{opacity:.48;cursor:not-allowed}
   .studio-status{border-radius:9px;padding:10px 12px;background:#f4f8f6;color:#36574d;font-size:13px;white-space:pre-wrap}
   .studio-gpu{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;border:1px solid #d7e5df;border-radius:10px;background:#fbfefd;padding:10px 12px}
-  .studio-gpu strong{font-size:12px;color:#36574d}.studio-gpu span{font-size:12px;color:var(--muted)}
+  .studio-gpu>div{display:grid;gap:3px}.studio-gpu strong{font-size:12px;color:#36574d}.studio-gpu span{font-size:12px;color:var(--muted)}
   .studio-gpu button{border:1px solid #b9d2c7;border-radius:8px;background:#fff;color:#245f50;padding:7px 10px;font-weight:750;cursor:pointer}
   .studio-gpu button[hidden]{display:none}
   .studio-advanced{border:1px solid #dce7e2;border-radius:10px;background:#fbfdfc;padding:0 12px}
@@ -183,6 +183,7 @@
         <div>
           <strong>Qwen GPU · NVIDIA L4</strong>
           <span id="studioGpuStatus">CHECKING · 正在检查模型状态</span>
+          <span id="studioQueueStatus">队列 · 正在读取</span>
         </div>
         <button id="studioGpuStart" type="button" hidden>启动 GPU</button>
       </div>
@@ -226,12 +227,14 @@
   const empty = $("studioEmpty");
   const status = $("studioStatus");
   const gpuStatus = $("studioGpuStatus");
+  const queueStatus = $("studioQueueStatus");
   const gpuStart = $("studioGpuStart");
   const generateButton = $("studioGenerate");
   const meta = $("studioMeta");
   const useAsBase = $("studioUseAsBase");
   const promptInput = $("studioPrompt");
   let currentResultUrl = "";
+  let currentRunId = null;
   let gpuReady = false;
   let generating = false;
   let gpuPollTimer = null;
@@ -360,33 +363,36 @@
 
   function applyGpuState(payload) {
     const state = String(payload?.display_status || "ERROR").toUpperCase();
-    gpuReady = state === "READY" && payload?.model_loaded === true;
+    // BUSY means the model is loaded and the FIFO queue is active. New work
+    // may still be submitted; only STOPPED/STARTING/LOADING/ERROR block it.
+    gpuReady = (state === "READY" || state === "BUSY") && payload?.model_loaded === true;
     generateButton.disabled = generating || !gpuReady;
     gpuStart.hidden = state !== "STOPPED";
 
-    if (gpuReady) {
+    if (state === "READY" && gpuReady) {
       gpuStatus.textContent = "READY · Qwen 模型已加载";
-      if (!generating && !status.textContent.startsWith("SUCCESS")) status.textContent = "READY · 可以开始生成";
+      if (!generating && !currentRunId && !status.textContent.startsWith("SUCCESS")) {
+        status.textContent = "READY · 可以开始生成";
+      }
+      return;
+    }
+    if (state === "BUSY" && gpuReady) {
+      gpuStatus.textContent = "BUSY · GPU 正在生成；仍可继续提交";
       return;
     }
     if (state === "STARTING" || state === "LOADING") {
       gpuStatus.textContent = state + " · Qwen 模型启动/预热中";
-      if (!generating) status.textContent = "LOADING · 模型准备完成后 Generate 会自动解锁";
-      return;
-    }
-    if (state === "BUSY") {
-      gpuStatus.textContent = "BUSY · GPU 正在执行其他 Qwen 任务";
-      if (!generating) status.textContent = "BUSY · 当前任务完成后可继续生成";
+      if (!generating && !currentRunId) status.textContent = "LOADING · 模型准备完成后 Generate 会自动解锁";
       return;
     }
     if (state === "STOPPED") {
       gpuStatus.textContent = "STOPPED · L4 GPU 当前未启动";
-      if (!generating) status.textContent = "STOPPED · 点击“启动 GPU”";
+      if (!generating && !currentRunId) status.textContent = "STOPPED · 点击“启动 GPU”";
       return;
     }
     const message = payload?.error?.message || payload?.message || "Qwen GPU 状态不可用";
     gpuStatus.textContent = "ERROR · " + message;
-    if (!generating) status.textContent = "ERROR · " + message;
+    if (!generating && !currentRunId) status.textContent = "ERROR · " + message;
   }
 
   async function refreshGpuStatus() {
@@ -400,7 +406,30 @@
       gpuReady = false;
       generateButton.disabled = true;
       gpuStatus.textContent = "ERROR · " + error.message;
-      if (!generating) status.textContent = "ERROR · 无法确认 Qwen Ready 状态";
+      if (!generating && !currentRunId) status.textContent = "ERROR · 无法确认 Qwen Ready 状态";
+      return null;
+    }
+  }
+
+  function applyQueueState(queue) {
+    if (!queue) return;
+    const running = Number(queue.running || 0);
+    const queued = Number(queue.queued || 0);
+    if (running > 0 || queued > 0) {
+      queueStatus.textContent = "队列 · 当前生成 " + running + " · 等待 " + queued + " · 单 L4 FIFO";
+    } else {
+      queueStatus.textContent = "队列 · 空闲";
+    }
+  }
+
+  async function refreshQueueStatus() {
+    try {
+      const response = await fetch("/api/image-studio/v1/queue?ts=" + Date.now(), {cache:"no-store"});
+      if (!response.ok) return null;
+      const payload = await response.json();
+      applyQueueState(payload);
+      return payload;
+    } catch (_) {
       return null;
     }
   }
@@ -456,7 +485,7 @@
 
     generating = true;
     generateButton.disabled = true;
-    status.textContent = "GENERATING · Qwen Worker 正在处理";
+    status.textContent = "SUBMITTING · 正在上传并加入生成队列";
     try {
       const response = await fetch("/api/image-studio/v1/edit", {method:"POST", body:form});
       const payload = await response.json();
@@ -470,13 +499,18 @@
         }
         throw new Error(detail?.message || JSON.stringify(detail));
       }
-      showRun(payload);
+      currentRunId = payload.run_id;
+      const position = payload.queue_position;
+      status.textContent = payload.status === "QUEUED"
+        ? "QUEUED · 已加入队列" + (position ? " · 排队第 " + position + " 位" : "")
+        : payload.status + " · " + payload.run_id;
+      applyQueueState(payload.queue);
       await loadHistory();
     } catch (error) {
       status.textContent = "FAILED · " + error.message;
     } finally {
       generating = false;
-      await refreshGpuStatus();
+      await Promise.all([refreshGpuStatus(), refreshQueueStatus()]);
     }
   }
 
@@ -497,22 +531,56 @@
     ].filter(Boolean).join(" · ");
   }
 
+  function syncCurrentRun(run) {
+    if (!run || run.run_id !== currentRunId) return;
+    if (run.status === "QUEUED") {
+      status.textContent = "QUEUED · " + run.run_id + (run.queue_position ? " · 排队第 " + run.queue_position + " 位" : "");
+      return;
+    }
+    if (run.status === "RUNNING") {
+      status.textContent = "RUNNING · " + run.run_id + " · Qwen 正在生成";
+      return;
+    }
+    if (run.status === "SUCCESS") {
+      showRun(run);
+      currentRunId = null;
+      return;
+    }
+    if (run.status === "FAILED") {
+      const message = run.error?.message || "生成失败";
+      status.textContent = "FAILED · " + message;
+      currentRunId = null;
+    }
+  }
+
   async function loadHistory() {
     try {
-      const response = await fetch("/api/image-studio/v1/runs");
+      const response = await fetch("/api/image-studio/v1/runs?ts=" + Date.now(), {cache:"no-store"});
       if (!response.ok) return;
       const payload = await response.json();
+      applyQueueState(payload.queue);
       const history = $("studioHistory");
       history.innerHTML = "";
-      (payload.items || []).filter((run) => run.output_image_url).slice(0, 12).forEach((run) => {
+      const items = (payload.items || []).slice(0, 12);
+      items.forEach((run) => {
         const button = document.createElement("button");
         button.type = "button";
         button.innerHTML = '<img alt=""><small></small>';
-        button.querySelector("img").src = run.output_image_url;
-        button.querySelector("small").textContent = run.mode + " · " + run.run_id;
-        button.addEventListener("click", () => showRun(run));
+        button.querySelector("img").src = run.output_image_url || run.base_image_url;
+        const queueText = run.status === "QUEUED" && run.queue_position
+          ? " · 排队 " + run.queue_position
+          : "";
+        button.querySelector("small").textContent = run.status + queueText + " · " + run.mode;
+        button.addEventListener("click", () => {
+          currentRunId = run.run_id;
+          if (run.status === "SUCCESS") showRun(run);
+          else syncCurrentRun(run);
+        });
         history.appendChild(button);
       });
+      if (currentRunId) {
+        syncCurrentRun(items.find((run) => run.run_id === currentRunId));
+      }
     } catch (_) {}
   }
 
@@ -535,7 +603,12 @@
   applyPreset("HEAD_SWAP", true);
   loadHistory();
   refreshGpuStatus();
-  gpuPollTimer = window.setInterval(refreshGpuStatus, 5000);
+  refreshQueueStatus();
+  gpuPollTimer = window.setInterval(() => {
+    refreshGpuStatus();
+    refreshQueueStatus();
+    loadHistory();
+  }, 3000);
   window.addEventListener("beforeunload", () => {
     if (gpuPollTimer) window.clearInterval(gpuPollTimer);
   });
