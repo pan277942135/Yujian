@@ -13,16 +13,16 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from google.cloud import storage
 from PIL import Image
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-from starlette.concurrency import run_in_threadpool
 
-from app.db import get_db
+from app.db import SessionLocal, get_db
 from app.image_studio_worker_client import invoke_image_studio_worker
 from app.qwen_refine_worker_client import check_qwen_refine_worker
 from app.platform.models import ImageStudioRun
 from app.platform.services.image_studio_prompt import compile_image_studio_prompt
 from app.portrait_worker_client import PortraitWorkerError, _read_image_uri
+from app.services.image_studio_jobs import enqueue_image_studio_queue
 
 router = APIRouter(prefix="/api/image-studio/v1", tags=["image-studio"])
 
@@ -206,6 +206,205 @@ def _response(run: ImageStudioRun) -> dict[str, Any]:
     }
 
 
+
+def _queue_position(db: Session, run: ImageStudioRun) -> int | None:
+    if run.status != "QUEUED":
+        return None
+    queued_ids = list(
+        db.scalars(
+            select(ImageStudioRun.run_id)
+            .where(ImageStudioRun.status == "QUEUED")
+            .order_by(ImageStudioRun.created_at.asc(), ImageStudioRun.run_id.asc())
+        )
+    )
+    try:
+        return queued_ids.index(run.run_id) + 1
+    except ValueError:
+        return None
+
+
+def _queue_snapshot(db: Session) -> dict[str, Any]:
+    queued = int(
+        db.scalar(
+            select(func.count())
+            .select_from(ImageStudioRun)
+            .where(ImageStudioRun.status == "QUEUED")
+        )
+        or 0
+    )
+    running = int(
+        db.scalar(
+            select(func.count())
+            .select_from(ImageStudioRun)
+            .where(ImageStudioRun.status == "RUNNING")
+        )
+        or 0
+    )
+    current_run_id = db.scalar(
+        select(ImageStudioRun.run_id)
+        .where(ImageStudioRun.status == "RUNNING")
+        .order_by(ImageStudioRun.started_at.asc(), ImageStudioRun.created_at.asc())
+        .limit(1)
+    )
+    return {
+        "running": running,
+        "queued": queued,
+        "active": running + queued,
+        "current_run_id": str(current_run_id) if current_run_id else None,
+        "concurrency": 1,
+        "policy": "FIFO_SINGLE_L4",
+    }
+
+
+def _response_with_queue(db: Session, run: ImageStudioRun) -> dict[str, Any]:
+    payload = _response(run)
+    payload["queue_position"] = _queue_position(db, run)
+    payload["queue"] = _queue_snapshot(db)
+    return payload
+
+
+def _execute_queued_run(run_id: str) -> str:
+    """Execute one already-claimed RUNNING job in a fresh DB session."""
+
+    db = SessionLocal()
+    try:
+        run = db.get(ImageStudioRun, str(run_id))
+        if run is None or run.status != "RUNNING":
+            return "SKIPPED"
+
+        request_state = _request_for(run)
+        reference_uris = _reference_uris_for(run)
+        stages = request_state.get("stages")
+        if not isinstance(stages, list):
+            stages = []
+            request_state["stages"] = stages
+
+        try:
+            worker = invoke_image_studio_worker(
+                base_image_uri=run.base_image_uri,
+                reference_image_uris=reference_uris,
+                source_run_id=run.run_id,
+                prompt=str(request_state.get("compiled_prompt") or ""),
+                negative_prompt=str(request_state.get("negative_prompt") or ""),
+                steps=int(run.steps or 25),
+                seed=run.seed,
+                resolution_mode=str(request_state.get("resolution_mode") or "real_768"),
+            )
+            generated_bytes, _ = _read_image_uri(
+                worker["result_uri"],
+                label="image_studio_output",
+            )
+            qwen_stage = next(
+                (
+                    stage
+                    for stage in stages
+                    if isinstance(stage, dict) and stage.get("name") == "qwen_generation"
+                ),
+                None,
+            )
+            if qwen_stage is not None:
+                qwen_stage["status"] = "DONE"
+
+            mask_composited = False
+            if run.mask_uri:
+                stages.append({"name": "mask_composite", "status": "RUNNING"})
+                base_bytes, _ = _read_image_uri(run.base_image_uri, label="image_studio_base")
+                mask_bytes, _ = _read_image_uri(run.mask_uri, label="image_studio_mask")
+                final_bytes = _mask_composite(base_bytes, generated_bytes, mask_bytes)
+                stages[-1]["status"] = "DONE"
+                mask_composited = True
+            else:
+                with Image.open(io.BytesIO(generated_bytes)) as generated_source:
+                    rgb = generated_source.convert("RGB")
+                    output = io.BytesIO()
+                    rgb.save(output, format="PNG")
+                    final_bytes = output.getvalue()
+
+            output_uri = _store_bytes(
+                run.run_id,
+                "output",
+                final_bytes,
+                "image/png",
+                ".png",
+            )
+            run.output_image_uri = output_uri
+            run.seed = worker.get("seed", run.seed)
+            run.elapsed_ms = worker.get("elapsed_ms")
+            run.request_json = json.dumps(request_state, ensure_ascii=False)
+            run.result_json = json.dumps(
+                {
+                    "worker_result_uri": worker.get("result_uri"),
+                    "worker_protocol": worker.get("worker_protocol"),
+                    "reference_count": len(reference_uris),
+                    "mask_composited": mask_composited,
+                },
+                ensure_ascii=False,
+            )
+            run.status = "SUCCESS"
+            run.finished_at = _utcnow()
+            db.commit()
+            return "SUCCESS"
+        except PortraitWorkerError as exc:
+            if exc.error_code == "QWEN_WORKER_NOT_READY":
+                qwen_stage = next(
+                    (
+                        stage
+                        for stage in stages
+                        if isinstance(stage, dict) and stage.get("name") == "qwen_generation"
+                    ),
+                    None,
+                )
+                if qwen_stage is not None:
+                    qwen_stage["status"] = "QUEUED"
+                run.status = "QUEUED"
+                run.started_at = None
+                run.finished_at = None
+                run.error_code = None
+                run.error_message = None
+                run.request_json = json.dumps(request_state, ensure_ascii=False)
+                db.commit()
+                return "REQUEUED"
+
+            qwen_stage = next(
+                (
+                    stage
+                    for stage in stages
+                    if isinstance(stage, dict) and stage.get("name") == "qwen_generation"
+                ),
+                None,
+            )
+            if qwen_stage is not None:
+                qwen_stage["status"] = "FAILED"
+            run.status = "FAILED"
+            run.error_code = exc.error_code
+            run.error_message = str(exc)[:3000]
+            run.finished_at = _utcnow()
+            run.request_json = json.dumps(request_state, ensure_ascii=False)
+            db.commit()
+            return "FAILED"
+        except Exception as exc:
+            active_stage = next(
+                (
+                    stage
+                    for stage in reversed(stages)
+                    if isinstance(stage, dict) and stage.get("status") == "RUNNING"
+                ),
+                None,
+            )
+            if active_stage is not None:
+                active_stage["status"] = "FAILED"
+            safe_message = f"{exc.__class__.__name__}: {exc}"[:2000]
+            run.status = "FAILED"
+            run.error_code = "IMAGE_STUDIO_FAILED"
+            run.error_message = safe_message
+            run.finished_at = _utcnow()
+            run.request_json = json.dumps(request_state, ensure_ascii=False)
+            db.commit()
+            return "FAILED"
+    finally:
+        db.close()
+
+
 @router.post("/edit")
 async def edit_image(
     base_image: UploadFile = File(...),
@@ -235,6 +434,8 @@ async def edit_image(
         raise HTTPException(status_code=422, detail="seed 必须是整数") from exc
 
     roles = _parse_roles(reference_roles, mode, len(reference_uploads))
+    # BUSY is acceptable: worker /health remains ready while the shared L4
+    # executes another prompt. STOPPED/LOADING still reject new submissions.
     _require_worker_ready()
     try:
         compiled = compile_image_studio_prompt(
@@ -272,15 +473,16 @@ async def edit_image(
         "compiled_prompt": compiled.prompt,
         "negative_prompt": compiled.negative_prompt,
         "resolution_mode": resolution_mode,
+        "queue_policy": "FIFO_SINGLE_L4",
         "stages": [
             {"name": "input", "status": "DONE"},
             {"name": "prompt_compile", "status": "DONE"},
-            {"name": "qwen_generation", "status": "RUNNING"},
+            {"name": "qwen_generation", "status": "QUEUED"},
         ],
     }
     run = ImageStudioRun(
         run_id=run_id,
-        status="RUNNING",
+        status="QUEUED",
         mode=compiled.mode,
         preservation=compiled.preservation,
         model_version=MODEL_ID,
@@ -291,88 +493,14 @@ async def edit_image(
         mask_uri=mask_uri,
         seed=seed_value,
         steps=int(steps),
-        started_at=_utcnow(),
+        started_at=None,
     )
     db.add(run)
     db.commit()
+    db.refresh(run)
 
-    try:
-        worker = await run_in_threadpool(
-            invoke_image_studio_worker,
-            base_image_uri=base_uri,
-            reference_image_uris=reference_uris,
-            source_run_id=run_id,
-            prompt=compiled.prompt,
-            negative_prompt=compiled.negative_prompt,
-            steps=int(steps),
-            seed=seed_value,
-            resolution_mode=resolution_mode,
-        )
-        generated_bytes, _ = _read_image_uri(worker["result_uri"], label="image_studio_output")
-        stages = request_state["stages"]
-        qwen_stage = next((stage for stage in stages if stage.get("name") == "qwen_generation"), None)
-        if qwen_stage is not None:
-            qwen_stage["status"] = "DONE"
-
-        if mask_payload is not None:
-            stages.append({"name": "mask_composite", "status": "RUNNING"})
-            final_bytes = _mask_composite(base_bytes, generated_bytes, mask_payload[0])
-            stages[-1]["status"] = "DONE"
-        else:
-            with Image.open(io.BytesIO(generated_bytes)) as generated_source:
-                rgb = generated_source.convert("RGB")
-                output = io.BytesIO()
-                rgb.save(output, format="PNG")
-                final_bytes = output.getvalue()
-
-        output_uri = _store_bytes(run_id, "output", final_bytes, "image/png", ".png")
-        run.output_image_uri = output_uri
-        run.seed = worker.get("seed", seed_value)
-        run.elapsed_ms = worker.get("elapsed_ms")
-        run.request_json = json.dumps(request_state, ensure_ascii=False)
-        run.result_json = json.dumps(
-            {
-                "worker_result_uri": worker.get("result_uri"),
-                "worker_protocol": worker.get("worker_protocol"),
-                "reference_count": len(reference_uris),
-                "mask_composited": mask_payload is not None,
-            },
-            ensure_ascii=False,
-        )
-        run.status = "SUCCESS"
-        run.finished_at = _utcnow()
-        db.commit()
-        db.refresh(run)
-        return _response(run)
-    except PortraitWorkerError as exc:
-        stages = request_state.get("stages") or []
-        if stages:
-            stages[-1]["status"] = "FAILED"
-        run.status = "FAILED"
-        run.error_code = exc.error_code
-        run.error_message = str(exc)[:3000]
-        run.finished_at = _utcnow()
-        run.request_json = json.dumps(request_state, ensure_ascii=False)
-        db.commit()
-        raise HTTPException(
-            status_code=exc.status_code or 502,
-            detail={"code": exc.error_code, "message": str(exc)},
-        ) from exc
-    except Exception as exc:
-        stages = request_state.get("stages") or []
-        if stages:
-            stages[-1]["status"] = "FAILED"
-        safe_message = f"{exc.__class__.__name__}: {exc}"[:2000]
-        run.status = "FAILED"
-        run.error_code = "IMAGE_STUDIO_FAILED"
-        run.error_message = safe_message
-        run.finished_at = _utcnow()
-        run.request_json = json.dumps(request_state, ensure_ascii=False)
-        db.commit()
-        raise HTTPException(
-            status_code=500,
-            detail={"code": "IMAGE_STUDIO_FAILED", "message": safe_message},
-        ) from exc
+    enqueue_image_studio_queue()
+    return _response_with_queue(db, run)
 
 
 @router.get("/runs")
@@ -384,7 +512,7 @@ def list_runs(db: Session = Depends(get_db)) -> dict[str, Any]:
             .limit(50)
         )
     )
-    return {"items": [_response(run) for run in rows], "count": len(rows)}
+    return {"items": [_response_with_queue(db, run) for run in rows], "count": len(rows), "queue": _queue_snapshot(db)}
 
 
 @router.get("/runs/{run_id}")
@@ -392,7 +520,12 @@ def get_run(run_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     run = db.get(ImageStudioRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Image Studio run 不存在")
-    return _response(run)
+    return _response_with_queue(db, run)
+
+
+@router.get("/queue")
+def get_queue(db: Session = Depends(get_db)) -> dict[str, Any]:
+    return _queue_snapshot(db)
 
 
 @router.get("/runs/{run_id}/media/{kind}")
