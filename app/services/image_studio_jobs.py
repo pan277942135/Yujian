@@ -7,10 +7,10 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 
 from app.db import SessionLocal, engine
 from app.platform.models import ImageStudioRun
@@ -61,6 +61,40 @@ def _set_generation_stage(run: ImageStudioRun, status: str) -> None:
     else:
         stage["status"] = status
     run.request_json = json.dumps(state, ensure_ascii=False)
+
+
+def _requeue_orphaned_running_jobs() -> int:
+    """Recover RUNNING rows only after this process owns the global queue lock.
+
+    The advisory lock is held for the entire lifetime of a live queue consumer.
+    Therefore, once another process successfully acquires it, any RUNNING row
+    left in the database cannot still be owned by a live Image Studio consumer.
+    This makes restart/deploy recovery immediate instead of waiting for a fixed
+    lease timeout.
+    """
+
+    db = SessionLocal()
+    try:
+        rows = list(
+            db.scalars(
+                select(ImageStudioRun)
+                .where(ImageStudioRun.status == RUNNING)
+                .order_by(ImageStudioRun.created_at.asc(), ImageStudioRun.run_id.asc())
+                .with_for_update(skip_locked=True)
+            )
+        )
+        for run in rows:
+            run.status = QUEUED
+            run.started_at = None
+            run.finished_at = None
+            run.error_code = None
+            run.error_message = None
+            _set_generation_stage(run, QUEUED)
+        if rows:
+            db.commit()
+        return len(rows)
+    finally:
+        db.close()
 
 
 def _claim_next_job() -> str | None:
@@ -161,6 +195,10 @@ def _drain_queue() -> None:
         _schedule_drain_retry()
         return
     try:
+        # Owning the global advisory lock proves no live Image Studio consumer
+        # is currently responsible for RUNNING rows. Recover them immediately
+        # before claiming the next FIFO job.
+        _requeue_orphaned_running_jobs()
         while True:
             run_id = _claim_next_job()
             if run_id is None:
@@ -186,48 +224,30 @@ def enqueue_image_studio_queue() -> None:
 
 
 def recover_pending_image_studio_jobs(*, limit: int = 100) -> int:
-    """Recover interrupted work on application startup and resume FIFO draining."""
+    """Resume durable work after application startup.
 
-    lease_seconds = max(
-        300,
-        int(os.getenv("IMAGE_STUDIO_PROCESSING_LEASE_SECONDS", "1800")),
-    )
-    cutoff = _utcnow() - timedelta(seconds=lease_seconds)
+    Recovery itself runs inside the same advisory-lock protected drain path.
+    If an older Cloud Run revision is still consuming a job, lock acquisition
+    waits/retries. Once that owner disappears, orphaned RUNNING rows are
+    immediately returned to FIFO order and processing resumes.
+    """
+
     db = SessionLocal()
     try:
-        stale = list(
-            db.scalars(
-                select(ImageStudioRun).where(
-                    ImageStudioRun.status == RUNNING,
-                    ImageStudioRun.started_at.is_not(None),
-                    ImageStudioRun.started_at < cutoff,
-                )
+        pending = int(
+            db.scalar(
+                select(func.count())
+                .select_from(ImageStudioRun)
+                .where(ImageStudioRun.status.in_([QUEUED, RUNNING]))
             )
-        )
-        for run in stale:
-            run.status = QUEUED
-            run.started_at = None
-            run.finished_at = None
-            run.error_code = None
-            run.error_message = None
-            _set_generation_stage(run, QUEUED)
-        if stale:
-            db.commit()
-
-        pending = list(
-            db.scalars(
-                select(ImageStudioRun.run_id)
-                .where(ImageStudioRun.status == QUEUED)
-                .order_by(ImageStudioRun.created_at.asc(), ImageStudioRun.run_id.asc())
-                .limit(max(1, min(int(limit), 1000)))
-            )
+            or 0
         )
     finally:
         db.close()
 
     if pending:
         enqueue_image_studio_queue()
-    return len(pending)
+    return pending
 
 
 __all__ = [
