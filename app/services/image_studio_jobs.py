@@ -24,6 +24,8 @@ FAILED = "FAILED"
 # provides the cross-instance singleton for the shared L4/ComfyUI worker.
 _WORKER_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="image-studio-queue")
 _LOCAL_QUEUE_LOCK = threading.Lock()
+_RETRY_TIMER_LOCK = threading.Lock()
+_RETRY_TIMER: threading.Timer | None = None
 _QUEUE_LOCK_KEY = 493_867_251_031
 
 
@@ -140,9 +142,23 @@ def _release_cross_instance_lock(token) -> None:
     token.release()
 
 
+def _schedule_drain_retry(delay_seconds: float = 1.0) -> None:
+    """Ensure a queued job is retried when another instance owns the advisory lock."""
+
+    global _RETRY_TIMER
+    with _RETRY_TIMER_LOCK:
+        if _RETRY_TIMER is not None and _RETRY_TIMER.is_alive():
+            return
+        timer = threading.Timer(max(0.2, delay_seconds), enqueue_image_studio_queue)
+        timer.daemon = True
+        _RETRY_TIMER = timer
+        timer.start()
+
+
 def _drain_queue() -> None:
     token = _acquire_cross_instance_lock()
     if token is None:
+        _schedule_drain_retry()
         return
     try:
         while True:
