@@ -498,3 +498,14 @@ def test_identity_presets_require_reference_uploads_before_submit():
     assert "当前模式必须上传 Reference 1 角色身份母板" in template
     assert "换头 + 换背景必须上传 Reference 2 场景参考" in template
     assert "只换穿搭必须上传 Reference 1 穿搭参考" in template
+
+
+
+def test_qwen_uat_accepts_busy_loaded_worker_after_studio_success():
+    root = Path(__file__).resolve().parents[1]
+    uat = (root / "scripts" / "qwen_gpu_manual_uat.sh").read_text(encoding="utf-8")
+
+    assert "wait_for_worker_healthy()" in uat
+    assert '"$current" == "READY" || "$current" == "BUSY"' in uat
+    assert '"$model_loaded" == "true"' in uat
+    assert 'wait_for_worker_healthy 24 "post-image-studio"' in uat
