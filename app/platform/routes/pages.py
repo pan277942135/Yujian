@@ -34,6 +34,7 @@ PLATFORM_PAGES = (
     PlatformPage("/platform/lab/fish-portrait", "platform/lab/fish_portrait.html", "Fish Portrait POC", "智能流水线", "基于真实钓获照片和标准鱼体资产，验证 AI 鱼体数字化生成效果。", "/api/platform/portrait/jobs"),
     PlatformPage("/fish-portrait/qwen-lab", "platform/lab/qwen_image_edit.html", "Qwen Image Edit Lab", "智能流水线", "测试 Qwen 对真实鱼获图片的编辑能力。", "/api/fish-portrait/qwen-lab/generate"),
     PlatformPage("/platform/image-studio", "platform/lab/image_studio.html", "Image Studio", "Image Studio", "使用现有 Qwen 2511 Worker 进行多参考图、身份锁定和局部编辑。", "/api/image-studio/v1/edit"),
+    PlatformPage("/platform/image-studio/tasks", "platform/lab/image_studio_tasks.html", "任务处理列表", "Image Studio", "查看图生图排队、生成、成功和失败任务。", "/api/image-studio/v1/runs"),
     PlatformPage("/platform/assets", "platform/assets.html", "数字资产工厂", "数字资产工厂", "查看原图、Mask、透明鱼和 Sticker 资产。", "/api/platform/assets"),
     PlatformPage("/platform/assets/bside", "platform/bside_assets.html", "B面视觉资产", "数字资产工厂", "管理 B 面背景、描边样式和组合规则。", "/api/platform/assets/bside/backgrounds"),
     PlatformPage("/platform/assets/bside/jobs", "platform/bside_jobs.html", "B-side Jobs", "数字资产工厂", "查看用户渔获 B 面卡异步生成任务。", "/api/platform/bside-jobs"),
@@ -88,6 +89,34 @@ def platform_dataset_detail_page(request: Request, dataset_id: str) -> HTMLRespo
         f"/api/platform/datasets/{dataset_id}",
     )
     return _render(request, page)
+
+
+@router.get(
+    "/platform/image-studio/tasks/{run_id}",
+    response_class=HTMLResponse,
+    name="platform_image_studio_task_detail",
+)
+def platform_image_studio_task_detail_page(request: Request, run_id: str) -> HTMLResponse:
+    """Render one Image Studio generation task without adding a sidebar item."""
+
+    page = PlatformPage(
+        "/platform/image-studio/tasks/{run_id}",
+        "platform/lab/image_studio_task_detail.html",
+        "任务详情",
+        "Image Studio",
+        "查看 Image Studio 任务参数、处理阶段、输入资产和生成结果。",
+        f"/api/image-studio/v1/runs/{run_id}",
+    )
+    return templates.TemplateResponse(
+        request=request,
+        name=page.template,
+        context={
+            "page": page,
+            "page_title": page.title,
+            "platform_pages": PLATFORM_PAGES,
+            "run_id": run_id,
+        },
+    )
 
 
 @router.get("/platform/lab/image-studio", include_in_schema=False)

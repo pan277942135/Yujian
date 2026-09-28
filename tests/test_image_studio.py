@@ -257,3 +257,72 @@ def test_image_studio_runtime_uat_polls_queued_job_to_success():
     assert 'queue.get("policy") == "FIFO_SINGLE_L4"' in uat
     assert 'IMAGE_STUDIO_FINAL_STATUS' in uat
     assert 'test "$IMAGE_STUDIO_FINAL_STATUS" = "SUCCESS"' in uat
+
+
+
+def test_image_studio_workbench_has_no_inline_result_gallery():
+    root = Path(__file__).resolve().parents[1]
+    template = (
+        root
+        / "app"
+        / "templates"
+        / "platform"
+        / "lab"
+        / "image_studio.html"
+    ).read_text(encoding="utf-8")
+
+    assert ">Result<" not in template
+    assert "studioResult" not in template
+    assert "studioHistory" not in template
+    assert "studioUseAsBase" not in template
+    assert "/platform/image-studio/tasks" in template
+    assert "refreshCurrentRun" in template
+
+
+def test_image_studio_task_list_menu_pages_and_download_contract():
+    root = Path(__file__).resolve().parents[1]
+    sidebar = (root / "app" / "templates" / "platform" / "sidebar.html").read_text(encoding="utf-8")
+    pages = (root / "app" / "platform" / "routes" / "pages.py").read_text(encoding="utf-8")
+    route = (root / "app" / "platform" / "routes" / "image_studio.py").read_text(encoding="utf-8")
+    task_list = (
+        root
+        / "app"
+        / "templates"
+        / "platform"
+        / "lab"
+        / "image_studio_tasks.html"
+    ).read_text(encoding="utf-8")
+    task_detail = (
+        root
+        / "app"
+        / "templates"
+        / "platform"
+        / "lab"
+        / "image_studio_task_detail.html"
+    ).read_text(encoding="utf-8")
+
+    assert "任务处理列表" in sidebar
+    assert 'href="/platform/image-studio/tasks"' in sidebar
+    assert "current_path == '/platform/image-studio'" in sidebar
+    assert "current_path.startswith('/platform/image-studio/tasks')" in sidebar
+
+    assert 'PlatformPage("/platform/image-studio/tasks"' in pages
+    assert '"/platform/image-studio/tasks/{run_id}"' in pages
+
+    assert '@router.get("/runs/{run_id}/download/{kind}")' in route
+    assert '"Content-Disposition"' in route
+    assert '"stages": request.get("stages") or []' in route
+    assert '"started_at": run.started_at.isoformat()' in route
+
+    assert "QUEUED" in task_list
+    assert "RUNNING" in task_list
+    assert "SUCCESS" in task_list
+    assert "FAILED" in task_list
+    assert "查看详情" in task_list
+    assert "下载结果" in task_list
+
+    assert "处理阶段" in task_detail
+    assert "图片资产" in task_detail
+    assert "Base 原图" in task_detail
+    assert "生成结果" in task_detail
+    assert "/download/" in task_detail

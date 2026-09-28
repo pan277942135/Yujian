@@ -1,0 +1,181 @@
+{% extends "platform/base.html" %}
+
+{% block head %}
+<style>
+  .detail-shell{display:grid;gap:16px}
+  .detail-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap}
+  .detail-actions{display:flex;gap:8px;flex-wrap:wrap}
+  .detail-actions a,.detail-actions button{border:1px solid #cddfd7;border-radius:9px;background:#fff;color:#285247;padding:9px 12px;text-decoration:none;font:inherit;font-weight:700;cursor:pointer}
+  .detail-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+  .metric{border:1px solid #dce8e3;border-radius:10px;background:#fbfefd;padding:10px 12px}
+  .metric span{display:block;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+  .metric strong{display:block;margin-top:4px;font-size:13px;color:#294f43;word-break:break-word}
+  .status-badge{display:inline-flex;border-radius:999px;padding:5px 9px;font-size:12px;font-weight:800}
+  .status-queued{background:#f2f4f7;color:#59636e}.status-running{background:#fff4d8;color:#8a6514}.status-success{background:#e9f7ef;color:#28704c}.status-failed{background:#fdecec;color:#a13d3d}
+  .stage-list{display:flex;gap:8px;flex-wrap:wrap}
+  .stage{border-radius:999px;padding:6px 9px;background:#eef4f1;color:#47635a;font-size:11px;font-weight:750}
+  .stage[data-status="DONE"]{background:#e8f6ee;color:#28704c}.stage[data-status="RUNNING"]{background:#fff3d4;color:#886313}.stage[data-status="FAILED"]{background:#fdeaea;color:#a23b3b}.stage[data-status="QUEUED"]{background:#f1f3f5;color:#59636e}
+  .prompt{white-space:pre-wrap;word-break:break-word;border:1px solid #e0e9e5;border-radius:10px;background:#fbfcfc;padding:12px;font-size:12px;line-height:1.6;color:#334f47}
+  .asset-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+  .asset-card{border:1px solid #d9e5e0;border-radius:12px;background:#fff;overflow:hidden}
+  .asset-card img{display:block;width:100%;height:360px;object-fit:contain;background:#f2f6f4}
+  .asset-meta{padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .asset-meta strong{font-size:13px;color:#31564b}
+  .asset-links{display:flex;gap:7px}
+  .asset-links a{border:1px solid #cbded5;border-radius:8px;padding:6px 9px;text-decoration:none;color:#245f50;font-size:11px;font-weight:750}
+  .asset-links a.primary{background:#245f50;color:#fff;border-color:#245f50}
+  .error-box{border:1px solid #f0c8c8;border-radius:10px;background:#fff5f5;padding:12px;color:#8e3434}
+  @media(max-width:1000px){.detail-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.asset-grid{grid-template-columns:1fr}}
+  @media(max-width:620px){.detail-grid{grid-template-columns:1fr}.asset-card img{height:280px}}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="detail-shell">
+  <section class="panel detail-head">
+    <div>
+      <h1 style="margin:0 0 5px">任务详情</h1>
+      <div id="detailRunId" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--muted)">{{ run_id }}</div>
+    </div>
+    <div class="detail-actions">
+      <button id="detailRefresh" type="button">刷新</button>
+      <a href="/platform/image-studio/tasks">返回任务列表</a>
+      <a href="/platform/image-studio">图生图工作台</a>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div id="detailMetrics" class="detail-grid"></div>
+  </section>
+
+  <section class="panel">
+    <h2 style="margin-top:0">处理阶段</h2>
+    <div id="detailStages" class="stage-list"></div>
+  </section>
+
+  <section id="detailErrorPanel" class="panel" hidden>
+    <h2 style="margin-top:0">失败信息</h2>
+    <div id="detailError" class="error-box"></div>
+  </section>
+
+  <section class="panel">
+    <h2 style="margin-top:0">生成指令</h2>
+    <div id="detailPrompt" class="prompt">—</div>
+    <h3>Negative Prompt</h3>
+    <div id="detailNegative" class="prompt">—</div>
+  </section>
+
+  <section class="panel">
+    <h2 style="margin-top:0">图片资产</h2>
+    <div id="detailAssets" class="asset-grid"></div>
+  </section>
+</div>
+
+<script>
+(() => {
+  const runId = {{ run_id | tojson }};
+  const $ = (id) => document.getElementById(id);
+
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function formatTime(value) {
+    if (!value) return "—";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  }
+
+  function formatElapsed(value) {
+    if (value == null) return "—";
+    const ms = Number(value);
+    return Number.isFinite(ms) ? (ms >= 1000 ? (ms / 1000).toFixed(1) + " s" : ms + " ms") : "—";
+  }
+
+  function statusClass(status) {
+    return {
+      QUEUED: "status-queued",
+      RUNNING: "status-running",
+      SUCCESS: "status-success",
+      FAILED: "status-failed"
+    }[status] || "status-queued";
+  }
+
+  function metric(label, value, html=false) {
+    return '<div class="metric"><span>' + escapeHtml(label) + '</span><strong>' + (html ? value : escapeHtml(value)) + '</strong></div>';
+  }
+
+  function assetCard(label, kind, url) {
+    if (!url) return "";
+    const encodedRun = encodeURIComponent(runId);
+    const preview = "/api/image-studio/v1/runs/" + encodedRun + "/media/" + encodeURIComponent(kind);
+    const download = "/api/image-studio/v1/runs/" + encodedRun + "/download/" + encodeURIComponent(kind);
+    return '<article class="asset-card">' +
+      '<img src="' + preview + '?t=' + Date.now() + '" alt="' + escapeHtml(label) + '">' +
+      '<div class="asset-meta"><strong>' + escapeHtml(label) + '</strong>' +
+      '<div class="asset-links"><a href="' + preview + '" target="_blank" rel="noopener">预览</a>' +
+      '<a class="primary" href="' + download + '">下载</a></div></div></article>';
+  }
+
+  function render(run) {
+    const statusHtml = '<span class="status-badge ' + statusClass(run.status) + '">' + escapeHtml(run.status) + '</span>';
+    $("detailMetrics").innerHTML =
+      metric("状态", statusHtml, true) +
+      metric("排队位置", run.queue_position ? "第 " + run.queue_position + " 位" : "—") +
+      metric("模式", run.mode || "—") +
+      metric("原图保持", run.preservation || "—") +
+      metric("模型", run.model || "—") +
+      metric("Steps", run.steps ?? "—") +
+      metric("Seed", run.seed ?? "random") +
+      metric("耗时", formatElapsed(run.elapsed_ms)) +
+      metric("创建", formatTime(run.created_at)) +
+      metric("开始", formatTime(run.started_at)) +
+      metric("完成", formatTime(run.finished_at)) +
+      metric("队列策略", run.queue?.policy || "FIFO_SINGLE_L4");
+
+    const stages = run.stages || [];
+    $("detailStages").innerHTML = stages.length
+      ? stages.map((stage) => '<span class="stage" data-status="' + escapeHtml(stage.status || "") + '">' + escapeHtml(stage.name || "stage") + ' · ' + escapeHtml(stage.status || "—") + '</span>').join("")
+      : '<span class="stage">暂无阶段数据</span>';
+
+    $("detailPrompt").textContent = run.compiled_prompt || "—";
+    $("detailNegative").textContent = run.negative_prompt || "—";
+
+    if (run.error) {
+      $("detailErrorPanel").hidden = false;
+      $("detailError").textContent = (run.error.code || "ERROR") + " · " + (run.error.message || "");
+    } else {
+      $("detailErrorPanel").hidden = true;
+    }
+
+    let assets = assetCard("Base 原图", "base", run.base_image_url);
+    (run.reference_urls || []).forEach((url, index) => {
+      const role = (run.reference_roles || [])[index];
+      assets += assetCard("Reference " + (index + 1) + (role ? " · " + role : ""), "reference_" + (index + 1), url);
+    });
+    if (run.mask_url) assets += assetCard("Mask", "mask", run.mask_url);
+    if (run.output_image_url) assets += assetCard("生成结果", "output", run.output_image_url);
+    $("detailAssets").innerHTML = assets || '<div style="color:var(--muted)">暂无可用图片资产</div>';
+  }
+
+  async function load() {
+    try {
+      const response = await fetch("/api/image-studio/v1/runs/" + encodeURIComponent(runId) + "?ts=" + Date.now(), {cache:"no-store"});
+      if (!response.ok) throw new Error("任务读取失败");
+      render(await response.json());
+    } catch (error) {
+      $("detailMetrics").innerHTML = metric("错误", error.message);
+    }
+  }
+
+  $("detailRefresh").addEventListener("click", load);
+  load();
+  window.setInterval(load, 3000);
+})();
+</script>
+{% endblock %}

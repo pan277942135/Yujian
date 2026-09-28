@@ -8,7 +8,7 @@
   .studio-preset strong{display:block;font-size:14px;margin-bottom:5px}
   .studio-preset span{display:block;font-size:11px;line-height:1.45;color:var(--muted)}
   .studio-preset.active{border-color:#2a8068;background:#eff8f4;box-shadow:0 0 0 2px rgba(42,128,104,.10)}
-  .studio-grid{display:grid;grid-template-columns:minmax(350px,480px) minmax(0,1fr);gap:18px;align-items:start}
+  .studio-grid{display:grid;grid-template-columns:minmax(0,760px);gap:18px;align-items:start}
   .studio-panel{display:grid;gap:14px}
   .studio-field{display:grid;gap:6px}
   .studio-field label{font-size:13px;font-weight:750;color:#36574d}
@@ -33,15 +33,8 @@
   .studio-advanced{border:1px solid #dce7e2;border-radius:10px;background:#fbfdfc;padding:0 12px}
   .studio-advanced summary{cursor:pointer;padding:11px 0;font-size:13px;font-weight:750;color:#36574d}
   .studio-advanced-body{display:grid;gap:12px;padding:0 0 12px}
-  .studio-result{display:grid;gap:12px}
-  .studio-result img{display:block;width:100%;max-height:72vh;object-fit:contain;background:#eef4f1;border-radius:12px;border:1px solid #d7e4de}
-  .studio-empty{min-height:420px;border:1px dashed #c9d9d2;border-radius:12px;display:grid;place-items:center;color:var(--muted);background:#fbfdfc}
-  .studio-history{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}
-  .studio-history button{border:1px solid #d3e1db;background:white;border-radius:9px;padding:6px;text-align:left;cursor:pointer}
-  .studio-history img{width:100%;aspect-ratio:9/12;object-fit:cover;border-radius:6px;background:#eef4f1}
-  .studio-history small{display:block;margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   @media(max-width:1100px){.studio-presets{grid-template-columns:repeat(3,minmax(0,1fr))}}
-  @media(max-width:980px){.studio-grid{grid-template-columns:1fr}.studio-history{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media(max-width:980px){.studio-grid{grid-template-columns:1fr}}
   @media(max-width:620px){.studio-presets{grid-template-columns:repeat(2,minmax(0,1fr))}.studio-pair{grid-template-columns:1fr}}
 </style>
 {% endblock %}
@@ -190,26 +183,12 @@
 
       <div class="studio-actions">
         <button id="studioGenerate" class="studio-primary" type="button" disabled>Generate</button>
-        <button id="studioRefreshHistory" class="studio-secondary" type="button">刷新历史</button>
+        <a class="studio-secondary" href="/platform/image-studio/tasks" style="text-decoration:none;border-radius:9px;padding:10px 14px;font-weight:750">任务处理列表</a>
       </div>
       <div id="studioStatus" class="studio-status">CHECKING · 等待 Qwen Ready</div>
     </section>
 
-    <section class="panel studio-result">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-        <div>
-          <h2 style="margin:0">Result</h2>
-          <div id="studioMeta" class="studio-help">尚未生成</div>
-        </div>
-        <button id="studioUseAsBase" class="studio-secondary" type="button" hidden>作为新 Base</button>
-      </div>
-      <div id="studioEmpty" class="studio-empty">生成结果将在这里显示</div>
-      <img id="studioResult" alt="Image Studio Result" hidden>
-      <div>
-        <h3 style="margin:8px 0">History</h3>
-        <div id="studioHistory" class="studio-history"></div>
-      </div>
-    </section>
+
   </div>
 </div>
 
@@ -223,17 +202,12 @@
   const preservation = $("studioPreservation");
   const maskField = $("studioMaskField");
   const mask = $("studioMask");
-  const result = $("studioResult");
-  const empty = $("studioEmpty");
   const status = $("studioStatus");
   const gpuStatus = $("studioGpuStatus");
   const queueStatus = $("studioQueueStatus");
   const gpuStart = $("studioGpuStart");
   const generateButton = $("studioGenerate");
-  const meta = $("studioMeta");
-  const useAsBase = $("studioUseAsBase");
   const promptInput = $("studioPrompt");
-  let currentResultUrl = "";
   let currentRunId = null;
   let gpuReady = false;
   let generating = false;
@@ -505,30 +479,12 @@
         ? "QUEUED · 已加入队列" + (position ? " · 排队第 " + position + " 位" : "")
         : payload.status + " · " + payload.run_id;
       applyQueueState(payload.queue);
-      await loadHistory();
     } catch (error) {
       status.textContent = "FAILED · " + error.message;
     } finally {
       generating = false;
       await Promise.all([refreshGpuStatus(), refreshQueueStatus()]);
     }
-  }
-
-  function showRun(run) {
-    if (!run.output_image_url) return;
-    currentResultUrl = run.output_image_url + "?t=" + Date.now();
-    result.src = currentResultUrl;
-    result.hidden = false;
-    empty.hidden = true;
-    useAsBase.hidden = false;
-    status.textContent = run.status + " · " + run.run_id;
-    meta.textContent = [
-      activePreset !== "CUSTOM" && presets[activePreset] ? presets[activePreset].title : run.mode,
-      run.preservation,
-      "seed=" + (run.seed ?? "random"),
-      "steps=" + run.steps,
-      run.elapsed_ms != null ? run.elapsed_ms + " ms" : null
-    ].filter(Boolean).join(" · ");
   }
 
   function syncCurrentRun(run) {
@@ -542,72 +498,38 @@
       return;
     }
     if (run.status === "SUCCESS") {
-      showRun(run);
+      status.textContent = "SUCCESS · " + run.run_id + " · 已完成，可在任务处理列表查看和下载";
       currentRunId = null;
       return;
     }
     if (run.status === "FAILED") {
       const message = run.error?.message || "生成失败";
-      status.textContent = "FAILED · " + message;
+      status.textContent = "FAILED · " + message + " · 可在任务处理列表查看详情";
       currentRunId = null;
     }
   }
 
-  async function loadHistory() {
+  async function refreshCurrentRun() {
+    if (!currentRunId) return;
     try {
-      const response = await fetch("/api/image-studio/v1/runs?ts=" + Date.now(), {cache:"no-store"});
+      const response = await fetch("/api/image-studio/v1/runs/" + encodeURIComponent(currentRunId) + "?ts=" + Date.now(), {cache:"no-store"});
       if (!response.ok) return;
-      const payload = await response.json();
-      applyQueueState(payload.queue);
-      const history = $("studioHistory");
-      history.innerHTML = "";
-      const items = (payload.items || []).slice(0, 12);
-      items.forEach((run) => {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.innerHTML = '<img alt=""><small></small>';
-        button.querySelector("img").src = run.output_image_url || run.base_image_url;
-        const queueText = run.status === "QUEUED" && run.queue_position
-          ? " · 排队 " + run.queue_position
-          : "";
-        button.querySelector("small").textContent = run.status + queueText + " · " + run.mode;
-        button.addEventListener("click", () => {
-          currentRunId = run.run_id;
-          if (run.status === "SUCCESS") showRun(run);
-          else syncCurrentRun(run);
-        });
-        history.appendChild(button);
-      });
-      if (currentRunId) {
-        syncCurrentRun(items.find((run) => run.run_id === currentRunId));
-      }
+      const run = await response.json();
+      applyQueueState(run.queue);
+      syncCurrentRun(run);
     } catch (_) {}
   }
 
-  async function reuseResult() {
-    if (!currentResultUrl) return;
-    const response = await fetch(currentResultUrl);
-    const blob = await response.blob();
-    const file = new File([blob], "image_studio_result.png", {type: blob.type || "image/png"});
-    const transfer = new DataTransfer();
-    transfer.items.add(file);
-    base.files = transfer.files;
-    status.textContent = "READY · 当前结果已设为新 Base";
-  }
-
   generateButton.addEventListener("click", generate);
-  $("studioRefreshHistory").addEventListener("click", loadHistory);
   gpuStart.addEventListener("click", startGpu);
-  useAsBase.addEventListener("click", reuseResult);
 
   applyPreset("HEAD_SWAP", true);
-  loadHistory();
   refreshGpuStatus();
   refreshQueueStatus();
   gpuPollTimer = window.setInterval(() => {
     refreshGpuStatus();
     refreshQueueStatus();
-    loadHistory();
+    refreshCurrentRun();
   }, 3000);
   window.addEventListener("beforeunload", () => {
     if (gpuPollTimer) window.clearInterval(gpuPollTimer);
