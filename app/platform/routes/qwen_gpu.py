@@ -19,7 +19,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.platform.models import PipelineRun
+from app.platform.models import ImageStudioRun, PipelineRun
 from app.qwen_refine_worker_client import check_qwen_refine_worker
 from app.portrait_worker_client import PortraitWorkerError
 
@@ -218,15 +218,26 @@ def _stop_instance(config: QwenGpuConfig) -> dict[str, Any]:
 
 
 def _active_jobs(db: Session) -> int:
-    value = db.scalar(
-        select(func.count())
-        .select_from(PipelineRun)
-        .where(
-            PipelineRun.pipeline_type == PIPELINE_TYPE,
-            PipelineRun.status.in_(["QUEUED", "RUNNING"]),
+    lab_jobs = int(
+        db.scalar(
+            select(func.count())
+            .select_from(PipelineRun)
+            .where(
+                PipelineRun.pipeline_type == PIPELINE_TYPE,
+                PipelineRun.status.in_(["QUEUED", "RUNNING"]),
+            )
         )
+        or 0
     )
-    return int(value or 0)
+    studio_jobs = int(
+        db.scalar(
+            select(func.count())
+            .select_from(ImageStudioRun)
+            .where(ImageStudioRun.status.in_(["QUEUED", "RUNNING"]))
+        )
+        or 0
+    )
+    return lab_jobs + studio_jobs
 
 
 def _worker_snapshot() -> dict[str, Any]:
