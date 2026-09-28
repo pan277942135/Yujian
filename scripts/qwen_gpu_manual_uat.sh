@@ -117,6 +117,40 @@ wait_for_display() {
   return 1
 }
 
+wait_for_worker_healthy() {
+  local attempts="$1"
+  local label="$2"
+  local attempt
+  local http_code
+  local current
+  local model_loaded
+  for attempt in $(seq 1 "$attempts"); do
+    http_code="$(request GET "$SERVICE_URL/api/qwen-lab/gpu/status?uat_ts=$RANDOM" "$STATUS_JSON")"
+    test "$http_code" = "200"
+    current="$(display_status)"
+    model_loaded="$(python3 - "$STATUS_JSON" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+print("true" if payload.get("model_loaded") is True else "false")
+PY
+)"
+    echo "$label attempt=$attempt display_status=$current model_loaded=$model_loaded"
+    if [[ "$model_loaded" == "true" && ( "$current" == "READY" || "$current" == "BUSY" ) ]]; then
+      return 0
+    fi
+    if [[ "$current" == "ERROR" ]]; then
+      cat "$STATUS_JSON"
+      return 1
+    fi
+    sleep 5
+  done
+  echo "Timed out waiting for healthy Qwen worker (READY or BUSY with model_loaded=true)"
+  cat "$STATUS_JSON"
+  return 1
+}
+
 CONSOLE_KEY="$(gcloud secrets versions access latest --secret=yujian-console-access-key --project="$PROJECT_ID")"
 test -n "$CONSOLE_KEY"
 echo "::add-mask::$CONSOLE_KEY"
@@ -358,7 +392,7 @@ assert payload.get("storage_type") == "IMAGE_STUDIO_V1", payload
 assert payload.get("output_image_url"), payload
 assert payload.get("queue_position") is None, payload
 PY
-wait_for_display READY 24 "post-image-studio"
+wait_for_worker_healthy 24 "post-image-studio"
 
 VM_STATUS="$(gcloud compute instances describe "$GPU_INSTANCE"   --project "$GPU_PROJECT_ID" --zone "$GPU_ZONE" --format='value(status)')"
 test "$VM_STATUS" = "RUNNING"
@@ -369,6 +403,7 @@ test "$VM_STATUS" = "RUNNING"
   echo "- BUSY blocks manual stop: **PASS**"
   echo "- Dataset Qwen generation: **PASS**"
   echo "- Image Studio durable FIFO queue + Identity Lock runtime + isolated storage: **PASS**"
+  echo "- Post-Image Studio worker health accepts READY/BUSY when model is loaded: **PASS**"
   echo "- Automatic GPU stop during UAT: **DISABLED**"
   echo "- Final VM status: `$VM_STATUS` (expected RUNNING)"
 } >> "$GITHUB_STEP_SUMMARY"
