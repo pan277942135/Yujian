@@ -53,6 +53,37 @@ class PipelineRun(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
 
 
+class ImageStudioRun(Base):
+    """Independent Image Studio generation record.
+
+    Kept separate from production PipelineRun so private image-generation
+    history, prompts and assets never mix with fish-recognition/B-side traces.
+    """
+
+    __tablename__ = "image_studio_run"
+
+    run_id = Column(String(128), primary_key=True)
+    status = Column(String(32), nullable=False, default="QUEUED", index=True)
+    mode = Column(String(32), nullable=False, default="BASE_EDIT", index=True)
+    preservation = Column(String(16), nullable=False, default="STRONG")
+    model_version = Column(String(128), nullable=False, default="qwen-image-edit-2511")
+    request_json = Column(Text, nullable=False, default="{}")
+    result_json = Column(Text, nullable=False, default="{}")
+    base_image_uri = Column(Text, nullable=False)
+    reference_uris_json = Column(Text, nullable=False, default="[]")
+    mask_uri = Column(Text)
+    output_image_uri = Column(Text)
+    seed = Column(BigInteger)
+    steps = Column(Integer, nullable=False, default=25)
+    elapsed_ms = Column(Integer)
+    error_code = Column(String(64))
+    error_message = Column(Text)
+    started_at = Column(DateTime(timezone=True))
+    finished_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
 class FishAsset(Base):
     """Index of outputs produced by the existing completion pipeline."""
 
@@ -244,6 +275,7 @@ __all__ = [
     "BsideVisualSession",
     "BsideVisualStep",
     "FishAsset",
+    "ImageStudioRun",
     "PipelineRun",
     "PlatformOperationLog",
 ]
