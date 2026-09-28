@@ -16,6 +16,10 @@
   .studio-secondary{background:#edf5f1;color:#245f50}
   .studio-help{font-size:12px;color:var(--muted);line-height:1.5}
   .studio-status{border-radius:9px;padding:10px 12px;background:#f4f8f6;color:#36574d;font-size:13px;white-space:pre-wrap}
+  .studio-gpu{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;border:1px solid #d7e5df;border-radius:10px;background:#fbfefd;padding:10px 12px}
+  .studio-gpu strong{font-size:12px;color:#36574d}.studio-gpu span{font-size:12px;color:var(--muted)}
+  .studio-gpu button{border:1px solid #b9d2c7;border-radius:8px;background:#fff;color:#245f50;padding:7px 10px;font-weight:750;cursor:pointer}
+  .studio-gpu button[hidden]{display:none}.studio-actions button:disabled{opacity:.48;cursor:not-allowed}
   .studio-result{display:grid;gap:12px}
   .studio-result img{display:block;width:100%;max-height:72vh;object-fit:contain;background:#eef4f1;border-radius:12px;border:1px solid #d7e4de}
   .studio-empty{min-height:420px;border:1px dashed #c9d9d2;border-radius:12px;display:grid;place-items:center;color:var(--muted);background:#fbfdfc}
@@ -121,11 +125,18 @@
       </div>
     </div>
 
+    <div class="studio-gpu">
+      <div>
+        <strong>Qwen GPU</strong>
+        <span id="studioGpuStatus">CHECKING · 正在检查 L4 / Qwen 状态</span>
+      </div>
+      <button id="studioGpuStart" type="button" hidden>启动 GPU</button>
+    </div>
     <div class="studio-actions">
-      <button id="studioGenerate" class="studio-primary" type="button">Generate</button>
+      <button id="studioGenerate" class="studio-primary" type="button" disabled>Generate</button>
       <button id="studioRefreshHistory" class="studio-secondary" type="button">刷新历史</button>
     </div>
-    <div id="studioStatus" class="studio-status">READY</div>
+    <div id="studioStatus" class="studio-status">CHECKING · 等待 Qwen Ready</div>
   </section>
 
   <section class="panel studio-result">
@@ -157,9 +168,15 @@
   const result = $("studioResult");
   const empty = $("studioEmpty");
   const status = $("studioStatus");
+  const gpuStatus = $("studioGpuStatus");
+  const gpuStart = $("studioGpuStart");
+  const generateButton = $("studioGenerate");
   const meta = $("studioMeta");
   const useAsBase = $("studioUseAsBase");
   let currentResultUrl = "";
+  let gpuReady = false;
+  let generating = false;
+  let gpuPollTimer = null;
 
   mode.addEventListener("change", () => {
     maskField.hidden = mode.value !== "LOCAL_EDIT";
@@ -176,7 +193,77 @@
     return selectedRoles;
   }
 
+  function applyGpuState(payload) {
+    const state = String(payload?.display_status || "ERROR").toUpperCase();
+    gpuReady = state === "READY" && payload?.model_loaded === true;
+    generateButton.disabled = generating || !gpuReady;
+    gpuStart.hidden = state !== "STOPPED";
+
+    if (gpuReady) {
+      gpuStatus.textContent = "READY · Qwen 模型已加载";
+      if (!generating && !status.textContent.startsWith("SUCCESS")) {
+        status.textContent = "READY · 可以开始生成";
+      }
+      return;
+    }
+    if (state === "STARTING" || state === "LOADING") {
+      gpuStatus.textContent = state + " · Qwen 模型启动/预热中";
+      if (!generating) status.textContent = "LOADING · 模型准备完成后 Generate 会自动解锁";
+      return;
+    }
+    if (state === "BUSY") {
+      gpuStatus.textContent = "BUSY · GPU 正在执行其他 Qwen 任务";
+      if (!generating) status.textContent = "BUSY · 当前任务完成后可继续生成";
+      return;
+    }
+    if (state === "STOPPED") {
+      gpuStatus.textContent = "STOPPED · L4 GPU 当前未启动";
+      if (!generating) status.textContent = "STOPPED · 点击“启动 GPU”";
+      return;
+    }
+    const message = payload?.error?.message || payload?.message || "Qwen GPU 状态不可用";
+    gpuStatus.textContent = "ERROR · " + message;
+    if (!generating) status.textContent = "ERROR · " + message;
+  }
+
+  async function refreshGpuStatus() {
+    try {
+      const response = await fetch("/api/qwen-lab/gpu/status?studio_ts=" + Date.now(), {cache:"no-store"});
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload?.detail?.message || "GPU 状态检查失败");
+      applyGpuState(payload);
+      return payload;
+    } catch (error) {
+      gpuReady = false;
+      generateButton.disabled = true;
+      gpuStatus.textContent = "ERROR · " + error.message;
+      if (!generating) status.textContent = "ERROR · 无法确认 Qwen Ready 状态";
+      return null;
+    }
+  }
+
+  async function startGpu() {
+    gpuStart.disabled = true;
+    status.textContent = "STARTING · 正在启动 L4 GPU";
+    try {
+      const response = await fetch("/api/qwen-lab/gpu/start", {method:"POST"});
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload?.detail?.message || "GPU 启动失败");
+      applyGpuState(payload);
+      await refreshGpuStatus();
+    } catch (error) {
+      status.textContent = "ERROR · " + error.message;
+    } finally {
+      gpuStart.disabled = false;
+    }
+  }
+
   async function generate() {
+    const gpu = await refreshGpuStatus();
+    if (!gpu || !gpuReady) {
+      status.textContent = "LOADING · Qwen 尚未 Ready，生成未提交";
+      return;
+    }
     if (!base.files || !base.files[0]) {
       status.textContent = "ERROR · 请选择 Base Image";
       return;
@@ -204,18 +291,30 @@
     form.append("resolution_mode", "real_768");
     if ($("studioSeed").value.trim()) form.append("seed", $("studioSeed").value.trim());
 
-    $("studioGenerate").disabled = true;
+    generating = true;
+    generateButton.disabled = true;
     status.textContent = "GENERATING · Qwen Worker 正在处理";
     try {
       const response = await fetch("/api/image-studio/v1/edit", {method:"POST", body:form});
       const payload = await response.json();
-      if (!response.ok) throw new Error(JSON.stringify(payload.detail || payload));
+      if (!response.ok) {
+        const detail = payload?.detail || payload || {};
+        const code = detail?.code || "";
+        if (code === "QWEN_WORKER_NOT_READY") {
+          gpuReady = false;
+          status.textContent = "LOADING · Qwen 模型仍在预热，本次生成未创建";
+          await refreshGpuStatus();
+          return;
+        }
+        throw new Error(detail?.message || JSON.stringify(detail));
+      }
       showRun(payload);
       await loadHistory();
     } catch (error) {
       status.textContent = "FAILED · " + error.message;
     } finally {
-      $("studioGenerate").disabled = false;
+      generating = false;
+      await refreshGpuStatus();
     }
   }
 
@@ -237,20 +336,24 @@
   }
 
   async function loadHistory() {
-    const response = await fetch("/api/image-studio/v1/runs");
-    if (!response.ok) return;
-    const payload = await response.json();
-    const history = $("studioHistory");
-    history.innerHTML = "";
-    (payload.items || []).filter((run) => run.output_image_url).slice(0, 12).forEach((run) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.innerHTML = '<img alt=""><small></small>';
-      button.querySelector("img").src = run.output_image_url;
-      button.querySelector("small").textContent = run.mode + " · " + run.run_id;
-      button.addEventListener("click", () => showRun(run));
-      history.appendChild(button);
-    });
+    try {
+      const response = await fetch("/api/image-studio/v1/runs");
+      if (!response.ok) return;
+      const payload = await response.json();
+      const history = $("studioHistory");
+      history.innerHTML = "";
+      (payload.items || []).filter((run) => run.output_image_url).slice(0, 12).forEach((run) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.innerHTML = '<img alt=""><small></small>';
+        button.querySelector("img").src = run.output_image_url;
+        button.querySelector("small").textContent = run.mode + " · " + run.run_id;
+        button.addEventListener("click", () => showRun(run));
+        history.appendChild(button);
+      });
+    } catch (_) {
+      // History failure must not change GPU/generation state.
+    }
   }
 
   async function reuseResult() {
@@ -264,10 +367,17 @@
     status.textContent = "READY · 当前结果已设为新 Base";
   }
 
-  $("studioGenerate").addEventListener("click", generate);
+  generateButton.addEventListener("click", generate);
   $("studioRefreshHistory").addEventListener("click", loadHistory);
+  gpuStart.addEventListener("click", startGpu);
   useAsBase.addEventListener("click", reuseResult);
+
   loadHistory();
+  refreshGpuStatus();
+  gpuPollTimer = window.setInterval(refreshGpuStatus, 5000);
+  window.addEventListener("beforeunload", () => {
+    if (gpuPollTimer) window.clearInterval(gpuPollTimer);
+  });
 })();
 </script>
 {% endblock %}
