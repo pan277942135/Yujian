@@ -19,7 +19,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal, get_db
-from app.image_studio_worker_client import invoke_image_studio_worker
+from app.image_studio_worker_client import IMAGE_STUDIO_IDENTITY_V2_MODE, invoke_image_studio_worker
 from app.qwen_refine_worker_client import check_qwen_refine_worker
 from app.platform.models import ImageStudioRun
 from app.platform.services.image_studio_prompt import (
@@ -562,6 +562,8 @@ def _run_strict_head_stage(
         steps=int(run.steps or 25),
         seed=run.seed,
         resolution_mode="current",
+        worker_mode=IMAGE_STUDIO_IDENTITY_V2_MODE,
+        pipeline_stage="STRICT_HEAD_SWAP",
     )
     edited_head_bytes, _ = _read_image_uri(
         worker["result_uri"],
@@ -641,6 +643,8 @@ def _execute_queued_run(run_id: str) -> str:
                         steps=int(run.steps or 25),
                         seed=run.seed,
                         resolution_mode=str(request_state.get("resolution_mode") or "real_768"),
+                        worker_mode=IMAGE_STUDIO_IDENTITY_V2_MODE,
+                        pipeline_stage="SCENE_TRANSFER",
                     )
                     scene_bytes, _ = _read_image_uri(
                         scene_worker["result_uri"],
