@@ -22,8 +22,18 @@ from app.db import SessionLocal, get_db
 from app.image_studio_worker_client import invoke_image_studio_worker
 from app.qwen_refine_worker_client import check_qwen_refine_worker
 from app.platform.models import ImageStudioRun
-from app.platform.services.image_studio_prompt import compile_image_studio_prompt
+from app.platform.services.image_studio_prompt import (
+    compile_image_studio_prompt,
+    compile_scene_transfer_stage_prompt,
+    compile_strict_head_swap_prompt,
+)
 from app.portrait_worker_client import PortraitWorkerError, _read_image_uri
+from app.services.image_studio_identity import (
+    IdentityPreprocessError,
+    composite_head_roi,
+    crop_png,
+    prepare_strict_identity_assets,
+)
 from app.services.image_studio_jobs import enqueue_image_studio_queue
 
 router = APIRouter(prefix="/api/image-studio/v1", tags=["image-studio"])
