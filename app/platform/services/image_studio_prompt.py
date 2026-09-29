@@ -374,7 +374,19 @@ def compile_image_studio_prompt(
     if roles:
         sections.extend(["", "REFERENCE ROLES:"])
         for index, role in enumerate(roles, start=2):
-            sections.append(f"Picture {index} role = {role}. {_ROLE_RULES[role]}")
+            if role == "IDENTITY" and mode_value == "IDENTITY_BLEND":
+                rule = (
+                    "Use this picture only as a soft facial-character influence. "
+                    "The Base person remains identity authority."
+                )
+            elif role == "IDENTITY" and mode_value == "FULL_CHARACTER_REBUILD":
+                rule = (
+                    "Use this picture as the authoritative full character source for face identity, hair, "
+                    "age impression, and overall person appearance."
+                )
+            else:
+                rule = _ROLE_RULES[role]
+            sections.append(f"Picture {index} role = {role}. {rule}")
 
     negative_parts = [
         "face averaging",
