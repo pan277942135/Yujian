@@ -48,16 +48,20 @@
     </div>
     <div class="studio-presets" id="studioPresets">
       <button class="studio-preset active" type="button" data-preset="HEAD_SWAP">
-        <strong>角色换头</strong>
-        <span>原图身体/服装/背景尽量不动，只替换人物身份。</span>
-      </button>
-      <button class="studio-preset" type="button" data-preset="CHARACTER_FUSION">
-        <strong>角色融合</strong>
-        <span>角色母板负责身份，Base 负责动作、穿搭和场景。</span>
+        <strong>严格换头</strong>
+        <span>自动裁头 + 自动 Mask，只改头部身份，身体/穿搭/背景不重绘。</span>
       </button>
       <button class="studio-preset" type="button" data-preset="HEAD_SCENE">
         <strong>换头 + 换背景</strong>
-        <span>保留 Base 的身体与姿势，同时替换身份和环境。</span>
+        <span>先迁移场景，再局部严格换头，避免场景参考污染身份。</span>
+      </button>
+      <button class="studio-preset" type="button" data-preset="CHARACTER_FUSION">
+        <strong>轻融合</strong>
+        <span>Base 人物仍是主体，仅柔性吸收角色参考的部分脸部气质。</span>
+      </button>
+      <button class="studio-preset" type="button" data-preset="FULL_REBUILD">
+        <strong>整体角色替换</strong>
+        <span>保留 Base 镜头/姿势/场景，把人物整体重建为角色参考。</span>
       </button>
       <button class="studio-preset" type="button" data-preset="OUTFIT">
         <strong>只换穿搭</strong>
@@ -118,6 +122,23 @@
         </div>
       </div>
 
+      <div class="studio-field studio-upload" id="studioRef3Box" hidden>
+        <label id="studioRef3Label" for="studioRef3">Reference 3 · 脸部角度（可选）</label>
+        <input id="studioRef3" type="file" accept="image/jpeg,image/png,image/webp">
+        <div id="studioRef3Help" class="studio-help">换头 + 换背景时可额外提供与 Base 角度一致的脸部参考。</div>
+        <select id="studioRole3">
+          <option value="FACE_ANGLE">Face Angle</option>
+          <option value="IDENTITY">Identity</option>
+          <option value="SCENE">Scene</option>
+          <option value="OUTFIT">Outfit</option>
+          <option value="POSE">Pose</option>
+          <option value="BODY">Body</option>
+          <option value="HAIR">Hair</option>
+          <option value="STYLE">Style</option>
+          <option value="OBJECT">Object</option>
+        </select>
+      </div>
+
       <div class="studio-field">
         <label for="studioPrompt">编辑要求 *</label>
         <textarea id="studioPrompt"></textarea>
@@ -131,7 +152,11 @@
             <div class="studio-field">
               <label for="studioMode">Engine Mode</label>
               <select id="studioMode">
-                <option value="IDENTITY_LOCK">Identity Lock</option>
+                <option value="STRICT_HEAD_SWAP">Strict Head Swap V2</option>
+                <option value="HEAD_SWAP_SCENE_TRANSFER">Head Swap + Scene V2</option>
+                <option value="IDENTITY_BLEND">Identity Blend</option>
+                <option value="FULL_CHARACTER_REBUILD">Full Character Rebuild</option>
+                <option value="IDENTITY_LOCK">Legacy Identity Lock</option>
                 <option value="BASE_EDIT">Base Edit</option>
                 <option value="LOCAL_EDIT">Local Edit</option>
                 <option value="MULTI_REFERENCE">Multi Reference</option>
@@ -146,6 +171,34 @@
                 <option value="NORMAL">均衡</option>
               </select>
             </div>
+          </div>
+
+          <div class="studio-pair">
+            <div class="studio-field">
+              <label for="studioIdentityStrength">身份强度</label>
+              <select id="studioIdentityStrength">
+                <option value="HIGH">高 · 默认</option>
+                <option value="MEDIUM">中</option>
+                <option value="LOW">低</option>
+              </select>
+            </div>
+            <div class="studio-field">
+              <label for="studioHeadTightness">头部编辑范围</label>
+              <select id="studioHeadTightness">
+                <option value="MEDIUM">中 · 默认</option>
+                <option value="TIGHT">紧 · 更保守</option>
+                <option value="LOOSE">松 · 更多头发/颈部</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="studio-pair">
+            <label class="studio-help"><input id="studioKeepHairColor" type="checkbox"> 保留 Base 发色</label>
+            <label class="studio-help"><input id="studioKeepBaseHairShape" type="checkbox"> 保留 Base 发型轮廓</label>
+          </div>
+
+          <div class="studio-help">
+            Strict V2 固定保护身体、服装、手部和非头部区域；这些区域不会进入 Qwen 的局部输出。
           </div>
 
           <div class="studio-field studio-upload" id="studioMaskField" hidden>
@@ -196,8 +249,8 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const base = $("studioBase");
-  const refs = [$("studioRef1"), $("studioRef2")];
-  const roles = [$("studioRole1"), $("studioRole2")];
+  const refs = [$("studioRef1"), $("studioRef2"), $("studioRef3")];
+  const roles = [$("studioRole1"), $("studioRole2"), $("studioRole3")];
   const mode = $("studioMode");
   const preservation = $("studioPreservation");
   const maskField = $("studioMaskField");
@@ -217,64 +270,82 @@
 
   const presets = {
     HEAD_SWAP: {
-      title: "角色换头",
-      note: "Base 上传原照片；Reference 1 上传角色身份母板；Reference 2 可上传对应脸部角度。",
-      mode: "IDENTITY_LOCK",
+      title: "严格换头",
+      note: "自动检测 Base 头部，裁出 Identity 头部参考，只生成头部 ROI，再回贴原图。",
+      mode: "STRICT_HEAD_SWAP",
       preservation: "MAX",
+      refsVisible: 2,
       baseLabel: "Base · 原照片 *",
-      baseHelp: "Base 决定身体、姿势、服装、构图和背景。",
-      ref1: ["Reference 1 · 角色身份母板", "建议使用 M01 或最稳定的 Identity Master。", "IDENTITY"],
-      ref2: ["Reference 2 · 脸部角度（可选）", "例如正面、左45°、右45°、90°侧脸。", "FACE_ANGLE"],
-      refs: 2,
-      prompt: "以 Reference 1 作为唯一人物身份来源。保持 Base 中身体、肩颈以下、服装、姿势、手部、构图、光线和背景不变，只替换人物头部身份。若提供 Reference 2，它只负责当前脸部角度与几何，不要融合或平均 Base 原人物的脸。"
-    },
-    CHARACTER_FUSION: {
-      title: "角色融合",
-      note: "Base 直接使用动作/神态/姿态/穿搭参考图；Reference 1 只负责把人物替换成角色母板身份。",
-      mode: "IDENTITY_LOCK",
-      preservation: "STRONG",
-      baseLabel: "Base · 动作 / 穿搭 / 场景参考图 *",
-      baseHelp: "Base 提供姿势、表情、穿搭、身体、镜头和场景。",
-      ref1: ["Reference 1 · 角色身份母板", "只负责人物身份，不复制母板姿势和场景。", "IDENTITY"],
-      ref2: ["Reference 2 · 脸部角度（可选）", "只有角度复杂时才需要。", "FACE_ANGLE"],
-      refs: 2,
-      prompt: "Reference 1 只作为人物身份母板。完整保留 Base 的动作、神态、身体姿态、穿搭、手部、镜头、构图和场景，把 Base 中的人物重建为 Reference 1 的同一角色。不要把 Reference 1 的姿势、服装或背景带入结果。"
+      baseHelp: "身体、穿搭、姿势、手部、背景保持为 Base 原像素。",
+      ref1: ["Reference 1 · 角色身份母板 *", "建议使用 M01 / 清晰头肩身份母板。系统会自动裁脸。", "IDENTITY"],
+      ref2: ["Reference 2 · 脸部角度（可选）", "复杂角度时提供 F 系列对应角度；仅提供几何。", "FACE_ANGLE"],
+      ref3: ["Reference 3", "此模式不使用。", "FACE_ANGLE"],
+      prompt: "只替换人物头部身份。严格保持 Base 的身体、肩颈以下、服装、姿势、手部、构图、光线和背景不变。Reference 1 是唯一身份来源；可选 Reference 2 只负责当前脸部角度。"
     },
     HEAD_SCENE: {
       title: "换头 + 换背景",
-      note: "Base 保留人物身体与动作；Reference 1 负责身份；Reference 2 负责新背景。",
-      mode: "MULTI_REFERENCE",
+      note: "Stage 1 只做场景迁移；Stage 2 在中间结果上自动裁头并执行严格身份替换。",
+      mode: "HEAD_SWAP_SCENE_TRANSFER",
       preservation: "STRONG",
+      refsVisible: 3,
       baseLabel: "Base · 原人物照片 *",
-      baseHelp: "Base 决定人物身体、姿势、服装和主体构图。",
-      ref1: ["Reference 1 · 角色身份母板", "作为唯一人物身份来源。", "IDENTITY"],
-      ref2: ["Reference 2 · 新背景 / 场景", "只负责环境、空间与背景。", "SCENE"],
-      refs: 2,
-      prompt: "保留 Base 中人物的身体、姿势、手部、服装和主体构图；将人物头部身份替换为 Reference 1 的角色身份，同时把背景替换为 Reference 2 的场景。Reference 2 不得影响人物身份、身体或服装，并让人物与新场景的透视、光线和接触关系自然融合。"
+      baseHelp: "Base 决定人物姿势、身体、服装和主体构图。",
+      ref1: ["Reference 1 · 角色身份母板 *", "唯一人物身份来源；系统会自动裁脸。", "IDENTITY"],
+      ref2: ["Reference 2 · 新背景 / 场景 *", "只负责环境、空间、背景与环境光。", "SCENE"],
+      ref3: ["Reference 3 · 脸部角度（可选）", "复杂角度时提供 F 系列对应角度。", "FACE_ANGLE"],
+      prompt: "先把 Base 人物自然放入 Reference 2 的场景，保持人物身体、姿势与服装；再把头部身份严格替换为 Reference 1。Reference 3 如提供只负责脸部角度。"
+    },
+    CHARACTER_FUSION: {
+      title: "轻融合",
+      note: "Base 人物身份仍是主体，仅柔性吸收 Reference 1 的部分脸部气质，不承诺完全换人。",
+      mode: "IDENTITY_BLEND",
+      preservation: "STRONG",
+      refsVisible: 1,
+      baseLabel: "Base · 原照片 *",
+      baseHelp: "Base 保持人物主体、动作、穿搭、身体、镜头和场景。",
+      ref1: ["Reference 1 · 身份风格参考 *", "仅作为柔性身份影响。", "IDENTITY"],
+      ref2: ["Reference 2", "此模式不需要。", "FACE_ANGLE"],
+      ref3: ["Reference 3", "此模式不需要。", "FACE_ANGLE"],
+      prompt: "保持 Base 人物可识别，仅轻度融合 Reference 1 的部分脸部特征与角色气质。不要整体替换人物，不复制参考图服装、身体或背景。"
+    },
+    FULL_REBUILD: {
+      title: "整体角色替换",
+      note: "保留 Base 镜头、姿势、主体位置和场景，把整个人物重建为角色参考。",
+      mode: "FULL_CHARACTER_REBUILD",
+      preservation: "NORMAL",
+      refsVisible: 2,
+      baseLabel: "Base · 构图 / 姿势 / 场景参考 *",
+      baseHelp: "Base 主要负责镜头、人物姿势、位置和场景。",
+      ref1: ["Reference 1 · 角色身份母板 *", "作为整个人物角色来源。", "IDENTITY"],
+      ref2: ["Reference 2 · 场景参考（可选）", "可选，仅需要额外场景迁移时提供。", "SCENE"],
+      ref3: ["Reference 3", "此模式不使用。", "FACE_ANGLE"],
+      prompt: "保留 Base 的镜头、构图、人物姿势与主体位置，把人物整体重建为 Reference 1 的角色形象；如提供 Reference 2，可参考其场景。"
     },
     OUTFIT: {
       title: "只换穿搭",
       note: "Base 保留人物与场景；Reference 1 只提供服装。",
       mode: "MULTI_REFERENCE",
       preservation: "MAX",
+      refsVisible: 1,
       baseLabel: "Base · 原人物照片 *",
       baseHelp: "人物身份、脸、发型、姿势、身体、背景以 Base 为准。",
-      ref1: ["Reference 1 · 穿搭参考", "只复制服装，不复制参考人物。", "OUTFIT"],
-      ref2: ["Reference 2", "此模式通常不需要。", "FACE_ANGLE"],
-      refs: 1,
-      prompt: "保持 Base 的人物身份、脸、发型、身体比例、姿势、手部、场景、镜头和构图不变，只把服装替换为 Reference 1 中的穿搭。不要复制 Reference 1 人物的脸、发型、身体、姿势或背景。"
+      ref1: ["Reference 1 · 穿搭参考 *", "只复制服装，不复制参考人物。", "OUTFIT"],
+      ref2: ["Reference 2", "此模式不需要。", "FACE_ANGLE"],
+      ref3: ["Reference 3", "此模式不需要。", "FACE_ANGLE"],
+      prompt: "保持 Base 的人物身份、脸、发型、身体比例、姿势、手部、场景、镜头和构图不变，只把服装替换为 Reference 1 中的穿搭。"
     },
     HD: {
       title: "高清增强",
       note: "只上传 Base。增强真实摄影细节与清晰度，不重新设计人物。",
       mode: "BASE_EDIT",
       preservation: "MAX",
+      refsVisible: 0,
       baseLabel: "Base · 待增强图片 *",
       baseHelp: "保持身份、表情、姿势、服装、构图和场景。",
-      ref1: ["Reference 1", "此模式不需要参考图。", "IDENTITY"],
-      ref2: ["Reference 2", "此模式不需要参考图。", "FACE_ANGLE"],
-      refs: 0,
-      prompt: "提升原图真实摄影清晰度、面部细节、头发纹理、服装纹理和整体画面质感。保持人物身份、五官比例、表情、姿势、身体比例、服装、场景、构图、镜头和光线不变，不重新设计人物。"
+      ref1: ["Reference 1", "此模式不需要。", "IDENTITY"],
+      ref2: ["Reference 2", "此模式不需要。", "FACE_ANGLE"],
+      ref3: ["Reference 3", "此模式不需要。", "FACE_ANGLE"],
+      prompt: "提升原图真实摄影清晰度、面部细节、头发纹理、服装纹理和整体画面质感。保持人物身份、表情、姿势、身体比例、服装、场景、构图和光线不变。"
     }
   };
 
@@ -294,6 +365,7 @@
     preservation.value = preset.preservation;
     roles[0].value = preset.ref1[2];
     roles[1].value = preset.ref2[2];
+    roles[2].value = preset.ref3[2];
     setText("studioModeNote", "");
     $("studioModeNote").innerHTML = "<strong>" + preset.title + "</strong><div class=\"studio-help\"></div>";
     $("studioModeNote").querySelector(".studio-help").textContent = preset.note;
@@ -303,9 +375,12 @@
     setText("studioRef1Help", preset.ref1[1]);
     setText("studioRef2Label", preset.ref2[0]);
     setText("studioRef2Help", preset.ref2[1]);
-    $("studioReferences").hidden = preset.refs === 0;
-    $("studioRef1Box").hidden = preset.refs < 1;
-    $("studioRef2Box").hidden = preset.refs < 2;
+    setText("studioRef3Label", preset.ref3[0]);
+    setText("studioRef3Help", preset.ref3[1]);
+    $("studioReferences").hidden = preset.refsVisible === 0;
+    $("studioRef1Box").hidden = preset.refsVisible < 1;
+    $("studioRef2Box").hidden = preset.refsVisible < 2;
+    $("studioRef3Box").hidden = preset.refsVisible < 3;
     maskField.hidden = mode.value !== "LOCAL_EDIT";
 
     if (forcePrompt || !promptInput.value.trim() || promptInput.value === presetPrompt) {
@@ -439,7 +514,7 @@
       status.textContent = "ERROR · 请输入编辑要求";
       return;
     }
-    if (["HEAD_SWAP", "CHARACTER_FUSION", "HEAD_SCENE"].includes(activePreset) &&
+    if (["HEAD_SWAP", "CHARACTER_FUSION", "HEAD_SCENE", "FULL_REBUILD"].includes(activePreset) &&
         (!refs[0].files || !refs[0].files[0])) {
       status.textContent = "ERROR · 当前模式必须上传 Reference 1 角色身份母板";
       return;
@@ -470,6 +545,10 @@
     form.append("preservation", preservation.value);
     form.append("steps", $("studioSteps").value || "25");
     form.append("resolution_mode", "real_768");
+    form.append("identity_strength", $("studioIdentityStrength").value);
+    form.append("head_edit_tightness", $("studioHeadTightness").value);
+    form.append("keep_hair_color", $("studioKeepHairColor").checked ? "true" : "false");
+    form.append("keep_base_hair_shape", $("studioKeepBaseHairShape").checked ? "true" : "false");
     if ($("studioSeed").value.trim()) form.append("seed", $("studioSeed").value.trim());
 
     generating = true;
