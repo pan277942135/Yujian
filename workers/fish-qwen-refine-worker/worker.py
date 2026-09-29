@@ -36,7 +36,8 @@ SERVICE_NAME = "fish-qwen-refine-worker"
 MODEL_LABEL = "Qwen-Image-Edit-2511"
 QWEN_MODE = "fish_preserve_refine_qwen_v1"
 IMAGE_STUDIO_MODE = "image_studio_v1"
-SUPPORTED_MODES = {QWEN_MODE, IMAGE_STUDIO_MODE}
+IMAGE_STUDIO_IDENTITY_V2_MODE = "image_studio_identity_v2"
+SUPPORTED_MODES = {QWEN_MODE, IMAGE_STUDIO_MODE, IMAGE_STUDIO_IDENTITY_V2_MODE}
 DEFAULT_CONFIG_PATH = "/opt/fish-qwen-refine-worker/config.yaml"
 DEFAULT_WORKFLOW_PATH = "/opt/fish-qwen-refine-worker/qwen2511_api.json"
 DEFAULT_OUTPUT_DIR = "/opt/fish-qwen-refine-worker/output"
@@ -983,6 +984,7 @@ def refine(
         else ""
     )
     source_id = str(options.get("source_run_id") or source_run_id or "") or None
+    pipeline_stage = str(options.get("pipeline_stage") or "").strip() or None
     content = image.file.read()
     if not content:
         raise HTTPException(status_code=422, detail="image is empty")
@@ -993,7 +995,7 @@ def refine(
     if len(reference_uploads) > 2:
         raise HTTPException(status_code=422, detail="at most two reference images are supported")
     if requested_mode == QWEN_MODE and reference_uploads:
-        raise HTTPException(status_code=422, detail="reference images require image_studio_v1 mode")
+        raise HTTPException(status_code=422, detail="reference images require an Image Studio mode")
     for index, reference in enumerate(reference_uploads, start=1):
         reference_content = reference.file.read()
         if not reference_content:
@@ -1092,6 +1094,7 @@ def refine(
             "auto_straighten": auto_straighten,
             "auto_straighten_applied": False,
             "reference_count": len(reference_inputs),
+            "pipeline_stage": pipeline_stage,
             "worker_model": MODEL_LABEL,
             "prompt_id": result["prompt_id"],
             "elapsed_ms": round(total_seconds * 1000, 2),
@@ -1115,6 +1118,7 @@ def refine(
                 "resolution_mode": resolution_mode,
                 "diffusion_size": effective_diffusion_size,
                 "decoded_size": decoded_size,
+                "pipeline_stage": pipeline_stage,
             },
         }
         return JSONResponse(payload)

@@ -19,11 +19,22 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal, get_db
-from app.image_studio_worker_client import invoke_image_studio_worker
+from app.image_studio_worker_client import IMAGE_STUDIO_IDENTITY_V2_MODE, invoke_image_studio_worker
 from app.qwen_refine_worker_client import check_qwen_refine_worker
 from app.platform.models import ImageStudioRun
-from app.platform.services.image_studio_prompt import compile_image_studio_prompt
+from app.platform.services.image_studio_prompt import (
+    compile_image_studio_prompt,
+    compile_scene_transfer_stage_prompt,
+    compile_strict_head_swap_prompt,
+)
 from app.portrait_worker_client import PortraitWorkerError, _read_image_uri
+from app.services.image_studio_identity import (
+    IdentityPreprocessError,
+    composite_head_roi,
+    crop_png,
+    measure_strict_composite,
+    prepare_strict_identity_assets,
+)
 from app.services.image_studio_jobs import enqueue_image_studio_queue
 
 router = APIRouter(prefix="/api/image-studio/v1", tags=["image-studio"])
@@ -183,7 +194,7 @@ def _require_worker_ready() -> dict[str, Any]:
     health = snapshot.get("health") if isinstance(snapshot.get("health"), dict) else {}
     worker_status = str(health.get("status") or "").strip().lower()
     model_loaded = health.get("model_loaded") is True
-    if worker_status != "ready" or not model_loaded:
+    if worker_status not in {"ready", "busy"} or not model_loaded:
         raise HTTPException(
             status_code=503,
             detail={
@@ -208,8 +219,11 @@ def _parse_roles(raw: str, mode: str, reference_count: int) -> list[str]:
     else:
         roles = []
     if reference_count and not roles:
-        if str(mode or "").strip().upper() == "IDENTITY_LOCK":
+        mode_value = str(mode or "").strip().upper()
+        if mode_value in {"IDENTITY_LOCK", "STRICT_HEAD_SWAP"}:
             roles = ["IDENTITY"] + (["FACE_ANGLE"] if reference_count > 1 else [])
+        elif mode_value == "HEAD_SWAP_SCENE_TRANSFER":
+            roles = ["IDENTITY", "SCENE"] + (["FACE_ANGLE"] if reference_count > 2 else [])
         else:
             roles = ["OBJECT"] * reference_count
     if len(roles) != reference_count:
@@ -241,6 +255,36 @@ def _reference_uris_for(run: ImageStudioRun) -> list[str]:
     return [str(uri) for uri in value] if isinstance(value, list) else []
 
 
+def _intermediate_asset_urls(run: ImageStudioRun) -> list[dict[str, str]]:
+    result = _result_for(run)
+    assets = result.get("assets")
+    if not isinstance(assets, dict):
+        return []
+    labels = {
+        "base_face_crop": "Base Face Crop",
+        "base_head_crop": "Base Head Crop",
+        "identity_face_crop": "Identity Face Crop",
+        "identity_head_crop": "Identity Head Crop",
+        "identity_angle_crop": "Identity Angle Crop",
+        "mask_binary": "Auto Mask",
+        "mask_preview": "Mask Preview",
+        "scene_stage_result": "Scene Stage Result",
+        "edited_head_roi": "Edited Head ROI",
+    }
+    items: list[dict[str, str]] = []
+    for kind, label in labels.items():
+        if assets.get(kind):
+            items.append(
+                {
+                    "kind": kind,
+                    "label": label,
+                    "url": f"/api/image-studio/v1/runs/{run.run_id}/media/{kind}",
+                    "download_url": f"/api/image-studio/v1/runs/{run.run_id}/download/{kind}",
+                }
+            )
+    return items
+
+
 def _response(run: ImageStudioRun) -> dict[str, Any]:
     request = _request_for(run)
     result = _result_for(run)
@@ -256,10 +300,18 @@ def _response(run: ImageStudioRun) -> dict[str, Any]:
         "mode": run.mode,
         "preservation": run.preservation,
         "reference_roles": request.get("reference_roles") or [],
+        "pipeline_version": request.get("pipeline_version"),
+        "strict_geometry": request.get("strict_geometry"),
+        "identity_strength": request.get("identity_strength"),
+        "head_edit_tightness": request.get("head_edit_tightness"),
+        "keep_hair_color": request.get("keep_hair_color"),
+        "keep_base_hair_shape": request.get("keep_base_hair_shape"),
         "seed": run.seed,
         "steps": run.steps,
         "compiled_prompt": request.get("compiled_prompt"),
         "negative_prompt": request.get("negative_prompt"),
+        "scene_prompt": request.get("scene_prompt"),
+        "scene_negative_prompt": request.get("scene_negative_prompt"),
         "stages": request.get("stages") or [],
         "base_image_url": f"/api/image-studio/v1/runs/{run.run_id}/media/base",
         "reference_urls": [
@@ -276,6 +328,8 @@ def _response(run: ImageStudioRun) -> dict[str, Any]:
             if run.output_image_uri
             else None
         ),
+        "intermediate_assets": _intermediate_asset_urls(run),
+        "strict_validation": result.get("strict_validation"),
         "elapsed_ms": run.elapsed_ms,
         "worker_protocol": result.get("worker_protocol"),
         "mask_composited": result.get("mask_composited", False),
@@ -284,7 +338,6 @@ def _response(run: ImageStudioRun) -> dict[str, Any]:
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
     }
-
 
 
 def _queue_position(db: Session, run: ImageStudioRun) -> int | None:
@@ -343,6 +396,210 @@ def _response_with_queue(db: Session, run: ImageStudioRun) -> dict[str, Any]:
     return payload
 
 
+def _set_stage(stages: list[dict[str, Any]], name: str, status: str, **detail: Any) -> None:
+    stage = next(
+        (
+            item
+            for item in stages
+            if isinstance(item, dict) and item.get("name") == name
+        ),
+        None,
+    )
+    if stage is None:
+        stage = {"name": name, "status": status}
+        stages.append(stage)
+    else:
+        stage["status"] = status
+    for key, value in detail.items():
+        if value is not None:
+            stage[key] = value
+
+
+def _persist_progress(
+    db: Session,
+    run: ImageStudioRun,
+    request_state: dict[str, Any],
+    result_state: dict[str, Any],
+) -> None:
+    run.request_json = json.dumps(request_state, ensure_ascii=False)
+    run.result_json = json.dumps(result_state, ensure_ascii=False)
+    db.commit()
+
+
+def _strict_reference_indexes(roles: list[str]) -> tuple[int, int | None, int | None]:
+    try:
+        identity_index = roles.index("IDENTITY")
+    except ValueError as exc:
+        raise IdentityPreprocessError(
+            "IDENTITY_REFERENCE_REQUIRED",
+            "Strict identity transfer requires an IDENTITY reference.",
+        ) from exc
+    scene_index = roles.index("SCENE") if "SCENE" in roles else None
+    angle_index = roles.index("FACE_ANGLE") if "FACE_ANGLE" in roles else None
+    return identity_index, scene_index, angle_index
+
+
+def _run_strict_head_stage(
+    *,
+    db: Session,
+    run: ImageStudioRun,
+    request_state: dict[str, Any],
+    result_state: dict[str, Any],
+    stages: list[dict[str, Any]],
+    source_base_uri: str,
+    reference_uris: list[str],
+) -> tuple[bytes, dict[str, Any], int]:
+    roles = [str(role) for role in request_state.get("reference_roles") or []]
+    identity_index, _, angle_index = _strict_reference_indexes(roles)
+
+    base_bytes, _ = _read_image_uri(source_base_uri, label="strict_head_base")
+    identity_bytes, _ = _read_image_uri(
+        reference_uris[identity_index],
+        label="strict_identity_reference",
+    )
+    angle_bytes: bytes | None = None
+    if angle_index is not None:
+        angle_bytes, _ = _read_image_uri(
+            reference_uris[angle_index],
+            label="strict_face_angle_reference",
+        )
+
+    tightness = str(request_state.get("head_edit_tightness") or "MEDIUM").upper()
+    _set_stage(stages, "AUTO_CROP", "RUNNING")
+    _persist_progress(db, run, request_state, result_state)
+
+    prepared = prepare_strict_identity_assets(
+        base_bytes=base_bytes,
+        identity_bytes=identity_bytes,
+        angle_bytes=angle_bytes,
+        tightness=tightness,
+    )
+
+    assets = result_state.setdefault("assets", {})
+    assets["base_face_crop"] = _store_bytes(
+        run.run_id,
+        "base_face_crop",
+        crop_png(base_bytes, prepared.base_face_box),
+        "image/png",
+        ".png",
+    )
+    assets["base_head_crop"] = _store_bytes(
+        run.run_id,
+        "base_head_crop",
+        prepared.base_head_crop,
+        "image/png",
+        ".png",
+    )
+    assets["identity_face_crop"] = _store_bytes(
+        run.run_id,
+        "identity_face_crop",
+        prepared.identity_face_crop,
+        "image/png",
+        ".png",
+    )
+    assets["identity_head_crop"] = _store_bytes(
+        run.run_id,
+        "identity_head_crop",
+        prepared.identity_head_crop,
+        "image/png",
+        ".png",
+    )
+    if prepared.angle_head_crop:
+        assets["identity_angle_crop"] = _store_bytes(
+            run.run_id,
+            "identity_angle_crop",
+            prepared.angle_head_crop,
+            "image/png",
+            ".png",
+        )
+
+    request_state["strict_geometry"] = {
+        "base_face_box": prepared.base_face_box.as_list(),
+        "base_head_box": prepared.base_head_box.as_list(),
+        "identity_face_box": prepared.identity_face_box.as_list(),
+        "identity_head_box": prepared.identity_head_box.as_list(),
+    }
+    _set_stage(stages, "AUTO_CROP", "DONE")
+    _set_stage(stages, "AUTO_MASK", "RUNNING")
+    _persist_progress(db, run, request_state, result_state)
+
+    assets["mask_binary"] = _store_bytes(
+        run.run_id,
+        "mask_binary",
+        prepared.head_mask,
+        "image/png",
+        ".png",
+    )
+    assets["mask_preview"] = _store_bytes(
+        run.run_id,
+        "mask_preview",
+        prepared.head_mask_preview,
+        "image/png",
+        ".png",
+    )
+    _set_stage(stages, "AUTO_MASK", "DONE")
+
+    strict_prompt = compile_strict_head_swap_prompt(
+        str(request_state.get("user_prompt") or request_state.get("compiled_prompt") or "Strict head swap."),
+        has_angle_reference=angle_index is not None,
+        keep_hair_color=bool(request_state.get("keep_hair_color", False)),
+        keep_base_hair_shape=bool(request_state.get("keep_base_hair_shape", False)),
+        identity_strength=str(request_state.get("identity_strength") or "HIGH"),
+        negative_prompt=str(request_state.get("user_negative_prompt") or ""),
+    )
+    request_state["compiled_prompt"] = strict_prompt.prompt
+    request_state["negative_prompt"] = strict_prompt.negative_prompt
+
+    _set_stage(stages, "HEAD_SWAP", "RUNNING")
+    _persist_progress(db, run, request_state, result_state)
+
+    head_references = [assets["identity_head_crop"]]
+    if angle_index is not None and assets.get("identity_angle_crop"):
+        head_references.append(assets["identity_angle_crop"])
+
+    worker = invoke_image_studio_worker(
+        base_image_uri=assets["base_head_crop"],
+        reference_image_uris=head_references,
+        source_run_id=run.run_id,
+        prompt=strict_prompt.prompt,
+        negative_prompt=strict_prompt.negative_prompt,
+        steps=int(run.steps or 25),
+        seed=run.seed,
+        resolution_mode="current",
+        worker_mode=IMAGE_STUDIO_IDENTITY_V2_MODE,
+        pipeline_stage="STRICT_HEAD_SWAP",
+    )
+    edited_head_bytes, _ = _read_image_uri(
+        worker["result_uri"],
+        label="strict_edited_head",
+    )
+    assets["edited_head_roi"] = _store_bytes(
+        run.run_id,
+        "edited_head_roi",
+        edited_head_bytes,
+        "image/png",
+        ".png",
+    )
+    _set_stage(stages, "HEAD_SWAP", "DONE")
+
+    _set_stage(stages, "COMPOSITE", "RUNNING")
+    _persist_progress(db, run, request_state, result_state)
+    final_bytes = composite_head_roi(
+        base_bytes=base_bytes,
+        edited_head_bytes=edited_head_bytes,
+        head_box=prepared.base_head_box,
+        roi_mask_bytes=prepared.head_mask,
+    )
+    result_state["strict_validation"] = measure_strict_composite(
+        base_bytes=base_bytes,
+        result_bytes=final_bytes,
+        head_box=prepared.base_head_box,
+    )
+    _set_stage(stages, "COMPOSITE", "DONE")
+    _persist_progress(db, run, request_state, result_state)
+    return final_bytes, worker, int(worker.get("elapsed_ms") or 0)
+
+
 def _execute_queued_run(run_id: str) -> str:
     """Execute one already-claimed RUNNING job in a fresh DB session."""
 
@@ -354,51 +611,116 @@ def _execute_queued_run(run_id: str) -> str:
 
         request_state = _request_for(run)
         reference_uris = _reference_uris_for(run)
+        result_state = _result_for(run)
         stages = request_state.get("stages")
         if not isinstance(stages, list):
             stages = []
             request_state["stages"] = stages
 
         try:
-            worker = invoke_image_studio_worker(
-                base_image_uri=run.base_image_uri,
-                reference_image_uris=reference_uris,
-                source_run_id=run.run_id,
-                prompt=str(request_state.get("compiled_prompt") or ""),
-                negative_prompt=str(request_state.get("negative_prompt") or ""),
-                steps=int(run.steps or 25),
-                seed=run.seed,
-                resolution_mode=str(request_state.get("resolution_mode") or "real_768"),
-            )
-            generated_bytes, _ = _read_image_uri(
-                worker["result_uri"],
-                label="image_studio_output",
-            )
-            qwen_stage = next(
-                (
-                    stage
-                    for stage in stages
-                    if isinstance(stage, dict) and stage.get("name") == "qwen_generation"
-                ),
-                None,
-            )
-            if qwen_stage is not None:
-                qwen_stage["status"] = "DONE"
-
+            total_elapsed_ms = 0
+            worker_protocol: dict[str, Any] | list[Any] | None = None
             mask_composited = False
-            if run.mask_uri:
-                stages.append({"name": "mask_composite", "status": "RUNNING"})
-                base_bytes, _ = _read_image_uri(run.base_image_uri, label="image_studio_base")
-                mask_bytes, _ = _read_image_uri(run.mask_uri, label="image_studio_mask")
-                final_bytes = _mask_composite(base_bytes, generated_bytes, mask_bytes)
-                stages[-1]["status"] = "DONE"
+
+            if run.mode in {"STRICT_HEAD_SWAP", "HEAD_SWAP_SCENE_TRANSFER"}:
+                source_base_uri = run.base_image_uri
+                protocols: list[Any] = []
+
+                if run.mode == "HEAD_SWAP_SCENE_TRANSFER":
+                    roles = [str(role) for role in request_state.get("reference_roles") or []]
+                    _, scene_index, _ = _strict_reference_indexes(roles)
+                    if scene_index is None:
+                        raise IdentityPreprocessError(
+                            "SCENE_REFERENCE_REQUIRED",
+                            "HEAD_SWAP_SCENE_TRANSFER requires a SCENE reference.",
+                        )
+                    scene_prompt = compile_scene_transfer_stage_prompt(
+                        str(request_state.get("user_prompt") or "Transfer the subject into the scene reference."),
+                        negative_prompt=str(request_state.get("user_negative_prompt") or ""),
+                    )
+                    request_state["scene_prompt"] = scene_prompt.prompt
+                    request_state["scene_negative_prompt"] = scene_prompt.negative_prompt
+                    _set_stage(stages, "SCENE_TRANSFER", "RUNNING")
+                    _persist_progress(db, run, request_state, result_state)
+
+                    scene_worker = invoke_image_studio_worker(
+                        base_image_uri=run.base_image_uri,
+                        reference_image_uris=[reference_uris[scene_index]],
+                        source_run_id=run.run_id,
+                        prompt=scene_prompt.prompt,
+                        negative_prompt=scene_prompt.negative_prompt,
+                        steps=int(run.steps or 25),
+                        seed=run.seed,
+                        resolution_mode=str(request_state.get("resolution_mode") or "real_768"),
+                        worker_mode=IMAGE_STUDIO_IDENTITY_V2_MODE,
+                        pipeline_stage="SCENE_TRANSFER",
+                    )
+                    scene_bytes, _ = _read_image_uri(
+                        scene_worker["result_uri"],
+                        label="scene_stage_result",
+                    )
+                    scene_uri = _store_bytes(
+                        run.run_id,
+                        "scene_stage_result",
+                        scene_bytes,
+                        "image/png",
+                        ".png",
+                    )
+                    result_state.setdefault("assets", {})["scene_stage_result"] = scene_uri
+                    source_base_uri = scene_uri
+                    total_elapsed_ms += int(scene_worker.get("elapsed_ms") or 0)
+                    protocols.append(scene_worker.get("worker_protocol"))
+                    _set_stage(stages, "SCENE_TRANSFER", "DONE")
+                    _persist_progress(db, run, request_state, result_state)
+
+                final_bytes, head_worker, head_elapsed = _run_strict_head_stage(
+                    db=db,
+                    run=run,
+                    request_state=request_state,
+                    result_state=result_state,
+                    stages=stages,
+                    source_base_uri=source_base_uri,
+                    reference_uris=reference_uris,
+                )
+                total_elapsed_ms += head_elapsed
+                protocols.append(head_worker.get("worker_protocol"))
+                worker_protocol = {"pipeline": run.mode, "stages": protocols}
+                run.seed = head_worker.get("seed", run.seed)
                 mask_composited = True
             else:
-                with Image.open(io.BytesIO(generated_bytes)) as generated_source:
-                    rgb = generated_source.convert("RGB")
-                    output = io.BytesIO()
-                    rgb.save(output, format="PNG")
-                    final_bytes = output.getvalue()
+                worker = invoke_image_studio_worker(
+                    base_image_uri=run.base_image_uri,
+                    reference_image_uris=reference_uris,
+                    source_run_id=run.run_id,
+                    prompt=str(request_state.get("compiled_prompt") or ""),
+                    negative_prompt=str(request_state.get("negative_prompt") or ""),
+                    steps=int(run.steps or 25),
+                    seed=run.seed,
+                    resolution_mode=str(request_state.get("resolution_mode") or "real_768"),
+                )
+                generated_bytes, _ = _read_image_uri(
+                    worker["result_uri"],
+                    label="image_studio_output",
+                )
+                _set_stage(stages, "qwen_generation", "DONE")
+
+                if run.mask_uri:
+                    _set_stage(stages, "mask_composite", "RUNNING")
+                    base_bytes, _ = _read_image_uri(run.base_image_uri, label="image_studio_base")
+                    mask_bytes, _ = _read_image_uri(run.mask_uri, label="image_studio_mask")
+                    final_bytes = _mask_composite(base_bytes, generated_bytes, mask_bytes)
+                    _set_stage(stages, "mask_composite", "DONE")
+                    mask_composited = True
+                else:
+                    with Image.open(io.BytesIO(generated_bytes)) as generated_source:
+                        rgb = generated_source.convert("RGB")
+                        output = io.BytesIO()
+                        rgb.save(output, format="PNG")
+                        final_bytes = output.getvalue()
+
+                run.seed = worker.get("seed", run.seed)
+                total_elapsed_ms = int(worker.get("elapsed_ms") or 0)
+                worker_protocol = worker.get("worker_protocol")
 
             output_uri = _store_bytes(
                 run.run_id,
@@ -408,59 +730,75 @@ def _execute_queued_run(run_id: str) -> str:
                 ".png",
             )
             run.output_image_uri = output_uri
-            run.seed = worker.get("seed", run.seed)
-            run.elapsed_ms = worker.get("elapsed_ms")
-            run.request_json = json.dumps(request_state, ensure_ascii=False)
-            run.result_json = json.dumps(
+            run.elapsed_ms = total_elapsed_ms or None
+            result_state.update(
                 {
-                    "worker_result_uri": worker.get("result_uri"),
-                    "worker_protocol": worker.get("worker_protocol"),
+                    "worker_protocol": worker_protocol,
                     "reference_count": len(reference_uris),
                     "mask_composited": mask_composited,
-                },
-                ensure_ascii=False,
+                    "pipeline_version": "identity_transfer_v2"
+                    if run.mode in {"STRICT_HEAD_SWAP", "HEAD_SWAP_SCENE_TRANSFER"}
+                    else "image_studio_v1",
+                }
             )
+            run.request_json = json.dumps(request_state, ensure_ascii=False)
+            run.result_json = json.dumps(result_state, ensure_ascii=False)
             run.status = "SUCCESS"
             run.finished_at = _utcnow()
             db.commit()
             return "SUCCESS"
         except PortraitWorkerError as exc:
             if exc.error_code == "QWEN_WORKER_NOT_READY":
-                qwen_stage = next(
+                active_stage = next(
                     (
                         stage
-                        for stage in stages
-                        if isinstance(stage, dict) and stage.get("name") == "qwen_generation"
+                        for stage in reversed(stages)
+                        if isinstance(stage, dict) and stage.get("status") == "RUNNING"
                     ),
                     None,
                 )
-                if qwen_stage is not None:
-                    qwen_stage["status"] = "QUEUED"
+                if active_stage is not None:
+                    active_stage["status"] = "QUEUED"
                 run.status = "QUEUED"
                 run.started_at = None
                 run.finished_at = None
                 run.error_code = None
                 run.error_message = None
-                run.request_json = json.dumps(request_state, ensure_ascii=False)
-                db.commit()
+                _persist_progress(db, run, request_state, result_state)
                 return "REQUEUED"
 
-            qwen_stage = next(
+            active_stage = next(
                 (
                     stage
-                    for stage in stages
-                    if isinstance(stage, dict) and stage.get("name") == "qwen_generation"
+                    for stage in reversed(stages)
+                    if isinstance(stage, dict) and stage.get("status") == "RUNNING"
                 ),
                 None,
             )
-            if qwen_stage is not None:
-                qwen_stage["status"] = "FAILED"
+            if active_stage is not None:
+                active_stage["status"] = "FAILED"
             run.status = "FAILED"
             run.error_code = exc.error_code
             run.error_message = str(exc)[:3000]
             run.finished_at = _utcnow()
-            run.request_json = json.dumps(request_state, ensure_ascii=False)
-            db.commit()
+            _persist_progress(db, run, request_state, result_state)
+            return "FAILED"
+        except IdentityPreprocessError as exc:
+            active_stage = next(
+                (
+                    stage
+                    for stage in reversed(stages)
+                    if isinstance(stage, dict) and stage.get("status") == "RUNNING"
+                ),
+                None,
+            )
+            if active_stage is not None:
+                active_stage["status"] = "FAILED"
+            run.status = "FAILED"
+            run.error_code = exc.code
+            run.error_message = str(exc)[:3000]
+            run.finished_at = _utcnow()
+            _persist_progress(db, run, request_state, result_state)
             return "FAILED"
         except Exception as exc:
             active_stage = next(
@@ -478,8 +816,7 @@ def _execute_queued_run(run_id: str) -> str:
             run.error_code = "IMAGE_STUDIO_FAILED"
             run.error_message = safe_message
             run.finished_at = _utcnow()
-            run.request_json = json.dumps(request_state, ensure_ascii=False)
-            db.commit()
+            _persist_progress(db, run, request_state, result_state)
             return "FAILED"
     finally:
         db.close()
@@ -498,33 +835,88 @@ async def edit_image(
     seed: str | None = Form(default=None),
     steps: int = Form(default=25),
     resolution_mode: str = Form(default="real_768"),
+    identity_strength: str = Form(default="HIGH"),
+    head_edit_tightness: str = Form(default="MEDIUM"),
+    keep_hair_color: bool = Form(default=False),
+    keep_base_hair_shape: bool = Form(default=False),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    mode_value = str(mode or "").strip().upper()
     reference_uploads = list(references or [])
-    if len(reference_uploads) > 2:
-        raise HTTPException(status_code=422, detail="Image Studio V1 最多支持 2 张参考图")
+    max_references = 3 if mode_value == "HEAD_SWAP_SCENE_TRANSFER" else 2
+    if len(reference_uploads) > max_references:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{mode_value or 'Image Studio'} 最多支持 {max_references} 张参考图",
+        )
     if not 1 <= int(steps) <= 100:
         raise HTTPException(status_code=422, detail="steps 必须在 1 到 100 之间")
     if resolution_mode not in {"current", "real_768"}:
         raise HTTPException(status_code=422, detail="resolution_mode 必须是 current 或 real_768")
+
+    identity_strength_value = str(identity_strength or "HIGH").strip().upper()
+    if identity_strength_value not in {"LOW", "MEDIUM", "HIGH"}:
+        raise HTTPException(status_code=422, detail="identity_strength 必须是 LOW / MEDIUM / HIGH")
+    tightness_value = str(head_edit_tightness or "MEDIUM").strip().upper()
+    if tightness_value not in {"TIGHT", "MEDIUM", "LOOSE"}:
+        raise HTTPException(status_code=422, detail="head_edit_tightness 必须是 TIGHT / MEDIUM / LOOSE")
 
     try:
         seed_value = int(seed) if str(seed or "").strip() else None
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="seed 必须是整数") from exc
 
-    roles = _parse_roles(reference_roles, mode, len(reference_uploads))
-    # BUSY is acceptable: worker /health remains ready while the shared L4
-    # executes another prompt. STOPPED/LOADING still reject new submissions.
+    roles = _parse_roles(reference_roles, mode_value, len(reference_uploads))
+
+    if mode_value == "STRICT_HEAD_SWAP":
+        if not roles or roles[0] != "IDENTITY":
+            raise HTTPException(status_code=422, detail="STRICT_HEAD_SWAP 第一张参考图必须是 IDENTITY")
+        if len(roles) > 1 and roles[1] != "FACE_ANGLE":
+            raise HTTPException(status_code=422, detail="STRICT_HEAD_SWAP 第二张参考图只能是 FACE_ANGLE")
+    elif mode_value == "HEAD_SWAP_SCENE_TRANSFER":
+        expected = ["IDENTITY", "SCENE"] + (["FACE_ANGLE"] if len(roles) == 3 else [])
+        if roles != expected:
+            raise HTTPException(
+                status_code=422,
+                detail="HEAD_SWAP_SCENE_TRANSFER 参考顺序必须是 IDENTITY, SCENE, 可选 FACE_ANGLE",
+            )
+
+    # BUSY with a loaded model is healthy for the durable FIFO queue.
     _require_worker_ready()
+
     try:
-        compiled = compile_image_studio_prompt(
-            prompt,
-            mode=mode,
-            preservation=preservation,
-            reference_roles=roles,
-            negative_prompt=negative_prompt,
-        )
+        if mode_value == "STRICT_HEAD_SWAP":
+            compiled = compile_strict_head_swap_prompt(
+                prompt,
+                has_angle_reference="FACE_ANGLE" in roles,
+                keep_hair_color=bool(keep_hair_color),
+                keep_base_hair_shape=bool(keep_base_hair_shape),
+                identity_strength=identity_strength_value,
+                negative_prompt=negative_prompt,
+            )
+            scene_compiled = None
+        elif mode_value == "HEAD_SWAP_SCENE_TRANSFER":
+            compiled = compile_strict_head_swap_prompt(
+                prompt,
+                has_angle_reference="FACE_ANGLE" in roles,
+                keep_hair_color=bool(keep_hair_color),
+                keep_base_hair_shape=bool(keep_base_hair_shape),
+                identity_strength=identity_strength_value,
+                negative_prompt=negative_prompt,
+            )
+            scene_compiled = compile_scene_transfer_stage_prompt(
+                prompt,
+                negative_prompt=negative_prompt,
+            )
+        else:
+            compiled = compile_image_studio_prompt(
+                prompt,
+                mode=mode_value,
+                preservation=preservation,
+                reference_roles=roles,
+                negative_prompt=negative_prompt,
+            )
+            scene_compiled = None
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -548,23 +940,66 @@ async def edit_image(
         if mask_payload
         else None
     )
-    request_state = {
-        "reference_roles": list(compiled.reference_roles),
-        "compiled_prompt": compiled.prompt,
-        "negative_prompt": compiled.negative_prompt,
-        "resolution_mode": resolution_mode,
-        "queue_policy": "FIFO_SINGLE_L4",
-        "stages": [
+
+    if mode_value == "STRICT_HEAD_SWAP":
+        stages = [
+            {"name": "INPUT", "status": "DONE"},
+            {"name": "PROMPT_COMPILE", "status": "DONE"},
+            {"name": "AUTO_CROP", "status": "QUEUED"},
+            {"name": "AUTO_MASK", "status": "QUEUED"},
+            {"name": "HEAD_SWAP", "status": "QUEUED"},
+            {"name": "COMPOSITE", "status": "QUEUED"},
+        ]
+    elif mode_value == "HEAD_SWAP_SCENE_TRANSFER":
+        stages = [
+            {"name": "INPUT", "status": "DONE"},
+            {"name": "PROMPT_COMPILE", "status": "DONE"},
+            {"name": "SCENE_TRANSFER", "status": "QUEUED"},
+            {"name": "AUTO_CROP", "status": "QUEUED"},
+            {"name": "AUTO_MASK", "status": "QUEUED"},
+            {"name": "HEAD_SWAP", "status": "QUEUED"},
+            {"name": "COMPOSITE", "status": "QUEUED"},
+        ]
+    else:
+        stages = [
             {"name": "input", "status": "DONE"},
             {"name": "prompt_compile", "status": "DONE"},
             {"name": "qwen_generation", "status": "QUEUED"},
-        ],
+        ]
+
+    request_state = {
+        "pipeline_version": (
+            "identity_transfer_v2"
+            if mode_value in {"STRICT_HEAD_SWAP", "HEAD_SWAP_SCENE_TRANSFER"}
+            else "image_studio_v1"
+        ),
+        "reference_roles": roles,
+        "user_prompt": str(prompt or "").strip(),
+        "user_negative_prompt": str(negative_prompt or "").strip(),
+        "compiled_prompt": compiled.prompt,
+        "negative_prompt": compiled.negative_prompt,
+        "scene_prompt": scene_compiled.prompt if scene_compiled else None,
+        "scene_negative_prompt": scene_compiled.negative_prompt if scene_compiled else None,
+        "resolution_mode": resolution_mode,
+        "identity_strength": identity_strength_value,
+        "head_edit_tightness": tightness_value,
+        "keep_hair_color": bool(keep_hair_color),
+        "keep_base_hair_shape": bool(keep_base_hair_shape),
+        "preserve_clothing": True,
+        "preserve_body_shape": True,
+        "preserve_background": mode_value != "HEAD_SWAP_SCENE_TRANSFER",
+        "queue_policy": "FIFO_SINGLE_L4",
+        "stages": stages,
     }
     run = ImageStudioRun(
         run_id=run_id,
         status="QUEUED",
-        mode=compiled.mode,
-        preservation=compiled.preservation,
+        mode=mode_value,
+        preservation=(
+            "MAX" if mode_value == "STRICT_HEAD_SWAP"
+            else "STRONG" if mode_value == "HEAD_SWAP_SCENE_TRANSFER"
+            else compiled.preservation
+        ),
         model_version=MODEL_ID,
         request_json=json.dumps(request_state, ensure_ascii=False),
         result_json="{}",
@@ -653,6 +1088,12 @@ def _media_uri_for(run: ImageStudioRun, kind: str) -> str | None:
             return None
     if kind == "output":
         return run.output_image_uri
+
+    result = _result_for(run)
+    assets = result.get("assets")
+    if isinstance(assets, dict):
+        value = assets.get(kind)
+        return str(value) if value else None
     return None
 
 
