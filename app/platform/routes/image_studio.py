@@ -23,6 +23,7 @@ from app.image_studio_worker_client import IMAGE_STUDIO_IDENTITY_V2_MODE, invoke
 from app.qwen_refine_worker_client import check_qwen_refine_worker
 from app.platform.models import ImageStudioRun
 from app.platform.services.image_studio_prompt import (
+    compile_clean_frame_prompt,
     compile_image_studio_prompt,
     compile_scene_transfer_stage_prompt,
     compile_strict_head_swap_prompt,
@@ -180,6 +181,41 @@ def _mask_composite(base_bytes: bytes, generated_bytes: bytes, mask_bytes: bytes
     return output.getvalue()
 
 
+def _resize_png_to_long_edge(
+    image_bytes: bytes,
+    *,
+    long_edge: int,
+    aspect_source_bytes: bytes | None = None,
+) -> tuple[bytes, tuple[int, int]]:
+    if int(long_edge) not in {768, 1024, 1536, 2048}:
+        raise ValueError("output_long_edge must be one of 768, 1024, 1536, 2048")
+
+    with Image.open(io.BytesIO(image_bytes)) as image_source:
+        image = image_source.convert("RGB")
+    if aspect_source_bytes:
+        with Image.open(io.BytesIO(aspect_source_bytes)) as aspect_source:
+            source_width, source_height = aspect_source.size
+    else:
+        source_width, source_height = image.size
+
+    if source_width <= 0 or source_height <= 0:
+        raise ValueError("invalid source image size")
+
+    if source_width >= source_height:
+        target_width = int(long_edge)
+        target_height = max(1, int(round(source_height * float(long_edge) / source_width)))
+    else:
+        target_height = int(long_edge)
+        target_width = max(1, int(round(source_width * float(long_edge) / source_height)))
+
+    if image.size != (target_width, target_height):
+        image = image.resize((target_width, target_height), Image.Resampling.LANCZOS)
+
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue(), (target_width, target_height)
+
+
 def _require_worker_ready() -> dict[str, Any]:
     """Reject transient GPU warmup before creating an Image Studio run."""
 
@@ -268,6 +304,7 @@ def _intermediate_asset_urls(run: ImageStudioRun) -> list[dict[str, str]]:
         "identity_angle_crop": "Identity Angle Crop",
         "mask_binary": "Auto Mask",
         "mask_preview": "Mask Preview",
+        "clean_frame_result": "Clean Frame Result",
         "scene_stage_result": "Scene Stage Result",
         "edited_head_roi": "Edited Head ROI",
     }
@@ -306,6 +343,9 @@ def _response(run: ImageStudioRun) -> dict[str, Any]:
         "head_edit_tightness": request.get("head_edit_tightness"),
         "keep_hair_color": request.get("keep_hair_color"),
         "keep_base_hair_shape": request.get("keep_base_hair_shape"),
+        "clean_output": request.get("clean_output"),
+        "output_long_edge": request.get("output_long_edge"),
+        "output_size": result.get("output_size"),
         "seed": run.seed,
         "steps": run.steps,
         "compiled_prompt": request.get("compiled_prompt"),
@@ -565,7 +605,8 @@ def _run_strict_head_stage(
         negative_prompt=strict_prompt.negative_prompt,
         steps=int(run.steps or 25),
         seed=run.seed,
-        resolution_mode="current",
+        resolution_mode="target_long_edge",
+        target_long_edge=(1024 if int(request_state.get("output_long_edge") or 1024) >= 1024 else 768),
         worker_mode=IMAGE_STUDIO_IDENTITY_V2_MODE,
         pipeline_stage="STRICT_HEAD_SWAP",
     )
@@ -626,6 +667,46 @@ def _execute_queued_run(run_id: str) -> str:
                 source_base_uri = run.base_image_uri
                 protocols: list[Any] = []
 
+                if run.mode == "STRICT_HEAD_SWAP" and bool(request_state.get("clean_output", True)):
+                    clean_prompt = compile_clean_frame_prompt(
+                        str(request_state.get("user_prompt") or "")
+                    )
+                    request_state["clean_frame_prompt"] = clean_prompt.prompt
+                    request_state["clean_frame_negative_prompt"] = clean_prompt.negative_prompt
+                    _set_stage(stages, "CLEAN_FRAME", "RUNNING")
+                    _persist_progress(db, run, request_state, result_state)
+
+                    clean_worker = invoke_image_studio_worker(
+                        base_image_uri=run.base_image_uri,
+                        reference_image_uris=[],
+                        source_run_id=run.run_id,
+                        prompt=clean_prompt.prompt,
+                        negative_prompt=clean_prompt.negative_prompt,
+                        steps=int(run.steps or 25),
+                        seed=run.seed,
+                        resolution_mode="target_long_edge",
+                        target_long_edge=int(request_state.get("output_long_edge") or 1024),
+                        worker_mode=IMAGE_STUDIO_IDENTITY_V2_MODE,
+                        pipeline_stage="CLEAN_FRAME",
+                    )
+                    clean_bytes, _ = _read_image_uri(
+                        clean_worker["result_uri"],
+                        label="clean_frame_result",
+                    )
+                    clean_uri = _store_bytes(
+                        run.run_id,
+                        "clean_frame_result",
+                        clean_bytes,
+                        "image/png",
+                        ".png",
+                    )
+                    result_state.setdefault("assets", {})["clean_frame_result"] = clean_uri
+                    source_base_uri = clean_uri
+                    total_elapsed_ms += int(clean_worker.get("elapsed_ms") or 0)
+                    protocols.append(clean_worker.get("worker_protocol"))
+                    _set_stage(stages, "CLEAN_FRAME", "DONE")
+                    _persist_progress(db, run, request_state, result_state)
+
                 if run.mode == "HEAD_SWAP_SCENE_TRANSFER":
                     roles = [str(role) for role in request_state.get("reference_roles") or []]
                     _, scene_index, _ = _strict_reference_indexes(roles)
@@ -637,6 +718,7 @@ def _execute_queued_run(run_id: str) -> str:
                     scene_prompt = compile_scene_transfer_stage_prompt(
                         str(request_state.get("user_prompt") or "Transfer the subject into the scene reference."),
                         negative_prompt=str(request_state.get("user_negative_prompt") or ""),
+                        clean_output=bool(request_state.get("clean_output", True)),
                     )
                     request_state["scene_prompt"] = scene_prompt.prompt
                     request_state["scene_negative_prompt"] = scene_prompt.negative_prompt
@@ -651,7 +733,8 @@ def _execute_queued_run(run_id: str) -> str:
                         negative_prompt=scene_prompt.negative_prompt,
                         steps=int(run.steps or 25),
                         seed=run.seed,
-                        resolution_mode=str(request_state.get("resolution_mode") or "real_768"),
+                        resolution_mode="target_long_edge",
+                        target_long_edge=int(request_state.get("output_long_edge") or 1024),
                         worker_mode=IMAGE_STUDIO_IDENTITY_V2_MODE,
                         pipeline_stage="SCENE_TRANSFER",
                     )
@@ -696,7 +779,8 @@ def _execute_queued_run(run_id: str) -> str:
                     negative_prompt=str(request_state.get("negative_prompt") or ""),
                     steps=int(run.steps or 25),
                     seed=run.seed,
-                    resolution_mode=str(request_state.get("resolution_mode") or "real_768"),
+                    resolution_mode="target_long_edge",
+                    target_long_edge=int(request_state.get("output_long_edge") or 1024),
                 )
                 generated_bytes, _ = _read_image_uri(
                     worker["result_uri"],
@@ -721,6 +805,23 @@ def _execute_queued_run(run_id: str) -> str:
                 run.seed = worker.get("seed", run.seed)
                 total_elapsed_ms = int(worker.get("elapsed_ms") or 0)
                 worker_protocol = worker.get("worker_protocol")
+
+            original_base_bytes, _ = _read_image_uri(
+                run.base_image_uri,
+                label="image_studio_output_aspect_base",
+            )
+            final_bytes, final_size = _resize_png_to_long_edge(
+                final_bytes,
+                long_edge=int(request_state.get("output_long_edge") or 1024),
+                aspect_source_bytes=original_base_bytes,
+            )
+            result_state["output_size"] = {
+                "width": final_size[0],
+                "height": final_size[1],
+                "long_edge": int(request_state.get("output_long_edge") or 1024),
+                "aspect_source": "BASE",
+            }
+            _set_stage(stages, "OUTPUT_RESIZE", "DONE")
 
             output_uri = _store_bytes(
                 run.run_id,
@@ -834,7 +935,9 @@ async def edit_image(
     reference_roles: str = Form(default="[]"),
     seed: str | None = Form(default=None),
     steps: int = Form(default=25),
-    resolution_mode: str = Form(default="real_768"),
+    resolution_mode: str = Form(default="target_long_edge"),
+    output_long_edge: int = Form(default=1024),
+    clean_output: bool = Form(default=True),
     identity_strength: str = Form(default="HIGH"),
     head_edit_tightness: str = Form(default="MEDIUM"),
     keep_hair_color: bool = Form(default=False),
@@ -851,8 +954,10 @@ async def edit_image(
         )
     if not 1 <= int(steps) <= 100:
         raise HTTPException(status_code=422, detail="steps 必须在 1 到 100 之间")
-    if resolution_mode not in {"current", "real_768"}:
-        raise HTTPException(status_code=422, detail="resolution_mode 必须是 current 或 real_768")
+    if resolution_mode not in {"current", "real_768", "target_long_edge"}:
+        raise HTTPException(status_code=422, detail="resolution_mode 必须是 current / real_768 / target_long_edge")
+    if int(output_long_edge) not in {768, 1024, 1536, 2048}:
+        raise HTTPException(status_code=422, detail="output_long_edge 必须是 768 / 1024 / 1536 / 2048")
 
     identity_strength_value = str(identity_strength or "HIGH").strip().upper()
     if identity_strength_value not in {"LOW", "MEDIUM", "HIGH"}:
@@ -893,6 +998,7 @@ async def edit_image(
                 keep_base_hair_shape=bool(keep_base_hair_shape),
                 identity_strength=identity_strength_value,
                 negative_prompt=negative_prompt,
+                clean_output=bool(clean_output),
             )
             scene_compiled = None
         elif mode_value == "HEAD_SWAP_SCENE_TRANSFER":
@@ -903,10 +1009,12 @@ async def edit_image(
                 keep_base_hair_shape=bool(keep_base_hair_shape),
                 identity_strength=identity_strength_value,
                 negative_prompt=negative_prompt,
+                clean_output=bool(clean_output),
             )
             scene_compiled = compile_scene_transfer_stage_prompt(
                 prompt,
                 negative_prompt=negative_prompt,
+                clean_output=bool(clean_output),
             )
         else:
             compiled = compile_image_studio_prompt(
@@ -915,6 +1023,7 @@ async def edit_image(
                 preservation=preservation,
                 reference_roles=roles,
                 negative_prompt=negative_prompt,
+                clean_output=bool(clean_output),
             )
             scene_compiled = None
     except ValueError as exc:
@@ -945,10 +1054,12 @@ async def edit_image(
         stages = [
             {"name": "INPUT", "status": "DONE"},
             {"name": "PROMPT_COMPILE", "status": "DONE"},
+            {"name": "CLEAN_FRAME", "status": "QUEUED" if clean_output else "SKIPPED"},
             {"name": "AUTO_CROP", "status": "QUEUED"},
             {"name": "AUTO_MASK", "status": "QUEUED"},
             {"name": "HEAD_SWAP", "status": "QUEUED"},
             {"name": "COMPOSITE", "status": "QUEUED"},
+            {"name": "OUTPUT_RESIZE", "status": "QUEUED"},
         ]
     elif mode_value == "HEAD_SWAP_SCENE_TRANSFER":
         stages = [
@@ -959,12 +1070,14 @@ async def edit_image(
             {"name": "AUTO_MASK", "status": "QUEUED"},
             {"name": "HEAD_SWAP", "status": "QUEUED"},
             {"name": "COMPOSITE", "status": "QUEUED"},
+            {"name": "OUTPUT_RESIZE", "status": "QUEUED"},
         ]
     else:
         stages = [
             {"name": "input", "status": "DONE"},
             {"name": "prompt_compile", "status": "DONE"},
             {"name": "qwen_generation", "status": "QUEUED"},
+            {"name": "OUTPUT_RESIZE", "status": "QUEUED"},
         ]
 
     request_state = {
@@ -980,7 +1093,9 @@ async def edit_image(
         "negative_prompt": compiled.negative_prompt,
         "scene_prompt": scene_compiled.prompt if scene_compiled else None,
         "scene_negative_prompt": scene_compiled.negative_prompt if scene_compiled else None,
-        "resolution_mode": resolution_mode,
+        "resolution_mode": "target_long_edge",
+        "output_long_edge": int(output_long_edge),
+        "clean_output": bool(clean_output),
         "identity_strength": identity_strength_value,
         "head_edit_tightness": tightness_value,
         "keep_hair_color": bool(keep_hair_color),
