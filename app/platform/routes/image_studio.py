@@ -251,6 +251,36 @@ def _reference_uris_for(run: ImageStudioRun) -> list[str]:
     return [str(uri) for uri in value] if isinstance(value, list) else []
 
 
+def _intermediate_asset_urls(run: ImageStudioRun) -> list[dict[str, str]]:
+    result = _result_for(run)
+    assets = result.get("assets")
+    if not isinstance(assets, dict):
+        return []
+    labels = {
+        "base_face_crop": "Base Face Crop",
+        "base_head_crop": "Base Head Crop",
+        "identity_face_crop": "Identity Face Crop",
+        "identity_head_crop": "Identity Head Crop",
+        "identity_angle_crop": "Identity Angle Crop",
+        "mask_binary": "Auto Mask",
+        "mask_preview": "Mask Preview",
+        "scene_stage_result": "Scene Stage Result",
+        "edited_head_roi": "Edited Head ROI",
+    }
+    items: list[dict[str, str]] = []
+    for kind, label in labels.items():
+        if assets.get(kind):
+            items.append(
+                {
+                    "kind": kind,
+                    "label": label,
+                    "url": f"/api/image-studio/v1/runs/{run.run_id}/media/{kind}",
+                    "download_url": f"/api/image-studio/v1/runs/{run.run_id}/download/{kind}",
+                }
+            )
+    return items
+
+
 def _response(run: ImageStudioRun) -> dict[str, Any]:
     request = _request_for(run)
     result = _result_for(run)
@@ -266,10 +296,16 @@ def _response(run: ImageStudioRun) -> dict[str, Any]:
         "mode": run.mode,
         "preservation": run.preservation,
         "reference_roles": request.get("reference_roles") or [],
+        "identity_strength": request.get("identity_strength"),
+        "head_edit_tightness": request.get("head_edit_tightness"),
+        "keep_hair_color": request.get("keep_hair_color"),
+        "keep_base_hair_shape": request.get("keep_base_hair_shape"),
         "seed": run.seed,
         "steps": run.steps,
         "compiled_prompt": request.get("compiled_prompt"),
         "negative_prompt": request.get("negative_prompt"),
+        "scene_prompt": request.get("scene_prompt"),
+        "scene_negative_prompt": request.get("scene_negative_prompt"),
         "stages": request.get("stages") or [],
         "base_image_url": f"/api/image-studio/v1/runs/{run.run_id}/media/base",
         "reference_urls": [
@@ -286,6 +322,7 @@ def _response(run: ImageStudioRun) -> dict[str, Any]:
             if run.output_image_uri
             else None
         ),
+        "intermediate_assets": _intermediate_asset_urls(run),
         "elapsed_ms": run.elapsed_ms,
         "worker_protocol": result.get("worker_protocol"),
         "mask_composited": result.get("mask_composited", False),
@@ -294,7 +331,6 @@ def _response(run: ImageStudioRun) -> dict[str, Any]:
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
     }
-
 
 
 def _queue_position(db: Session, run: ImageStudioRun) -> int | None:
