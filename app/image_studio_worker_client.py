@@ -36,6 +36,7 @@ def invoke_image_studio_worker(
     steps: int = 25,
     seed: int | None = None,
     resolution_mode: str = "real_768",
+    target_long_edge: int | None = None,
     worker_mode: str = IMAGE_STUDIO_MODE,
     pipeline_stage: str | None = None,
 ) -> dict[str, Any]:
@@ -77,6 +78,7 @@ def invoke_image_studio_worker(
         "prompt": str(prompt or "").strip(),
         "negative_prompt": str(negative_prompt or "").strip(),
         "resolution_mode": str(resolution_mode or "real_768").strip().lower(),
+        "target_long_edge": int(target_long_edge) if target_long_edge is not None else None,
         "pipeline_stage": str(pipeline_stage or "").strip() or None,
     }
     fields = [
@@ -150,6 +152,7 @@ def invoke_image_studio_worker(
         "steps": safe_steps,
         "seed": safe_seed,
         "resolution_mode": params["resolution_mode"],
+        "target_long_edge": params["target_long_edge"],
         "pipeline_stage": params["pipeline_stage"],
     }
     return result
