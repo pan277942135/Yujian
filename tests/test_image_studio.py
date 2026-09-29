@@ -14,6 +14,7 @@ from fastapi import HTTPException
 import app.platform.routes.image_studio as image_studio_route
 from app.platform.routes.image_studio import STORAGE_TYPE, _delete_failed_run, _mask_composite, _require_worker_ready
 from app.platform.services.image_studio_prompt import (
+    compile_clean_frame_prompt,
     compile_image_studio_prompt,
     compile_scene_transfer_stage_prompt,
     compile_strict_head_swap_prompt,
@@ -780,3 +781,81 @@ def test_busy_loaded_worker_is_accepted_for_fifo_submission(monkeypatch):
         lambda: {"health": {"status": "busy", "model_loaded": True}},
     )
     assert _require_worker_ready()["status"] == "busy"
+
+
+
+def test_clean_frame_prompt_removes_only_overlay_ui_by_default():
+    compiled = compile_clean_frame_prompt("Keep the photographed subject unchanged.")
+
+    assert compiled.mode == "BASE_EDIT"
+    assert compiled.preservation == "MAX"
+    assert "watermark text" in compiled.prompt
+    assert "status bars" in compiled.prompt
+    assert "toolbars" in compiled.prompt
+    assert "screenshot controls" in compiled.prompt
+    assert "Preserve genuine in-scene signage" in compiled.prompt
+    assert "printed clothing graphics" in compiled.prompt
+    assert "genuine product logos" in compiled.negative_prompt
+
+
+def test_image_studio_ui_exposes_output_size_and_default_clean_output():
+    root = Path(__file__).resolve().parents[1]
+    template = (
+        root
+        / "app"
+        / "templates"
+        / "platform"
+        / "lab"
+        / "image_studio.html"
+    ).read_text(encoding="utf-8")
+
+    assert 'id="studioOutputLongEdge"' in template
+    assert '<option value="1024" selected>' in template
+    assert '<option value="1536">' in template
+    assert '<option value="2048">' in template
+    assert 'id="studioCleanOutput" type="checkbox" checked' in template
+    assert 'form.append("output_long_edge"' in template
+    assert 'form.append("clean_output"' in template
+    assert 'form.append("resolution_mode", "target_long_edge")' in template
+
+
+def test_image_studio_route_has_clean_frame_and_exact_output_resize():
+    root = Path(__file__).resolve().parents[1]
+    route = (root / "app" / "platform" / "routes" / "image_studio.py").read_text(encoding="utf-8")
+    detail = (
+        root
+        / "app"
+        / "templates"
+        / "platform"
+        / "lab"
+        / "image_studio_task_detail.html"
+    ).read_text(encoding="utf-8")
+
+    assert 'output_long_edge: int = Form(default=1024)' in route
+    assert 'clean_output: bool = Form(default=True)' in route
+    assert '"CLEAN_FRAME"' in route
+    assert 'compile_clean_frame_prompt(' in route
+    assert 'pipeline_stage="CLEAN_FRAME"' in route
+    assert '_resize_png_to_long_edge(' in route
+    assert '"output_size"' in route
+    assert '"clean_frame_result": "Clean Frame Result"' in route
+    assert "输出长边" in detail
+    assert "最终尺寸" in detail
+    assert "清理叠加 UI" in detail
+
+
+def test_worker_supports_target_long_edge_generation():
+    root = Path(__file__).resolve().parents[1]
+    worker = (
+        root
+        / "workers"
+        / "fish-qwen-refine-worker"
+        / "worker.py"
+    ).read_text(encoding="utf-8")
+    client = (root / "app" / "image_studio_worker_client.py").read_text(encoding="utf-8")
+
+    assert '"target_long_edge"' in worker
+    assert "_aspect_dimensions" in worker
+    assert "{768, 1024, 1536, 2048}" in worker
+    assert "target_long_edge: int | None = None" in client
+    assert '"target_long_edge": params["target_long_edge"]' in client
