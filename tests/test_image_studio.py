@@ -97,7 +97,7 @@ def test_worker_source_keeps_legacy_mode_and_adds_multi_reference_inputs():
 
     assert 'QWEN_MODE = "fish_preserve_refine_qwen_v1"' in worker
     assert 'IMAGE_STUDIO_MODE = "image_studio_v1"' in worker
-    assert "SUPPORTED_MODES = {QWEN_MODE, IMAGE_STUDIO_MODE}" in worker
+    assert "SUPPORTED_MODES = {QWEN_MODE, IMAGE_STUDIO_MODE, IMAGE_STUDIO_IDENTITY_V2_MODE}" in worker
     assert "references: list[UploadFile] | None" in worker
     assert 'f"image{offset}"' in worker
     assert '"reference_count": len(reference_inputs)' in worker
