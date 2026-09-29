@@ -70,6 +70,69 @@ def _normalise_enum(value: str, allowed: set[str], label: str) -> str:
     return normalized
 
 
+def _clean_output_contract() -> str:
+    return (
+        "Return a clean image without overlaid watermark text, app chrome, status bars, navigation bars, toolbars, "
+        "floating UI buttons, screenshot controls, subtitle/caption overlays, decorative borders, or other interface "
+        "elements that are not part of the photographed scene. Preserve genuine in-scene signage, printed clothing "
+        "graphics, product branding, and naturally photographed text unless the user explicitly asks to remove them."
+    )
+
+
+def compile_clean_frame_prompt(instruction: str = "") -> CompiledPrompt:
+    user_instruction = str(instruction or "").strip()
+    sections = [
+        "CLEAN FRAME STAGE:",
+        (
+            "Remove only non-scene overlays and screenshot/interface artifacts. "
+            "Do not redesign, beautify, restyle, or replace any person or object."
+        ),
+        "",
+        "CLEAN OUTPUT CONTRACT:",
+        _clean_output_contract(),
+        "",
+        "PRESERVATION CONTRACT:",
+        (
+            "Preserve person identity, face, hair, body, clothing, pose, hands, background, scene geometry, camera, "
+            "crop, perspective, lighting, shadows, color, and all photographic content. Fill only pixels revealed by "
+            "removed overlays so they continue the immediately surrounding scene naturally."
+        ),
+    ]
+    if user_instruction:
+        sections.extend(["", "USER CONTEXT:", user_instruction])
+    negative = ", ".join(
+        [
+            "person redesign",
+            "identity change",
+            "face change",
+            "body reshaping",
+            "outfit replacement",
+            "background replacement",
+            "camera change",
+            "crop change",
+            "removing real-world signage",
+            "removing printed clothing graphics",
+            "removing genuine product logos",
+            "watermark overlay",
+            "app UI",
+            "toolbar",
+            "status bar",
+            "navigation bar",
+            "screenshot controls",
+            "subtitle overlay",
+            "floating button",
+            "decorative border",
+        ]
+    )
+    return CompiledPrompt(
+        prompt="\n".join(sections).strip(),
+        negative_prompt=negative,
+        mode="BASE_EDIT",
+        preservation="MAX",
+        reference_roles=(),
+    )
+
+
 def compile_strict_head_swap_prompt(
     instruction: str,
     *,
@@ -78,6 +141,7 @@ def compile_strict_head_swap_prompt(
     keep_base_hair_shape: bool = False,
     identity_strength: str = "HIGH",
     negative_prompt: str = "",
+    clean_output: bool = True,
 ) -> CompiledPrompt:
     instruction_value = str(instruction or "").strip()
     if not instruction_value:
@@ -147,6 +211,9 @@ def compile_strict_head_swap_prompt(
         ]
     )
 
+    if clean_output:
+        sections.extend(["", "CLEAN OUTPUT CONTRACT:", _clean_output_contract()])
+
     negative_parts = [
         "original Base facial identity",
         "hybrid face",
@@ -178,6 +245,7 @@ def compile_scene_transfer_stage_prompt(
     instruction: str,
     *,
     negative_prompt: str = "",
+    clean_output: bool = True,
 ) -> CompiledPrompt:
     instruction_value = str(instruction or "").strip()
     if not instruction_value:
@@ -203,6 +271,9 @@ def compile_scene_transfer_stage_prompt(
             "a separate strict head-swap stage will handle final identity after this scene edit."
         ),
     ]
+    if clean_output:
+        sections.extend(["", "CLEAN OUTPUT CONTRACT:", _clean_output_contract()])
+
     negative_parts = [
         "new person",
         "identity replacement",
@@ -231,6 +302,7 @@ def compile_image_studio_prompt(
     preservation: str = "STRONG",
     reference_roles: Iterable[str] = (),
     negative_prompt: str = "",
+    clean_output: bool = True,
 ) -> CompiledPrompt:
     instruction_value = str(instruction or "").strip()
     if not instruction_value:
@@ -258,6 +330,7 @@ def compile_image_studio_prompt(
             instruction_value,
             has_angle_reference=len(roles) > 1,
             negative_prompt=negative_prompt,
+            clean_output=clean_output,
         )
 
     identity_indexes = [
@@ -371,6 +444,9 @@ def compile_image_studio_prompt(
             ]
         )
 
+    if clean_output:
+        sections.extend(["", "CLEAN OUTPUT CONTRACT:", _clean_output_contract()])
+
     if roles:
         sections.extend(["", "REFERENCE ROLES:"])
         for index, role in enumerate(roles, start=2):
@@ -416,6 +492,20 @@ def compile_image_studio_prompt(
         )
     else:
         negative_parts.insert(0, "unrequested identity change")
+    if clean_output:
+        negative_parts.extend(
+            [
+                "watermark overlay",
+                "app UI",
+                "toolbar",
+                "status bar",
+                "navigation bar",
+                "screenshot controls",
+                "subtitle overlay",
+                "floating button",
+                "decorative border",
+            ]
+        )
     supplied_negative = str(negative_prompt or "").strip()
     if supplied_negative:
         negative_parts.append(supplied_negative)
@@ -434,6 +524,7 @@ __all__ = [
     "ALLOWED_PRESERVATION",
     "ALLOWED_REFERENCE_ROLES",
     "CompiledPrompt",
+    "compile_clean_frame_prompt",
     "compile_image_studio_prompt",
     "compile_scene_transfer_stage_prompt",
     "compile_strict_head_swap_prompt",
