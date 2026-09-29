@@ -581,9 +581,9 @@ def _patch_workflow(
     _set_input(workflow, "170:168", "value", False)
     _set_input(workflow, "195", "filename_prefix", output_prefix)
 
-    if resolution_mode == "real_768":
+    if resolution_mode in {"real_768", "target_long_edge"}:
         if diffusion_width is None or diffusion_height is None:
-            raise WorkerError("real_768 dimensions were not calculated", 500)
+            raise WorkerError(f"{resolution_mode} dimensions were not calculated", 500)
         workflow["196"] = {
             "inputs": {
                 "image": ["41", 0],
@@ -593,7 +593,7 @@ def _patch_workflow(
                 "crop": "disabled",
             },
             "class_type": "ImageScale",
-            "_meta": {"title": "Real-768 aspect-preserving input scale"},
+            "_meta": {"title": "Aspect-preserving target input scale"},
         }
         _set_input(workflow, "170:160", "image", ["196", 0])
     elif resolution_mode != "current":
@@ -674,7 +674,7 @@ def _read_image_size(content: bytes) -> tuple[int, int] | None:
         return None
 
 
-def _real_768_dimensions(content: bytes) -> tuple[int, int]:
+def _aspect_dimensions(content: bytes, long_edge: int) -> tuple[int, int]:
     try:
         from PIL import Image
 
@@ -682,16 +682,22 @@ def _real_768_dimensions(content: bytes) -> tuple[int, int]:
             source_width, source_height = image.size
     except Exception as exc:
         raise WorkerError(
-            "real_768 requires a readable image: " + str(exc), 422
+            "target resolution requires a readable image: " + str(exc), 422
         ) from exc
 
     if source_width <= 0 or source_height <= 0:
-        raise WorkerError("real_768 requires a non-empty image", 422)
+        raise WorkerError("target resolution requires a non-empty image", 422)
+    if long_edge not in {768, 1024, 1536, 2048}:
+        raise WorkerError("target_long_edge must be one of 768, 1024, 1536, 2048", 422)
 
-    scale = 768.0 / max(source_width, source_height)
+    scale = float(long_edge) / max(source_width, source_height)
     width = max(16, int(round(source_width * scale / 16.0)) * 16)
     height = max(16, int(round(source_height * scale / 16.0)) * 16)
     return width, height
+
+
+def _real_768_dimensions(content: bytes) -> tuple[int, int]:
+    return _aspect_dimensions(content, 768)
 
 
 def _execute_generation(
@@ -956,11 +962,18 @@ def refine(
 
     experiment_no_cfg = _as_bool(options.get("experimental_no_cfg", False))
     resolution_mode = str(options.get("resolution_mode") or "current").strip().lower()
-    if resolution_mode not in {"current", "real_768"}:
+    if resolution_mode not in {"current", "real_768", "target_long_edge"}:
         raise HTTPException(
             status_code=422,
-            detail="resolution_mode must be current or real_768",
+            detail="resolution_mode must be current, real_768, or target_long_edge",
         )
+    raw_target_long_edge = options.get("target_long_edge")
+    try:
+        target_long_edge = int(raw_target_long_edge) if raw_target_long_edge not in (None, "") else None
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="target_long_edge must be an integer") from exc
+    if target_long_edge is not None and target_long_edge not in {768, 1024, 1536, 2048}:
+        raise HTTPException(status_code=422, detail="target_long_edge must be one of 768, 1024, 1536, 2048")
     cfg_scale = 1.0 if experiment_no_cfg else 4.0
     negative_prompt_sent = not experiment_no_cfg
 
@@ -1012,6 +1025,13 @@ def refine(
     if resolution_mode == "real_768":
         try:
             diffusion_width, diffusion_height = _real_768_dimensions(content)
+        except WorkerError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    elif resolution_mode == "target_long_edge":
+        if target_long_edge is None:
+            raise HTTPException(status_code=422, detail="target_long_edge is required for target_long_edge mode")
+        try:
+            diffusion_width, diffusion_height = _aspect_dimensions(content, target_long_edge)
         except WorkerError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
@@ -1088,6 +1108,7 @@ def refine(
             "cfg_scale": cfg_scale,
             "negative_prompt_sent": negative_prompt_sent,
             "resolution_mode": resolution_mode,
+            "target_long_edge": target_long_edge,
             "diffusion_size": effective_diffusion_size,
             "decoded_size": decoded_size,
             "saved_size": decoded_size,
@@ -1116,6 +1137,7 @@ def refine(
                 "cfg_scale": cfg_scale,
                 "negative_prompt_sent": negative_prompt_sent,
                 "resolution_mode": resolution_mode,
+                "target_long_edge": target_long_edge,
                 "diffusion_size": effective_diffusion_size,
                 "decoded_size": decoded_size,
                 "pipeline_stage": pipeline_stage,
