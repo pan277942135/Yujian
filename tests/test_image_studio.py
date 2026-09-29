@@ -613,6 +613,8 @@ def test_blend_and_full_rebuild_have_distinct_authority_semantics():
 
     assert "soft identity influence, not a replacement authority" in blend.prompt
     assert "Base remains the primary person identity" in blend.prompt
+    assert "The Base person remains identity authority" in blend.prompt
+    assert "sole authoritative source" not in blend.prompt
     assert "FULL CHARACTER REBUILD" in rebuild.prompt
     assert "original person appearance, face, hair, clothing, and body styling may be rebuilt" in rebuild.prompt
 
