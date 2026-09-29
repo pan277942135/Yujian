@@ -136,6 +136,9 @@
       metric("原图保持", run.preservation || "—") +
       metric("身份强度", run.identity_strength || "—") +
       metric("头部范围", run.head_edit_tightness || "—") +
+      metric("输出长边", run.output_long_edge ? run.output_long_edge + " px" : "—") +
+      metric("最终尺寸", run.output_size ? (run.output_size.width + " × " + run.output_size.height) : "—") +
+      metric("清理叠加 UI", run.clean_output === true ? "开启" : run.clean_output === false ? "关闭" : "—") +
       metric("保留发色", run.keep_hair_color === true ? "是" : run.keep_hair_color === false ? "否" : "—") +
       metric("保留发型", run.keep_base_hair_shape === true ? "是" : run.keep_base_hair_shape === false ? "否" : "—") +
       metric("模型", run.model || "—") +
