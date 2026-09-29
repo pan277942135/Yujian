@@ -241,8 +241,19 @@ jobs:
           GPU_PROJECT_ID: ${{ env.QWEN_GPU_PROJECT_ID }}
           GPU_ZONE: ${{ env.QWEN_GPU_ZONE }}
           GPU_INSTANCE: ${{ env.QWEN_GPU_INSTANCE }}
+          IMAGE_STUDIO_IDENTITY_UAT_BASE_URI: ${{ vars.IMAGE_STUDIO_IDENTITY_UAT_BASE_URI }}
+          IMAGE_STUDIO_IDENTITY_UAT_REFERENCE_URI: ${{ vars.IMAGE_STUDIO_IDENTITY_UAT_REFERENCE_URI }}
+          IMAGE_STUDIO_IDENTITY_UAT_STEPS: ${{ vars.IMAGE_STUDIO_IDENTITY_UAT_STEPS }}
         shell: bash
         run: bash scripts/qwen_gpu_manual_uat.sh
+
+      - name: Upload Image Studio identity V2 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-studio-identity-v2-${{ github.run_id }}
+          path: ${{ runner.temp }}/qwen-gpu-manual-uat/identity-transfer-v2
+          if-no-files-found: warn
 
       - name: Fish Visible historical failed-case E2E
         id: fish_visible_e2e
