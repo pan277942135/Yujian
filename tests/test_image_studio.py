@@ -188,7 +188,7 @@ def test_image_studio_ui_disables_generate_until_gpu_ready():
         / "image_studio.html"
     ).read_text(encoding="utf-8")
 
-    assert 'id="studioGenerate" class="studio-generate" type="button" disabled' in template
+    assert 'id="studioGenerate" class="generate" type="button" disabled' in template
     assert '"/api/qwen-lab/gpu/status?studio_ts="' in template
     assert '"/api/qwen-lab/gpu/start"' in template
     assert '(gpuState === "READY" || gpuState === "BUSY") && payload.model_loaded === true' in template
