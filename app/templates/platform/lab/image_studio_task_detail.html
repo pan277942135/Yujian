@@ -134,6 +134,10 @@
       metric("排队位置", run.queue_position ? "第 " + run.queue_position + " 位" : "—") +
       metric("模式", run.mode || "—") +
       metric("原图保持", run.preservation || "—") +
+      metric("身份强度", run.identity_strength || "—") +
+      metric("头部范围", run.head_edit_tightness || "—") +
+      metric("保留发色", run.keep_hair_color === true ? "是" : run.keep_hair_color === false ? "否" : "—") +
+      metric("保留发型", run.keep_base_hair_shape === true ? "是" : run.keep_base_hair_shape === false ? "否" : "—") +
       metric("模型", run.model || "—") +
       metric("Steps", run.steps ?? "—") +
       metric("Seed", run.seed ?? "random") +
@@ -163,7 +167,8 @@
       references: run.reference_urls || [],
       roles: run.reference_roles || [],
       mask: run.mask_url || null,
-      output: run.output_image_url || null
+      output: run.output_image_url || null,
+      intermediate: run.intermediate_assets || []
     });
     if (assetSignature !== lastAssetSignature) {
       let assets = assetCard("Base 原图", "base", run.base_image_url);
@@ -172,6 +177,9 @@
         assets += assetCard("Reference " + (index + 1) + (role ? " · " + role : ""), "reference_" + (index + 1), url);
       });
       if (run.mask_url) assets += assetCard("Mask", "mask", run.mask_url);
+      (run.intermediate_assets || []).forEach((asset) => {
+        assets += assetCard(asset.label || asset.kind, asset.kind, asset.url);
+      });
       if (run.output_image_url) assets += assetCard("生成结果", "output", run.output_image_url);
       $("detailAssets").innerHTML = assets || '<div style="color:var(--muted)">暂无可用图片资产</div>';
       lastAssetSignature = assetSignature;
