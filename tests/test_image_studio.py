@@ -193,7 +193,7 @@ def test_image_studio_ui_disables_generate_until_gpu_ready():
     assert '"/api/qwen-lab/gpu/start"' in template
     assert '(gpuState === "READY" || gpuState === "BUSY") && payload.model_loaded === true' in template
     assert '"运行中，可继续提交"' in template
-    assert '"正在启动 / 加载"' in template
+    assert "正在启动 / 加载" in template
     assert '"/api/image-studio/v1/queue?ts="' in template
 
 
