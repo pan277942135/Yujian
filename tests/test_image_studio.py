@@ -199,7 +199,7 @@ def test_image_studio_ui_disables_generate_until_gpu_ready():
 
 
 
-def test_image_studio_common_presets_are_primary_ui():
+def test_image_studio_workbench_is_chat_style_multi_image_composer():
     root = Path(__file__).resolve().parents[1]
     template = (
         root
@@ -210,15 +210,20 @@ def test_image_studio_common_presets_are_primary_ui():
         / "image_studio.html"
     ).read_text(encoding="utf-8")
 
-    for preset in ["HEAD_SWAP", "CHARACTER_FUSION", "HEAD_SCENE", "OUTFIT", "HD"]:
-        assert f'data-preset="{preset}"' in template
-    assert "严格换头" in template
-    assert "轻融合" in template
-    assert "换头 + 换背景" in template
-    assert "整体角色替换" in template
-    assert "只换穿搭" in template
-    assert "高清增强" in template
-    assert "<summary>高级设置</summary>" in template
+    assert 'id="studioFiles"' in template
+    assert 'multiple' in template
+    assert 'id="studioPrompt"' in template
+    assert 'id="studioGenerate"' in template
+    assert 'form.append("mode", "NATURAL_EDIT")' in template
+    assert 'form.append("reference_roles", "[]")' in template
+    assert 'files.slice(1).forEach((file) => form.append("references", file))' in template
+    assert "最多 3 张图片" in template
+    assert "图片顺序就是“图1、图2、图3”" in template
+    assert "studioPresets" not in template
+    assert "studioRole1" not in template
+    assert "studioMask" not in template
+    assert "studioSteps" not in template
+    assert "<summary>高级设置</summary>" not in template
 
 
 def test_qwen_runtime_has_no_automatic_vm_shutdown_policy():
@@ -497,21 +502,22 @@ def test_image_studio_detail_images_do_not_reload_every_poll():
     assert "window.clearInterval(pollTimer)" in detail
 
 
-def test_identity_presets_require_reference_uploads_before_submit():
-    root = Path(__file__).resolve().parents[1]
-    template = (
-        root
-        / "app"
-        / "templates"
-        / "platform"
-        / "lab"
-        / "image_studio.html"
-    ).read_text(encoding="utf-8")
+def test_natural_edit_delegates_reference_roles_to_qwen():
+    compiled = compile_image_studio_prompt(
+        "把图2的人物替换到图1里，保持图1的姿势和背景。",
+        mode="NATURAL_EDIT",
+        preservation="NORMAL",
+        reference_roles=["REFERENCE"],
+    )
 
-    assert '["HEAD_SWAP", "CHARACTER_FUSION", "HEAD_SCENE", "FULL_REBUILD"].includes(activePreset)' in template
-    assert "当前模式必须上传 Reference 1 角色身份母板" in template
-    assert "换头 + 换背景必须上传 Reference 2 场景参考" in template
-    assert "只换穿搭必须上传 Reference 1 穿搭参考" in template
+    assert compiled.mode == "NATURAL_EDIT"
+    assert compiled.preservation == "NORMAL"
+    assert compiled.reference_roles == ("REFERENCE",)
+    assert "Infer the role of each picture from the user's instruction" in compiled.prompt
+    assert "Picture 1 is the first uploaded image." in compiled.prompt
+    assert "Picture 2 is the 2 uploaded image." in compiled.prompt
+    assert "IDENTITY REPLACEMENT AUTHORITY" not in compiled.prompt
+    assert "BASE IMAGE AUTHORITY" not in compiled.prompt
 
 
 
@@ -859,3 +865,17 @@ def test_worker_supports_target_long_edge_generation():
     assert "{768, 1024, 1536, 2048}" in worker
     assert "target_long_edge: int | None = None" in client
     assert '"target_long_edge": params["target_long_edge"]' in client
+
+
+
+def test_natural_edit_route_uses_generic_reference_roles():
+    root = Path(__file__).resolve().parents[1]
+    route = (root / "app" / "platform" / "routes" / "image_studio.py").read_text(encoding="utf-8")
+    prompt_service = (
+        root / "app" / "platform" / "services" / "image_studio_prompt.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'if mode_value == "NATURAL_EDIT":' in route
+    assert 'roles = ["REFERENCE"] * reference_count' in route
+    assert '"NATURAL_EDIT",' in prompt_service
+    assert '"REFERENCE",' in prompt_service
