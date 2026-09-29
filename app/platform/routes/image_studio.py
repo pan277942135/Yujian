@@ -193,7 +193,7 @@ def _require_worker_ready() -> dict[str, Any]:
     health = snapshot.get("health") if isinstance(snapshot.get("health"), dict) else {}
     worker_status = str(health.get("status") or "").strip().lower()
     model_loaded = health.get("model_loaded") is True
-    if worker_status != "ready" or not model_loaded:
+    if worker_status not in {"ready", "busy"} or not model_loaded:
         raise HTTPException(
             status_code=503,
             detail={
@@ -218,8 +218,11 @@ def _parse_roles(raw: str, mode: str, reference_count: int) -> list[str]:
     else:
         roles = []
     if reference_count and not roles:
-        if str(mode or "").strip().upper() == "IDENTITY_LOCK":
+        mode_value = str(mode or "").strip().upper()
+        if mode_value in {"IDENTITY_LOCK", "STRICT_HEAD_SWAP"}:
             roles = ["IDENTITY"] + (["FACE_ANGLE"] if reference_count > 1 else [])
+        elif mode_value == "HEAD_SWAP_SCENE_TRANSFER":
+            roles = ["IDENTITY", "SCENE"] + (["FACE_ANGLE"] if reference_count > 2 else [])
         else:
             roles = ["OBJECT"] * reference_count
     if len(roles) != reference_count:
@@ -819,33 +822,88 @@ async def edit_image(
     seed: str | None = Form(default=None),
     steps: int = Form(default=25),
     resolution_mode: str = Form(default="real_768"),
+    identity_strength: str = Form(default="HIGH"),
+    head_edit_tightness: str = Form(default="MEDIUM"),
+    keep_hair_color: bool = Form(default=False),
+    keep_base_hair_shape: bool = Form(default=False),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    mode_value = str(mode or "").strip().upper()
     reference_uploads = list(references or [])
-    if len(reference_uploads) > 2:
-        raise HTTPException(status_code=422, detail="Image Studio V1 最多支持 2 张参考图")
+    max_references = 3 if mode_value == "HEAD_SWAP_SCENE_TRANSFER" else 2
+    if len(reference_uploads) > max_references:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{mode_value or 'Image Studio'} 最多支持 {max_references} 张参考图",
+        )
     if not 1 <= int(steps) <= 100:
         raise HTTPException(status_code=422, detail="steps 必须在 1 到 100 之间")
     if resolution_mode not in {"current", "real_768"}:
         raise HTTPException(status_code=422, detail="resolution_mode 必须是 current 或 real_768")
+
+    identity_strength_value = str(identity_strength or "HIGH").strip().upper()
+    if identity_strength_value not in {"LOW", "MEDIUM", "HIGH"}:
+        raise HTTPException(status_code=422, detail="identity_strength 必须是 LOW / MEDIUM / HIGH")
+    tightness_value = str(head_edit_tightness or "MEDIUM").strip().upper()
+    if tightness_value not in {"TIGHT", "MEDIUM", "LOOSE"}:
+        raise HTTPException(status_code=422, detail="head_edit_tightness 必须是 TIGHT / MEDIUM / LOOSE")
 
     try:
         seed_value = int(seed) if str(seed or "").strip() else None
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="seed 必须是整数") from exc
 
-    roles = _parse_roles(reference_roles, mode, len(reference_uploads))
-    # BUSY is acceptable: worker /health remains ready while the shared L4
-    # executes another prompt. STOPPED/LOADING still reject new submissions.
+    roles = _parse_roles(reference_roles, mode_value, len(reference_uploads))
+
+    if mode_value == "STRICT_HEAD_SWAP":
+        if not roles or roles[0] != "IDENTITY":
+            raise HTTPException(status_code=422, detail="STRICT_HEAD_SWAP 第一张参考图必须是 IDENTITY")
+        if len(roles) > 1 and roles[1] != "FACE_ANGLE":
+            raise HTTPException(status_code=422, detail="STRICT_HEAD_SWAP 第二张参考图只能是 FACE_ANGLE")
+    elif mode_value == "HEAD_SWAP_SCENE_TRANSFER":
+        expected = ["IDENTITY", "SCENE"] + (["FACE_ANGLE"] if len(roles) == 3 else [])
+        if roles != expected:
+            raise HTTPException(
+                status_code=422,
+                detail="HEAD_SWAP_SCENE_TRANSFER 参考顺序必须是 IDENTITY, SCENE, 可选 FACE_ANGLE",
+            )
+
+    # BUSY with a loaded model is healthy for the durable FIFO queue.
     _require_worker_ready()
+
     try:
-        compiled = compile_image_studio_prompt(
-            prompt,
-            mode=mode,
-            preservation=preservation,
-            reference_roles=roles,
-            negative_prompt=negative_prompt,
-        )
+        if mode_value == "STRICT_HEAD_SWAP":
+            compiled = compile_strict_head_swap_prompt(
+                prompt,
+                has_angle_reference="FACE_ANGLE" in roles,
+                keep_hair_color=bool(keep_hair_color),
+                keep_base_hair_shape=bool(keep_base_hair_shape),
+                identity_strength=identity_strength_value,
+                negative_prompt=negative_prompt,
+            )
+            scene_compiled = None
+        elif mode_value == "HEAD_SWAP_SCENE_TRANSFER":
+            compiled = compile_strict_head_swap_prompt(
+                prompt,
+                has_angle_reference="FACE_ANGLE" in roles,
+                keep_hair_color=bool(keep_hair_color),
+                keep_base_hair_shape=bool(keep_base_hair_shape),
+                identity_strength=identity_strength_value,
+                negative_prompt=negative_prompt,
+            )
+            scene_compiled = compile_scene_transfer_stage_prompt(
+                prompt,
+                negative_prompt=negative_prompt,
+            )
+        else:
+            compiled = compile_image_studio_prompt(
+                prompt,
+                mode=mode_value,
+                preservation=preservation,
+                reference_roles=roles,
+                negative_prompt=negative_prompt,
+            )
+            scene_compiled = None
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -869,23 +927,66 @@ async def edit_image(
         if mask_payload
         else None
     )
-    request_state = {
-        "reference_roles": list(compiled.reference_roles),
-        "compiled_prompt": compiled.prompt,
-        "negative_prompt": compiled.negative_prompt,
-        "resolution_mode": resolution_mode,
-        "queue_policy": "FIFO_SINGLE_L4",
-        "stages": [
+
+    if mode_value == "STRICT_HEAD_SWAP":
+        stages = [
+            {"name": "INPUT", "status": "DONE"},
+            {"name": "PROMPT_COMPILE", "status": "DONE"},
+            {"name": "AUTO_CROP", "status": "QUEUED"},
+            {"name": "AUTO_MASK", "status": "QUEUED"},
+            {"name": "HEAD_SWAP", "status": "QUEUED"},
+            {"name": "COMPOSITE", "status": "QUEUED"},
+        ]
+    elif mode_value == "HEAD_SWAP_SCENE_TRANSFER":
+        stages = [
+            {"name": "INPUT", "status": "DONE"},
+            {"name": "PROMPT_COMPILE", "status": "DONE"},
+            {"name": "SCENE_TRANSFER", "status": "QUEUED"},
+            {"name": "AUTO_CROP", "status": "QUEUED"},
+            {"name": "AUTO_MASK", "status": "QUEUED"},
+            {"name": "HEAD_SWAP", "status": "QUEUED"},
+            {"name": "COMPOSITE", "status": "QUEUED"},
+        ]
+    else:
+        stages = [
             {"name": "input", "status": "DONE"},
             {"name": "prompt_compile", "status": "DONE"},
             {"name": "qwen_generation", "status": "QUEUED"},
-        ],
+        ]
+
+    request_state = {
+        "pipeline_version": (
+            "identity_transfer_v2"
+            if mode_value in {"STRICT_HEAD_SWAP", "HEAD_SWAP_SCENE_TRANSFER"}
+            else "image_studio_v1"
+        ),
+        "reference_roles": roles,
+        "user_prompt": str(prompt or "").strip(),
+        "user_negative_prompt": str(negative_prompt or "").strip(),
+        "compiled_prompt": compiled.prompt,
+        "negative_prompt": compiled.negative_prompt,
+        "scene_prompt": scene_compiled.prompt if scene_compiled else None,
+        "scene_negative_prompt": scene_compiled.negative_prompt if scene_compiled else None,
+        "resolution_mode": resolution_mode,
+        "identity_strength": identity_strength_value,
+        "head_edit_tightness": tightness_value,
+        "keep_hair_color": bool(keep_hair_color),
+        "keep_base_hair_shape": bool(keep_base_hair_shape),
+        "preserve_clothing": True,
+        "preserve_body_shape": True,
+        "preserve_background": mode_value != "HEAD_SWAP_SCENE_TRANSFER",
+        "queue_policy": "FIFO_SINGLE_L4",
+        "stages": stages,
     }
     run = ImageStudioRun(
         run_id=run_id,
         status="QUEUED",
-        mode=compiled.mode,
-        preservation=compiled.preservation,
+        mode=mode_value,
+        preservation=(
+            "MAX" if mode_value == "STRICT_HEAD_SWAP"
+            else "STRONG" if mode_value == "HEAD_SWAP_SCENE_TRANSFER"
+            else compiled.preservation
+        ),
         model_version=MODEL_ID,
         request_json=json.dumps(request_state, ensure_ascii=False),
         result_json="{}",
