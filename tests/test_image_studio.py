@@ -7,13 +7,24 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
-from app.image_studio_worker_client import IMAGE_STUDIO_MODE, MAX_REFERENCES
+from app.image_studio_worker_client import IMAGE_STUDIO_IDENTITY_V2_MODE, IMAGE_STUDIO_MODE, MAX_REFERENCES
 from app.platform.models import ImageStudioRun
 from fastapi import HTTPException
 
 import app.platform.routes.image_studio as image_studio_route
 from app.platform.routes.image_studio import STORAGE_TYPE, _delete_failed_run, _mask_composite, _require_worker_ready
-from app.platform.services.image_studio_prompt import compile_image_studio_prompt
+from app.platform.services.image_studio_prompt import (
+    compile_image_studio_prompt,
+    compile_scene_transfer_stage_prompt,
+    compile_strict_head_swap_prompt,
+)
+from app.services.image_studio_identity import (
+    Box,
+    IdentityPreprocessError,
+    composite_head_roi,
+    measure_strict_composite,
+    prepare_strict_identity_assets,
+)
 
 
 def _png(size=(4, 4), color=(0, 0, 0), mode="RGB") -> bytes:
@@ -27,6 +38,7 @@ def test_image_studio_contract_is_separate_from_fish_lab():
     assert STORAGE_TYPE == "IMAGE_STUDIO_V1"
     assert ImageStudioRun.__tablename__ == "image_studio_run"
     assert IMAGE_STUDIO_MODE == "image_studio_v1"
+    assert IMAGE_STUDIO_IDENTITY_V2_MODE == "image_studio_identity_v2"
     assert MAX_REFERENCES == 2
 
 
@@ -199,9 +211,10 @@ def test_image_studio_common_presets_are_primary_ui():
 
     for preset in ["HEAD_SWAP", "CHARACTER_FUSION", "HEAD_SCENE", "OUTFIT", "HD"]:
         assert f'data-preset="{preset}"' in template
-    assert "角色换头" in template
-    assert "角色融合" in template
+    assert "严格换头" in template
+    assert "轻融合" in template
     assert "换头 + 换背景" in template
+    assert "整体角色替换" in template
     assert "只换穿搭" in template
     assert "高清增强" in template
     assert "<summary>高级设置</summary>" in template
@@ -494,7 +507,7 @@ def test_identity_presets_require_reference_uploads_before_submit():
         / "image_studio.html"
     ).read_text(encoding="utf-8")
 
-    assert '["HEAD_SWAP", "CHARACTER_FUSION", "HEAD_SCENE"].includes(activePreset)' in template
+    assert '["HEAD_SWAP", "CHARACTER_FUSION", "HEAD_SCENE", "FULL_REBUILD"].includes(activePreset)' in template
     assert "当前模式必须上传 Reference 1 角色身份母板" in template
     assert "换头 + 换背景必须上传 Reference 2 场景参考" in template
     assert "只换穿搭必须上传 Reference 1 穿搭参考" in template
@@ -530,3 +543,238 @@ def test_qwen_deploy_is_noninvasive_for_live_image_studio_queue():
     assert 'wait_for_worker_healthy 24 "post-generate"' in uat
     assert 'wait_for_worker_healthy 24 "post-image-studio"' in uat
     assert 'wait_for_display READY 24 "post-generate"' not in uat
+
+
+
+class _FakeVisionClient:
+    def __init__(self, boxes):
+        self._boxes = list(boxes)
+
+    def face_detection(self, *, image, max_results=5):
+        annotations = []
+        for left, top, right, bottom in self._boxes:
+            vertices = [
+                SimpleNamespace(x=left, y=top),
+                SimpleNamespace(x=right, y=top),
+                SimpleNamespace(x=right, y=bottom),
+                SimpleNamespace(x=left, y=bottom),
+            ]
+            annotations.append(
+                SimpleNamespace(
+                    fd_bounding_poly=SimpleNamespace(vertices=vertices),
+                    bounding_poly=None,
+                )
+            )
+        return SimpleNamespace(
+            face_annotations=annotations,
+            error=SimpleNamespace(message=""),
+        )
+
+
+def test_strict_head_swap_prompt_is_local_and_identity_authoritative():
+    compiled = compile_strict_head_swap_prompt(
+        "Replace only the head identity.",
+        has_angle_reference=True,
+        identity_strength="HIGH",
+    )
+
+    assert compiled.mode == "STRICT_HEAD_SWAP"
+    assert compiled.reference_roles == ("IDENTITY", "FACE_ANGLE")
+    assert "LOCAL HEAD ROI" in compiled.prompt
+    assert "Picture 2 is a tightly cropped IDENTITY head reference" in compiled.prompt
+    assert "Do not invent shoulders, torso, outfit" in compiled.prompt
+    assert "feather-composited back into the untouched Base image" in compiled.prompt
+    assert "copying identity-reference clothing" in compiled.negative_prompt
+
+
+def test_scene_stage_prompt_does_not_ask_scene_reference_for_identity():
+    compiled = compile_scene_transfer_stage_prompt("Move the subject into the target room.")
+
+    assert compiled.mode == "SCENE_TRANSFER"
+    assert compiled.reference_roles == ("SCENE",)
+    assert "Picture 2 / SCENE is authoritative only for the environment" in compiled.prompt
+    assert "Do not copy any person identity" in compiled.prompt
+    assert "separate strict head-swap stage" in compiled.prompt
+
+
+def test_blend_and_full_rebuild_have_distinct_authority_semantics():
+    blend = compile_image_studio_prompt(
+        "Blend lightly.",
+        mode="IDENTITY_BLEND",
+        preservation="STRONG",
+        reference_roles=["IDENTITY"],
+    )
+    rebuild = compile_image_studio_prompt(
+        "Rebuild character.",
+        mode="FULL_CHARACTER_REBUILD",
+        preservation="NORMAL",
+        reference_roles=["IDENTITY"],
+    )
+
+    assert "soft identity influence, not a replacement authority" in blend.prompt
+    assert "Base remains the primary person identity" in blend.prompt
+    assert "FULL CHARACTER REBUILD" in rebuild.prompt
+    assert "original person appearance, face, hair, clothing, and body styling may be rebuilt" in rebuild.prompt
+
+
+def test_strict_identity_preprocess_builds_head_crops_and_mask(monkeypatch):
+    base = _png(size=(200, 300), color=(20, 30, 40))
+    identity = _png(size=(240, 320), color=(180, 160, 140))
+    clients = iter([
+        _FakeVisionClient([(70, 80, 130, 150)]),
+    ])
+    # One detector object is reused for both images, so return base then identity.
+    class SequenceClient:
+        def __init__(self):
+            self.calls = 0
+
+        def face_detection(self, *, image, max_results=5):
+            self.calls += 1
+            box = (70, 80, 130, 150) if self.calls == 1 else (80, 70, 160, 165)
+            return _FakeVisionClient([box]).face_detection(image=image, max_results=max_results)
+
+    prepared = prepare_strict_identity_assets(
+        base_bytes=base,
+        identity_bytes=identity,
+        tightness="MEDIUM",
+        client=SequenceClient(),
+    )
+
+    assert prepared.base_face_box == Box(70, 80, 130, 150)
+    assert prepared.base_head_box.width > prepared.base_face_box.width
+    assert prepared.base_head_box.height > prepared.base_face_box.height
+    assert prepared.identity_head_box.width > prepared.identity_face_box.width
+    assert prepared.base_head_crop.startswith(b"\x89PNG")
+    assert prepared.identity_face_crop.startswith(b"\x89PNG")
+    assert prepared.identity_head_crop.startswith(b"\x89PNG")
+    assert prepared.head_mask.startswith(b"\x89PNG")
+    assert prepared.head_mask_preview.startswith(b"\x89PNG")
+
+
+def test_strict_composite_preserves_every_pixel_outside_head_roi():
+    base = _png(size=(100, 120), color=(10, 20, 30))
+    edited = _png(size=(40, 50), color=(220, 120, 80))
+    head_box = Box(30, 20, 70, 70)
+
+    mask_image = Image.new("L", (40, 50), 255)
+    mask_output = io.BytesIO()
+    mask_image.save(mask_output, format="PNG")
+
+    final_bytes = composite_head_roi(
+        base_bytes=base,
+        edited_head_bytes=edited,
+        head_box=head_box,
+        roi_mask_bytes=mask_output.getvalue(),
+    )
+    metrics = measure_strict_composite(
+        base_bytes=base,
+        result_bytes=final_bytes,
+        head_box=head_box,
+    )
+
+    assert metrics["outside_roi_preserved"] is True
+    assert metrics["outside_roi_changed_pixels"] == 0
+    assert metrics["head_roi_mean_abs_diff"] > 0
+
+
+def test_strict_identity_rejects_ambiguous_multiple_faces():
+    base = _png(size=(200, 300), color=(20, 30, 40))
+    client = _FakeVisionClient([
+        (20, 40, 90, 120),
+        (105, 45, 175, 125),
+    ])
+
+    with pytest.raises(IdentityPreprocessError) as exc_info:
+        prepare_strict_identity_assets(
+            base_bytes=base,
+            identity_bytes=base,
+            client=client,
+        )
+
+    assert exc_info.value.code == "MULTIPLE_FACES_AMBIGUOUS"
+
+
+def test_image_studio_v2_route_and_worker_contracts_are_explicit():
+    root = Path(__file__).resolve().parents[1]
+    route = (root / "app" / "platform" / "routes" / "image_studio.py").read_text(encoding="utf-8")
+    worker = (
+        root
+        / "workers"
+        / "fish-qwen-refine-worker"
+        / "worker.py"
+    ).read_text(encoding="utf-8")
+    client = (root / "app" / "image_studio_worker_client.py").read_text(encoding="utf-8")
+
+    assert '"STRICT_HEAD_SWAP"' in route
+    assert '"HEAD_SWAP_SCENE_TRANSFER"' in route
+    assert '"identity_transfer_v2"' in route
+    assert 'pipeline_stage="STRICT_HEAD_SWAP"' in route
+    assert 'pipeline_stage="SCENE_TRANSFER"' in route
+    assert '"AUTO_CROP"' in route
+    assert '"AUTO_MASK"' in route
+    assert '"COMPOSITE"' in route
+
+    assert 'IMAGE_STUDIO_IDENTITY_V2_MODE = "image_studio_identity_v2"' in worker
+    assert "pipeline_stage" in worker
+    assert 'IMAGE_STUDIO_IDENTITY_V2_MODE = "image_studio_identity_v2"' in client
+
+
+def test_image_studio_v2_ui_has_strict_modes_and_controls():
+    root = Path(__file__).resolve().parents[1]
+    template = (
+        root
+        / "app"
+        / "templates"
+        / "platform"
+        / "lab"
+        / "image_studio.html"
+    ).read_text(encoding="utf-8")
+
+    assert 'value="STRICT_HEAD_SWAP"' in template
+    assert 'value="HEAD_SWAP_SCENE_TRANSFER"' in template
+    assert 'value="IDENTITY_BLEND"' in template
+    assert 'value="FULL_CHARACTER_REBUILD"' in template
+    assert 'id="studioRef3"' in template
+    assert 'id="studioIdentityStrength"' in template
+    assert 'id="studioHeadTightness"' in template
+    assert 'id="studioKeepHairColor"' in template
+    assert 'id="studioKeepBaseHairShape"' in template
+    assert 'form.append("identity_strength"' in template
+    assert 'form.append("head_edit_tightness"' in template
+
+
+def test_task_detail_exposes_strict_identity_intermediates():
+    root = Path(__file__).resolve().parents[1]
+    route = (root / "app" / "platform" / "routes" / "image_studio.py").read_text(encoding="utf-8")
+    detail = (
+        root
+        / "app"
+        / "templates"
+        / "platform"
+        / "lab"
+        / "image_studio_task_detail.html"
+    ).read_text(encoding="utf-8")
+
+    for kind in [
+        "base_face_crop",
+        "base_head_crop",
+        "identity_face_crop",
+        "identity_head_crop",
+        "mask_binary",
+        "mask_preview",
+        "edited_head_roi",
+    ]:
+        assert kind in route
+    assert "intermediate_assets" in route
+    assert "run.intermediate_assets" in detail
+    assert "身份强度" in detail
+    assert "头部范围" in detail
+
+
+def test_busy_loaded_worker_is_accepted_for_fifo_submission(monkeypatch):
+    monkeypatch.setattr(
+        image_studio_route,
+        "check_qwen_refine_worker",
+        lambda: {"health": {"status": "busy", "model_loaded": True}},
+    )
+    assert _require_worker_ready()["status"] == "busy"
