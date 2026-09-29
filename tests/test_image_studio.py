@@ -188,14 +188,14 @@ def test_image_studio_ui_disables_generate_until_gpu_ready():
         / "image_studio.html"
     ).read_text(encoding="utf-8")
 
-    assert 'id="studioGenerate" class="studio-generate" type="button" disabled' in template
+    assert 'id="studioGenerate" class="generate" type="button" disabled' in template
     assert '"/api/qwen-lab/gpu/status?studio_ts="' in template
     assert '"/api/qwen-lab/gpu/start"' in template
-    assert '(gpuState === "READY" || gpuState === "BUSY") && payload.model_loaded === true' in template
-    assert '"运行中，可继续提交"' in template
-    assert "正在启动 / 加载" in template
+    assert '(state === "READY" || state === "BUSY") && payload?.model_loaded === true' in template
+    assert '"GPU · BUSY，可继续排队"' in template
+    assert 'state === "STARTING" || state === "LOADING"' in template
     assert '"/api/image-studio/v1/queue?ts="' in template
-
+    assert "syncGenerate()" in template
 
 
 def test_image_studio_workbench_is_chat_style_multi_image_composer():
