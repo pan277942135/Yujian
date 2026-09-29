@@ -14,6 +14,7 @@ from typing import Iterable
 
 from google.cloud import vision
 from PIL import Image, ImageDraw, ImageFilter
+import numpy as np
 
 
 class IdentityPreprocessError(RuntimeError):
@@ -304,6 +305,38 @@ def composite_head_roi(
     return _png(result)
 
 
+def measure_strict_composite(
+    *,
+    base_bytes: bytes,
+    result_bytes: bytes,
+    head_box: Box,
+) -> dict[str, float | int | bool]:
+    base = np.asarray(_open_rgb(base_bytes), dtype=np.int16)
+    result = np.asarray(_open_rgb(result_bytes), dtype=np.int16)
+    if base.shape != result.shape:
+        raise IdentityPreprocessError(
+            "STRICT_COMPOSITE_SIZE_MISMATCH",
+            f"strict composite size mismatch: base={base.shape}, result={result.shape}",
+        )
+
+    diff = np.abs(result - base)
+    height, width = base.shape[:2]
+    inside = np.zeros((height, width), dtype=bool)
+    inside[head_box.top:head_box.bottom, head_box.left:head_box.right] = True
+    outside = ~inside
+
+    outside_changed = int(np.any(diff[outside] > 0, axis=1).sum()) if outside.any() else 0
+    outside_total = int(outside.sum())
+    roi_diff = diff[inside]
+    head_mae = float(roi_diff.mean()) if roi_diff.size else 0.0
+    return {
+        "outside_roi_preserved": outside_changed == 0,
+        "outside_roi_changed_pixels": outside_changed,
+        "outside_roi_total_pixels": outside_total,
+        "head_roi_mean_abs_diff": round(head_mae, 4),
+    }
+
+
 __all__ = [
     "Box",
     "IdentityPreprocessError",
@@ -313,5 +346,6 @@ __all__ = [
     "crop_png",
     "detect_primary_face",
     "expand_head_box",
+    "measure_strict_composite",
     "prepare_strict_identity_assets",
 ]
