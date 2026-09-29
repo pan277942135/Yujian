@@ -267,7 +267,19 @@ def compile_image_studio_prompt(
     ]
     identity_picture = identity_indexes[0] if identity_indexes else None
 
-    if identity_picture is not None:
+    if identity_picture is not None and mode_value == "IDENTITY_BLEND":
+        base_authority = (
+            "Picture 1 / Base remains the primary person identity and is authoritative for camera, crop, pose, body, "
+            "clothing, lighting, scene, and overall facial continuity. The IDENTITY reference should influence selected "
+            "facial qualities softly without replacing the person wholesale."
+        )
+    elif identity_picture is not None and mode_value == "FULL_CHARACTER_REBUILD":
+        base_authority = (
+            "Picture 1 / Base is authoritative only for camera, framing, pose, subject placement, lighting direction, "
+            "and scene geometry. The original person appearance, face, hair, clothing, and body styling may be rebuilt "
+            "from the character reference."
+        )
+    elif identity_picture is not None:
         base_authority = (
             "Picture 1 / Base is authoritative only for camera, crop, body pose, hands, clothing, lighting, "
             "background, scene geometry, and other non-identity details. It is NOT authoritative for the person's "
@@ -284,7 +296,31 @@ def compile_image_studio_prompt(
         base_authority,
     ]
 
-    if identity_picture is not None:
+    if identity_picture is not None and mode_value == "IDENTITY_BLEND":
+        sections.extend(
+            [
+                "",
+                "IDENTITY BLEND:",
+                (
+                    f"Picture {identity_picture} is a soft identity influence, not a replacement authority. "
+                    "Keep the Base person recognizable while gently borrowing selected facial qualities and character mood. "
+                    "Do not copy the reference outfit, body, background, or full hairstyle."
+                ),
+            ]
+        )
+    elif identity_picture is not None and mode_value == "FULL_CHARACTER_REBUILD":
+        sections.extend(
+            [
+                "",
+                "FULL CHARACTER REBUILD:",
+                (
+                    f"Picture {identity_picture} is the authoritative character source for face identity, hair, age impression, "
+                    "and overall character appearance. Rebuild the Base person as this character while preserving Base camera, "
+                    "pose, placement, and scene. Do not preserve the original Base person's identity."
+                ),
+            ]
+        )
+    elif identity_picture is not None:
         sections.extend(
             [
                 "",
@@ -305,6 +341,7 @@ def compile_image_studio_prompt(
                 ),
             ]
         )
+
     elif mode_value == "IDENTITY_LOCK":
         sections.extend(
             [
@@ -349,7 +386,15 @@ def compile_image_studio_prompt(
         "unrequested crop change",
         "unrequested background change",
     ]
-    if identity_picture is not None:
+    if identity_picture is not None and mode_value == "IDENTITY_BLEND":
+        negative_parts.extend(
+            [
+                "full identity replacement",
+                "copying reference outfit",
+                "copying reference body",
+            ]
+        )
+    elif identity_picture is not None:
         negative_parts.extend(
             [
                 "preserving the original Base face identity",
