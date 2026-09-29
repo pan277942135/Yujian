@@ -1075,6 +1075,12 @@ def _media_uri_for(run: ImageStudioRun, kind: str) -> str | None:
             return None
     if kind == "output":
         return run.output_image_uri
+
+    result = _result_for(run)
+    assets = result.get("assets")
+    if isinstance(assets, dict):
+        value = assets.get(kind)
+        return str(value) if value else None
     return None
 
 
