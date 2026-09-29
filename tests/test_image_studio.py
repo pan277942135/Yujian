@@ -188,13 +188,12 @@ def test_image_studio_ui_disables_generate_until_gpu_ready():
         / "image_studio.html"
     ).read_text(encoding="utf-8")
 
-    assert 'id="studioGenerate" class="studio-primary" type="button" disabled' in template
-    assert 'id="studioGpuStart"' in template
+    assert 'id="studioGenerate" class="studio-generate" type="button" disabled' in template
     assert '"/api/qwen-lab/gpu/status?studio_ts="' in template
     assert '"/api/qwen-lab/gpu/start"' in template
-    assert '(state === "READY" || state === "BUSY") && payload?.model_loaded === true' in template
-    assert '"BUSY · GPU 正在生成；仍可继续提交"' in template
-    assert '"LOADING · Qwen 尚未 Ready，生成未提交"' in template
+    assert '(gpuState === "READY" || gpuState === "BUSY") && payload.model_loaded === true' in template
+    assert '"运行中，可继续提交"' in template
+    assert '"正在启动 / 加载"' in template
     assert '"/api/image-studio/v1/queue?ts="' in template
 
 
@@ -728,7 +727,7 @@ def test_image_studio_v2_route_and_worker_contracts_are_explicit():
     assert 'IMAGE_STUDIO_IDENTITY_V2_MODE = "image_studio_identity_v2"' in client
 
 
-def test_image_studio_v2_ui_has_strict_modes_and_controls():
+def test_image_studio_advanced_modes_are_not_exposed_in_chat_workbench():
     root = Path(__file__).resolve().parents[1]
     template = (
         root
@@ -739,17 +738,16 @@ def test_image_studio_v2_ui_has_strict_modes_and_controls():
         / "image_studio.html"
     ).read_text(encoding="utf-8")
 
-    assert 'value="STRICT_HEAD_SWAP"' in template
-    assert 'value="HEAD_SWAP_SCENE_TRANSFER"' in template
-    assert 'value="IDENTITY_BLEND"' in template
-    assert 'value="FULL_CHARACTER_REBUILD"' in template
-    assert 'id="studioRef3"' in template
-    assert 'id="studioIdentityStrength"' in template
-    assert 'id="studioHeadTightness"' in template
-    assert 'id="studioKeepHairColor"' in template
-    assert 'id="studioKeepBaseHairShape"' in template
-    assert 'form.append("identity_strength"' in template
-    assert 'form.append("head_edit_tightness"' in template
+    assert 'value="STRICT_HEAD_SWAP"' not in template
+    assert 'value="HEAD_SWAP_SCENE_TRANSFER"' not in template
+    assert 'value="IDENTITY_BLEND"' not in template
+    assert 'value="FULL_CHARACTER_REBUILD"' not in template
+    assert 'id="studioRef3"' not in template
+    assert 'id="studioIdentityStrength"' not in template
+    assert 'id="studioHeadTightness"' not in template
+    assert 'id="studioKeepHairColor"' not in template
+    assert 'id="studioKeepBaseHairShape"' not in template
+    assert 'form.append("mode", "NATURAL_EDIT")' in template
 
 
 def test_task_detail_exposes_strict_identity_intermediates():
@@ -804,7 +802,7 @@ def test_clean_frame_prompt_removes_only_overlay_ui_by_default():
     assert "genuine product logos" in compiled.negative_prompt
 
 
-def test_image_studio_ui_exposes_output_size_and_default_clean_output():
+def test_image_studio_chat_workbench_keeps_output_defaults_hidden():
     root = Path(__file__).resolve().parents[1]
     template = (
         root
@@ -815,13 +813,10 @@ def test_image_studio_ui_exposes_output_size_and_default_clean_output():
         / "image_studio.html"
     ).read_text(encoding="utf-8")
 
-    assert 'id="studioOutputLongEdge"' in template
-    assert '<option value="1024" selected>' in template
-    assert '<option value="1536">' in template
-    assert '<option value="2048">' in template
-    assert 'id="studioCleanOutput" type="checkbox" checked' in template
-    assert 'form.append("output_long_edge"' in template
-    assert 'form.append("clean_output"' in template
+    assert 'id="studioOutputLongEdge"' not in template
+    assert 'id="studioCleanOutput"' not in template
+    assert 'form.append("output_long_edge", "1024")' in template
+    assert 'form.append("clean_output", "true")' in template
     assert 'form.append("resolution_mode", "target_long_edge")' in template
 
 
