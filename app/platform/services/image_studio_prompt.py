@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Iterable
 
 ALLOWED_MODES = {
+    "NATURAL_EDIT",
     "BASE_EDIT",
     "IDENTITY_LOCK",
     "LOCAL_EDIT",
@@ -17,6 +18,7 @@ ALLOWED_MODES = {
 }
 ALLOWED_PRESERVATION = {"NORMAL", "STRONG", "MAX"}
 ALLOWED_REFERENCE_ROLES = {
+    "REFERENCE",
     "IDENTITY",
     "FACE_ANGLE",
     "POSE",
@@ -29,6 +31,7 @@ ALLOWED_REFERENCE_ROLES = {
 }
 
 _ROLE_RULES = {
+    "REFERENCE": "Use this picture according to the user's natural-language instruction and the visual relationship among all uploaded pictures. Do not assume a fixed role.",
     "IDENTITY": "Use this picture as the sole authoritative source for the target person's facial identity and stable personal features. The base image person is not identity authority.",
     "FACE_ANGLE": "Use the face-angle reference only to resolve facial geometry for the requested camera angle.",
     "POSE": "Use the pose reference for body pose and gesture, without replacing identity.",
@@ -295,6 +298,76 @@ def compile_scene_transfer_stage_prompt(
     )
 
 
+def compile_natural_edit_prompt(
+    instruction: str,
+    *,
+    reference_count: int = 0,
+    negative_prompt: str = "",
+    clean_output: bool = True,
+) -> CompiledPrompt:
+    """Minimal multi-image prompt that delegates role understanding to Qwen."""
+
+    instruction_value = str(instruction or "").strip()
+    if not instruction_value:
+        raise ValueError("instruction cannot be empty")
+    if len(instruction_value) > 4000:
+        raise ValueError("instruction cannot exceed 4000 characters")
+    if not 0 <= int(reference_count) <= 2:
+        raise ValueError("NATURAL_EDIT supports 1 to 3 uploaded images in total")
+
+    sections = [
+        "NATURAL MULTI-IMAGE EDIT:",
+        instruction_value,
+        "",
+        "IMAGE ORDER:",
+        "Picture 1 is the first uploaded image.",
+    ]
+    for index in range(2, int(reference_count) + 2):
+        sections.append(f"Picture {index} is the {index} uploaded image.")
+
+    sections.extend(
+        [
+            "",
+            "UNDERSTANDING CONTRACT:",
+            (
+                "Infer the role of each picture from the user's instruction and the visual content itself. "
+                "A later picture may be a person, face, scene, outfit, pose, style, object, or any other reference. "
+                "Do not impose a fixed role unless the user states one. Follow the user's requested relationships "
+                "between pictures directly and preserve details only when the instruction requires preservation."
+            ),
+        ]
+    )
+    if clean_output:
+        sections.extend(["", "CLEAN OUTPUT CONTRACT:", _clean_output_contract()])
+
+    negative_parts: list[str] = []
+    if clean_output:
+        negative_parts.extend(
+            [
+                "watermark overlay",
+                "app UI",
+                "toolbar",
+                "status bar",
+                "navigation bar",
+                "screenshot controls",
+                "subtitle overlay",
+                "floating button",
+                "decorative border",
+            ]
+        )
+    supplied = str(negative_prompt or "").strip()
+    if supplied:
+        negative_parts.append(supplied)
+
+    return CompiledPrompt(
+        prompt="\n".join(sections).strip(),
+        negative_prompt=", ".join(negative_parts),
+        mode="NATURAL_EDIT",
+        preservation="NORMAL",
+        reference_roles=tuple("REFERENCE" for _ in range(int(reference_count))),
+    )
+
+
 def compile_image_studio_prompt(
     instruction: str,
     *,
@@ -318,6 +391,14 @@ def compile_image_studio_prompt(
         _normalise_enum(role, ALLOWED_REFERENCE_ROLES, "reference role")
         for role in reference_roles
     )
+    if mode_value == "NATURAL_EDIT":
+        return compile_natural_edit_prompt(
+            instruction_value,
+            reference_count=len(roles),
+            negative_prompt=negative_prompt,
+            clean_output=clean_output,
+        )
+
     if len(roles) > 2:
         raise ValueError("Image Studio V1 supports at most two reference images")
 
@@ -526,6 +607,7 @@ __all__ = [
     "CompiledPrompt",
     "compile_clean_frame_prompt",
     "compile_image_studio_prompt",
+    "compile_natural_edit_prompt",
     "compile_scene_transfer_stage_prompt",
     "compile_strict_head_swap_prompt",
 ]

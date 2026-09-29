@@ -256,7 +256,9 @@ def _parse_roles(raw: str, mode: str, reference_count: int) -> list[str]:
         roles = []
     if reference_count and not roles:
         mode_value = str(mode or "").strip().upper()
-        if mode_value in {"IDENTITY_LOCK", "STRICT_HEAD_SWAP"}:
+        if mode_value == "NATURAL_EDIT":
+            roles = ["REFERENCE"] * reference_count
+        elif mode_value in {"IDENTITY_LOCK", "STRICT_HEAD_SWAP"}:
             roles = ["IDENTITY"] + (["FACE_ANGLE"] if reference_count > 1 else [])
         elif mode_value == "HEAD_SWAP_SCENE_TRANSFER":
             roles = ["IDENTITY", "SCENE"] + (["FACE_ANGLE"] if reference_count > 2 else [])
