@@ -32,6 +32,7 @@ from app.services.image_studio_identity import (
     IdentityPreprocessError,
     composite_head_roi,
     crop_png,
+    measure_strict_composite,
     prepare_strict_identity_assets,
 )
 from app.services.image_studio_jobs import enqueue_image_studio_queue
@@ -328,6 +329,7 @@ def _response(run: ImageStudioRun) -> dict[str, Any]:
             else None
         ),
         "intermediate_assets": _intermediate_asset_urls(run),
+        "strict_validation": result.get("strict_validation"),
         "elapsed_ms": run.elapsed_ms,
         "worker_protocol": result.get("worker_protocol"),
         "mask_composited": result.get("mask_composited", False),
@@ -587,6 +589,11 @@ def _run_strict_head_stage(
         edited_head_bytes=edited_head_bytes,
         head_box=prepared.base_head_box,
         roi_mask_bytes=prepared.head_mask,
+    )
+    result_state["strict_validation"] = measure_strict_composite(
+        base_bytes=base_bytes,
+        result_bytes=final_bytes,
+        head_box=prepared.base_head_box,
     )
     _set_stage(stages, "COMPOSITE", "DONE")
     _persist_progress(db, run, request_state, result_state)
