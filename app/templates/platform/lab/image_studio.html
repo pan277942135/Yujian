@@ -44,7 +44,7 @@
   <section class="panel">
     <div>
       <h1 style="margin:0 0 5px">Image Studio</h1>
-      <p class="studio-help" style="margin:0">先选你要做什么。系统自动配置 Qwen Mode、Reference Role 和原图保持度；需要时再展开高级设置。</p>
+      <p class="studio-help" style="margin:0">先选你要做什么。系统自动配置 Qwen Mode、Reference Role 和原图保持度；默认清理水印、工具栏和截图 UI，并按所选尺寸输出。</p>
     </div>
     <div class="studio-presets" id="studioPresets">
       <button class="studio-preset active" type="button" data-preset="HEAD_SWAP">
@@ -143,6 +143,26 @@
         <label for="studioPrompt">编辑要求 *</label>
         <textarea id="studioPrompt"></textarea>
         <div class="studio-help">预设会填入基础指令，你可以直接修改。系统还会追加身份/构图保护约束。</div>
+      </div>
+
+      <div class="studio-pair">
+        <div class="studio-field">
+          <label for="studioOutputLongEdge">输出图片大小 · 保持 Base 原比例</label>
+          <select id="studioOutputLongEdge">
+            <option value="768">768 长边 · 快速</option>
+            <option value="1024" selected>1024 长边 · 默认</option>
+            <option value="1536">1536 长边 · 高清</option>
+            <option value="2048">2048 长边 · 超清 / 更慢</option>
+          </select>
+          <div class="studio-help">最终下载图长边固定为所选值，短边按 Base 原始比例计算。</div>
+        </div>
+        <div class="studio-field">
+          <label>画面清理</label>
+          <label class="studio-help" style="display:flex;align-items:flex-start;gap:8px;padding-top:9px">
+            <input id="studioCleanOutput" type="checkbox" checked style="width:auto;margin-top:2px">
+            <span>默认去掉叠加水印、状态栏、导航栏、工具栏、截图按钮、字幕/角标等 UI；保留真实场景招牌、衣服印花和产品 Logo。</span>
+          </label>
+        </div>
       </div>
 
       <details class="studio-advanced">
@@ -271,7 +291,7 @@
   const presets = {
     HEAD_SWAP: {
       title: "严格换头",
-      note: "自动检测 Base 头部，裁出 Identity 头部参考，只生成头部 ROI，再回贴原图。",
+      note: "默认先清理水印/工具栏等叠加 UI，再自动检测头部，只生成头部 ROI，最后回贴并按目标尺寸输出。",
       mode: "STRICT_HEAD_SWAP",
       preservation: "MAX",
       refsVisible: 2,
@@ -284,7 +304,7 @@
     },
     HEAD_SCENE: {
       title: "换头 + 换背景",
-      note: "Stage 1 只做场景迁移；Stage 2 在中间结果上自动裁头并执行严格身份替换。",
+      note: "Stage 1 迁移场景并同步清理叠加 UI；Stage 2 自动裁头执行严格身份替换，最后按目标尺寸输出。",
       mode: "HEAD_SWAP_SCENE_TRANSFER",
       preservation: "STRONG",
       refsVisible: 3,
@@ -544,7 +564,9 @@
     form.append("mode", mode.value);
     form.append("preservation", preservation.value);
     form.append("steps", $("studioSteps").value || "25");
-    form.append("resolution_mode", "real_768");
+    form.append("resolution_mode", "target_long_edge");
+    form.append("output_long_edge", $("studioOutputLongEdge").value || "1024");
+    form.append("clean_output", $("studioCleanOutput").checked ? "true" : "false");
     form.append("identity_strength", $("studioIdentityStrength").value);
     form.append("head_edit_tightness", $("studioHeadTightness").value);
     form.append("keep_hair_color", $("studioKeepHairColor").checked ? "true" : "false");
