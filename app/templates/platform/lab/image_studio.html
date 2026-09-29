@@ -2,165 +2,181 @@
 
 {% block head %}
 <style>
-  .studio-page{max-width:860px;margin:0 auto;display:grid;gap:18px;padding:8px 0 28px}
-  .studio-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}
-  .studio-head h1{margin:0;font-size:24px;color:#234c40}
-  .studio-sub{margin:5px 0 0;color:var(--muted);font-size:13px;line-height:1.55}
-  .studio-task-link{white-space:nowrap;border:1px solid #d6e4de;border-radius:10px;padding:8px 11px;color:#28584a;text-decoration:none;font-size:12px;font-weight:750;background:#fff}
-  .studio-composer{border:1px solid #d6e3de;border-radius:18px;background:#fff;box-shadow:0 10px 28px rgba(39,79,66,.07);overflow:hidden}
-  .studio-attachments{display:flex;gap:10px;overflow-x:auto;padding:14px 14px 4px}
-  .studio-attachments:empty{display:none}
-  .studio-thumb{position:relative;flex:0 0 112px}
-  .studio-thumb img{display:block;width:112px;height:112px;object-fit:cover;border-radius:12px;background:#eef3f1;border:1px solid #d7e3de}
-  .studio-thumb .studio-index{position:absolute;left:7px;top:7px;border-radius:999px;background:rgba(22,48,40,.78);color:#fff;font-size:10px;font-weight:800;padding:3px 6px}
-  .studio-thumb button{position:absolute;right:6px;top:6px;border:0;border-radius:999px;width:24px;height:24px;background:rgba(255,255,255,.92);color:#5e6c67;cursor:pointer;font-size:16px;line-height:22px;padding:0}
-  .studio-input{width:100%;box-sizing:border-box;border:0;outline:0;resize:none;min-height:132px;padding:16px 18px 8px;font:inherit;font-size:15px;line-height:1.6;color:#233f37;background:transparent}
-  .studio-input::placeholder{color:#8b9b95}
-  .studio-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px 12px}
-  .studio-tools{display:flex;align-items:center;gap:8px}
-  .studio-attach,.studio-generate{display:inline-flex;align-items:center;justify-content:center;border-radius:11px;font:inherit;font-weight:800;cursor:pointer}
-  .studio-attach{width:38px;height:38px;border:1px solid #d5e2dc;background:#f8fbfa;color:#28584a;font-size:22px}
-  .studio-generate{border:0;background:#245f50;color:#fff;padding:10px 17px;min-width:82px}
-  .studio-generate:disabled{opacity:.42;cursor:not-allowed}
-  .studio-hint{font-size:11px;color:var(--muted)}
-  .studio-state{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;border-radius:12px;background:#f7faf9;padding:10px 12px;color:#557069;font-size:12px}
-  .studio-state strong{color:#31584c}
-  .studio-status{white-space:pre-wrap}
-  .studio-queue{white-space:nowrap}
-  .studio-hidden{display:none!important}
+  .studio-shell{max-width:860px;margin:0 auto;display:grid;gap:14px}
+  .studio-title{padding:2px 2px 4px}
+  .studio-title h1{margin:0 0 6px;font-size:24px;color:#24483d}
+  .studio-title p{margin:0;color:var(--muted);font-size:13px;line-height:1.55}
+  .composer{border:1px solid #d8e5df;border-radius:18px;background:#fff;padding:14px;box-shadow:0 8px 28px rgba(26,74,60,.06);display:grid;gap:12px}
+  .images-row{display:flex;gap:10px;overflow-x:auto;padding-bottom:2px}
+  .image-card{position:relative;flex:0 0 116px;border:1px solid #d9e5e0;border-radius:12px;overflow:hidden;background:#f5f8f7}
+  .image-card img{display:block;width:116px;height:116px;object-fit:cover}
+  .image-label{position:absolute;left:7px;bottom:7px;background:rgba(24,52,44,.82);color:#fff;border-radius:999px;padding:3px 7px;font-size:10px;font-weight:800}
+  .image-remove{position:absolute;right:6px;top:6px;border:0;border-radius:999px;background:rgba(24,52,44,.78);color:#fff;width:24px;height:24px;cursor:pointer;font-size:14px;line-height:24px;padding:0}
+  .upload-tile{flex:0 0 116px;height:116px;border:1px dashed #a9c8bc;border-radius:12px;background:#f8fcfa;color:#376557;display:grid;place-items:center;text-align:center;cursor:pointer;font-size:12px;line-height:1.45;padding:8px;box-sizing:border-box}
+  .upload-tile strong{display:block;font-size:24px;font-weight:400;line-height:1}
+  #studioFiles{display:none}
+  .prompt-box{width:100%;min-height:150px;box-sizing:border-box;border:0;outline:0;resize:vertical;padding:4px 2px;font:inherit;font-size:16px;line-height:1.65;color:#203f36;background:transparent}
+  .prompt-box::placeholder{color:#8fa19b}
+  .composer-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;border-top:1px solid #edf2f0;padding-top:10px}
+  .helper{font-size:12px;color:var(--muted);line-height:1.5}
+  .actions{display:flex;align-items:center;gap:8px}
+  .actions a{color:#38695b;text-decoration:none;font-size:12px;font-weight:750;padding:9px 11px;border-radius:9px;background:#eef5f2}
+  .generate{border:0;border-radius:10px;background:#245f50;color:#fff;padding:10px 18px;font-weight:800;cursor:pointer}
+  .generate:disabled{opacity:.45;cursor:not-allowed}
+  .runtime{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:0 2px}
+  .runtime-text{display:flex;gap:10px;flex-wrap:wrap;color:var(--muted);font-size:11px}
+  .runtime button{border:1px solid #c7dbd2;border-radius:8px;background:#fff;color:#2e6454;padding:6px 9px;font-size:11px;font-weight:750;cursor:pointer}
+  .runtime button[hidden]{display:none}
+  .status{border-radius:10px;background:#f4f8f6;padding:9px 11px;color:#3f5e55;font-size:12px;white-space:pre-wrap}
   @media(max-width:640px){
-    .studio-page{padding-top:0}
-    .studio-head{align-items:center}
-    .studio-head h1{font-size:21px}
-    .studio-sub{font-size:12px}
-    .studio-thumb,.studio-thumb img{width:92px;height:92px;flex-basis:92px}
-    .studio-input{min-height:118px}
+    .studio-shell{max-width:none}
+    .composer{border-radius:14px;padding:11px}
+    .image-card,.upload-tile{flex-basis:94px}
+    .image-card img{width:94px;height:94px}
+    .upload-tile{height:94px}
+    .prompt-box{min-height:132px;font-size:15px}
   }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="studio-page">
-  <header class="studio-head">
-    <div>
-      <h1>图生图工作台</h1>
-      <p class="studio-sub">上传图片，直接告诉 Qwen 你想怎么改。图片顺序就是“图1、图2、图3”。</p>
-    </div>
-    <a class="studio-task-link" href="/platform/image-studio/tasks">任务处理列表</a>
-  </header>
+<div class="studio-shell">
+  <div class="studio-title">
+    <h1>图生图工作台</h1>
+    <p>上传图片，然后直接告诉 Qwen 你想怎么改。最多 3 张图片，图片顺序就是“图1、图2、图3”。</p>
+  </div>
 
-  <section class="studio-composer">
-    <div id="studioAttachments" class="studio-attachments"></div>
+  <section class="composer">
+    <div class="images-row" id="studioImageRow">
+      <label class="upload-tile" id="studioUploadTile" for="studioFiles">
+        <span><strong>＋</strong>添加图片<br>支持多张</span>
+      </label>
+    </div>
+    <input id="studioFiles" type="file" accept="image/jpeg,image/png,image/webp" multiple>
+
     <textarea
       id="studioPrompt"
-      class="studio-input"
-      placeholder="例如：把图2的人物替换到图1里，保持图1的姿势、衣服和背景不变。"
-      maxlength="4000"
+      class="prompt-box"
+      placeholder="例如：图1作为绝对底图，把图2的人物替换到图1，保持图1的姿势、衣服和背景不变。"
     ></textarea>
 
-    <div class="studio-toolbar">
-      <div class="studio-tools">
-        <button id="studioAttach" class="studio-attach" type="button" title="添加图片">＋</button>
-        <span id="studioHint" class="studio-hint">最多 3 张图片</span>
+    <div class="composer-footer">
+      <div class="helper">不需要选择模式、角色、Mask 或参数；用自然语言说明每张图的用途即可。</div>
+      <div class="actions">
+        <a href="/platform/image-studio/tasks">任务处理列表</a>
+        <button id="studioGenerate" class="generate" type="button" disabled>生成</button>
       </div>
-      <button id="studioGenerate" class="studio-generate" type="button" disabled>生成</button>
     </div>
   </section>
 
-  <input id="studioFiles" class="studio-hidden" type="file" accept="image/jpeg,image/png,image/webp" multiple>
-
-  <div class="studio-state">
-    <div id="studioStatus" class="studio-status"><strong>模型</strong> · 正在检查</div>
-    <div id="studioQueue" class="studio-queue">队列 · —</div>
+  <div class="runtime">
+    <div class="runtime-text">
+      <span id="studioGpuStatus">GPU · 检查中</span>
+      <span id="studioQueueStatus">队列 · 读取中</span>
+    </div>
+    <button id="studioGpuStart" type="button" hidden>启动 GPU</button>
   </div>
+
+  <div id="studioStatus" class="status">请选择至少 1 张图片并输入编辑要求。</div>
 </div>
 
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
-  const fileInput = $("studioFiles");
-  const attachments = $("studioAttachments");
+  const input = $("studioFiles");
+  const imageRow = $("studioImageRow");
+  const uploadTile = $("studioUploadTile");
   const promptInput = $("studioPrompt");
   const generateButton = $("studioGenerate");
   const status = $("studioStatus");
-  const queueStatus = $("studioQueue");
-  const hint = $("studioHint");
+  const gpuStatus = $("studioGpuStatus");
+  const queueStatus = $("studioQueueStatus");
+  const gpuStart = $("studioGpuStart");
 
   let files = [];
   let objectUrls = [];
   let gpuReady = false;
-  let gpuState = "CHECKING";
   let submitting = false;
   let currentRunId = null;
   let pollTimer = null;
 
-  function clearObjectUrls() {
+  function revokePreviews() {
     objectUrls.forEach((url) => URL.revokeObjectURL(url));
     objectUrls = [];
   }
 
+  function syncGenerate() {
+    generateButton.disabled = submitting || !gpuReady || files.length < 1 || !promptInput.value.trim();
+  }
+
   function renderFiles() {
-    clearObjectUrls();
-    attachments.innerHTML = "";
+    revokePreviews();
+    imageRow.querySelectorAll(".image-card").forEach((node) => node.remove());
+
     files.forEach((file, index) => {
       const url = URL.createObjectURL(file);
       objectUrls.push(url);
       const card = document.createElement("div");
-      card.className = "studio-thumb";
+      card.className = "image-card";
       card.innerHTML =
         '<img alt="图' + (index + 1) + '">' +
-        '<span class="studio-index">图' + (index + 1) + '</span>' +
-        '<button type="button" aria-label="删除图' + (index + 1) + '">×</button>';
+        '<span class="image-label">图' + (index + 1) + '</span>' +
+        '<button class="image-remove" type="button" aria-label="删除图' + (index + 1) + '">×</button>';
       card.querySelector("img").src = url;
-      card.querySelector("button").addEventListener("click", () => {
+      card.querySelector(".image-remove").addEventListener("click", () => {
         files.splice(index, 1);
         renderFiles();
-        syncGenerateState();
       });
-      attachments.appendChild(card);
+      imageRow.insertBefore(card, uploadTile);
     });
-    hint.textContent = files.length
-      ? files.length + "/3 · 第1张为主图，后续为参考图"
-      : "最多 3 张图片";
+
+    uploadTile.hidden = files.length >= 3;
+    syncGenerate();
   }
 
-  function syncGenerateState() {
-    generateButton.disabled = submitting || !gpuReady || files.length === 0 || !promptInput.value.trim();
-  }
+  input.addEventListener("change", () => {
+    const selected = Array.from(input.files || []);
+    if (!selected.length) return;
+    const remaining = Math.max(0, 3 - files.length);
+    files.push(...selected.slice(0, remaining));
+    if (selected.length > remaining) {
+      status.textContent = "最多 3 张图片，多余图片未加入。";
+    }
+    input.value = "";
+    renderFiles();
+  });
 
-  function setQueue(queue) {
-    if (!queue) return;
-    const running = Number(queue.running || 0);
-    const queued = Number(queue.queued || 0);
-    queueStatus.textContent = (running || queued)
-      ? "队列 · 生成中 " + running + " · 等待 " + queued
-      : "队列 · 空闲";
+  promptInput.addEventListener("input", syncGenerate);
+
+  function applyGpuState(payload) {
+    const state = String(payload?.display_status || "ERROR").toUpperCase();
+    gpuReady = (state === "READY" || state === "BUSY") && payload?.model_loaded === true;
+    gpuStart.hidden = state !== "STOPPED";
+
+    if (state === "READY" && gpuReady) {
+      gpuStatus.textContent = "GPU · READY";
+    } else if (state === "BUSY" && gpuReady) {
+      gpuStatus.textContent = "GPU · BUSY，可继续排队";
+    } else if (state === "STARTING" || state === "LOADING") {
+      gpuStatus.textContent = "GPU · " + state;
+    } else if (state === "STOPPED") {
+      gpuStatus.textContent = "GPU · STOPPED";
+    } else {
+      gpuStatus.textContent = "GPU · ERROR";
+    }
+    syncGenerate();
   }
 
   async function refreshGpu() {
     try {
       const response = await fetch("/api/qwen-lab/gpu/status?studio_ts=" + Date.now(), {cache:"no-store"});
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload?.detail?.message || "状态读取失败");
-      gpuState = String(payload.display_status || "ERROR").toUpperCase();
-      gpuReady = (gpuState === "READY" || gpuState === "BUSY") && payload.model_loaded === true;
-      if (gpuReady) {
-        status.innerHTML = "<strong>模型</strong> · " + (gpuState === "BUSY" ? "运行中，可继续提交" : "已就绪");
-      } else if (gpuState === "STOPPED") {
-        status.innerHTML = "<strong>模型</strong> · GPU 未启动，点击生成会自动启动";
-      } else if (gpuState === "STARTING" || gpuState === "LOADING") {
-        status.innerHTML = "<strong>模型</strong> · 正在启动 / 加载";
-      } else {
-        status.innerHTML = "<strong>模型</strong> · 暂不可用";
-      }
-      syncGenerateState();
-      return payload;
-    } catch (error) {
+      if (!response.ok) throw new Error("GPU 状态读取失败");
+      applyGpuState(payload);
+    } catch (_) {
       gpuReady = false;
-      gpuState = "ERROR";
-      status.innerHTML = "<strong>模型</strong> · " + error.message;
-      syncGenerateState();
-      return null;
+      gpuStatus.textContent = "GPU · 状态不可用";
+      syncGenerate();
     }
   }
 
@@ -168,51 +184,74 @@
     try {
       const response = await fetch("/api/image-studio/v1/queue?ts=" + Date.now(), {cache:"no-store"});
       if (!response.ok) return;
-      setQueue(await response.json());
+      const queue = await response.json();
+      const running = Number(queue.running || 0);
+      const queued = Number(queue.queued || 0);
+      queueStatus.textContent = running || queued
+        ? "队列 · 生成 " + running + " / 等待 " + queued
+        : "队列 · 空闲";
     } catch (_) {}
   }
 
-  async function ensureGpuReady() {
-    await refreshGpu();
-    if (gpuReady) return true;
-    if (gpuState !== "STOPPED") return false;
-
-    status.innerHTML = "<strong>模型</strong> · 正在启动 GPU";
+  async function refreshCurrentRun() {
+    if (!currentRunId) return;
     try {
-      const response = await fetch("/api/qwen-lab/gpu/start", {method:"POST"});
-      if (!response.ok) return false;
-    } catch (_) {
-      return false;
-    }
-
-    for (let attempt = 0; attempt < 180; attempt += 1) {
-      await new Promise((resolve) => window.setTimeout(resolve, 5000));
-      await refreshGpu();
-      if (gpuReady) return true;
-      if (gpuState === "ERROR") return false;
-    }
-    return false;
+      const response = await fetch("/api/image-studio/v1/runs/" + encodeURIComponent(currentRunId) + "?ts=" + Date.now(), {cache:"no-store"});
+      if (!response.ok) return;
+      const run = await response.json();
+      if (run.status === "QUEUED") {
+        status.textContent = "已排队" + (run.queue_position ? " · 第 " + run.queue_position + " 位" : "") + " · " + run.run_id;
+      } else if (run.status === "RUNNING") {
+        status.textContent = "生成中 · " + run.run_id;
+      } else if (run.status === "SUCCESS") {
+        status.textContent = "生成完成 · 请到任务处理列表查看和下载 · " + run.run_id;
+        currentRunId = null;
+      } else if (run.status === "FAILED") {
+        status.textContent = "生成失败 · 请到任务处理列表查看原因 · " + run.run_id;
+        currentRunId = null;
+      }
+    } catch (_) {}
   }
 
-  async function submit() {
-    if (!files.length || !promptInput.value.trim() || submitting) return;
+  async function startGpu() {
+    gpuStart.disabled = true;
+    status.textContent = "正在启动 GPU…";
+    try {
+      const response = await fetch("/api/qwen-lab/gpu/start", {method:"POST"});
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload?.detail?.message || "GPU 启动失败");
+      applyGpuState(payload);
+    } catch (error) {
+      status.textContent = "启动失败 · " + error.message;
+    } finally {
+      gpuStart.disabled = false;
+      refreshGpu();
+    }
+  }
 
-    submitting = true;
-    syncGenerateState();
-    status.innerHTML = "<strong>任务</strong> · 准备提交";
-
-    const ready = await ensureGpuReady();
-    if (!ready) {
-      status.innerHTML = "<strong>任务</strong> · Qwen 尚未就绪";
-      submitting = false;
-      syncGenerateState();
+  async function generate() {
+    if (!files.length) {
+      status.textContent = "请至少上传 1 张图片。";
       return;
     }
+    const prompt = promptInput.value.trim();
+    if (!prompt) {
+      status.textContent = "请输入编辑要求。";
+      return;
+    }
+    if (!gpuReady) {
+      status.textContent = "Qwen 尚未 Ready。";
+      return;
+    }
+
+    submitting = true;
+    syncGenerate();
+    status.textContent = "正在上传并加入队列…";
 
     const form = new FormData();
     form.append("base_image", files[0]);
     files.slice(1).forEach((file) => form.append("references", file));
-    form.append("prompt", promptInput.value.trim());
+    form.append("prompt", prompt);
     form.append("mode", "NATURAL_EDIT");
     form.append("preservation", "NORMAL");
     form.append("reference_roles", "[]");
@@ -221,7 +260,6 @@
     form.append("output_long_edge", "1024");
     form.append("clean_output", "true");
 
-    status.innerHTML = "<strong>任务</strong> · 正在加入队列";
     try {
       const response = await fetch("/api/image-studio/v1/edit", {method:"POST", body:form});
       const payload = await response.json();
@@ -230,56 +268,20 @@
         throw new Error(detail?.message || detail || "提交失败");
       }
       currentRunId = payload.run_id;
-      setQueue(payload.queue);
-      status.innerHTML = "<strong>" + payload.status + "</strong> · " +
-        payload.run_id + (payload.queue_position ? " · 排队第 " + payload.queue_position + " 位" : "");
+      status.textContent = "已提交" + (payload.queue_position ? " · 排队第 " + payload.queue_position + " 位" : "") + " · " + payload.run_id;
+      await refreshQueue();
     } catch (error) {
-      status.innerHTML = "<strong>FAILED</strong> · " + error.message;
+      status.textContent = "提交失败 · " + error.message;
     } finally {
       submitting = false;
-      syncGenerateState();
+      syncGenerate();
     }
   }
 
-  async function refreshCurrentRun() {
-    if (!currentRunId) return;
-    try {
-      const response = await fetch(
-        "/api/image-studio/v1/runs/" + encodeURIComponent(currentRunId) + "?ts=" + Date.now(),
-        {cache:"no-store"}
-      );
-      if (!response.ok) return;
-      const run = await response.json();
-      setQueue(run.queue);
-      if (run.status === "QUEUED") {
-        status.innerHTML = "<strong>QUEUED</strong> · " + run.run_id +
-          (run.queue_position ? " · 排队第 " + run.queue_position + " 位" : "");
-      } else if (run.status === "RUNNING") {
-        status.innerHTML = "<strong>RUNNING</strong> · Qwen 正在生成";
-      } else if (run.status === "SUCCESS") {
-        status.innerHTML = '<strong>SUCCESS</strong> · 已完成 · <a href="/platform/image-studio/tasks/' +
-          encodeURIComponent(run.run_id) + '">查看结果</a>';
-        currentRunId = null;
-      } else if (run.status === "FAILED") {
-        status.innerHTML = '<strong>FAILED</strong> · <a href="/platform/image-studio/tasks/' +
-          encodeURIComponent(run.run_id) + '">查看原因</a>';
-        currentRunId = null;
-      }
-    } catch (_) {}
-  }
+  generateButton.addEventListener("click", generate);
+  gpuStart.addEventListener("click", startGpu);
 
-  $("studioAttach").addEventListener("click", () => fileInput.click());
-  fileInput.addEventListener("change", () => {
-    const incoming = Array.from(fileInput.files || []);
-    const room = Math.max(0, 3 - files.length);
-    files.push(...incoming.slice(0, room));
-    fileInput.value = "";
-    renderFiles();
-    syncGenerateState();
-  });
-  promptInput.addEventListener("input", syncGenerateState);
-  generateButton.addEventListener("click", submit);
-
+  renderFiles();
   refreshGpu();
   refreshQueue();
   pollTimer = window.setInterval(() => {
@@ -289,7 +291,7 @@
   }, 3000);
 
   window.addEventListener("beforeunload", () => {
-    clearObjectUrls();
+    revokePreviews();
     if (pollTimer) window.clearInterval(pollTimer);
   });
 })();
