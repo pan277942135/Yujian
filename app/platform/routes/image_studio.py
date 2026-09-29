@@ -299,6 +299,8 @@ def _response(run: ImageStudioRun) -> dict[str, Any]:
         "mode": run.mode,
         "preservation": run.preservation,
         "reference_roles": request.get("reference_roles") or [],
+        "pipeline_version": request.get("pipeline_version"),
+        "strict_geometry": request.get("strict_geometry"),
         "identity_strength": request.get("identity_strength"),
         "head_edit_tightness": request.get("head_edit_tightness"),
         "keep_hair_color": request.get("keep_hair_color"),
