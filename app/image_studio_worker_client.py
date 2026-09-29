@@ -22,6 +22,7 @@ from app.qwen_refine_worker_client import (
 )
 
 IMAGE_STUDIO_MODE = "image_studio_v1"
+IMAGE_STUDIO_IDENTITY_V2_MODE = "image_studio_identity_v2"
 MAX_REFERENCES = 2
 
 
@@ -35,6 +36,8 @@ def invoke_image_studio_worker(
     steps: int = 25,
     seed: int | None = None,
     resolution_mode: str = "real_768",
+    worker_mode: str = IMAGE_STUDIO_MODE,
+    pipeline_stage: str | None = None,
 ) -> dict[str, Any]:
     base_url = _base_url()
     if not base_url:
@@ -60,17 +63,24 @@ def invoke_image_studio_worker(
 
     safe_steps = max(1, min(int(steps), 100))
     safe_seed = int(seed) if seed is not None else None
+    safe_worker_mode = str(worker_mode or IMAGE_STUDIO_MODE).strip()
+    if safe_worker_mode not in {IMAGE_STUDIO_MODE, IMAGE_STUDIO_IDENTITY_V2_MODE}:
+        raise PortraitWorkerError(
+            "IMAGE_STUDIO_WORKER_MODE_INVALID",
+            f"unsupported Image Studio worker mode: {safe_worker_mode}",
+        )
     params = {
-        "mode": IMAGE_STUDIO_MODE,
+        "mode": safe_worker_mode,
         "source_run_id": str(source_run_id or "") or None,
         "steps": safe_steps,
         "seed": safe_seed,
         "prompt": str(prompt or "").strip(),
         "negative_prompt": str(negative_prompt or "").strip(),
         "resolution_mode": str(resolution_mode or "real_768").strip().lower(),
+        "pipeline_stage": str(pipeline_stage or "").strip() or None,
     }
     fields = [
-        ("mode", IMAGE_STUDIO_MODE),
+        ("mode", safe_worker_mode),
         ("source_run_id", str(source_run_id or "")),
         ("params", json.dumps(params, ensure_ascii=False, separators=(",", ":"))),
     ]
@@ -133,15 +143,21 @@ def invoke_image_studio_worker(
     result["worker_protocol"] = {
         "request": "multipart/form-data",
         "path": _path(),
-        "mode": IMAGE_STUDIO_MODE,
+        "mode": safe_worker_mode,
         "base_bytes": len(base_data),
         "reference_count": len(references),
         "reference_bytes": reference_sizes,
         "steps": safe_steps,
         "seed": safe_seed,
         "resolution_mode": params["resolution_mode"],
+        "pipeline_stage": params["pipeline_stage"],
     }
     return result
 
 
-__all__ = ["IMAGE_STUDIO_MODE", "MAX_REFERENCES", "invoke_image_studio_worker"]
+__all__ = [
+    "IMAGE_STUDIO_IDENTITY_V2_MODE",
+    "IMAGE_STUDIO_MODE",
+    "MAX_REFERENCES",
+    "invoke_image_studio_worker",
+]
