@@ -155,6 +155,16 @@ CREATE TABLE IF NOT EXISTS feedback_events (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS accepted_pool_sync_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  status TEXT NOT NULL DEFAULT 'PENDING',
+  created_at TEXT NOT NULL,
+  claimed_at TEXT,
+  completed_at TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT
+);
+
 CREATE TABLE IF NOT EXISTS inference_assets (
   image_id TEXT PRIMARY KEY,
   source TEXT NOT NULL DEFAULT 'android_detector',
@@ -406,9 +416,61 @@ CREATE INDEX IF NOT EXISTS idx_presence_batch ON fish_presence_results(batch_id)
 CREATE INDEX IF NOT EXISTS idx_presence_status ON fish_presence_results(status);
 CREATE INDEX IF NOT EXISTS idx_fingerprint_batch ON image_fingerprints(batch_id);
 CREATE INDEX IF NOT EXISTS idx_fingerprint_sha ON image_fingerprints(sha256);
+
+CREATE TABLE IF NOT EXISTS global_image_contents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sha256 TEXT NOT NULL UNIQUE,
+  lifecycle_status TEXT NOT NULL DEFAULT 'RESERVED',
+  canonical_batch_id TEXT,
+  canonical_image_id TEXT,
+  canonical_image_asset_id INTEGER,
+  canonical_object_name TEXT,
+  incoming_batch_id TEXT,
+  incoming_path TEXT,
+  source TEXT,
+  last_error TEXT,
+  first_seen_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(canonical_image_asset_id) REFERENCES image_assets(id)
+);
+CREATE INDEX IF NOT EXISTS idx_global_image_contents_sha256 ON global_image_contents(sha256);
+CREATE INDEX IF NOT EXISTS idx_global_image_contents_status ON global_image_contents(lifecycle_status);
+
+CREATE TABLE IF NOT EXISTS global_duplicate_audits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sha256 TEXT NOT NULL,
+  incoming_batch_id TEXT NOT NULL,
+  incoming_path TEXT NOT NULL,
+  source TEXT NOT NULL,
+  canonical_batch_id TEXT,
+  canonical_image_id TEXT,
+  canonical_image_asset_id INTEGER,
+  canonical_object_name TEXT,
+  reason TEXT NOT NULL DEFAULT 'GLOBAL_EXACT_DUPLICATE',
+  blocked_at TEXT NOT NULL,
+  FOREIGN KEY(canonical_image_asset_id) REFERENCES image_assets(id)
+);
+CREATE INDEX IF NOT EXISTS idx_global_duplicate_audits_sha256 ON global_duplicate_audits(sha256);
+CREATE INDEX IF NOT EXISTS idx_global_duplicate_audits_batch ON global_duplicate_audits(incoming_batch_id);
+
+CREATE TABLE IF NOT EXISTS global_image_duplicate_members (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sha256 TEXT NOT NULL,
+  image_asset_id INTEGER NOT NULL,
+  batch_id TEXT NOT NULL,
+  image_id TEXT NOT NULL,
+  object_name TEXT,
+  recorded_at TEXT NOT NULL,
+  UNIQUE(sha256, image_asset_id),
+  FOREIGN KEY(image_asset_id) REFERENCES image_assets(id)
+);
+CREATE INDEX IF NOT EXISTS idx_global_duplicate_members_sha256 ON global_image_duplicate_members(sha256);
 CREATE INDEX IF NOT EXISTS idx_fingerprint_group ON image_fingerprints(duplicate_group);
 CREATE INDEX IF NOT EXISTS idx_feedback_pipeline ON feedback_events(pipeline_status);
 CREATE INDEX IF NOT EXISTS idx_feedback_batch ON feedback_events(materialized_batch_id);
+CREATE INDEX IF NOT EXISTS idx_accepted_pool_sync_requests_status ON accepted_pool_sync_requests(status);
+CREATE INDEX IF NOT EXISTS idx_accepted_pool_sync_requests_created_at ON accepted_pool_sync_requests(created_at);
 CREATE INDEX IF NOT EXISTS idx_inference_assets_status ON inference_assets(status);
 CREATE INDEX IF NOT EXISTS idx_fish_species_name ON fish_species(name_cn);
 CREATE INDEX IF NOT EXISTS idx_fish_species_status ON fish_species(status);

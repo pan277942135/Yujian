@@ -8,6 +8,7 @@ from google.cloud import storage
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.exact_dedupe import claim_global_image, mark_global_image_active, mark_global_image_failed, sha256_bytes
 from app.factory import get_bucket_name
 from app.models import FeedbackEvent
 
@@ -56,6 +57,7 @@ def materialize_feedback_batch(
     rows: list[dict[str, str]] = []
     copied = 0
     skipped_missing = 0
+    duplicates = 0
     for event in events:
         assert event.image_gcs_uri
         source_bucket_name, source_object = parse_gs(event.image_gcs_uri)
@@ -69,9 +71,52 @@ def materialize_feedback_batch(
         safe_name = f"FB{event.id:08d}{suffix}"
         target_object = prefix + "images/feedback/" + safe_name
         target_blob = target_bucket.blob(target_object)
-        if not target_blob.exists(client):
-            source_bucket.copy_blob(source_blob, target_bucket, target_object)
-            copied += 1
+        image_bytes = source_blob.download_as_bytes()
+        digest = sha256_bytes(image_bytes)
+        relative_path = "images/feedback/" + safe_name
+        claim = claim_global_image(
+            db,
+            sha256=digest,
+            batch_id=batch_id,
+            incoming_path=relative_path,
+            object_name=target_object,
+            source="yujian_app_feedback",
+            image_id=f"FB{event.id:08d}",
+        )
+        if claim.blocked:
+            event.pipeline_status = "DUPLICATE_BLOCKED"
+            event.materialized_batch_id = None
+            event.materialized_image_id = None
+            event.user_note = "\n".join(
+                value for value in (event.user_note, f"[global_exact_duplicate] sha256={digest}") if value
+            )
+            duplicates += 1
+            continue
+        try:
+            if target_blob.exists(client):
+                existing_bytes = target_blob.download_as_bytes()
+                if sha256_bytes(existing_bytes) != digest:
+                    raise RuntimeError(f"feedback target differs from source: gs://{bucket_name}/{target_object}")
+                skipped_missing += 0
+            else:
+                content_type = {
+                    ".jpg": "image/jpeg",
+                    ".jpeg": "image/jpeg",
+                    ".png": "image/png",
+                    ".webp": "image/webp",
+                }.get(suffix, "application/octet-stream")
+                target_blob.upload_from_string(image_bytes, content_type=content_type, if_generation_match=0)
+                copied += 1
+            mark_global_image_active(
+                db,
+                sha256=digest,
+                batch_id=batch_id,
+                image_id=f"FB{event.id:08d}",
+                object_name=target_object,
+            )
+        except Exception as exc:
+            mark_global_image_failed(db, sha256=digest, error=str(exc))
+            raise
 
         claimed = (event.corrected_species or event.predicted_species or "").strip()
         rows.append(
@@ -99,7 +144,17 @@ def materialize_feedback_batch(
         event.materialized_image_id = f"FB{event.id:08d}"
 
     if not rows:
-        raise ValueError("feedback images could not be materialized")
+        db.commit()
+        return {
+            "batch_id": batch_id,
+            "status": "NO_NEW_IMAGES",
+            "incoming_uri": None,
+            "feedback_events": 0,
+            "copied_images": copied,
+            "duplicates": duplicates,
+            "skipped_missing_images": skipped_missing,
+            "next_step": "没有新的图片进入审核",
+        }
 
     fields = [
         "image_id",
@@ -123,9 +178,11 @@ def materialize_feedback_batch(
     db.commit()
     return {
         "batch_id": batch_id,
+        "status": "READY_FOR_AUDIT",
         "incoming_uri": f"gs://{bucket_name}/{prefix}",
         "feedback_events": len(rows),
         "copied_images": copied,
+        "duplicates": duplicates,
         "skipped_missing_images": skipped_missing,
         "next_step": "Open Batches and click 准备审核",
     }

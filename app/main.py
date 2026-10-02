@@ -20,6 +20,7 @@ from app.batch_console import audit_with_species_catalog, list_incoming_batches
 from app.batch_upload_api import ensure_incoming_manifest
 from app.db import SessionLocal, get_db, init_db
 from app.detector_runtime import detect, normalize_android_source
+from app.exact_dedupe import GlobalExactGuardUnavailable
 from app.factory import DOWNLOAD_RETRY, get_bucket_name, promote_incoming_batch, sync_batch_registry
 from app.feedback_pipeline import materialize_feedback_batch
 from app.frozen_crop_bridge import _read_uri
@@ -68,6 +69,9 @@ install_access_guard(app)
 @app.on_event("startup")
 def startup():
     init_db()
+    from app.accepted_pool import start_accepted_pool_request_worker
+
+    start_accepted_pool_request_worker()
     db = SessionLocal()
     try:
         ensure_species_catalog(db)
@@ -380,24 +384,27 @@ def incoming():
 @app.get("/api/batches")
 def batches(db: Session = Depends(get_db)):
     rows = db.scalars(select(Batch).order_by(Batch.created_at.desc())).all()
+    review_rows = db.execute(
+        select(ImageAsset.batch_id, ImageAsset.review_status, func.count())
+        .group_by(ImageAsset.batch_id, ImageAsset.review_status)
+    ).all()
+    review_by_batch: dict[str, dict[str, int]] = {}
+    for batch_id, status, count in review_rows:
+        review_by_batch.setdefault(batch_id, {})[status] = int(count)
     result = []
     for batch in rows:
-        status_rows = db.execute(
-            select(ImageAsset.review_status, func.count())
-            .where(ImageAsset.batch_id == batch.batch_id)
-            .group_by(ImageAsset.review_status)
-        ).all()
+        review = review_by_batch.get(batch.batch_id, {})
         result.append(
             {
                 "batch_id": batch.batch_id,
                 "source": batch.source,
                 "created_at": batch.created_at.isoformat(),
-                "image_count": db.scalar(select(func.count()).select_from(ImageAsset).where(ImageAsset.batch_id == batch.batch_id)) or 0,
+                "image_count": sum(review.values()),
                 "raw_image_count": batch.image_count,
                 "status": batch.status,
                 "manifest_uri": batch.manifest_uri,
                 "raw_uri": batch.raw_uri,
-                "review": {status: count for status, count in status_rows},
+                "review": review,
             }
         )
     return result
@@ -414,6 +421,8 @@ def batch_audit(payload: BatchAction, db: Session = Depends(get_db)):
         )
     except ManifestNormalizationError as exc:
         return JSONResponse(status_code=400, content=exc.as_dict())
+    except GlobalExactGuardUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -425,6 +434,8 @@ def batch_promote(payload: BatchAction):
         return promote_incoming_batch(payload.incoming_prefix, payload.batch_id, payload.source)
     except ManifestNormalizationError as exc:
         return JSONResponse(status_code=400, content=exc.as_dict())
+    except GlobalExactGuardUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -433,6 +444,9 @@ def batch_promote(payload: BatchAction):
 def batch_sync(payload: BatchSync, db: Session = Depends(get_db)):
     try:
         return sync_batch_registry(db, payload.batch_id)
+    except GlobalExactGuardUnavailable as exc:
+        db.rollback()
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -575,22 +589,18 @@ def update_review(batch_id: str, image_id: str, payload: ReviewUpdate, db: Sessi
             after_json=json.dumps(after, ensure_ascii=False),
         )
     )
+    pool_signal = None
+    if proposed_status == "approved":
+        # Only write the durable downstream signal in this transaction.  The
+        # Accepted Pool worker performs its full scan after the response path.
+        from app.accepted_pool import enqueue_accepted_pool_sync
+
+        pool_signal = enqueue_accepted_pool_sync(db)
     db.commit()
     db.refresh(image)
     result = image_dict(image)
-    if proposed_status == "approved":
-        # Accepted Pool materialisation is deliberately queued after the
-        # review transaction.  The review response stays fast and the
-        # resumable worker processes only new/changed accepted bboxes.
-        from app.accepted_pool import enqueue_accepted_pool_sync
-
-        pool_job = enqueue_accepted_pool_sync(db)
-        if pool_job:
-            result["accepted_pool_sync"] = {
-                "job_id": pool_job.get("job_id"),
-                "status": pool_job.get("status"),
-                "pending_count": pool_job.get("pending_count", 0),
-            }
+    if pool_signal:
+        result["accepted_pool_sync"] = pool_signal
     return result
 
 
@@ -673,6 +683,9 @@ def api_record_feedback(payload: FeedbackCreate, db: Session = Depends(get_db)):
 def api_materialize_feedback(payload: FeedbackMaterialize, db: Session = Depends(get_db)):
     try:
         return materialize_feedback_batch(db, batch_id=payload.batch_id, limit=payload.limit)
+    except GlobalExactGuardUnavailable as exc:
+        db.rollback()
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
