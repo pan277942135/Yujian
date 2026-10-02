@@ -15,6 +15,7 @@ import hashlib
 import io
 import json
 import threading
+import time
 import uuid
 from collections import Counter
 from datetime import datetime, timezone
@@ -24,7 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
-from app.models import BatchCropReview, DatasetVersion, ImageAsset, SpeciesCatalog
+from app.models import AcceptedPoolSyncRequest, BatchCropReview, DatasetVersion, ImageAsset, SpeciesCatalog
 from app.platform.services import crop_dataset
 
 
@@ -63,6 +64,8 @@ _job_locks: dict[str, threading.Lock] = {}
 _job_locks_guard = threading.Lock()
 _worker_threads: dict[str, threading.Thread] = {}
 _worker_threads_guard = threading.Lock()
+_request_worker: threading.Thread | None = None
+_request_worker_guard = threading.Lock()
 
 
 def _now() -> str:
@@ -1489,18 +1492,92 @@ def freeze_accepted_pool_dataset(
 
 
 def enqueue_accepted_pool_sync(db: Session) -> dict[str, Any] | None:
-    """Best-effort enqueue used after review commits.
+    """Record a durable downstream signal without touching Accepted Pool data.
 
-    Review writes must remain usable in local environments without GCS.  The
-    explicit Dataset page sync endpoint remains the retryable source of truth.
+    This function is intentionally limited to one INSERT/flush.  In
+    particular, it must not call ``start_accepted_pool_sync``: that function
+    scans review rows and reads the manifest/class map and therefore belongs to
+    the worker path only.
     """
 
+    request = AcceptedPoolSyncRequest(status="PENDING")
+    db.add(request)
+    db.flush()
+    return {
+        "request_id": str(request.id),
+        "job_id": None,
+        "status": request.status,
+        "pending_count": 0,
+    }
+
+
+def _claim_sync_request() -> int | None:
+    db = SessionLocal()
     try:
+        query = (
+            select(AcceptedPoolSyncRequest)
+            .where(AcceptedPoolSyncRequest.status == "PENDING")
+            .order_by(AcceptedPoolSyncRequest.id)
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+        request = db.scalar(query)
+        if request is None:
+            return None
+        request.status = "RUNNING"
+        request.claimed_at = datetime.now(timezone.utc)
+        request.attempts = int(request.attempts or 0) + 1
+        db.commit()
+        return int(request.id)
+    finally:
+        db.close()
+
+
+def _process_sync_request(request_id: int) -> None:
+    db = SessionLocal()
+    try:
+        request = db.get(AcceptedPoolSyncRequest, request_id)
+        if request is None:
+            return
         job = start_accepted_pool_sync(db)
         _schedule_job(job)
-        return job
-    except Exception:
-        return None
+        request.status = "DISPATCHED"
+        request.completed_at = datetime.now(timezone.utc)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        request = db.get(AcceptedPoolSyncRequest, request_id)
+        if request is not None:
+            request.status = "FAILED"
+            request.last_error = str(exc)[:1000]
+            request.completed_at = datetime.now(timezone.utc)
+            db.commit()
+    finally:
+        db.close()
+
+
+def _accepted_pool_request_loop() -> None:
+    while True:
+        request_id = _claim_sync_request()
+        if request_id is None:
+            time.sleep(0.5)
+            continue
+        _process_sync_request(request_id)
+
+
+def start_accepted_pool_request_worker() -> None:
+    """Start the process-local worker that drains durable sync signals."""
+
+    global _request_worker
+    with _request_worker_guard:
+        if _request_worker is not None and _request_worker.is_alive():
+            return
+        _request_worker = threading.Thread(
+            target=_accepted_pool_request_loop,
+            name="accepted-pool-request-worker",
+            daemon=True,
+        )
+        _request_worker.start()
 
 
 __all__ = [
@@ -1512,6 +1589,7 @@ __all__ = [
     "accepted_pool_crop_object_name",
     "accepted_pool_freeze_preview",
     "enqueue_accepted_pool_sync",
+    "start_accepted_pool_request_worker",
     "find_accepted_pool_manifest_row",
     "freeze_accepted_pool_dataset",
     "get_accepted_pool_job",

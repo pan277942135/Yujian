@@ -344,6 +344,25 @@ class FeedbackEvent(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
 
 
+class AcceptedPoolSyncRequest(Base):
+    """Durable, lightweight signal for downstream Accepted Pool materialisation.
+
+    Review persistence owns the transaction that creates this row.  The worker
+    claims it later and performs the expensive source scan/GCS work outside the
+    review HTTP request.
+    """
+
+    __tablename__ = "accepted_pool_sync_requests"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    status = Column(String(32), nullable=False, default="PENDING", index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+    claimed_at = Column(DateTime(timezone=True))
+    completed_at = Column(DateTime(timezone=True))
+    attempts = Column(Integer, nullable=False, default=0)
+    last_error = Column(Text)
+
+
 class InferenceAsset(Base):
     """Immutable App inference asset awaiting the existing human review gate."""
 

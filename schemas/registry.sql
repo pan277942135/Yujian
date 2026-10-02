@@ -155,6 +155,16 @@ CREATE TABLE IF NOT EXISTS feedback_events (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS accepted_pool_sync_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  status TEXT NOT NULL DEFAULT 'PENDING',
+  created_at TEXT NOT NULL,
+  claimed_at TEXT,
+  completed_at TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT
+);
+
 CREATE TABLE IF NOT EXISTS inference_assets (
   image_id TEXT PRIMARY KEY,
   source TEXT NOT NULL DEFAULT 'android_detector',
@@ -409,6 +419,8 @@ CREATE INDEX IF NOT EXISTS idx_fingerprint_sha ON image_fingerprints(sha256);
 CREATE INDEX IF NOT EXISTS idx_fingerprint_group ON image_fingerprints(duplicate_group);
 CREATE INDEX IF NOT EXISTS idx_feedback_pipeline ON feedback_events(pipeline_status);
 CREATE INDEX IF NOT EXISTS idx_feedback_batch ON feedback_events(materialized_batch_id);
+CREATE INDEX IF NOT EXISTS idx_accepted_pool_sync_requests_status ON accepted_pool_sync_requests(status);
+CREATE INDEX IF NOT EXISTS idx_accepted_pool_sync_requests_created_at ON accepted_pool_sync_requests(created_at);
 CREATE INDEX IF NOT EXISTS idx_inference_assets_status ON inference_assets(status);
 CREATE INDEX IF NOT EXISTS idx_fish_species_name ON fish_species(name_cn);
 CREATE INDEX IF NOT EXISTS idx_fish_species_status ON fish_species(status);

@@ -56,14 +56,22 @@ def truth_distribution(db: Session, *, review_status: str | None = None) -> tupl
     return [(str(name), int(count)) for name, count in rows], int(unconfirmed)
 
 
-def valid_truth_for_image(db: Session, image: ImageAsset, proposed: str) -> bool:
+def valid_truth_for_image(
+    db: Session,
+    image: ImageAsset,
+    proposed: str,
+    *,
+    catalog_by_name: dict[str, SpeciesCatalog] | None = None,
+) -> bool:
     proposed = proposed.strip()
     if not proposed:
         return True
     # Historical retired truth may be preserved, but retired species cannot be newly assigned.
     if proposed == normalized_truth(image):
         return True
-    row = db.scalar(select(SpeciesCatalog).where(SpeciesCatalog.common_name_zh == proposed))
+    row = catalog_by_name.get(proposed) if catalog_by_name is not None else db.scalar(
+        select(SpeciesCatalog).where(SpeciesCatalog.common_name_zh == proposed)
+    )
     return bool(row and row.status in {"active", "candidate"})
 
 

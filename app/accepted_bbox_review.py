@@ -304,20 +304,17 @@ def update_accepted_bbox(
             reviewer=payload.reviewer,
             notes=payload.notes,
         )
+        pool_signal = None
+        if row.status in ACCEPTED_STATUSES:
+            from app.accepted_pool import enqueue_accepted_pool_sync
+
+            pool_signal = enqueue_accepted_pool_sync(db)
         db.commit()
         db.refresh(row)
         presence = db.scalar(select(FishPresenceResult).where(FishPresenceResult.image_asset_id == image.id))
         result = _item(image, row, presence)
-        if row.status in ACCEPTED_STATUSES:
-            from app.accepted_pool import enqueue_accepted_pool_sync
-
-            pool_job = enqueue_accepted_pool_sync(db)
-            if pool_job:
-                result["accepted_pool_sync"] = {
-                    "job_id": pool_job.get("job_id"),
-                    "status": pool_job.get("status"),
-                    "pending_count": pool_job.get("pending_count", 0),
-                }
+        if pool_signal:
+            result["accepted_pool_sync"] = pool_signal
         return result
     except HTTPException:
         db.rollback()
@@ -340,18 +337,15 @@ def bulk_accepted_bbox(payload: AcceptedBBoxBulk, db: Session = Depends(get_db))
                 reviewer=item.reviewer,
                 notes=item.notes,
             )
-        db.commit()
-        result: dict[str, Any] = {"updated": len(payload.items)}
+        pool_signal = None
         if any(item.decision.strip().upper() in ACCEPTED_STATUSES for item in payload.items):
             from app.accepted_pool import enqueue_accepted_pool_sync
 
-            pool_job = enqueue_accepted_pool_sync(db)
-            if pool_job:
-                result["accepted_pool_sync"] = {
-                    "job_id": pool_job.get("job_id"),
-                    "status": pool_job.get("status"),
-                    "pending_count": pool_job.get("pending_count", 0),
-                }
+            pool_signal = enqueue_accepted_pool_sync(db)
+        db.commit()
+        result: dict[str, Any] = {"updated": len(payload.items)}
+        if pool_signal:
+            result["accepted_pool_sync"] = pool_signal
         return result
     except HTTPException:
         db.rollback()
