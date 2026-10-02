@@ -14,7 +14,9 @@ from google.cloud import storage
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Batch, DatasetVersion, ImageAsset
+from app.db import SessionLocal
+from app.exact_dedupe import claim_global_image, mark_global_image_active, mark_global_image_failed, sha256_bytes
+from app.models import Batch, DatasetVersion, GlobalImageContent, ImageAsset
 from app.services.manifest_normalizer import (
     IMAGE_FIELD_ALIASES,
     SPECIES_FIELD_ALIASES,
@@ -360,22 +362,117 @@ def promote_incoming_batch(
     if not images:
         raise RuntimeError("no image objects found in incoming prefix")
 
-    copied = skipped = 0
-    for source_blob in incoming:
-        rel = source_blob.name[len(prefix):]
-        destination_name = raw_prefix + rel
-        destination = bucket.blob(destination_name)
-        if destination.exists(client):
-            destination.reload(client)
-            same = destination.size == source_blob.size and (
-                not source_blob.md5_hash or destination.md5_hash == source_blob.md5_hash
+    registry_db = SessionLocal()
+    claims: dict[str, tuple[str, str]] = {}
+    blocked_names: set[str] = set()
+    try:
+        for source_blob in images:
+            rel = source_blob.name[len(prefix):]
+            digest = sha256_bytes(source_blob.download_as_bytes())
+            claim = claim_global_image(
+                registry_db,
+                sha256=digest,
+                batch_id=batch_id,
+                incoming_path=rel,
+                object_name=source_blob.name,
+                source=source,
             )
-            if not same:
-                raise RuntimeError(f"destination differs from source: gs://{bucket_name}/{destination_name}")
-            skipped += 1
-            continue
-        bucket.copy_blob(source_blob, bucket, destination_name)
-        copied += 1
+            if claim.blocked:
+                blocked_names.add(source_blob.name)
+            else:
+                claims[source_blob.name] = (digest, rel)
+
+        allowed_images = [blob for blob in images if blob.name not in blocked_names]
+        if not allowed_images:
+            registry_db.commit()
+            return {
+                "batch_id": batch_id,
+                "source": source,
+                "status": "NO_NEW_IMAGES",
+                "input_images": len(images),
+                "new_images": 0,
+                "duplicates": len(blocked_names),
+                "duplicate_paths": sorted(name[len(prefix):] for name in blocked_names),
+            }
+
+        blocked_rel = {name[len(prefix):] for name in blocked_names}
+        blocked_basenames = {PurePosixPath(name).name for name in blocked_rel}
+        manifest_fields, filtered_rows, _ = _manifest_rows(manifests[0])
+        if blocked_names:
+            filtered_rows = [
+                row
+                for row in filtered_rows
+                if norm_path(_manifest_value(row, IMAGE_PATH_COLUMNS)) not in blocked_rel
+                and PurePosixPath(norm_path(_manifest_value(row, IMAGE_PATH_COLUMNS))).name not in blocked_basenames
+            ]
+        if not filtered_rows:
+            registry_db.commit()
+            return {
+                "batch_id": batch_id,
+                "source": source,
+                "status": "NO_NEW_IMAGES",
+                "input_images": len(images),
+                "new_images": 0,
+                "duplicates": len(blocked_names),
+                "duplicate_paths": sorted(blocked_rel),
+            }
+
+        copied = skipped = 0
+        for source_blob in incoming:
+            if source_blob.name in blocked_names:
+                continue
+            rel = source_blob.name[len(prefix):]
+            destination_name = raw_prefix + rel
+            destination = bucket.blob(destination_name)
+            if source_blob.name == manifests[0].name and blocked_names:
+                manifest_buffer = io.StringIO()
+                writer = csv.DictWriter(manifest_buffer, fieldnames=manifest_fields, extrasaction="ignore")
+                writer.writeheader()
+                writer.writerows(filtered_rows)
+                payload = manifest_buffer.getvalue().encode("utf-8")
+                if destination.exists(client):
+                    existing_payload = destination.download_as_bytes()
+                    if existing_payload != payload:
+                        raise RuntimeError(f"destination differs from filtered manifest: gs://{bucket_name}/{destination_name}")
+                    skipped += 1
+                else:
+                    destination.upload_from_string(payload, content_type="text/csv; charset=utf-8", if_generation_match=0)
+                    copied += 1
+                continue
+            if destination.exists(client):
+                destination.reload(client)
+                same = destination.size == source_blob.size and (
+                    not source_blob.md5_hash or destination.md5_hash == source_blob.md5_hash
+                )
+                if not same:
+                    raise RuntimeError(f"destination differs from source: gs://{bucket_name}/{destination_name}")
+                skipped += 1
+                continue
+            bucket.copy_blob(source_blob, bucket, destination_name)
+            copied += 1
+
+        for source_name, (digest, rel) in claims.items():
+            mark_global_image_active(
+                registry_db,
+                sha256=digest,
+                batch_id=batch_id,
+                object_name=raw_prefix + rel,
+            )
+        registry_db.commit()
+    except Exception as exc:
+        registry_db.rollback()
+        for digest, _ in claims.values():
+            try:
+                mark_global_image_failed(registry_db, sha256=digest, error=str(exc))
+            except Exception:
+                pass
+        try:
+            registry_db.commit()
+        except Exception:
+            registry_db.rollback()
+        raise
+    finally:
+        registry_db.close()
 
     manifest_rel = manifests[0].name[len(prefix):]
     batch = {
@@ -383,8 +480,10 @@ def promote_incoming_batch(
         "batch_name": batch_name,
         "source": source,
         "created_at": utcnow_iso(),
-        "image_count": len(images),
-        "manifest_rows": len(rows),
+        "image_count": len(allowed_images),
+        "manifest_rows": len(filtered_rows),
+        "input_image_count": len(images),
+        "duplicate_count": len(blocked_names),
         "status": "INGESTED",
         "incoming_uri": f"gs://{bucket_name}/{prefix}",
         "raw_uri": f"gs://{bucket_name}/{raw_prefix}",
@@ -470,6 +569,47 @@ def sync_batch_registry(db: Session, batch_id: str, bucket_name: str | None = No
         by_basename[PurePosixPath(name).name].append(name)
     audit_by_id = _audit_queue(bucket, batch_id)
 
+    guarded_objects: dict[str, str] = {}
+    blocked_names: set[str] = set()
+    for object_name in image_objects:
+        relative_path = object_name[len(prefix) + 1 :] if object_name.startswith(prefix + "/") else object_name
+        existing_claim = db.scalar(
+            select(GlobalImageContent).where(
+                GlobalImageContent.incoming_batch_id == batch_id,
+                GlobalImageContent.incoming_path == relative_path,
+                GlobalImageContent.lifecycle_status.in_(("RESERVED", "ACTIVE")),
+            )
+        )
+        if existing_claim is not None:
+            guarded_objects[object_name] = existing_claim.sha256
+            continue
+        digest = sha256_bytes(bucket.blob(object_name).download_as_bytes())
+        claim = claim_global_image(
+            db,
+            sha256=digest,
+            batch_id=batch_id,
+            incoming_path=relative_path,
+            object_name=object_name,
+            source=batch_doc.get("source", "registry_sync"),
+        )
+        if claim.blocked:
+            blocked_names.add(object_name)
+        else:
+            guarded_objects[object_name] = digest
+
+    if not guarded_objects:
+        db.commit()
+        return {
+            "batch_id": batch_id,
+            "manifest_rows": len(rows),
+            "gcs_images": len(image_objects),
+            "inserted": 0,
+            "updated": 0,
+            "missing": 0,
+            "duplicates": len(blocked_names),
+            "status": "NO_NEW_IMAGES",
+        }
+
     batch = db.get(Batch, batch_id)
     if not batch:
         batch = Batch(
@@ -491,6 +631,7 @@ def sync_batch_registry(db: Session, batch_id: str, bucket_name: str | None = No
             batch.notes = str(batch_doc["batch_name"]).strip()[:128]
 
     inserted = updated = missing = 0
+    duplicate_rows = 0
     for row in rows:
         file_name = norm_path(
             row.get("image_path")
@@ -513,6 +654,9 @@ def sync_batch_registry(db: Session, batch_id: str, bucket_name: str | None = No
                 object_name = matches[0]
         if not object_name:
             missing += 1
+            continue
+        if object_name in blocked_names:
+            duplicate_rows += 1
             continue
 
         resolved_file = PurePosixPath(object_name).name
@@ -568,16 +712,32 @@ def sync_batch_registry(db: Session, batch_id: str, bucket_name: str | None = No
             for key, value in values.items():
                 if value is not None:
                     setattr(existing, key, value)
+            mark_global_image_active(
+                db,
+                sha256=guarded_objects[object_name],
+                batch_id=batch_id,
+                image_id=existing.image_id,
+                image_asset_id=existing.id,
+                object_name=object_name,
+            )
             updated += 1
         else:
-            db.add(
-                ImageAsset(
+            image = ImageAsset(
                     batch_id=batch_id,
                     image_id=image_id,
                     review_status=manifest_review,
                     truth_status="LIKELY_CORRECT" if manifest_review == "approved" and truth_species else "UNCERTAIN",
                     **values,
                 )
+            db.add(image)
+            db.flush()
+            mark_global_image_active(
+                db,
+                sha256=guarded_objects[object_name],
+                batch_id=batch_id,
+                image_id=image.image_id,
+                image_asset_id=image.id,
+                object_name=object_name,
             )
             inserted += 1
 
@@ -589,6 +749,9 @@ def sync_batch_registry(db: Session, batch_id: str, bucket_name: str | None = No
         "inserted": inserted,
         "updated": updated,
         "missing": missing,
+        "duplicates": len(blocked_names),
+        "reviewable_manifest_rows": len(rows) - duplicate_rows,
+        "duplicate_rows": duplicate_rows,
     }
 
 
