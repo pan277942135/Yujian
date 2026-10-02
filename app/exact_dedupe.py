@@ -34,6 +34,10 @@ FAILED = "FAILED"
 _LIFECYCLE = {RESERVED, ACTIVE, FAILED}
 
 
+class GlobalExactGuardUnavailable(RuntimeError):
+    """The authoritative global exact-content registry could not be consulted."""
+
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -186,13 +190,18 @@ def claim_global_image(
         "created_at": now,
         "updated_at": now,
     }
-    inserted = _claim_insert(db, values)
-    row = db.scalar(select(GlobalImageContent).where(GlobalImageContent.sha256 == digest).with_for_update())
+    try:
+        inserted = _claim_insert(db, values)
+        row = db.scalar(select(GlobalImageContent).where(GlobalImageContent.sha256 == digest).with_for_update())
+    except Exception as exc:
+        db.rollback()
+        LOGGER.exception("ingestion_guard_error sha256_prefix=%s batch_id=%s source=%s", digest[:16], batch_id, source)
+        raise GlobalExactGuardUnavailable("global exact-content authority is unavailable; retry the ingestion") from exc
     if row is None:
-        raise RuntimeError("global exact-content registry unavailable")
+        raise GlobalExactGuardUnavailable("global exact-content registry is unavailable; retry the ingestion")
 
     if inserted:
-        LOGGER.info("global_exact_dedupe status=RESERVED sha256=%s batch_id=%s path=%s", digest, batch_id, path)
+        LOGGER.info("ingestion_exact_new sha256_prefix=%s batch_id=%s source=%s", digest[:16], batch_id, source)
         return GlobalClaim("CLAIMED", digest, row.id, row.canonical_batch_id, row.canonical_image_id, row.canonical_image_asset_id, row.canonical_object_name)
 
     if row.lifecycle_status == FAILED and row.canonical_image_asset_id is None:
@@ -205,7 +214,7 @@ def claim_global_image(
         row.source = (source or "unknown")[:128]
         row.last_error = None
         row.updated_at = now
-        LOGGER.info("global_exact_dedupe status=RESERVED sha256=%s batch_id=%s path=%s", digest, batch_id, path)
+        LOGGER.info("ingestion_exact_new sha256_prefix=%s batch_id=%s source=%s", digest[:16], batch_id, source)
         return GlobalClaim("CLAIMED", digest, row.id, row.canonical_batch_id, row.canonical_image_id, row.canonical_image_asset_id, row.canonical_object_name)
 
     if row.lifecycle_status not in _LIFECYCLE:
@@ -213,15 +222,15 @@ def claim_global_image(
     if row.lifecycle_status in {RESERVED, ACTIVE} and _same_logical_asset(
         row, batch_id=batch_id, incoming_path=path, object_name=object_name
     ):
-        LOGGER.info("global_exact_dedupe status=SKIP sha256=%s batch_id=%s path=%s", digest, batch_id, path)
+        LOGGER.info("ingestion_exact_idempotent_skip sha256_prefix=%s batch_id=%s source=%s", digest[:16], batch_id, source)
         return GlobalClaim("SKIP", digest, row.id, row.canonical_batch_id, row.canonical_image_id, row.canonical_image_asset_id, row.canonical_object_name)
 
     _audit_duplicate(db, row, sha256=digest, batch_id=batch_id, incoming_path=path, source=source)
     LOGGER.info(
-        "global_exact_dedupe status=DUPLICATE_BLOCKED sha256=%s batch_id=%s path=%s canonical_batch=%s",
-        digest,
+        "ingestion_exact_duplicate_blocked sha256_prefix=%s batch_id=%s source=%s canonical_batch=%s",
+        digest[:16],
         batch_id,
-        path,
+        source,
         row.canonical_batch_id,
     )
     return GlobalClaim(
@@ -259,7 +268,7 @@ def mark_global_image_active(
         row.canonical_object_name = object_name
     row.updated_at = utcnow()
     row.last_error = None
-    LOGGER.info("global_exact_dedupe status=ACTIVE sha256=%s batch_id=%s image_id=%s", digest, batch_id, image_id)
+    LOGGER.info("ingestion_exact_active sha256_prefix=%s batch_id=%s image_id=%s", digest[:16], batch_id, image_id)
     return row
 
 
@@ -271,7 +280,7 @@ def mark_global_image_failed(db: Session, *, sha256: str, error: str) -> None:
     row.lifecycle_status = FAILED
     row.last_error = str(error)[:4000]
     row.updated_at = utcnow()
-    LOGGER.error("global_exact_dedupe status=FAILED sha256=%s error=%s", digest, row.last_error)
+    LOGGER.error("ingestion_guard_error sha256_prefix=%s error=%s", digest[:16], row.last_error)
 
 
 def record_historical_member(db: Session, *, sha256: str, image: ImageAsset) -> bool:
@@ -340,10 +349,10 @@ def bootstrap_global_registry(
                     client = storage.Client()
                 bucket, object_name = _gcs_parts(image.gcs_uri, bucket_name)
                 digest = sha256_bytes(client.bucket(bucket).blob(object_name).download_as_bytes())
-                LOGGER.info("global_exact_dedupe status=BACKFILL_PROCESSED image_asset_id=%s sha256=%s", image.id, digest)
+                LOGGER.info("global_sha_backfill_processed image_asset_id=%s sha256_prefix=%s", image.id, digest[:16])
             except Exception as exc:
                 missing += 1
-                LOGGER.error("global_exact_dedupe status=BACKFILL_MISSING image_asset_id=%s error=%s", image.id, exc)
+                LOGGER.error("global_sha_backfill_missing image_asset_id=%s error=%s", image.id, exc)
                 continue
         digest = normalize_sha256(digest)
         row = db.scalar(select(GlobalImageContent).where(GlobalImageContent.sha256 == digest).with_for_update())
@@ -387,7 +396,7 @@ def bootstrap_global_registry(
         "coverage_complete": missing == 0,
         "status": "COMPLETE" if missing == 0 else "BLOCKED_DEPENDENCY",
     }
-    LOGGER.info("global_exact_dedupe status=BACKFILL_SUMMARY result=%s", result)
+    LOGGER.info("global_sha_backfill_summary result=%s", result)
     return result
 
 

@@ -23,6 +23,7 @@ from starlette.requests import Request
 from app.db import SessionLocal
 from app.exact_dedupe import (
     GLOBAL_EXACT_DUPLICATE,
+    GlobalExactGuardUnavailable,
     claim_global_image,
     mark_global_image_active,
     mark_global_image_failed,
@@ -601,6 +602,8 @@ async def upload_batch_file(
             result = _upload_resumable_blob(bucket, client, object_name, data, content_type=content_type)
         result.update({"batch_id": batch_id, "relative_path": relative_path})
         return result
+    except GlobalExactGuardUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -611,6 +614,8 @@ def finalize_batch_upload(payload: UploadFinalizeRequest):
         return _finalize_upload(payload.batch_id, payload.source, payload.batch_name)
     except ManifestNormalizationError as exc:
         return _manifest_error_response(exc)
+    except GlobalExactGuardUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -688,6 +693,8 @@ async def upload_batch_dataset(
                         conflicts.append(name)
                     elif result["status"] == "DUPLICATE_BLOCKED":
                         duplicate_paths.append(name)
+                except GlobalExactGuardUnavailable:
+                    raise
                 except Exception:
                     upload_counts["failed"] += 1
             if conflicts or upload_counts["failed"]:
@@ -716,5 +723,7 @@ async def upload_batch_dataset(
         return _manifest_error_response(exc)
     except zipfile.BadZipFile as exc:
         raise HTTPException(status_code=400, detail="ZIP 文件损坏或格式不正确") from exc
+    except GlobalExactGuardUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
