@@ -187,6 +187,74 @@ class ImageAsset(Base):
     crop_review = relationship("BatchCropReview", back_populates="image", uselist=False, cascade="all, delete-orphan")
 
 
+class GlobalImageContent(Base):
+    """One globally unique exact image content identity.
+
+    This registry deliberately sits beside ``ImageAsset`` instead of adding a
+    uniqueness constraint to it.  Historical batches can contain duplicates;
+    new ingestion paths must consult this table before creating another live
+    asset.
+    """
+
+    __tablename__ = "global_image_contents"
+    __table_args__ = (UniqueConstraint("sha256", name="uq_global_image_content_sha256"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    sha256 = Column(String(64), nullable=False, index=True)
+    lifecycle_status = Column(String(16), nullable=False, default="RESERVED", index=True)
+    status = synonym("lifecycle_status")
+    canonical_batch_id = Column(String(128), index=True)
+    canonical_image_id = Column(String(256), index=True)
+    canonical_image_asset_id = Column(Integer, ForeignKey("image_assets.id"), index=True)
+    canonical_object_name = Column(Text)
+    incoming_batch_id = Column(String(128), index=True)
+    incoming_path = Column(Text)
+    source = Column(String(128))
+    last_error = Column(Text)
+    first_seen_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+    canonical_image_asset = relationship("ImageAsset", foreign_keys=[canonical_image_asset_id])
+
+
+class GlobalDuplicateAudit(Base):
+    """Append-only record of every new-ingestion exact duplicate decision."""
+
+    __tablename__ = "global_duplicate_audits"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    sha256 = Column(String(64), nullable=False, index=True)
+    incoming_batch_id = Column(String(128), nullable=False, index=True)
+    incoming_path = Column(Text, nullable=False)
+    source = Column(String(128), nullable=False)
+    canonical_batch_id = Column(String(128))
+    canonical_image_id = Column(String(256))
+    canonical_image_asset_id = Column(Integer, ForeignKey("image_assets.id"))
+    canonical_object_name = Column(Text)
+    reason = Column(String(64), nullable=False, default="GLOBAL_EXACT_DUPLICATE")
+    blocked_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+
+
+class GlobalImageDuplicateMember(Base):
+    """Historical ImageAsset membership for a global exact-content group."""
+
+    __tablename__ = "global_image_duplicate_members"
+    __table_args__ = (
+        UniqueConstraint("sha256", "image_asset_id", name="uq_global_duplicate_member_asset"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    sha256 = Column(String(64), nullable=False, index=True)
+    image_asset_id = Column(Integer, ForeignKey("image_assets.id"), nullable=False, index=True)
+    batch_id = Column(String(128), nullable=False, index=True)
+    image_id = Column(String(256), nullable=False)
+    object_name = Column(Text)
+    recorded_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+
+    image_asset = relationship("ImageAsset", foreign_keys=[image_asset_id])
+
+
 class BatchCropReview(Base):
     """Human gate for turning a normal Batch image into a reviewed crop.
 
