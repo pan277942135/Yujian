@@ -146,10 +146,11 @@ def _upload_resumable_blob(
     data: bytes,
     *,
     content_type: str,
+    sha256: str | None = None,
 ) -> dict:
     """Upload one object idempotently and report UPLOADED/SKIP/CONFLICT."""
 
-    sha256 = _payload_sha256(data)
+    sha256 = sha256 or _payload_sha256(data)
     blob = bucket.blob(object_name)
     if blob.exists(client):
         if _blob_matches_payload(blob, data, client):
@@ -291,6 +292,7 @@ def _guarded_image_upload(
             object_name,
             data,
             content_type=content_type,
+            sha256=digest,
         )
         if result.get("status") in {"UPLOADED", "SKIP"}:
             mark_global_image_active(db, sha256=digest, batch_id=batch_id, object_name=object_name)
@@ -360,9 +362,22 @@ def _ensure_manifest_ready(
         else:
             duplicate_rows_removed = 0
         rows = validate_fish_manifest_text(manifest_text, source_name=existing.name)
+        manifest_path = existing.name[len(prefix):] if existing.name.startswith(prefix) else existing.name
+        if batch_id and duplicate_rows_removed:
+            output_name = prefix + "metadata/fish_manifest.csv"
+            output = bucket.blob(output_name)
+            upload_kwargs = {}
+            if getattr(existing, "generation", None) is not None and existing.name == output_name:
+                upload_kwargs["if_generation_match"] = existing.generation
+            output.upload_from_string(
+                manifest_text,
+                content_type="text/csv; charset=utf-8",
+                **upload_kwargs,
+            )
+            manifest_path = "metadata/fish_manifest.csv"
         return {
             "status": "MANIFEST_READY",
-            "manifest_path": existing.name[len(prefix):] if existing.name.startswith(prefix) else existing.name,
+            "manifest_path": manifest_path,
             "manifest_rows": rows,
             "generated": False,
             "duplicate_rows_removed": duplicate_rows_removed,
@@ -446,8 +461,9 @@ def _finalize_upload(batch_id: str, source: str, batch_name: str | None = None) 
         raise ValueError("上传目录为空，请先上传采集数据")
 
     images = [b for b in blobs if PurePosixPath(b.name).suffix.lower() in IMAGE_EXTS]
+    duplicate_paths = _duplicate_paths(batch_id)
+    duplicate_count = len(duplicate_paths)
     if not images:
-        duplicate_count = len(_duplicate_paths(batch_id))
         if duplicate_count:
             return {
                 "batch_id": batch_id,
@@ -456,6 +472,9 @@ def _finalize_upload(batch_id: str, source: str, batch_name: str | None = None) 
                 "input_images": duplicate_count,
                 "new_images": 0,
                 "duplicates": duplicate_count,
+                "skipped": 0,
+                "retained": 0,
+                "removed": duplicate_count,
                 "duplicate_rows_removed": duplicate_count,
             }
         raise ValueError("没有发现 jpg/jpeg/png/webp 图片")
@@ -480,8 +499,13 @@ def _finalize_upload(batch_id: str, source: str, batch_name: str | None = None) 
         "source": source,
         "created_at": created_at,
         "image_count": len(images),
-        "input_image_count": len(images) + len(_duplicate_paths(batch_id)),
-        "duplicate_count": len(_duplicate_paths(batch_id)),
+        "input_image_count": len(images) + duplicate_count,
+        "new_images": len(images),
+        "duplicate_count": duplicate_count,
+        "duplicates": duplicate_count,
+        "skipped": 0,
+        "retained": len(images),
+        "removed": duplicate_count,
         "manifest_rows": manifest_rows,
         "duplicate_rows_removed": int(manifest_info.get("duplicate_rows_removed", 0)),
         "generated_fish_manifest": generated_manifest,
@@ -502,6 +526,12 @@ def _finalize_upload(batch_id: str, source: str, batch_name: str | None = None) 
         "created_at": created_at,
         "uploaded_files": len(blobs),
         "image_count": len(images),
+        "input_image_count": len(images) + duplicate_count,
+        "new_images": len(images),
+        "duplicates": duplicate_count,
+        "skipped": 0,
+        "retained": len(images),
+        "removed": duplicate_count,
         "manifest_rows": manifest_rows,
         "generated_fish_manifest": generated_manifest,
         "manifest_path": manifest_info["manifest_path"],

@@ -25,7 +25,6 @@ from app.models import (
     GlobalImageDuplicateMember,
     ImageAsset,
 )
-from app.dedupe import ImageFingerprint
 
 LOGGER = logging.getLogger(__name__)
 GLOBAL_EXACT_DUPLICATE = "GLOBAL_EXACT_DUPLICATE"
@@ -318,6 +317,10 @@ def bootstrap_global_registry(
     limit: int | None = None,
 ) -> dict:
     """Populate the registry for every live ImageAsset without deleting history."""
+
+    # ``app.dedupe`` imports factory helpers, so keep this legacy-fingerprint
+    # dependency lazy and leave the ingestion guard importable by factory.
+    from app.dedupe import ImageFingerprint
 
     assets = db.scalars(select(ImageAsset).order_by(ImageAsset.created_at, ImageAsset.id)).all()
     if limit is not None:
