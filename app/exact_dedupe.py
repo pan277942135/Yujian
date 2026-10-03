@@ -340,6 +340,7 @@ def bootstrap_global_registry(
     } if assets else {}
     client = None
     processed = missing = created = historical_duplicates = 0
+    missing_details = []
     for image in assets:
         fingerprint = fingerprints.get(image.id)
         digest = fingerprint.sha256 if fingerprint and fingerprint.sha256 else None
@@ -352,6 +353,15 @@ def bootstrap_global_registry(
                 LOGGER.info("global_sha_backfill_processed image_asset_id=%s sha256_prefix=%s", image.id, digest[:16])
             except Exception as exc:
                 missing += 1
+                missing_details.append(
+                    {
+                        "image_asset_id": image.id,
+                        "batch_id": image.batch_id,
+                        "image_id": image.image_id,
+                        "gcs_uri": image.gcs_uri,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
                 LOGGER.error("global_sha_backfill_missing image_asset_id=%s error=%s", image.id, exc)
                 continue
         digest = normalize_sha256(digest)
@@ -392,6 +402,7 @@ def bootstrap_global_registry(
         "missing": missing,
         "created": created,
         "historical_duplicate_members": historical_duplicates,
+        "missing_details": missing_details,
         "coverage": coverage,
         "coverage_complete": missing == 0,
         "status": "COMPLETE" if missing == 0 else "BLOCKED_DEPENDENCY",
