@@ -52,6 +52,7 @@ jobs:
         with:
           ref: 56b0f9469a5934a3207487d06a5be516005ab29c
           fetch-depth: 1
+          clean: false
 
       - name: Verify exact audit SHA
         shell: bash
