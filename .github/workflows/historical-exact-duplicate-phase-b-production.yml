@@ -33,6 +33,7 @@ env:
   WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
   DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
   PHASE_A_RUN_ID: "37101698837"
+  PHASE_A_ARTIFACT_ID: "11265843128"
   PHASE_A_ARTIFACT_NAME: historical-exact-duplicate-production-37101698837
   PHASE_A_AUDIT_SHA: 4de6de59704586fb52b9ae626bfe8f8b1c4d9abf
   EXPECTED_PLAN_SHA: 6ab205d53b03b2dbb1aa4142ab424c9024d24fc5b2659ea25e77f8b351f5788c
@@ -138,8 +139,13 @@ jobs:
         run: |
           set -euo pipefail
           PHASE_A_DIR="$RUNNER_TEMP/phase-a"
-          gh run download "$PHASE_A_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$PHASE_A_ARTIFACT_NAME" --dir "$PHASE_A_DIR"
-          test -f "$PHASE_A_DIR/cleanup_plan.json"
+          ARCHIVE="$RUNNER_TEMP/phase-a-artifact.zip"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$PHASE_A_ARTIFACT_ID/zip" > "$ARCHIVE"
+          mkdir -p "$PHASE_A_DIR"
+          unzip -q "$ARCHIVE" -d "$PHASE_A_DIR"
+          PLAN_PATH="$(find "$PHASE_A_DIR" -name cleanup_plan.json -type f -print -quit)"
+          test -n "$PLAN_PATH"
+          PHASE_A_DIR="$(dirname "$PLAN_PATH")"
           PLAN_SHA="$(sha256sum "$PHASE_A_DIR/cleanup_plan.json" | cut -d' ' -f1)"
           test "$PLAN_SHA" = "$EXPECTED_PLAN_SHA"
           echo "PHASE_A_DIR=$PHASE_A_DIR" >> "$GITHUB_OUTPUT"
