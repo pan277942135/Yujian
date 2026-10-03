@@ -26,7 +26,7 @@ from app.accepted_pool import (
     start_accepted_pool_sync,
     step_accepted_pool_job,
 )
-from app.db import SessionLocal, init_db
+from app.db import SessionLocal, _ensure_training_eligibility_columns
 from app.dataset_models import DatasetItem
 from app.models import DatasetVersion, GlobalImageContent, GlobalImageDuplicateMember, ImageAsset
 
@@ -604,7 +604,11 @@ def main() -> int:
     if not root.exists():
         root = _download_phase_a(os.getenv("PHASE_A_PLAN_GCS_PREFIX", ""), root)
     authority = load_phase_a_artifact(root)
-    init_db()
+    # Phase A runs against an existing production schema and deliberately does
+    # not call SQLAlchemy create_all().  Phase B must do the same: the
+    # repository contains unrelated optional B-side metadata whose fixture is
+    # not part of this cleanup.  Apply only this additive, idempotent contract.
+    _ensure_training_eligibility_columns()
     db = SessionLocal()
     try:
         result = execute_phase_b(
