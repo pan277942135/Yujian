@@ -18,6 +18,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from google.cloud import storage
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from starlette.requests import Request
 
 from app.db import SessionLocal
@@ -276,17 +277,6 @@ def _guarded_image_upload(
                 "duplicate": True,
                 **claim.as_dict(),
             }
-        if claim.status == "SKIP":
-            db.commit()
-            return {
-                "relative_path": relative_path,
-                "size_bytes": len(data),
-                "sha256": digest,
-                "status": "SKIP",
-                "skipped": True,
-                **claim.as_dict(),
-            }
-
         result = _upload_resumable_blob(
             bucket,
             client,
@@ -300,7 +290,13 @@ def _guarded_image_upload(
         else:
             mark_global_image_failed(db, sha256=digest, error=result.get("status", "upload failed"))
         db.commit()
-        result.update({"relative_path": relative_path, **claim.as_dict()})
+        result.update(
+            {
+                "relative_path": relative_path,
+                "claim_status": claim.status,
+                "canonical": claim.as_dict()["canonical"],
+            }
+        )
         return result
     except Exception as exc:
         db.rollback()
