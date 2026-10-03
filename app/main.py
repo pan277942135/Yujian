@@ -20,6 +20,7 @@ from app.batch_console import audit_with_species_catalog, list_incoming_batches
 from app.batch_upload_api import ensure_incoming_manifest
 from app.db import SessionLocal, get_db, init_db
 from app.detector_runtime import detect, normalize_android_source
+from app.exact_dedupe import GlobalExactGuardUnavailable
 from app.factory import DOWNLOAD_RETRY, get_bucket_name, promote_incoming_batch, sync_batch_registry
 from app.feedback_pipeline import materialize_feedback_batch
 from app.frozen_crop_bridge import _read_uri
@@ -414,6 +415,8 @@ def batch_audit(payload: BatchAction, db: Session = Depends(get_db)):
         )
     except ManifestNormalizationError as exc:
         return JSONResponse(status_code=400, content=exc.as_dict())
+    except GlobalExactGuardUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -425,6 +428,8 @@ def batch_promote(payload: BatchAction):
         return promote_incoming_batch(payload.incoming_prefix, payload.batch_id, payload.source)
     except ManifestNormalizationError as exc:
         return JSONResponse(status_code=400, content=exc.as_dict())
+    except GlobalExactGuardUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -433,6 +438,9 @@ def batch_promote(payload: BatchAction):
 def batch_sync(payload: BatchSync, db: Session = Depends(get_db)):
     try:
         return sync_batch_registry(db, payload.batch_id)
+    except GlobalExactGuardUnavailable as exc:
+        db.rollback()
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -673,6 +681,9 @@ def api_record_feedback(payload: FeedbackCreate, db: Session = Depends(get_db)):
 def api_materialize_feedback(payload: FeedbackMaterialize, db: Session = Depends(get_db)):
     try:
         return materialize_feedback_batch(db, batch_id=payload.batch_id, limit=payload.limit)
+    except GlobalExactGuardUnavailable as exc:
+        db.rollback()
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc

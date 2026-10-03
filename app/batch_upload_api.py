@@ -18,8 +18,18 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from google.cloud import storage
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from starlette.requests import Request
 
+from app.db import SessionLocal
+from app.exact_dedupe import (
+    GLOBAL_EXACT_DUPLICATE,
+    GlobalExactGuardUnavailable,
+    claim_global_image,
+    mark_global_image_active,
+    mark_global_image_failed,
+    sha256_bytes,
+)
 from app.factory import IMAGE_EXTS, get_bucket_name
 from app.services.manifest_normalizer import (
     ManifestNormalizationError,
@@ -138,10 +148,11 @@ def _upload_resumable_blob(
     data: bytes,
     *,
     content_type: str,
+    sha256: str | None = None,
 ) -> dict:
     """Upload one object idempotently and report UPLOADED/SKIP/CONFLICT."""
 
-    sha256 = _payload_sha256(data)
+    sha256 = sha256 or _payload_sha256(data)
     blob = bucket.blob(object_name)
     if blob.exists(client):
         if _blob_matches_payload(blob, data, client):
@@ -190,6 +201,126 @@ def _upload_resumable_blob(
     }
 
 
+def _duplicate_paths(batch_id: str) -> set[str]:
+    db = SessionLocal()
+    try:
+        from app.models import GlobalDuplicateAudit
+
+        rows = db.scalars(
+            select(GlobalDuplicateAudit).where(
+                GlobalDuplicateAudit.incoming_batch_id == batch_id,
+                GlobalDuplicateAudit.reason == GLOBAL_EXACT_DUPLICATE,
+            )
+        ).all()
+        return {str(row.incoming_path).replace("\\", "/").lstrip("/") for row in rows}
+    finally:
+        db.close()
+
+
+def _manifest_row_path(row: dict[str, str]) -> str:
+    for key in ("file_name", "image_path", "filename", "image_name", "relative_path", "file_path", "path"):
+        value = (row.get(key) or "").strip()
+        if value:
+            return value.replace("\\", "/").lstrip("/")
+    return ""
+
+
+def _exclude_duplicate_manifest_rows(source_text: str, batch_id: str) -> tuple[str, int]:
+    duplicate_paths = _duplicate_paths(batch_id)
+    if not duplicate_paths:
+        return source_text, 0
+    duplicate_basenames = {PurePosixPath(path).name for path in duplicate_paths}
+    reader = csv.DictReader(io.StringIO(source_text.lstrip("\ufeff")))
+    if not reader.fieldnames:
+        return source_text, 0
+    all_rows = list(csv.DictReader(io.StringIO(source_text.lstrip("\ufeff"))))
+    rows = [
+        row
+        for row in all_rows
+        if _manifest_row_path(row) not in duplicate_paths
+        and PurePosixPath(_manifest_row_path(row)).name not in duplicate_basenames
+    ]
+    removed = len(all_rows) - len(rows)
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=list(reader.fieldnames), extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+    return out.getvalue(), removed
+
+
+def _guarded_image_upload(
+    bucket: storage.Bucket,
+    client: storage.Client,
+    *,
+    batch_id: str,
+    relative_path: str,
+    object_name: str,
+    data: bytes,
+    content_type: str,
+    source: str,
+) -> dict:
+    """Claim content before GCS upload and finalize the claim after success."""
+
+    digest = sha256_bytes(data)
+    db = SessionLocal()
+    claim = None
+    try:
+        claim = claim_global_image(
+            db,
+            sha256=digest,
+            batch_id=batch_id,
+            incoming_path=relative_path,
+            object_name=object_name,
+            source=source,
+        )
+        if claim.blocked:
+            db.commit()
+            return {
+                "relative_path": relative_path,
+                "size_bytes": len(data),
+                "sha256": digest,
+                "status": "DUPLICATE_BLOCKED",
+                "duplicate": True,
+                **claim.as_dict(),
+            }
+        result = _upload_resumable_blob(
+            bucket,
+            client,
+            object_name,
+            data,
+            content_type=content_type,
+            sha256=digest,
+        )
+        if result.get("status") in {"UPLOADED", "SKIP"}:
+            mark_global_image_active(db, sha256=digest, batch_id=batch_id, object_name=object_name)
+        else:
+            mark_global_image_failed(db, sha256=digest, error=result.get("status", "upload failed"))
+        db.commit()
+        # Keep the storage outcome authoritative for upload counters.  The
+        # registry claim is a separate state machine: a new claim followed by
+        # an existing GCS object is a successful reconciliation (SKIP), not a
+        # business state named CLAIMED.
+        result.update(
+            {
+                "relative_path": relative_path,
+                "claim_status": claim.status,
+                "canonical": claim.as_dict()["canonical"],
+            }
+        )
+        return result
+    except Exception as exc:
+        db.rollback()
+        if claim is not None and claim.status == "CLAIMED":
+            try:
+                mark_global_image_failed(db, sha256=digest, error=str(exc))
+                db.commit()
+            except Exception:
+                db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def _source_manifest_blob(blobs: list[storage.Blob]) -> storage.Blob | None:
     candidates = [
         b
@@ -225,6 +356,7 @@ def _ensure_manifest_ready(
     bucket_name: str,
     incoming_prefix: str,
     blobs: list[storage.Blob],
+    batch_id: str | None = None,
 ) -> dict:
     """Validate or materialize the canonical metadata/fish_manifest.csv in GCS."""
 
@@ -232,18 +364,42 @@ def _ensure_manifest_ready(
     existing = _existing_fish_manifest(blobs)
     if existing is not None:
         manifest_text = _download_manifest_text(existing)
+        if batch_id:
+            manifest_text, duplicate_rows_removed = _exclude_duplicate_manifest_rows(manifest_text, batch_id)
+        else:
+            duplicate_rows_removed = 0
         rows = validate_fish_manifest_text(manifest_text, source_name=existing.name)
+        manifest_path = existing.name[len(prefix):] if existing.name.startswith(prefix) else existing.name
+        if batch_id and duplicate_rows_removed:
+            output_name = prefix + "metadata/fish_manifest.csv"
+            output = bucket.blob(output_name)
+            upload_kwargs = {}
+            if getattr(existing, "generation", None) is not None and existing.name == output_name:
+                upload_kwargs["if_generation_match"] = existing.generation
+            output.upload_from_string(
+                manifest_text,
+                content_type="text/csv; charset=utf-8",
+                **upload_kwargs,
+            )
+            manifest_path = "metadata/fish_manifest.csv"
         return {
             "status": "MANIFEST_READY",
-            "manifest_path": existing.name[len(prefix):] if existing.name.startswith(prefix) else existing.name,
+            "manifest_path": manifest_path,
             "manifest_rows": rows,
             "generated": False,
+            "duplicate_rows_removed": duplicate_rows_removed,
         }
 
     source = _source_manifest_blob(blobs)
     if source is None:
         raise ManifestNormalizationError("missing metadata/manifest.csv")
     source_text = _download_manifest_text(source)
+    if batch_id:
+        source_text, duplicate_rows_removed = _exclude_duplicate_manifest_rows(source_text, batch_id)
+    else:
+        duplicate_rows_removed = 0
+    if not source_text.strip() or source_text.count("\n") <= 1:
+        raise ManifestNormalizationError("no reviewable images remain after global exact duplicate filtering")
     normalized, rows = normalize_manifest_text(source_text, source_name=source.name)
     output_name = prefix + "metadata/fish_manifest.csv"
     output = bucket.blob(output_name)
@@ -267,12 +423,14 @@ def _ensure_manifest_ready(
             "manifest_path": "metadata/fish_manifest.csv",
             "manifest_rows": rows,
             "generated": False,
+            "duplicate_rows_removed": duplicate_rows_removed,
         }
     return {
         "status": "MANIFEST_READY",
         "manifest_path": "metadata/fish_manifest.csv",
         "manifest_rows": rows,
         "generated": True,
+        "duplicate_rows_removed": duplicate_rows_removed,
     }
 
 
@@ -292,6 +450,7 @@ def ensure_incoming_manifest(incoming_prefix: str, bucket_name: str | None = Non
         bucket_name=bucket_name,
         incoming_prefix=prefix,
         blobs=blobs,
+        batch_id=prefix.rstrip("/").split("/")[-1],
     )
 
 
@@ -309,7 +468,22 @@ def _finalize_upload(batch_id: str, source: str, batch_name: str | None = None) 
         raise ValueError("上传目录为空，请先上传采集数据")
 
     images = [b for b in blobs if PurePosixPath(b.name).suffix.lower() in IMAGE_EXTS]
+    duplicate_paths = _duplicate_paths(batch_id)
+    duplicate_count = len(duplicate_paths)
     if not images:
+        if duplicate_count:
+            return {
+                "batch_id": batch_id,
+                "source": source,
+                "status": "NO_NEW_IMAGES",
+                "input_images": duplicate_count,
+                "new_images": 0,
+                "duplicates": duplicate_count,
+                "skipped": 0,
+                "retained": 0,
+                "removed": duplicate_count,
+                "duplicate_rows_removed": duplicate_count,
+            }
         raise ValueError("没有发现 jpg/jpeg/png/webp 图片")
 
     manifest_info = _ensure_manifest_ready(
@@ -318,6 +492,7 @@ def _finalize_upload(batch_id: str, source: str, batch_name: str | None = None) 
         bucket_name=bucket_name,
         incoming_prefix=_prefix(batch_id),
         blobs=blobs,
+        batch_id=batch_id,
     )
     generated_manifest = bool(manifest_info["generated"])
     manifest_rows = int(manifest_info["manifest_rows"])
@@ -331,7 +506,15 @@ def _finalize_upload(batch_id: str, source: str, batch_name: str | None = None) 
         "source": source,
         "created_at": created_at,
         "image_count": len(images),
+        "input_image_count": len(images) + duplicate_count,
+        "new_images": len(images),
+        "duplicate_count": duplicate_count,
+        "duplicates": duplicate_count,
+        "skipped": 0,
+        "retained": len(images),
+        "removed": duplicate_count,
         "manifest_rows": manifest_rows,
+        "duplicate_rows_removed": int(manifest_info.get("duplicate_rows_removed", 0)),
         "generated_fish_manifest": generated_manifest,
         "manifest_path": manifest_info["manifest_path"],
         "status": "READY_FOR_AUDIT",
@@ -350,6 +533,12 @@ def _finalize_upload(batch_id: str, source: str, batch_name: str | None = None) 
         "created_at": created_at,
         "uploaded_files": len(blobs),
         "image_count": len(images),
+        "input_image_count": len(images) + duplicate_count,
+        "new_images": len(images),
+        "duplicates": duplicate_count,
+        "skipped": 0,
+        "retained": len(images),
+        "removed": duplicate_count,
         "manifest_rows": manifest_rows,
         "generated_fish_manifest": generated_manifest,
         "manifest_path": manifest_info["manifest_path"],
@@ -387,6 +576,7 @@ async def upload_batch_file(
     file: UploadFile = File(...),
     batch_id: str = Form(...),
     relative_path: str = Form(...),
+    source: str = Form(default="manual"),
 ):
     try:
         batch_id = _validate_batch_id(batch_id)
@@ -403,15 +593,23 @@ async def upload_batch_file(
         client = storage.Client()
         bucket = client.bucket(get_bucket_name())
         object_name = _prefix(batch_id) + relative_path
-        result = _upload_resumable_blob(
-            bucket,
-            client,
-            object_name,
-            data,
-            content_type=content_type,
-        )
+        if PurePosixPath(relative_path).suffix.lower() in IMAGE_EXTS:
+            result = _guarded_image_upload(
+                bucket,
+                client,
+                batch_id=batch_id,
+                relative_path=relative_path,
+                object_name=object_name,
+                data=data,
+                content_type=content_type,
+                source=source,
+            )
+        else:
+            result = _upload_resumable_blob(bucket, client, object_name, data, content_type=content_type)
         result.update({"batch_id": batch_id, "relative_path": relative_path})
         return result
+    except GlobalExactGuardUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -422,6 +620,8 @@ def finalize_batch_upload(payload: UploadFinalizeRequest):
         return _finalize_upload(payload.batch_id, payload.source, payload.batch_name)
     except ManifestNormalizationError as exc:
         return _manifest_error_response(exc)
+    except GlobalExactGuardUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -457,8 +657,9 @@ async def upload_batch_dataset(
                 raise ValueError("ZIP 为空")
             client = storage.Client()
             bucket = client.bucket(get_bucket_name())
-            upload_counts = {"total": 0, "uploaded": 0, "skipped": 0, "conflict": 0, "failed": 0}
+            upload_counts = {"total": 0, "uploaded": 0, "skipped": 0, "duplicates": 0, "conflict": 0, "failed": 0}
             conflicts = []
+            duplicate_paths = []
             for info in members:
                 try:
                     name = _safe_relative_path(info.filename)
@@ -470,17 +671,36 @@ async def upload_batch_dataset(
                     raise ValueError(f"ZIP 内单文件超过 25 MiB：{name}")
                 upload_counts["total"] += 1
                 try:
-                    result = _upload_resumable_blob(
-                        bucket,
-                        client,
-                        _prefix(final_batch) + name,
-                        archive.read(info),
-                        content_type=mimetypes.guess_type(name)[0] or "application/octet-stream",
+                    payload = archive.read(info)
+                    if PurePosixPath(name).suffix.lower() in IMAGE_EXTS:
+                        result = _guarded_image_upload(
+                            bucket,
+                            client,
+                            batch_id=final_batch,
+                            relative_path=name,
+                            object_name=_prefix(final_batch) + name,
+                            data=payload,
+                            content_type=mimetypes.guess_type(name)[0] or "application/octet-stream",
+                            source=source,
+                        )
+                    else:
+                        result = _upload_resumable_blob(
+                            bucket,
+                            client,
+                            _prefix(final_batch) + name,
+                            payload,
+                            content_type=mimetypes.guess_type(name)[0] or "application/octet-stream",
+                        )
+                    outcome = {"SKIP": "skipped", "DUPLICATE_BLOCKED": "duplicates"}.get(
+                        result["status"], result["status"].lower()
                     )
-                    outcome = {"SKIP": "skipped"}.get(result["status"], result["status"].lower())
                     upload_counts[outcome] = upload_counts.get(outcome, 0) + 1
                     if result["status"] == "CONFLICT":
                         conflicts.append(name)
+                    elif result["status"] == "DUPLICATE_BLOCKED":
+                        duplicate_paths.append(name)
+                except GlobalExactGuardUnavailable:
+                    raise
                 except Exception:
                     upload_counts["failed"] += 1
             if conflicts or upload_counts["failed"]:
@@ -489,6 +709,7 @@ async def upload_batch_dataset(
                     "source": source,
                     "status": "CONFLICT" if conflicts else "FAILED",
                     "conflicts": conflicts,
+                    "duplicates": duplicate_paths,
                     "upload_summary": upload_counts,
                 }
         result = _finalize_upload(final_batch, source, batch_name)
@@ -499,6 +720,8 @@ async def upload_batch_dataset(
                 "skipped": upload_counts["skipped"],
                 "conflict": upload_counts["conflict"],
                 "failed": upload_counts["failed"],
+                "duplicates": upload_counts["duplicates"],
+                "duplicate_paths": duplicate_paths,
             }
         )
         return result
@@ -506,5 +729,7 @@ async def upload_batch_dataset(
         return _manifest_error_response(exc)
     except zipfile.BadZipFile as exc:
         raise HTTPException(status_code=400, detail="ZIP 文件损坏或格式不正确") from exc
+    except GlobalExactGuardUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
