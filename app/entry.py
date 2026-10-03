@@ -3,6 +3,7 @@ import os
 
 from fastapi import HTTPException
 
+from app.historical_duplicate_closure import write_fence_active
 from app.detector_runtime import load_detector
 from app.main import app, templates as main_templates
 from app.platform.routes.api import router as platform_api_router
@@ -129,6 +130,7 @@ def deployment_health() -> dict:
         "account_privacy_path": "/api/v1/me/privacy",
         "user_catches_path": "/api/v1/catches",
         "feedback_ingest_key_configured": feedback_ingest_key_configured,
+        "historical_duplicate_closure_write_fence_active": write_fence_active(),
         "model_publish_path": "/api/models/{model_id}/publish",
         "model_publish_configured": model_publish_configured,
         "portrait_worker_path": "/api/platform/portrait/jobs",

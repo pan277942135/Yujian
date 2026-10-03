@@ -31,6 +31,7 @@ def main() -> None:
     assert payload["service"] == "yujian-model-factory-console", payload
     assert payload["feedback_ingest_path"] == "/api/feedback/ingest", payload
     assert payload["feedback_ingest_key_configured"] is False, payload
+    assert payload["historical_duplicate_closure_write_fence_active"] is False, payload
     assert payload["qwen_refine_worker_configured"] is False, payload
     assert payload["qwen_refine_worker_url"] is None, payload
     assert "/health/deploy" in PUBLIC_PATHS
@@ -89,6 +90,8 @@ def main() -> None:
             "--source .",
             '--build-service-account "$BUILD_SA_RESOURCE"',
             'DEPLOY_ENV_VARS="APP_GIT_COMMIT=${GIT_SHA}"',
+            'CLOSURE_WRITE_FENCE="${CLOSURE_WRITE_FENCE:-false}"',
+            'HISTORICAL_DUPLICATE_CLOSURE_WRITE_FENCE=${CLOSURE_WRITE_FENCE}',
             'FEEDBACK_INGEST_KEY="$(python -c',
             '::add-mask::%s',
             "--timeout=1200s",

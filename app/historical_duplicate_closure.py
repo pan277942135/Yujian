@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import ImageAsset
+from app.models import ImageAsset, SpeciesCatalog
 
 WRITE_FENCE_ENV = "HISTORICAL_DUPLICATE_CLOSURE_WRITE_FENCE"
 WRITE_FENCE_CODE = "HISTORICAL_DUPLICATE_CLOSURE_IN_PROGRESS"
@@ -38,7 +38,6 @@ PROTECTED_ROUTE_PATHS = (
     "/api/batches/upload",
     "/api/species",
     "/api/species/{species_key}/status",
-    "/api/feedback",
     "/api/feedback/materialize",
     "/api/feedback/ingest",
     "/api/v1/inference/upload",
@@ -68,6 +67,17 @@ def write_fence_active() -> bool:
 
 def assert_training_authority_writable() -> None:
     if write_fence_active():
+        raise HistoricalDuplicateClosureWriteFenceLocked()
+
+
+def assert_feedback_species_allowed(db: Session, corrected_species: str | None) -> None:
+    """Allow feedback labels only when closure cannot create a new candidate."""
+
+    corrected = (corrected_species or "").strip()
+    if not write_fence_active() or not corrected:
+        return
+    known = db.scalar(select(SpeciesCatalog).where(SpeciesCatalog.common_name_zh == corrected))
+    if known is None:
         raise HistoricalDuplicateClosureWriteFenceLocked()
 
 

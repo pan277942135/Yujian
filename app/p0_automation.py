@@ -14,6 +14,7 @@ from app.feedback_pipeline import materialize_feedback_batch
 from app.freeze_policy import select_freeze_candidates
 from app.models import FeedbackEvent
 from app.species_alias import alias_resolution
+from app.historical_duplicate_closure import write_fence_active
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/automation", tags=["p0-automation"])
@@ -71,6 +72,14 @@ def maybe_auto_materialize_feedback(db: Session) -> dict:
     threshold = feedback_threshold()
     size = max(threshold, feedback_batch_size())
     eligible = _eligible_feedback_count(db)
+    if write_fence_active():
+        return {
+            "triggered": False,
+            "blocked_by_closure": True,
+            "eligible": eligible,
+            "threshold": threshold,
+            "batch_size": size,
+        }
     if eligible < threshold:
         return {
             "triggered": False,

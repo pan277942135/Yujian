@@ -52,6 +52,7 @@ from app.services.manifest_normalizer import ManifestNormalizationError
 from app.services.review_prefill import parse_review_signals, trusted_truth_prefill
 from app.historical_duplicate_closure import (
     HistoricalDuplicateClosureWriteFenceLocked,
+    assert_feedback_species_allowed,
     assert_training_authority_writable,
 )
 
@@ -517,6 +518,7 @@ def review_stats(
 
 @app.post("/api/review/{batch_id}/{image_id}/reidentify-bbox")
 def reidentify_review_bbox(batch_id: str, image_id: str, db: Session = Depends(get_db)):
+    assert_training_authority_writable()
     image = db.scalar(select(ImageAsset).where(ImageAsset.batch_id == batch_id, ImageAsset.image_id == image_id))
     if not image:
         raise HTTPException(status_code=404, detail="image not found")
@@ -686,9 +688,11 @@ def api_feedback(status: str | None = None, limit: int = Query(default=100, ge=1
 
 @app.post("/api/feedback")
 def api_record_feedback(payload: FeedbackCreate, db: Session = Depends(get_db)):
-    assert_training_authority_writable()
     try:
+        assert_feedback_species_allowed(db, payload.corrected_species)
         return record_feedback(db, **payload.model_dump())
+    except HistoricalDuplicateClosureWriteFenceLocked:
+        raise
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -724,6 +728,7 @@ def accepted_pool_summary_api(db: Session = Depends(get_db)):
 
 @app.post("/api/datasets/accepted-pool/sync")
 def accepted_pool_sync_start(db: Session = Depends(get_db)):
+    assert_training_authority_writable()
     from app.accepted_pool import start_accepted_pool_sync
 
     try:
@@ -735,6 +740,7 @@ def accepted_pool_sync_start(db: Session = Depends(get_db)):
 
 @app.post("/api/datasets/accepted-pool/preview")
 def accepted_pool_freeze_preview_api(payload: DatasetFreeze, db: Session = Depends(get_db)):
+    assert_training_authority_writable()
     from app.accepted_pool import accepted_pool_freeze_preview
 
     try:
@@ -762,6 +768,7 @@ def accepted_pool_sync_job(job_id: str):
 
 @app.post("/api/datasets/accepted-pool/jobs/{job_id}/step")
 def accepted_pool_sync_step(job_id: str):
+    assert_training_authority_writable()
     from app.accepted_pool import get_accepted_pool_job, step_accepted_pool_job
 
     if get_accepted_pool_job(job_id) is None:

@@ -257,6 +257,7 @@ def accepted_bbox_items(
 
 @router.post("/api/dataset-accepted-bbox/{batch_id}/{image_id}/reidentify")
 def reidentify_bbox(batch_id: str, image_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    assert_training_authority_writable()
     image = _find_image(db, batch_id, image_id)
     try:
         source, _ = _read_uri(image.gcs_uri)

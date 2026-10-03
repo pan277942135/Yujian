@@ -152,6 +152,7 @@ def platform_accepted_fish_pool(db: Session = Depends(get_db)) -> dict[str, Any]
 
 @router.post("/datasets/crop/create")
 def platform_crop_dataset_create(payload: CropDatasetCreate) -> dict[str, Any]:
+    assert_training_authority_writable()
     source = payload.source.strip().upper()
     if source not in {"ACCEPTED_BBOX", ACCEPTED_POOL_SOURCE}:
         raise HTTPException(status_code=400, detail={"error": "SOURCE_NOT_SUPPORTED", "source": payload.source})
@@ -198,6 +199,7 @@ def platform_crop_dataset_job(job_id: str) -> dict[str, Any]:
 
 @router.post("/datasets/crop/jobs/{job_id}/step")
 def platform_crop_dataset_step(job_id: str) -> dict[str, Any]:
+    assert_training_authority_writable()
     try:
         return step_crop_dataset_job(job_id)
     except ValueError as exc:
@@ -235,6 +237,7 @@ def platform_release_qa(dataset_id: str, db: Session = Depends(get_db)) -> dict[
 
 @router.post("/datasets/{dataset_id}/release-qa/start")
 def platform_release_qa_start(dataset_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    assert_training_authority_writable()
     try:
         qa = start_random_50_qa(dataset_id, db)
         adapters.record_operation(db, "RANDOM_50_QA_START", "dataset_release", dataset_id, detail={"sample_size": qa.get("sample_size", 0), "status": qa.get("status")})
@@ -250,6 +253,7 @@ def platform_release_qa_start(dataset_id: str, db: Session = Depends(get_db)) ->
 
 @router.post("/datasets/{dataset_id}/release-qa/review")
 def platform_release_qa_review(dataset_id: str, payload: CropReleaseQaReview, db: Session = Depends(get_db)) -> dict[str, Any]:
+    assert_training_authority_writable()
     try:
         qa = review_random_50_qa(dataset_id, payload.qa_index, payload.decision, payload.note, db)
         adapters.record_operation(db, "RANDOM_50_QA_REVIEW", "dataset_release", dataset_id, detail={"qa_index": payload.qa_index, "decision": payload.decision.upper(), "final_release_gate": qa.get("final_release_gate")})
@@ -436,6 +440,7 @@ def platform_training_jobs(db: Session = Depends(get_db)) -> list[dict[str, Any]
 
 @router.post("/training/create")
 def platform_training_create(payload: PlatformTrainingCreate, db: Session = Depends(get_db)) -> dict[str, Any]:
+    assert_training_authority_writable()
     dataset_version = (payload.dataset_version or payload.dataset_id or "").strip()
     if not dataset_version:
         raise HTTPException(status_code=400, detail="请选择数据集")

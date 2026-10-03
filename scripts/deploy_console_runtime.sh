@@ -320,6 +320,12 @@ if [[ "$FEEDBACK_READY" != "true" ]]; then
   exit 1
 fi
 
+CLOSURE_FENCE_READY="$(printf '%s' "$DEPLOY_HEALTH" | python -c 'import json,sys; print("true" if json.load(sys.stdin).get("historical_duplicate_closure_write_fence_active") else "false")')"
+if [[ "$CLOSURE_FENCE_READY" != "true" ]]; then
+  echo "Historical duplicate closure fence is not active on the deployed revision" >&2
+  exit 1
+fi
+
 USER_AUTH_READY="$(printf '%s' "$SERVICE_JSON" | python -c '
 import json,sys
 d=json.load(sys.stdin)
@@ -382,6 +388,7 @@ printf 'BUILD_SA_RESOURCE=%s\n' "$BUILD_SA_RESOURCE"
 printf 'HEALTH=%s\n' "$BASIC_HEALTH"
 printf 'DEPLOY_HEALTH=%s\n' "$DEPLOY_HEALTH"
 printf 'FEEDBACK_SMOKE=%s\n' "$FEEDBACK_SMOKE"
+printf 'HISTORICAL_DUPLICATE_CLOSURE_WRITE_FENCE_ACTIVE=%s\n' "$CLOSURE_FENCE_READY"
 printf 'USER_AUTH_JWT_READY=%s\n' "$USER_AUTH_READY"
 
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
@@ -391,6 +398,7 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "git_commit=${GIT_SHA}"
     echo "build_service_account=${BUILD_SA}"
     echo "feedback_ingest_ready=${FEEDBACK_READY}"
+    echo "historical_duplicate_closure_write_fence_active=${CLOSURE_FENCE_READY}"
     echo "user_auth_jwt_ready=${USER_AUTH_READY}"
   } >> "$GITHUB_OUTPUT"
 fi
