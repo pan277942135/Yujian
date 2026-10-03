@@ -79,6 +79,36 @@ jobs:
           import json
           import sys
 
+          def resolve_secret_reference(item):
+              secret_ref = ((item.get("valueFrom") or {}).get("secretKeyRef") or {})
+              if not secret_ref:
+                  secret_ref = ((item.get("valueSource") or {}).get("secretKeyRef") or {})
+              return str(secret_ref.get("name") or secret_ref.get("secret") or "").strip()
+
+          def resolve_plain_values(items):
+              names = {"GCS_BUCKET", "CLOUD_SQL_CONNECTION_NAME", "DB_USER", "DB_NAME"}
+              return {
+                  str(item.get("name")): str(item["value"])
+                  for item in items
+                  if item.get("name") in names and item.get("value")
+              }
+
+          parser_fixture = {
+              "name": "DB_PASSWORD",
+              "valueFrom": {"secretKeyRef": {"key": "latest", "name": "yujian-console-db-password"}},
+          }
+          assert resolve_secret_reference(parser_fixture) == "yujian-console-db-password"
+          plain_fixture = [
+              {"name": "GCS_BUCKET", "value": "fixture-bucket"},
+              {"name": "CLOUD_SQL_CONNECTION_NAME", "value": "fixture:asia-east1:sql"},
+              {"name": "DB_USER", "value": "fixture-user"},
+              {"name": "DB_NAME", "value": "fixture-db"},
+          ]
+          assert set(resolve_plain_values(plain_fixture)) == {
+              "GCS_BUCKET", "CLOUD_SQL_CONNECTION_NAME", "DB_USER", "DB_NAME"
+          }
+          print("Cloud Run secret/plain-env parser contract: PASS")
+
           with open(sys.argv[1], encoding="utf-8") as handle:
               payload = json.load(handle)
           template = ((payload.get("spec") or {}).get("template") or {})
@@ -88,13 +118,14 @@ jobs:
               raise SystemExit("live Console service has no container configuration")
           values = {}
           db_secret = ""
+          db_password_item = None
           for item in containers[0].get("env") or []:
               name = str(item.get("name") or "")
               if name in {"GCS_BUCKET", "CLOUD_SQL_CONNECTION_NAME", "DB_USER", "DB_NAME"} and item.get("value"):
                   values[name] = str(item["value"])
               if name == "DB_PASSWORD":
-                  ref = ((item.get("valueSource") or {}).get("secretKeyRef") or {})
-                  db_secret = str(ref.get("secret") or "")
+                  db_password_item = item
+                  db_secret = resolve_secret_reference(item)
           annotations = (template.get("metadata") or {}).get("annotations") or {}
           values["CLOUD_SQL_CONNECTION_NAME"] = values.get("CLOUD_SQL_CONNECTION_NAME") or str(
               annotations.get("run.googleapis.com/cloudsql-instances") or ""
@@ -104,12 +135,18 @@ jobs:
           if missing:
               raise SystemExit(f"missing live Console configuration: {','.join(missing)}")
           if not db_secret:
-              raise SystemExit("DB_PASSWORD is not configured as a Secret Manager reference")
+              sanitized_keys = sorted((db_password_item or {}).keys())
+              raise SystemExit(
+                  "DB_PASSWORD is not configured as a Secret Manager reference; "
+                  f"sanitized env keys: {','.join(sanitized_keys)}"
+              )
           if not runtime_sa:
               raise SystemExit("live Console runtime service account is missing")
           with open(sys.argv[2], "a", encoding="utf-8") as handle:
               for key, value in {**values, "DB_SECRET": db_secret, "RUNTIME_SA": runtime_sa}.items():
                   handle.write(f"{key}={value}\n")
+          print("DB_PASSWORD binding type: Secret Manager")
+          print(f"DB secret reference name: {db_secret}")
           print("Live Console DB/GCS/runtime configuration resolved without printing secret values.")
           PY
 
@@ -145,6 +182,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          gcloud secrets describe "$DB_SECRET" \
+            --project "$PROJECT_ID" \
+            --format='value(name)' >/dev/null
+          echo "Secret Manager reference exists: $DB_SECRET"
           RUN_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
           EVIDENCE_ROOT="gs://${BUCKET}/operator-audits/historical_exact_duplicate_cleanup_v1/${RUN_STAMP}-${AUDIT_SHA:0:8}"
           SECOND_PREFIX="${EVIDENCE_ROOT}/idempotency"
