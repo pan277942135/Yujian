@@ -85,6 +85,8 @@ jobs:
         run: test -f schemas/0017_crop_dataset_v2.sql
       - name: Validate production pipeline migration exists
         run: test -f schemas/0013_production_pipeline_v2.sql
+      - name: Validate training eligibility migration exists
+        run: test -f schemas/0029_training_eligibility_v1.sql
       - name: Validate Fish Knowledge migration exists
         run: test -f schemas/0014_fish_knowledge_v1.sql
       - name: Validate Fish Knowledge V1.1 migrations exist

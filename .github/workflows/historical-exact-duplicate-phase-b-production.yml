@@ -1,0 +1,318 @@
+name: Historical Exact Duplicate Phase B Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "First run must be dry-run; apply requires a verified dry-run run ID"
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - apply
+      dry_run_run_id:
+        description: "Required only for apply: the GitHub run ID whose exact dry-run evidence passed"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+concurrency:
+  group: historical-exact-duplicate-phase-b-production
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: gemini-api-project-503706
+  REGION: asia-east1
+  SERVICE: yujian-model-factory-console
+  JOB_NAME: yujian-historical-exact-duplicate-phase-b-v1
+  WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+  DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+  PHASE_A_RUN_ID: "37101698837"
+  PHASE_A_ARTIFACT_NAME: historical-exact-duplicate-production-37101698837
+  PHASE_A_AUDIT_SHA: 4de6de59704586fb52b9ae626bfe8f8b1c4d9abf
+  EXPECTED_PLAN_SHA: 6ab205d53b03b2dbb1aa4142ab424c9024d24fc5b2659ea25e77f8b351f5788c
+  AR_REPOSITORY: yujian-training
+
+jobs:
+  phase-b-production:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    environment: uat
+    steps:
+      - name: Enforce main-only execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+
+      - name: Validate execution mode
+        shell: bash
+        env:
+          MODE: ${{ inputs.mode }}
+          DRY_RUN_RUN_ID: ${{ inputs.dry_run_run_id }}
+        run: |
+          set -euo pipefail
+          if [[ "$MODE" = "apply" && -z "$DRY_RUN_RUN_ID" ]]; then
+            echo "apply requires a verified dry-run run ID"
+            exit 1
+          fi
+
+      - name: Checkout Phase B implementation
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          clean: true
+
+      - name: Verify workflow is running from main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Authenticate to Google Cloud with existing WIF
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          version: ">= 416.0.0"
+
+      - name: Resolve live Console production configuration
+        id: runtime
+        shell: bash
+        env:
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          REGION: ${{ env.REGION }}
+          SERVICE: ${{ env.SERVICE }}
+        run: |
+          set -euo pipefail
+          SERVICE_JSON="$RUNNER_TEMP/yujian-console-service.json"
+          gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > "$SERVICE_JSON"
+          python3 - "$SERVICE_JSON" "$GITHUB_OUTPUT" <<'PY'
+          import json, sys
+          payload = json.loads(open(sys.argv[1], encoding="utf-8").read())
+          template = (payload.get("spec") or {}).get("template") or {}
+          spec = template.get("spec") or {}
+          containers = spec.get("containers") or []
+          if not containers:
+              raise SystemExit("live Console service has no container")
+          values = {}
+          db_secret = ""
+          for item in containers[0].get("env") or []:
+              name = str(item.get("name") or "")
+              if name in {"GCS_BUCKET", "CLOUD_SQL_CONNECTION_NAME", "DB_USER", "DB_NAME"} and item.get("value"):
+                  values[name] = str(item["value"])
+              if name == "DB_PASSWORD":
+                  ref = (item.get("valueFrom") or {}).get("secretKeyRef") or (item.get("valueSource") or {}).get("secretKeyRef") or {}
+                  db_secret = str(ref.get("name") or ref.get("secret") or "")
+          annotations = (template.get("metadata") or {}).get("annotations") or {}
+          values["CLOUD_SQL_CONNECTION_NAME"] = values.get("CLOUD_SQL_CONNECTION_NAME") or str(annotations.get("run.googleapis.com/cloudsql-instances") or "").split(",")[0]
+          runtime_sa = str(spec.get("serviceAccountName") or "")
+          missing = [key for key in ("GCS_BUCKET", "CLOUD_SQL_CONNECTION_NAME", "DB_USER", "DB_NAME") if not values.get(key)]
+          if missing or not db_secret or not runtime_sa:
+              raise SystemExit(f"incomplete live Console configuration: missing={missing}, secret_bound={bool(db_secret)}, runtime_sa={bool(runtime_sa)}")
+          with open(sys.argv[2], "a", encoding="utf-8") as out:
+              for key, value in {**values, "DB_SECRET": db_secret, "RUNTIME_SA": runtime_sa}.items():
+                  out.write(f"{key}={value}\n")
+          print("Live Console configuration resolved; secret value was not printed.")
+          PY
+
+      - name: Download and pin Phase A artifact
+        id: phase_a
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          PHASE_A_DIR="$RUNNER_TEMP/phase-a"
+          gh run download "$PHASE_A_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$PHASE_A_ARTIFACT_NAME" --dir "$PHASE_A_DIR"
+          test -f "$PHASE_A_DIR/cleanup_plan.json"
+          PLAN_SHA="$(sha256sum "$PHASE_A_DIR/cleanup_plan.json" | cut -d' ' -f1)"
+          test "$PLAN_SHA" = "$EXPECTED_PLAN_SHA"
+          echo "PHASE_A_DIR=$PHASE_A_DIR" >> "$GITHUB_OUTPUT"
+          echo "PLAN_SHA=$PLAN_SHA" >> "$GITHUB_OUTPUT"
+          echo "Phase A raw cleanup_plan.json SHA256: $PLAN_SHA"
+
+      - name: Validate prior dry-run evidence for apply
+        if: ${{ inputs.mode == 'apply' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN_RUN_ID: ${{ inputs.dry_run_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          DRY_DIR="$RUNNER_TEMP/prior-dry-run"
+          gh run download "$DRY_RUN_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "historical-exact-duplicate-phase-b-$DRY_RUN_RUN_ID" --dir "$DRY_DIR"
+          python3 - "$DRY_DIR" "$EXPECTED_PLAN_SHA" <<'PY'
+          import json, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          metadata = json.loads((root / "execution_metadata.json").read_text(encoding="utf-8"))
+          plan = json.loads((root / "phase_b_plan.json").read_text(encoding="utf-8"))
+          assert metadata.get("status") == "DRY_RUN", metadata
+          assert metadata.get("cleanup_plan_sha256") == sys.argv[2], metadata
+          expected = plan.get("expected") or {}
+          assert expected == {
+              "target_non_conflict_groups": 1201,
+              "target_redundant_images": 1626,
+              "target_truth_conflict_groups": 28,
+              "target_truth_conflict_images": 76,
+              "target_total_exclusions": 1702,
+              "expected_training_eligible": 8161,
+          }, expected
+          print("PRIOR_DRY_RUN_GATE_PASS")
+          PY
+
+      - name: Stage exact Phase A artifact in GCS
+        id: evidence
+        env:
+          BUCKET: ${{ steps.runtime.outputs.GCS_BUCKET }}
+          PHASE_A_DIR: ${{ steps.phase_a.outputs.PHASE_A_DIR }}
+          AUDIT_SHA: ${{ env.PHASE_A_AUDIT_SHA }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUN_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+          ROOT="gs://${BUCKET}/operator-audits/historical_exact_duplicate_cleanup_v1/phase_b-${GITHUB_RUN_ID}-${RUN_STAMP}-${AUDIT_SHA:0:8}"
+          gcloud storage cp "$PHASE_A_DIR/cleanup_plan.json" "$ROOT/phase-a/cleanup_plan.json"
+          gcloud storage cp "$PHASE_A_DIR/conflicts.json" "$ROOT/phase-a/conflicts.json"
+          gcloud storage cp "$PHASE_A_DIR/coverage.json" "$ROOT/phase-a/coverage.json"
+          gcloud storage cp "$PHASE_A_DIR/execution_metadata.json" "$ROOT/phase-a/execution_metadata.json"
+          gcloud storage cp "$PHASE_A_DIR/report.md" "$ROOT/phase-a/report.md"
+          echo "EVIDENCE_ROOT=$ROOT" >> "$GITHUB_ENV"
+
+      - name: Build and publish Phase B image
+        id: image
+        env:
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          REGION: ${{ env.REGION }}
+          AR_REPOSITORY: ${{ env.AR_REPOSITORY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPOSITORY}/historical-exact-phase-b:${GITHUB_SHA:0:12}"
+          BUILD_ID="$(gcloud builds submit --project "$PROJECT_ID" --tag "$IMAGE_URI" --async --format='value(id)' --quiet .)"
+          test -n "$BUILD_ID"
+          STATUS=""
+          for attempt in $(seq 1 80); do
+            STATUS="$(gcloud builds describe "$BUILD_ID" --project "$PROJECT_ID" --format='value(status)')"
+            echo "Cloud Build status: $STATUS ($attempt/80)"
+            case "$STATUS" in SUCCESS) break;; FAILURE|INTERNAL_ERROR|TIMEOUT|CANCELLED|EXPIRED) exit 1;; esac
+            sleep 15
+          done
+          test "$STATUS" = SUCCESS
+          echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy temporary Phase B Cloud Run Job
+        id: deploy
+        env:
+          IMAGE_URI: ${{ steps.image.outputs.IMAGE_URI }}
+          BUCKET: ${{ steps.runtime.outputs.GCS_BUCKET }}
+          CONNECTION_NAME: ${{ steps.runtime.outputs.CLOUD_SQL_CONNECTION_NAME }}
+          DB_USER: ${{ steps.runtime.outputs.DB_USER }}
+          DB_NAME: ${{ steps.runtime.outputs.DB_NAME }}
+          DB_SECRET: ${{ steps.runtime.outputs.DB_SECRET }}
+          RUNTIME_SA: ${{ steps.runtime.outputs.RUNTIME_SA }}
+          MODE: ${{ inputs.mode }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUTPUT_PREFIX="$EVIDENCE_ROOT/phase-b"
+          gcloud run jobs deploy "$JOB_NAME" \
+            --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE_URI" \
+            --command python \
+            --args=scripts/historical_exact_duplicate_phase_b.py,--mode="$MODE",--output-dir=/tmp/phase-b,--sync-pool,--idempotency-check \
+            --service-account "$RUNTIME_SA" --set-cloudsql-instances "$CONNECTION_NAME" \
+            --set-env-vars="GCS_BUCKET=${BUCKET},CLOUD_SQL_CONNECTION_NAME=${CONNECTION_NAME},DB_USER=${DB_USER},DB_NAME=${DB_NAME},PHASE_A_PLAN_GCS_PREFIX=${EVIDENCE_ROOT}/phase-a,AUDIT_ENVIRONMENT=production,APP_GIT_COMMIT=${GITHUB_SHA},PHASE_A_RUN_ID=${PHASE_A_RUN_ID},PHASE_A_AUDIT_SHA=${PHASE_A_AUDIT_SHA},CLEANUP_PLAN_SHA256=${EXPECTED_PLAN_SHA}" \
+            --set-secrets="DB_PASSWORD=${DB_SECRET}:latest" \
+            --cpu=2 --memory=8Gi --tasks=1 --parallelism=1 --max-retries=0 --task-timeout=7200s --quiet
+
+      - name: Execute production Phase B job
+        id: execute
+        env:
+          MODE: ${{ inputs.mode }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "$JOB_NAME" --project "$PROJECT_ID" --region "$REGION" --update-env-vars="PHASE_B_MODE=${MODE}" --wait --quiet
+          EXECUTION="$(gcloud run jobs executions list --job="$JOB_NAME" --project "$PROJECT_ID" --region "$REGION" --limit=1 --sort-by='~metadata.creationTimestamp' --format='value(metadata.name)')"
+          test -n "$EXECUTION"
+          echo "EXECUTION=$EXECUTION" >> "$GITHUB_OUTPUT"
+
+      - name: Collect and verify Phase B evidence
+        id: verify
+        env:
+          MODE: ${{ inputs.mode }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/phase-b-evidence"
+          mkdir -p "$OUT"
+          gcloud storage cp -r "$EVIDENCE_ROOT/phase-b/*" "$OUT/"
+          python3 - "$OUT" "$MODE" "$EXPECTED_PLAN_SHA" <<'PY'
+          import json, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          mode = sys.argv[2]
+          expected_sha = sys.argv[3]
+          required = {"phase_b_plan.json", "phase_b_apply.json", "phase_b_post_audit.json", "accepted_pool_post_sync.json", "execution_metadata.json"}
+          assert required <= {item.name for item in root.iterdir()}, sorted(item.name for item in root.iterdir())
+          metadata = json.loads((root / "execution_metadata.json").read_text(encoding="utf-8"))
+          assert metadata.get("cleanup_plan_sha256") == expected_sha, metadata
+          if mode == "dry-run":
+              assert metadata.get("status") == "DRY_RUN", metadata
+          else:
+              assert metadata.get("status") == "COMPLETE", metadata
+              post = metadata.get("after") or {}
+              assert post.get("total_image_assets") == 9863, post
+              assert post.get("training_eligible") == 8161, post
+              assert post.get("GLOBAL_EXACT_DUPLICATE") == 1626, post
+              assert post.get("GLOBAL_EXACT_TRUTH_CONFLICT") == 76, post
+              assert post.get("eligible_exact_duplicate_groups") == 0, post
+              assert post.get("eligible_truth_conflict_members") == 0, post
+              assert metadata.get("gcs_source_images_deleted") == 0, metadata
+              assert metadata.get("phase_c_started") is False, metadata
+              assert metadata.get("model_training_started") is False, metadata
+          print("PHASE_B_EVIDENCE_GATE_PASS")
+          PY
+
+      - name: Upload Phase B evidence as GitHub Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-exact-duplicate-phase-b-${{ github.run_id }}
+          path: ${{ runner.temp }}/phase-b-evidence
+          if-no-files-found: warn
+
+      - name: Publish Phase B summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### Historical Exact Duplicate Cleanup V1 · Phase B"
+            echo "- GitHub ref: \`$GITHUB_REF\`"
+            echo "- Mode: \`${{ inputs.mode }}\`"
+            echo "- Phase A run: \`$PHASE_A_RUN_ID\`"
+            echo "- Phase A audit SHA: \`$PHASE_A_AUDIT_SHA\`"
+            echo "- Cleanup plan SHA256: \`$EXPECTED_PLAN_SHA\`"
+            echo "- Cloud Run execution: \`${{ steps.execute.outputs.EXECUTION }}\`"
+            echo "- Phase C / new Dataset: **NOT STARTED**"
+            echo "- Model training: **NOT STARTED**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Delete temporary Cloud Run Job after successful evidence collection
+        if: ${{ success() && steps.verify.outcome == 'success' }}
+        shell: bash
+        run: |
+          gcloud run jobs delete "$JOB_NAME" --project "$PROJECT_ID" --region "$REGION" --quiet

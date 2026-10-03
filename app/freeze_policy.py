@@ -4,12 +4,12 @@ import hashlib
 import math
 from collections import Counter, defaultdict
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.data_policy import UNCONFIRMED_TRUTH, human_approval_overrides, normalized_truth
 from app.dedupe import ImageFingerprint
-from app.models import BatchCropReview, ImageAsset, SpeciesCatalog
+from app.models import BatchCropReview, GlobalImageDuplicateMember, ImageAsset, SpeciesCatalog
 from app.presence import FishPresenceResult, effective_status
 from app.species_policy import (
     ensure_target_species,
@@ -323,6 +323,47 @@ def _training_gate(
     return [], _empty_split(), [], sorted(disabled_by_key.values(), key=lambda x: x["species"])
 
 
+def _training_eligibility_gate(db: Session) -> None:
+    """Block future Freeze if exact-duplicate eligibility has regressed."""
+
+    duplicate_groups = db.execute(
+        select(GlobalImageDuplicateMember.sha256, func.count())
+        .join(ImageAsset, ImageAsset.id == GlobalImageDuplicateMember.image_asset_id)
+        .where(ImageAsset.training_eligible.is_(True))
+        .group_by(GlobalImageDuplicateMember.sha256)
+        .having(func.count() > 1)
+    ).all()
+    conflict_members = int(
+        db.scalar(
+            select(func.count())
+            .select_from(ImageAsset)
+            .where(
+                ImageAsset.training_eligible.is_(True),
+                ImageAsset.training_exclusion_reason == "GLOBAL_EXACT_TRUTH_CONFLICT",
+            )
+        )
+        or 0
+    )
+    reenabled_quarantine = int(
+        db.scalar(
+            select(func.count())
+            .select_from(ImageAsset)
+            .where(
+                ImageAsset.training_eligible.is_(True),
+                ImageAsset.training_exclusion_reason == "GLOBAL_EXACT_DUPLICATE",
+            )
+        )
+        or 0
+    )
+    if duplicate_groups or conflict_members or reenabled_quarantine:
+        raise ValueError(
+            "Training eligibility gate failed: "
+            f"eligible_exact_duplicate_groups={len(duplicate_groups)}, "
+            f"eligible_truth_conflict_members={conflict_members}, "
+            f"reenabled_quarantine_rows={reenabled_quarantine}"
+        )
+
+
 def select_freeze_candidates(
     db: Session,
     *,
@@ -332,11 +373,12 @@ def select_freeze_candidates(
     allow_split_blockers: bool = False,
 ) -> dict:
     ensure_target_species(db)
+    _training_eligibility_gate(db)
     catalog_rows = db.scalars(select(SpeciesCatalog).order_by(SpeciesCatalog.catalog_order)).all()
     active_by_name = {row.common_name_zh: row for row in catalog_rows if row.status == "active"}
     images = db.scalars(
         select(ImageAsset)
-        .where(ImageAsset.review_status == "approved")
+        .where(ImageAsset.review_status == "approved", ImageAsset.training_eligible.is_(True))
         .order_by(ImageAsset.batch_id, ImageAsset.id)
     ).all()
     if not images:

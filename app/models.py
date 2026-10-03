@@ -172,6 +172,11 @@ class ImageAsset(Base):
     truth_species = Column(String(128), index=True)
     truth_status = Column(String(64), nullable=False, default="UNCERTAIN", index=True)
     review_status = Column(String(64), nullable=False, default="pending", index=True)
+    training_eligible = Column(Boolean, nullable=False, default=True, index=True)
+    training_exclusion_reason = Column(String(64), index=True)
+    duplicate_of_image_asset_id = Column(Integer, ForeignKey("image_assets.id"), index=True)
+    training_eligibility_source = Column(Text)
+    training_eligibility_updated_at = Column(DateTime(timezone=True))
     scene = Column(String(64))
     lighting = Column(String(64))
     quality = Column(String(64))
@@ -185,6 +190,12 @@ class ImageAsset(Base):
     batch = relationship("Batch", back_populates="images")
     review_events = relationship("ReviewEvent", back_populates="image", cascade="all, delete-orphan")
     crop_review = relationship("BatchCropReview", back_populates="image", uselist=False, cascade="all, delete-orphan")
+    duplicate_of_image_asset = relationship(
+        "ImageAsset",
+        remote_side=[id],
+        foreign_keys=[duplicate_of_image_asset_id],
+        uselist=False,
+    )
 
 
 class GlobalImageContent(Base):

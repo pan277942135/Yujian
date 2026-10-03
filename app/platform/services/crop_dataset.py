@@ -137,6 +137,7 @@ def _pool_rows(db):
         .join(ImageAsset, ImageAsset.id == BatchCropReview.image_asset_id)
         .outerjoin(FishPresenceResult, FishPresenceResult.image_asset_id == ImageAsset.id)
         .where(BatchCropReview.status.in_(ACCEPTED_STATUSES))
+        .where(ImageAsset.training_eligible.is_(True))
         .order_by(BatchCropReview.id)
     )
     return list(db.execute(statement).all())
@@ -153,7 +154,7 @@ def _accepted_pool_rows(db):
     statement = (
         select(ImageAsset, FishPresenceResult)
         .outerjoin(FishPresenceResult, FishPresenceResult.image_asset_id == ImageAsset.id)
-        .where(ImageAsset.review_status == "approved")
+        .where(ImageAsset.review_status == "approved", ImageAsset.training_eligible.is_(True))
         .order_by(ImageAsset.batch_id, ImageAsset.id)
     )
     return list(db.execute(statement).all())
@@ -166,6 +167,7 @@ def accepted_pool_count(db) -> int:
             select(func.count())
             .select_from(ImageAsset)
             .where(ImageAsset.review_status == "approved")
+            .where(ImageAsset.training_eligible.is_(True))
         )
         or 0
     )
@@ -177,9 +179,11 @@ def accepted_bbox_pool_count(db) -> int:
         db.scalar(
             select(func.count())
             .select_from(BatchCropReview)
+            .join(ImageAsset, ImageAsset.id == BatchCropReview.image_asset_id)
             .where(
                 BatchCropReview.status.in_(ACCEPTED_STATUSES),
                 BatchCropReview.accepted_bbox_json.is_not(None),
+                ImageAsset.training_eligible.is_(True),
             )
         )
         or 0
@@ -411,7 +415,7 @@ def _accepted_pool_chunk(db, refs):
     statement = (
         select(ImageAsset, FishPresenceResult)
         .outerjoin(FishPresenceResult, FishPresenceResult.image_asset_id == ImageAsset.id)
-        .where(ImageAsset.id.in_(ids))
+        .where(ImageAsset.id.in_(ids), ImageAsset.training_eligible.is_(True))
     )
     by_id = {int(image.id): (image, presence) for image, presence in db.execute(statement).all()}
     missing = [image_id for image_id in ids if image_id not in by_id]
