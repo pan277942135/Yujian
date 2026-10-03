@@ -18,6 +18,7 @@ from starlette.requests import Request
 from app.data_policy import truth_filter_clause
 from app.db import get_db
 from app.dedupe import ImageFingerprint
+from app.historical_duplicate_closure import assert_training_authority_writable
 from app.models import DatasetVersion, ImageAsset, ReviewEvent
 from app.presence import (
     PRESENCE_MODEL_VERSION,
@@ -372,6 +373,7 @@ def inspect_presence_override(
     payload: PresenceOverride,
     db: Session = Depends(get_db),
 ):
+    assert_training_authority_writable()
     image = db.scalar(select(ImageAsset).where(ImageAsset.batch_id == batch_id, ImageAsset.image_id == image_id))
     if not image:
         raise HTTPException(status_code=404, detail="image not found")

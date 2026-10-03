@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.exact_dedupe import claim_global_image, mark_global_image_active, mark_global_image_failed, sha256_bytes
 from app.factory import get_bucket_name
+from app.historical_duplicate_closure import assert_training_authority_writable
 from app.models import FeedbackEvent
 
 
@@ -35,6 +36,7 @@ def materialize_feedback_batch(
     No feedback is trusted as training truth here. Confirmations and corrections are
     both routed back through the normal Review stage.
     """
+    assert_training_authority_writable()
     if not batch_id.startswith("BATCH_"):
         raise ValueError("batch_id must start with BATCH_")
     bucket_name = bucket_name or get_bucket_name()

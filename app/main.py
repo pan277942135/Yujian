@@ -50,6 +50,10 @@ from app.presence import FishPresenceResult
 from app.crop_review import _candidate_boxes
 from app.services.manifest_normalizer import ManifestNormalizationError
 from app.services.review_prefill import parse_review_signals, trusted_truth_prefill
+from app.historical_duplicate_closure import (
+    HistoricalDuplicateClosureWriteFenceLocked,
+    assert_training_authority_writable,
+)
 
 REVIEW_VALUES = {"approved", "needs_review", "rejected", "hard_case", "pending"}
 TRUTH_VALUES = {
@@ -64,6 +68,11 @@ app = FastAPI(title="YuJian AI Model Factory", version="0.1.0")
 templates = Jinja2Templates(directory="app/templates")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 install_access_guard(app)
+
+
+@app.exception_handler(HistoricalDuplicateClosureWriteFenceLocked)
+async def historical_duplicate_closure_write_fence_handler(request, exc: HistoricalDuplicateClosureWriteFenceLocked):
+    return JSONResponse(status_code=423, content=exc.as_payload())
 
 
 @app.on_event("startup")
@@ -429,6 +438,7 @@ def batch_audit(payload: BatchAction, db: Session = Depends(get_db)):
 
 @app.post("/api/batches/promote")
 def batch_promote(payload: BatchAction):
+    assert_training_authority_writable()
     try:
         ensure_incoming_manifest(payload.incoming_prefix)
         return promote_incoming_batch(payload.incoming_prefix, payload.batch_id, payload.source)
@@ -442,6 +452,7 @@ def batch_promote(payload: BatchAction):
 
 @app.post("/api/batches/sync")
 def batch_sync(payload: BatchSync, db: Session = Depends(get_db)):
+    assert_training_authority_writable()
     try:
         return sync_batch_registry(db, payload.batch_id)
     except GlobalExactGuardUnavailable as exc:
@@ -541,6 +552,7 @@ def reidentify_review_bbox(batch_id: str, image_id: str, db: Session = Depends(g
 
 @app.patch("/api/review/{batch_id}/{image_id}")
 def update_review(batch_id: str, image_id: str, payload: ReviewUpdate, db: Session = Depends(get_db)):
+    assert_training_authority_writable()
     image = db.scalar(select(ImageAsset).where(ImageAsset.batch_id == batch_id, ImageAsset.image_id == image_id))
     if not image:
         raise HTTPException(status_code=404, detail="image not found")
@@ -642,6 +654,7 @@ def api_species(status: str | None = None, db: Session = Depends(get_db)):
 
 @app.post("/api/species")
 def api_create_species(payload: SpeciesCreate, db: Session = Depends(get_db)):
+    assert_training_authority_writable()
     try:
         return create_species_candidate(
             db,
@@ -658,6 +671,7 @@ def api_create_species(payload: SpeciesCreate, db: Session = Depends(get_db)):
 
 @app.patch("/api/species/{species_key}/status")
 def api_species_status(species_key: str, payload: SpeciesStatusUpdate, db: Session = Depends(get_db)):
+    assert_training_authority_writable()
     try:
         return set_species_status(db, species_key, payload.status)
     except Exception as exc:
@@ -672,6 +686,7 @@ def api_feedback(status: str | None = None, limit: int = Query(default=100, ge=1
 
 @app.post("/api/feedback")
 def api_record_feedback(payload: FeedbackCreate, db: Session = Depends(get_db)):
+    assert_training_authority_writable()
     try:
         return record_feedback(db, **payload.model_dump())
     except Exception as exc:
@@ -681,6 +696,7 @@ def api_record_feedback(payload: FeedbackCreate, db: Session = Depends(get_db)):
 
 @app.post("/api/feedback/materialize")
 def api_materialize_feedback(payload: FeedbackMaterialize, db: Session = Depends(get_db)):
+    assert_training_authority_writable()
     try:
         return materialize_feedback_batch(db, batch_id=payload.batch_id, limit=payload.limit)
     except GlobalExactGuardUnavailable as exc:
@@ -790,6 +806,7 @@ def dataset_crop_readiness(dataset_version: str, db: Session = Depends(get_db)):
 
 @app.post("/api/datasets/freeze")
 def dataset_freeze(payload: DatasetFreeze, db: Session = Depends(get_db)):
+    assert_training_authority_writable()
     try:
         source_mode = str(payload.source_mode or "ORIGINAL").strip().upper()
         if source_mode not in {"ORIGINAL", "ACCEPTED_POOL"}:

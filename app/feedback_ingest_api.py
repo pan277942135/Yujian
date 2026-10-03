@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.factory import get_bucket_name
 from app.flywheel import VALID_FEEDBACK_TYPES, feedback_dict, record_feedback
+from app.historical_duplicate_closure import assert_training_authority_writable
 from app.models import FeedbackEvent
 
 router = APIRouter(tags=["feedback-ingest"])
@@ -52,6 +53,8 @@ async def ingest_app_feedback(
     the same multipart/image validation, writes a temporary GCS object, verifies DB
     connectivity, then deletes the object without creating a feedback event.
     """
+    if not smoke:
+        assert_training_authority_writable()
     event_id = source_event_id.strip()
     if not event_id:
         raise HTTPException(status_code=400, detail="source_event_id is required")

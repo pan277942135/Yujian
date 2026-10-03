@@ -18,6 +18,7 @@ from app.data_policy import UNCONFIRMED_TRUTH
 from app.dedupe import ImageFingerprint
 from app.freeze_policy import select_freeze_candidates
 from app.factory import get_bucket_name
+from app.historical_duplicate_closure import assert_training_authority_writable
 from app.flywheel import ensure_species_catalog
 from app.models import DatasetVersion, ImageAsset, SpeciesCatalog
 from app.presence import FishPresenceResult, effective_status
@@ -238,6 +239,7 @@ def preview(payload: DatasetFreezePreviewRequest, db: Session = Depends(get_db))
 
 @router.post("/{dataset_version}/finalize")
 def finalize(dataset_version: str, db: Session = Depends(get_db)):
+    assert_training_authority_writable()
     try:
         return finalize_dataset_lineage(db, dataset_version)
     except Exception as exc:

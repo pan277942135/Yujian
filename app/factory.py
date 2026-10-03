@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.exact_dedupe import claim_global_image, mark_global_image_active, mark_global_image_failed, sha256_bytes
+from app.historical_duplicate_closure import assert_training_authority_writable
 from app.models import Batch, DatasetVersion, GlobalImageContent, ImageAsset
 from app.services.manifest_normalizer import (
     IMAGE_FIELD_ALIASES,
@@ -327,6 +328,7 @@ def promote_incoming_batch(
     source: str,
     bucket_name: str | None = None,
 ) -> dict:
+    assert_training_authority_writable()
     bucket_name = bucket_name or get_bucket_name()
     if not batch_id.startswith("BATCH_"):
         raise ValueError("batch_id must start with BATCH_")
@@ -544,6 +546,7 @@ def _manifest_review_signals(bucket: storage.Bucket, batch_id: str) -> dict[str,
 
 
 def sync_batch_registry(db: Session, batch_id: str, bucket_name: str | None = None) -> dict:
+    assert_training_authority_writable()
     bucket_name = bucket_name or get_bucket_name()
     client = storage.Client()
     bucket = client.bucket(bucket_name)

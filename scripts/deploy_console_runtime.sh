@@ -23,6 +23,7 @@ QWEN_GPU_NAME="${QWEN_GPU_NAME:-NVIDIA L4}"
 QWEN_GPU_WORKER="${QWEN_GPU_WORKER:-fish-qwen-refine-worker}"
 QWEN_GPU_MODEL="${QWEN_GPU_MODEL:-Qwen Image Edit 2511}"
 QWEN_WORKER_BASE_URL="${QWEN_WORKER_BASE_URL:-}"
+CLOSURE_WRITE_FENCE="${HISTORICAL_DUPLICATE_CLOSURE_WRITE_FENCE:-}"
 
 log() { printf '\n==> %s\n' "$*"; }
 
@@ -142,7 +143,22 @@ print(next((x.get("value","") for x in env if x.get("name")=="FISH_QWEN_REFINE_W
 ')"
 fi
 
+# Preserve an active closure fence on ordinary deploys.  The closure
+# workflow passes this variable explicitly when it intentionally changes the
+# maintenance-window state.
+if [[ -z "$CLOSURE_WRITE_FENCE" && -n "$PREVIOUS_SERVICE_JSON" ]]; then
+  CLOSURE_WRITE_FENCE="$(printf '%s' "$PREVIOUS_SERVICE_JSON" | python -c '
+import json,sys
+d=json.load(sys.stdin)
+containers=((d.get("spec") or {}).get("template") or {}).get("spec",{}).get("containers") or []
+env=(containers[0].get("env") if containers else []) or []
+print(next((x.get("value","") for x in env if x.get("name")=="HISTORICAL_DUPLICATE_CLOSURE_WRITE_FENCE"), ""))
+')"
+fi
+CLOSURE_WRITE_FENCE="${CLOSURE_WRITE_FENCE:-false}"
+
 DEPLOY_ENV_VARS="APP_GIT_COMMIT=${GIT_SHA}"
+DEPLOY_ENV_VARS="${DEPLOY_ENV_VARS},HISTORICAL_DUPLICATE_CLOSURE_WRITE_FENCE=${CLOSURE_WRITE_FENCE}"
 DEPLOY_ENV_VARS="${DEPLOY_ENV_VARS},GCS_BUCKET=${GCS_BUCKET},IMAGE_STUDIO_GCS_BUCKET=${IMAGE_STUDIO_GCS_BUCKET},SEGMENTATION_MODEL_TYPE=${SEGMENTATION_MODEL_TYPE},SEGMENTATION_CHECKPOINT_URI=${SEGMENTATION_CHECKPOINT_URI}"
 if [[ -n "${FISH_COMPLETION_WORKER_URL:-}" ]]; then FISH_WORKER_URL="${FISH_COMPLETION_WORKER_URL}"; fi
 if [[ -n "${FISH_COMPLETION_WORKER_TOKEN:-}" ]]; then FISH_WORKER_TOKEN="${FISH_COMPLETION_WORKER_TOKEN}"; fi
