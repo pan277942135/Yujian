@@ -102,9 +102,8 @@ jobs:
           print("Live Console DB/GCS/runtime configuration resolved without printing secret values.")
           PY
 
-      - name: Deploy and execute byte-identical recovery gate
-        id: recovery
-        continue-on-error: true
+      - name: Deploy byte-identical recovery gate
+        id: deploy
         env:
           PROJECT_ID: ${{ env.PROJECT_ID }}
           REGION: ${{ env.REGION }}
@@ -123,16 +122,29 @@ jobs:
           RUN_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
           RECOVERY_PREFIX="gs://${BUCKET}/operator-audits/historical_exact_duplicate_cleanup_v1/manifest_recovery/${RUN_STAMP}-${DATASET_VERSION}"
           SCRIPT_B64="$(base64 -w0 scripts/recover_frozen_manifest.py)"
+          RECOVERY_SCRIPT_SHA256="$(sha256sum scripts/recover_frozen_manifest.py | awk '{print $1}')"
+          PY_ENTRY="exec(__import__('base64').b64decode(__import__('os').environ['RECOVERY_SCRIPT_B64']).decode())"
+          if [[ "$PY_ENTRY" == *,* ]]; then
+            echo "Recovery entry contains forbidden comma"
+            exit 1
+          fi
           echo "RECOVERY_PREFIX=$RECOVERY_PREFIX" >> "$GITHUB_ENV"
+          echo "RECOVERY_SCRIPT_SHA256=$RECOVERY_SCRIPT_SHA256" >> "$GITHUB_ENV"
+          echo "PY_ENTRY=$PY_ENTRY" >> "$GITHUB_ENV"
+          {
+            echo "### Recovery harness identity"
+            echo "- Recovery script SHA256: `$RECOVERY_SCRIPT_SHA256`"
+            echo "- Python entry comma assertion: PASS"
+          } >> "$GITHUB_STEP_SUMMARY"
           gcloud run jobs deploy "$JOB_NAME" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --image "$IMAGE_URI" \
             --command python \
-            --args=-c,"import base64,os;exec(compile(base64.b64decode(os.environ['RECOVERY_SCRIPT_B64']),'recovery','exec'))" \
+            --args=-c,"${PY_ENTRY}" \
             --service-account "$RUNTIME_SA" \
             --set-cloudsql-instances "$CONNECTION_NAME" \
-            --set-env-vars="RECOVERY_SCRIPT_B64=${SCRIPT_B64},DATASET_VERSION=${DATASET_VERSION},GCS_BUCKET=${BUCKET},CLOUD_SQL_CONNECTION_NAME=${CONNECTION_NAME},DB_USER=${DB_USER},DB_NAME=${DB_NAME},GCP_PROJECT_ID=${PROJECT_ID},RECOVERY_OUTPUT_PREFIX=${RECOVERY_PREFIX}" \
+            --set-env-vars="RECOVERY_SCRIPT_B64=${SCRIPT_B64},RECOVERY_SCRIPT_SHA256=${RECOVERY_SCRIPT_SHA256},DATASET_VERSION=${DATASET_VERSION},GCS_BUCKET=${BUCKET},CLOUD_SQL_CONNECTION_NAME=${CONNECTION_NAME},DB_USER=${DB_USER},DB_NAME=${DB_NAME},GCP_PROJECT_ID=${PROJECT_ID},RECOVERY_OUTPUT_PREFIX=${RECOVERY_PREFIX}" \
             --set-secrets="DB_PASSWORD=${DB_SECRET}:latest" \
             --cpu=2 \
             --memory=8Gi \
@@ -141,6 +153,62 @@ jobs:
             --max-retries=0 \
             --task-timeout=3600s \
             --quiet
+
+      - name: Verify deployed recovery Job args
+        env:
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          REGION: ${{ env.REGION }}
+          JOB_NAME: ${{ env.JOB_NAME }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          JOB_JSON="$RUNNER_TEMP/historical-manifest-recovery-job.json"
+          gcloud run jobs describe "$JOB_NAME" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format=json > "$JOB_JSON"
+          python3 - "$JOB_JSON" "$PY_ENTRY" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              payload = json.load(handle)
+          expected = ["-c", sys.argv[2]]
+
+          def walk(value):
+              if isinstance(value, dict):
+                  yield value
+                  for child in value.values():
+                      yield from walk(child)
+              elif isinstance(value, list):
+                  for child in value:
+                      yield from walk(child)
+
+          container_node = next(
+              (node for node in walk(payload) if isinstance(node.get("containers"), list) and node["containers"]),
+              None,
+          )
+          if container_node is None:
+              raise SystemExit("deployed recovery Job has no container")
+          args = container_node["containers"][0].get("args") or []
+          if args != expected:
+              raise SystemExit(f"recovery Job args mismatch: {args!r} != {expected!r}")
+          print("RECOVERY_JOB_ARGS_PASS")
+          print(f"arg_count={len(args)}")
+          print(f"arg0={args[0]}")
+          print(f"arg1={args[1]}")
+          PY
+
+      - name: Execute byte-identical recovery gate
+        id: execute
+        continue-on-error: true
+        env:
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          REGION: ${{ env.REGION }}
+          JOB_NAME: ${{ env.JOB_NAME }}
+        shell: bash
+        run: |
+          set -euo pipefail
           EXECUTION="$(gcloud run jobs execute "$JOB_NAME" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
@@ -148,25 +216,11 @@ jobs:
             --format='value(name)')"
           echo "RECOVERY_EXECUTION=$EXECUTION" >> "$GITHUB_ENV"
 
-      - name: Inspect recovery execution output
+      - name: Collect recovery evidence
         if: always()
         env:
           BUCKET: ${{ steps.runtime.outputs.GCS_BUCKET }}
           DATASET_VERSION: ${{ env.DATASET_VERSION }}
-        shell: bash
-        run: |
-          set +e
-          echo "Recovery execution: ${RECOVERY_EXECUTION:-unknown}"
-          if [[ -n "${RECOVERY_EXECUTION:-}" ]]; then
-            gcloud run jobs executions logs read "$RECOVERY_EXECUTION" \
-              --project "$PROJECT_ID" \
-              --region "$REGION" \
-              --limit=200
-          fi
-          gcloud storage ls "gs://${BUCKET}/datasets/${DATASET_VERSION}/manifest.csv" || true
-
-      - name: Collect recovery evidence
-        if: always()
         shell: bash
         run: |
           set -euo pipefail
@@ -176,6 +230,8 @@ jobs:
             gcloud storage cp "$RECOVERY_PREFIX/DS_CROP_M1_v0.2_recovery.json" "$OUT/DS_CROP_M1_v0.2_recovery.json" || true
           fi
           test -f "$OUT/DS_CROP_M1_v0.2_recovery.json"
+          gcloud storage ls "gs://${BUCKET}/datasets/${DATASET_VERSION}/manifest.csv" > "$OUT/manifest_exists.txt"
+          test -s "$OUT/manifest_exists.txt"
           python3 - "$OUT/DS_CROP_M1_v0.2_recovery.json" <<'PY'
           import json
           import sys
@@ -187,6 +243,18 @@ jobs:
               raise SystemExit("source/destination SHA256 mismatch")
           print("FROZEN_MANIFEST_RECOVERY_PASS")
           PY
+
+      - name: Publish recovery summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### Recovery execution"
+            echo "- Execution: ${RECOVERY_EXECUTION:-NOT_STARTED}"
+            echo "- Script SHA256: ${RECOVERY_SCRIPT_SHA256:-UNKNOWN}"
+            echo "- Job args assertion: PASS"
+            echo "- Evidence gate: see artifact and manifest_exists.txt"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload recovery evidence
         if: always()
@@ -206,6 +274,6 @@ jobs:
             --quiet || true
 
       - name: Fail unless recovery passed
-        if: steps.recovery.outcome != 'success'
+        if: steps.execute.outcome != 'success' || steps.deploy.outcome != 'success'
         shell: bash
         run: exit 1
