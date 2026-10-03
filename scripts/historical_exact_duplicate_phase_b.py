@@ -64,6 +64,14 @@ class PhaseAPlanDrift(RuntimeError):
     code = "PHASE_A_PLAN_DRIFT"
 
 
+def _normalized_truth(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _normalized_review_status(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -373,7 +381,11 @@ def _live_drift_gate(db, authority: dict[str, Any]) -> dict[str, Any]:
             image = assets.get(int(member["image_asset_id"]))
             if image is None:
                 continue
-            if image.truth_species != member.get("truth_species") or image.truth_status != member.get("truth_status"):
+            if (
+                _normalized_truth(image.truth_species) != _normalized_truth(member.get("truth_species"))
+                or _normalized_truth(image.truth_status) != _normalized_truth(member.get("truth_status"))
+                or _normalized_review_status(image.review_status) != _normalized_review_status(member.get("review_status"))
+            ):
                 reasons.append(f"truth classification changed for image_asset_id={image.id}")
     if reasons:
         raise PhaseAPlanDrift("; ".join(reasons))
