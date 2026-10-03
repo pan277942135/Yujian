@@ -24,6 +24,9 @@ from scripts.historical_exact_duplicate_phase_b import (
     PHASE_A_RUN_ID,
     _derive_plan_counts,
     PhaseAPlanDrift,
+    _live_drift_gate,
+    _normalized_review_status,
+    _normalized_truth,
     _apply,
     _counts,
     _post_audit,
@@ -92,8 +95,8 @@ def _authority(db):
             db.add(GlobalImageDuplicateMember(sha256=sha, image_asset_id=row.id, batch_id=row.batch_id, image_id=row.image_id, object_name=row.object_name))
     db.commit()
     return {
-        "run_id": "37111404649",
-        "artifact_id": "11269314055",
+        "run_id": "37117694577",
+        "artifact_id": "11271499460",
         "audit_sha": "4de6de59704586fb52b9ae626bfe8f8b1c4d9abf",
         "cleanup_plan_sha256": "plan-sha",
         "plan": {
@@ -103,16 +106,16 @@ def _authority(db):
                     "sha256": "sha-normal", "truth_classification": "consistent", "manual_conflict": False,
                     "proposed_canonical_id": canonical.id, "proposed_redundant_image_asset_ids": [redundant.id],
                     "members": [
-                        {"image_asset_id": canonical.id, "truth_species": "草鱼", "truth_status": "LIKELY_CORRECT"},
-                        {"image_asset_id": redundant.id, "truth_species": "草鱼", "truth_status": "LIKELY_CORRECT"},
+                        {"image_asset_id": canonical.id, "truth_species": "草鱼", "truth_status": "LIKELY_CORRECT", "review_status": "approved"},
+                        {"image_asset_id": redundant.id, "truth_species": "草鱼", "truth_status": "LIKELY_CORRECT", "review_status": "approved"},
                     ],
                 },
                 {
                     "sha256": "sha-conflict", "truth_classification": "conflict", "manual_conflict": True,
                     "proposed_canonical_id": None, "proposed_redundant_image_asset_ids": None,
                     "members": [
-                        {"image_asset_id": conflict_a.id, "truth_species": "青鱼", "truth_status": "LIKELY_CORRECT"},
-                        {"image_asset_id": conflict_b.id, "truth_species": "草鱼", "truth_status": "LIKELY_CORRECT"},
+                        {"image_asset_id": conflict_a.id, "truth_species": "青鱼", "truth_status": "LIKELY_CORRECT", "review_status": "approved"},
+                        {"image_asset_id": conflict_b.id, "truth_species": "草鱼", "truth_status": "LIKELY_CORRECT", "review_status": "approved"},
                     ],
                 },
             ],
@@ -215,6 +218,96 @@ def test_phase_a_authority_constants_are_fresh():
     assert PHASE_A_RUN_ID == "37117694577"
     assert PHASE_A_ARTIFACT_ID == "11271499460"
     assert PHASE_A_CLEANUP_PLAN_SHA256 == "833b004a436d129f549f9c0780e75c366de6dc3283bd302f58a6b9c157dbd68f"
+
+
+def _authority_member(authority, image_id):
+    return next(
+        member
+        for group in authority["plan"]["groups"]
+        for member in group["members"]
+        if member["image_asset_id"] == image_id
+    )
+
+
+def test_live_drift_gate_normalizes_null_truth_species_to_empty(db):
+    authority = _authority(db)
+    image = db.scalar(select(ImageAsset).where(ImageAsset.image_id == "redundant"))
+    member = _authority_member(authority, image.id)
+    image.truth_species = None
+    member["truth_species"] = ""
+    db.commit()
+    assert _live_drift_gate(db, authority)["status"] == "PASS"
+
+
+def test_live_drift_gate_normalizes_whitespace_truth_species_to_empty(db):
+    authority = _authority(db)
+    image = db.scalar(select(ImageAsset).where(ImageAsset.image_id == "redundant"))
+    member = _authority_member(authority, image.id)
+    image.truth_species = "   "
+    member["truth_species"] = ""
+    db.commit()
+    assert _live_drift_gate(db, authority)["status"] == "PASS"
+
+
+def test_live_drift_gate_normalizes_truth_species_whitespace(db):
+    authority = _authority(db)
+    image = db.scalar(select(ImageAsset).where(ImageAsset.image_id == "redundant"))
+    member = _authority_member(authority, image.id)
+    image.truth_species = "草鱼 "
+    member["truth_species"] = "草鱼"
+    db.commit()
+    assert _normalized_truth(image.truth_species) == "草鱼"
+    assert _live_drift_gate(db, authority)["status"] == "PASS"
+
+
+def test_live_drift_gate_rejects_real_truth_species_drift(db):
+    authority = _authority(db)
+    image = db.scalar(select(ImageAsset).where(ImageAsset.image_id == "redundant"))
+    member = _authority_member(authority, image.id)
+    image.truth_species = "草鱼"
+    member["truth_species"] = "鲤鱼"
+    db.commit()
+    with pytest.raises(PhaseAPlanDrift, match=f"image_asset_id={image.id}"):
+        _live_drift_gate(db, authority)
+
+
+def test_live_drift_gate_normalizes_null_truth_status_to_empty(db):
+    authority = _authority(db)
+    image = db.scalar(select(ImageAsset).where(ImageAsset.image_id == "redundant"))
+    member = _authority_member(authority, image.id)
+    image.truth_status = None
+    member["truth_status"] = ""
+    with db.no_autoflush:
+        assert _live_drift_gate(db, authority)["status"] == "PASS"
+
+
+def test_live_drift_gate_normalizes_review_status_case(db):
+    authority = _authority(db)
+    image = db.scalar(select(ImageAsset).where(ImageAsset.image_id == "redundant"))
+    member = _authority_member(authority, image.id)
+    image.review_status = "APPROVED"
+    member["review_status"] = "approved"
+    db.commit()
+    assert _normalized_review_status(image.review_status) == "approved"
+    assert _live_drift_gate(db, authority)["status"] == "PASS"
+
+
+def test_live_drift_gate_rejects_real_review_status_drift(db):
+    authority = _authority(db)
+    image = db.scalar(select(ImageAsset).where(ImageAsset.image_id == "redundant"))
+    image.review_status = "rejected"
+    db.commit()
+    with pytest.raises(PhaseAPlanDrift, match=f"image_asset_id={image.id}"):
+        _live_drift_gate(db, authority)
+
+
+def test_live_drift_gate_rejects_duplicate_membership_drift(db):
+    authority = _authority(db)
+    member = db.scalar(select(GlobalImageDuplicateMember).where(GlobalImageDuplicateMember.image_id == "redundant"))
+    db.delete(member)
+    db.commit()
+    with pytest.raises(PhaseAPlanDrift, match="membership changed"):
+        _live_drift_gate(db, authority)
 
 
 def test_phase_b_second_apply_is_idempotent(db):
