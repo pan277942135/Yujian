@@ -224,18 +224,25 @@ def flywheel_summary(db: Session) -> dict:
     latest = db.scalar(select(DatasetVersion).order_by(DatasetVersion.created_at.desc()).limit(1))
     cutoff = latest.source_cutoff_at if latest else None
 
-    approved_total = db.scalar(select(func.count()).select_from(ImageAsset).where(ImageAsset.review_status == "approved")) or 0
+    approved_total = db.scalar(
+        select(func.count()).select_from(ImageAsset).where(
+            ImageAsset.review_status == "approved", ImageAsset.training_eligible.is_(True)
+        )
+    ) or 0
     accepted_bbox_pool = db.scalar(
         select(func.count())
         .select_from(BatchCropReview)
         .join(ImageAsset, BatchCropReview.image_asset_id == ImageAsset.id)
         .where(
             ImageAsset.review_status == "approved",
+            ImageAsset.training_eligible.is_(True),
             BatchCropReview.status.in_({"ACCEPTED", "TRAINING_READY"}),
             BatchCropReview.accepted_bbox_json.is_not(None),
         )
     ) or 0
-    new_approved_stmt = select(func.count()).select_from(ImageAsset).where(ImageAsset.review_status == "approved")
+    new_approved_stmt = select(func.count()).select_from(ImageAsset).where(
+        ImageAsset.review_status == "approved", ImageAsset.training_eligible.is_(True)
+    )
     if cutoff:
         new_approved_stmt = new_approved_stmt.where(ImageAsset.updated_at > cutoff)
     new_approved = db.scalar(new_approved_stmt) or 0

@@ -228,6 +228,7 @@ def _source_rows(db: Session) -> tuple[list[dict[str, Any]], int]:
         .join(ImageAsset, ImageAsset.id == BatchCropReview.image_asset_id)
         .where(
             ImageAsset.review_status == "approved",
+            ImageAsset.training_eligible.is_(True),
             BatchCropReview.status.in_(ACCEPTED_STATUSES),
             BatchCropReview.accepted_bbox_json.is_not(None),
         )
@@ -308,7 +309,7 @@ def _source_ref_map(db: Session, review_ids: list[int]) -> dict[int, dict[str, A
     statement = (
         select(BatchCropReview, ImageAsset)
         .join(ImageAsset, ImageAsset.id == BatchCropReview.image_asset_id)
-        .where(BatchCropReview.id.in_(review_ids))
+        .where(BatchCropReview.id.in_(review_ids), ImageAsset.training_eligible.is_(True))
     )
     maps = _species_values(db)
     result = {}
@@ -569,7 +570,7 @@ def _metadata_for(job: dict[str, Any], rows: list[dict[str, Any]], *, changed: b
             "pipeline_type": crop_dataset.CROP_PIPELINE_TYPE,
             "source": ACCEPTED_POOL_SOURCE,
             "source_type": ACCEPTED_POOL_SOURCE,
-            "source_selector": "BatchCropReview.ACCEPTED + ImageAsset.approved",
+            "source_selector": "BatchCropReview.ACCEPTED + ImageAsset.approved + ImageAsset.training_eligible",
             "accepted_pool_mode": "CUMULATIVE_INCREMENTAL",
             "accepted_pool_manifest_uri": _manifest_uri(ACCEPTED_POOL_MANIFEST_NAME),
             "accepted_pool_count": len(rows),
@@ -974,6 +975,7 @@ def accepted_pool_summary(db: Session) -> dict[str, Any]:
         .join(ImageAsset, ImageAsset.id == BatchCropReview.image_asset_id)
         .where(
             ImageAsset.review_status == "approved",
+            ImageAsset.training_eligible.is_(True),
             BatchCropReview.status.in_(ACCEPTED_STATUSES),
             BatchCropReview.accepted_bbox_json.is_not(None),
         )

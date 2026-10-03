@@ -63,6 +63,7 @@ def init_db():
     _ensure_bside_visual_columns()
     _ensure_bside_asset_registry_columns()
     _ensure_account_privacy_columns()
+    _ensure_training_eligibility_columns()
     from app.platform.services.bside_assets import seed_bside_asset_registry
 
     seed_db = SessionLocal()
@@ -243,3 +244,56 @@ def _ensure_account_privacy_columns() -> None:
     if "avatar_object_name" not in existing:
         with engine.begin() as connection:
             connection.exec_driver_sql('ALTER TABLE "users" ADD COLUMN "avatar_object_name" TEXT')
+
+
+def _ensure_training_eligibility_columns() -> None:
+    """Apply the additive historical duplicate eligibility contract in place.
+
+    ``create_all`` handles fresh databases, but production upgrades must use
+    explicit additive ALTER statements so an existing ``image_assets`` table
+    receives the fields without being recreated or rewritten.
+    """
+
+    inspector = inspect(engine)
+    if not inspector.has_table("image_assets"):
+        return
+    existing = {column["name"] for column in inspector.get_columns("image_assets")}
+    additions = {
+        "training_eligible": "BOOLEAN NOT NULL DEFAULT TRUE",
+        "training_exclusion_reason": "VARCHAR(64)",
+        "duplicate_of_image_asset_id": "INTEGER",
+        "training_eligibility_source": "TEXT",
+        "training_eligibility_updated_at": "TIMESTAMP WITH TIME ZONE",
+    }
+    with engine.begin() as connection:
+        for name, definition in additions.items():
+            if name not in existing:
+                connection.exec_driver_sql(f'ALTER TABLE "image_assets" ADD COLUMN "{name}" {definition}')
+        connection.exec_driver_sql(
+            'CREATE INDEX IF NOT EXISTS "ix_image_assets_training_eligible" '
+            'ON "image_assets" ("training_eligible")'
+        )
+        connection.exec_driver_sql(
+            'CREATE INDEX IF NOT EXISTS "ix_image_assets_training_exclusion_reason" '
+            'ON "image_assets" ("training_exclusion_reason")'
+        )
+        connection.exec_driver_sql(
+            'CREATE INDEX IF NOT EXISTS "ix_image_assets_duplicate_of_image_asset_id" '
+            'ON "image_assets" ("duplicate_of_image_asset_id")'
+        )
+        if engine.dialect.name == "postgresql":
+            connection.exec_driver_sql(
+                """
+                DO $$
+                BEGIN
+                  IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'fk_image_assets_duplicate_of_image_asset_id'
+                  ) THEN
+                    ALTER TABLE image_assets
+                      ADD CONSTRAINT fk_image_assets_duplicate_of_image_asset_id
+                      FOREIGN KEY (duplicate_of_image_asset_id) REFERENCES image_assets(id);
+                  END IF;
+                END $$;
+                """
+            )

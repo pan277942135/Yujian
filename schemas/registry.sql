@@ -37,6 +37,11 @@ CREATE TABLE IF NOT EXISTS image_assets (
   truth_species TEXT,
   truth_status TEXT NOT NULL DEFAULT 'UNCERTAIN',
   review_status TEXT NOT NULL DEFAULT 'pending',
+  training_eligible INTEGER NOT NULL DEFAULT 1,
+  training_exclusion_reason TEXT,
+  duplicate_of_image_asset_id INTEGER,
+  training_eligibility_source TEXT,
+  training_eligibility_updated_at TEXT,
   scene TEXT,
   lighting TEXT,
   quality TEXT,
@@ -47,7 +52,8 @@ CREATE TABLE IF NOT EXISTS image_assets (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE(batch_id, image_id),
-  FOREIGN KEY(batch_id) REFERENCES batches(batch_id)
+  FOREIGN KEY(batch_id) REFERENCES batches(batch_id),
+  FOREIGN KEY(duplicate_of_image_asset_id) REFERENCES image_assets(id)
 );
 
 CREATE TABLE IF NOT EXISTS review_events (
@@ -410,6 +416,9 @@ CREATE INDEX IF NOT EXISTS idx_batches_status ON batches(status);
 CREATE INDEX IF NOT EXISTS idx_species_status ON species_catalog(status);
 CREATE INDEX IF NOT EXISTS idx_images_review ON image_assets(review_status);
 CREATE INDEX IF NOT EXISTS idx_images_truth ON image_assets(truth_species);
+CREATE INDEX IF NOT EXISTS idx_images_training_eligible ON image_assets(training_eligible);
+CREATE INDEX IF NOT EXISTS idx_images_training_exclusion_reason ON image_assets(training_exclusion_reason);
+CREATE INDEX IF NOT EXISTS idx_images_duplicate_of ON image_assets(duplicate_of_image_asset_id);
 CREATE INDEX IF NOT EXISTS idx_batch_crop_review_batch ON batch_crop_reviews(batch_id);
 CREATE INDEX IF NOT EXISTS idx_batch_crop_review_status ON batch_crop_reviews(status);
 CREATE INDEX IF NOT EXISTS idx_presence_batch ON fish_presence_results(batch_id);
