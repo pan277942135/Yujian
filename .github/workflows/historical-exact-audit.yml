@@ -1,0 +1,313 @@
+name: Historical Exact Duplicate Phase A Audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "Explicitly run the isolated production Phase A audit"
+        required: true
+        type: choice
+        options:
+          - historical_exact_audit
+        default: historical_exact_audit
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: historical-exact-audit-v1
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: gemini-api-project-503706
+  REGION: asia-east1
+  SERVICE: yujian-model-factory-console
+  JOB_NAME: yujian-historical-exact-audit-v1
+  WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+  DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+  AUDIT_SHA: 56b0f9469a5934a3207487d06a5be516005ab29c
+  AR_REPOSITORY: yujian-training
+
+jobs:
+  historical-exact-audit:
+    if: github.ref == 'refs/heads/fix/historical-global-exact-duplicate-cleanup-v1' && inputs.operation == 'historical_exact_audit'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    environment: uat
+    steps:
+      - name: Checkout exact Phase A implementation SHA
+        uses: actions/checkout@v4
+        with:
+          ref: 56b0f9469a5934a3207487d06a5be516005ab29c
+          fetch-depth: 1
+
+      - name: Authenticate to Google Cloud with GitHub OIDC/WIF
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          version: '>= 416.0.0'
+
+      - name: Resolve live Console production configuration
+        id: runtime
+        shell: bash
+        env:
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          REGION: ${{ env.REGION }}
+          SERVICE: ${{ env.SERVICE }}
+        run: |
+          set -euo pipefail
+          SERVICE_JSON="$RUNNER_TEMP/yujian-console-service.json"
+          gcloud run services describe "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format=json > "$SERVICE_JSON"
+          python3 - "$SERVICE_JSON" "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              payload = json.load(handle)
+          template = ((payload.get("spec") or {}).get("template") or {})
+          spec = template.get("spec") or {}
+          containers = spec.get("containers") or []
+          if not containers:
+              raise SystemExit("Console service has no container configuration")
+          values = {}
+          db_secret = ""
+          for item in containers[0].get("env") or []:
+              name = str(item.get("name") or "")
+              if name in {"GCS_BUCKET", "CLOUD_SQL_CONNECTION_NAME", "DB_USER", "DB_NAME"} and item.get("value"):
+                  values[name] = str(item["value"])
+              if name == "DB_PASSWORD":
+                  ref = ((item.get("valueSource") or {}).get("secretKeyRef") or {})
+                  db_secret = str(ref.get("secret") or "")
+          annotations = (template.get("metadata") or {}).get("annotations") or {}
+          connection = values.get("CLOUD_SQL_CONNECTION_NAME") or str(annotations.get("run.googleapis.com/cloudsql-instances") or "").split(",")[0]
+          values["CLOUD_SQL_CONNECTION_NAME"] = connection
+          runtime_sa = str(spec.get("serviceAccountName") or "")
+          required = ["GCS_BUCKET", "CLOUD_SQL_CONNECTION_NAME", "DB_USER", "DB_NAME"]
+          missing = [name for name in required if not values.get(name)]
+          if missing:
+              raise SystemExit(f"missing live Console config: {','.join(missing)}")
+          if not db_secret:
+              raise SystemExit("DB_PASSWORD is not configured as a Secret Manager reference")
+          if not runtime_sa:
+              raise SystemExit("Console runtime service account is missing")
+          outputs = {
+              **values,
+              "DB_SECRET": db_secret,
+              "RUNTIME_SA": runtime_sa,
+          }
+          with open(sys.argv[2], "a", encoding="utf-8") as handle:
+              for key, value in outputs.items():
+                  handle.write(f"{key}={value}\n")
+          print("Resolved live Console bucket, Cloud SQL connection, database identity, secret reference, and runtime service account.")
+          PY
+
+      - name: Verify exact source SHA
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUDIT_SHA"
+          test "$(git rev-parse HEAD)" = "56b0f9469a5934a3207487d06a5be516005ab29c"
+
+      - name: Build isolated audit image from exact SHA
+        id: image
+        env:
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          REGION: ${{ env.REGION }}
+          AR_REPOSITORY: ${{ env.AR_REPOSITORY }}
+          AUDIT_SHA: ${{ env.AUDIT_SHA }}
+        run: |
+          set -euo pipefail
+          gcloud artifacts repositories describe "$AR_REPOSITORY" \
+            --project "$PROJECT_ID" --location "$REGION" --format='value(name)' >/dev/null
+          IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPOSITORY}/historical-exact-audit:${AUDIT_SHA:0:8}"
+          gcloud builds submit . --project "$PROJECT_ID" --tag "$IMAGE_URI"
+          echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy temporary Cloud Run audit Job
+        env:
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          REGION: ${{ env.REGION }}
+          JOB_NAME: ${{ env.JOB_NAME }}
+          IMAGE_URI: ${{ steps.image.outputs.IMAGE_URI }}
+          AUDIT_SHA: ${{ env.AUDIT_SHA }}
+          BUCKET: ${{ steps.runtime.outputs.GCS_BUCKET }}
+          CONNECTION_NAME: ${{ steps.runtime.outputs.CLOUD_SQL_CONNECTION_NAME }}
+          DB_USER: ${{ steps.runtime.outputs.DB_USER }}
+          DB_NAME: ${{ steps.runtime.outputs.DB_NAME }}
+          DB_SECRET: ${{ steps.runtime.outputs.DB_SECRET }}
+          RUNTIME_SA: ${{ steps.runtime.outputs.RUNTIME_SA }}
+        run: |
+          set -euo pipefail
+          RUN_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+          EVIDENCE_ROOT="gs://${BUCKET}/operator-audits/historical_exact_duplicate_cleanup_v1/${RUN_STAMP}-${AUDIT_SHA:0:8}"
+          echo "EVIDENCE_ROOT=$EVIDENCE_ROOT" >> "$GITHUB_ENV"
+          gcloud run jobs deploy "$JOB_NAME" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --image "$IMAGE_URI" \
+            --command python \
+            --args=scripts/historical_exact_duplicate_audit.py,--bootstrap,--audit,--production,--output-dir,/tmp/historical_exact_duplicate_cleanup_v1,--json \
+            --service-account "$RUNTIME_SA" \
+            --set-cloudsql-instances "$CONNECTION_NAME" \
+            --set-env-vars="GCS_BUCKET=${BUCKET},CLOUD_SQL_CONNECTION_NAME=${CONNECTION_NAME},DB_USER=${DB_USER},DB_NAME=${DB_NAME},APP_GIT_COMMIT=${AUDIT_SHA},AUDIT_GIT_SHA=${AUDIT_SHA},AUDIT_ENVIRONMENT=production,GCP_PROJECT_ID=${PROJECT_ID},GCP_REGION=${REGION},AUDIT_GCS_OUTPUT_PREFIX=${EVIDENCE_ROOT}" \
+            --set-secrets="DB_PASSWORD=${DB_SECRET}:latest" \
+            --cpu=2 \
+            --memory=8Gi \
+            --tasks=1 \
+            --parallelism=1 \
+            --max-retries=0 \
+            --task-timeout=3600s \
+            --quiet
+
+      - name: Execute first production bootstrap and audit
+        id: first
+        env:
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          REGION: ${{ env.REGION }}
+          JOB_NAME: ${{ env.JOB_NAME }}
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "$JOB_NAME" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+          EXECUTION="$(gcloud run jobs executions list --job="$JOB_NAME" --project "$PROJECT_ID" --region "$REGION" --limit=1 --sort-by='~metadata.creationTimestamp' --format='value(metadata.name)')"
+          test -n "$EXECUTION"
+          echo "EXECUTION=$EXECUTION" >> "$GITHUB_OUTPUT"
+          gcloud run jobs executions describe "$EXECUTION" --project "$PROJECT_ID" --region "$REGION" --format=json > "$RUNNER_TEMP/first-execution.json"
+          python3 - "$RUNNER_TEMP/first-execution.json" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              payload = json.load(handle)
+          conditions = payload.get("status", {}).get("conditions") or []
+          completed = next((item for item in conditions if item.get("type") == "Completed"), {})
+          if completed.get("state") not in {"CONDITION_SUCCEEDED", "True"} and completed.get("status") not in {"True", True}:
+              raise SystemExit(f"first audit execution did not succeed: {completed}")
+          PY
+
+      - name: Collect and verify first production evidence
+        env:
+          AUDIT_SHA: ${{ env.AUDIT_SHA }}
+        run: |
+          set -euo pipefail
+          FIRST_DIR="$RUNNER_TEMP/historical-exact-audit/first"
+          mkdir -p "$FIRST_DIR"
+          gcloud storage cp -r "$EVIDENCE_ROOT/*" "$FIRST_DIR/"
+          python3 - "$FIRST_DIR" "$AUDIT_SHA" "$JOB_NAME" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          root = pathlib.Path(sys.argv[1])
+          expected_sha = sys.argv[2]
+          expected_job = sys.argv[3]
+          required = {"coverage.json", "cleanup_plan.json", "conflicts.json", "report.md", "execution_metadata.json"}
+          assert required <= {item.name for item in root.iterdir()}, sorted(item.name for item in root.iterdir())
+          metadata = json.loads((root / "execution_metadata.json").read_text(encoding="utf-8"))
+          assert metadata.get("git_sha") == expected_sha, metadata
+          assert metadata.get("production") is True, metadata
+          assert metadata.get("cloud_run_job") == expected_job, metadata
+          assert metadata.get("status") == "COMPLETE", metadata
+          safety = metadata.get("safety") or {}
+          assert safety.get("accepted_pool_changed") is False, safety
+          assert safety.get("frozen_dataset_changed") is False, safety
+          assert safety.get("gcs_source_images_deleted") == 0, safety
+          coverage = json.loads((root / "coverage.json").read_text(encoding="utf-8"))
+          assert coverage.get("missing") == 0, coverage
+          assert coverage.get("coverage_complete") is True, coverage
+          assert float(coverage.get("coverage_percent")) == 100.0, coverage
+          print(json.dumps({"metadata": metadata, "coverage": coverage}, ensure_ascii=False, indent=2))
+          PY
+
+      - name: Execute second production bootstrap for idempotency
+        id: second
+        env:
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          REGION: ${{ env.REGION }}
+          JOB_NAME: ${{ env.JOB_NAME }}
+          SECOND_PREFIX: gs://${{ steps.runtime.outputs.GCS_BUCKET }}/operator-audits/historical_exact_duplicate_cleanup_v1/${{ github.run_id }}-${{ env.AUDIT_SHA }}-idempotency
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "$JOB_NAME" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --update-env-vars="AUDIT_GCS_OUTPUT_PREFIX=${SECOND_PREFIX}" \
+            --wait --quiet
+          EXECUTION="$(gcloud run jobs executions list --job="$JOB_NAME" --project "$PROJECT_ID" --region "$REGION" --limit=1 --sort-by='~metadata.creationTimestamp' --format='value(metadata.name)')"
+          test -n "$EXECUTION"
+          echo "EXECUTION=$EXECUTION" >> "$GITHUB_OUTPUT"
+          gcloud run jobs executions describe "$EXECUTION" --project "$PROJECT_ID" --region "$REGION" --format=json > "$RUNNER_TEMP/second-execution.json"
+
+      - name: Collect and verify idempotency evidence
+        env:
+          AUDIT_SHA: ${{ env.AUDIT_SHA }}
+          SECOND_PREFIX: gs://${{ steps.runtime.outputs.GCS_BUCKET }}/operator-audits/historical_exact_duplicate_cleanup_v1/${{ github.run_id }}-${{ env.AUDIT_SHA }}-idempotency
+        run: |
+          set -euo pipefail
+          SECOND_DIR="$RUNNER_TEMP/historical-exact-audit/second"
+          mkdir -p "$SECOND_DIR"
+          gcloud storage cp -r "$SECOND_PREFIX/*" "$SECOND_DIR/"
+          python3 - "$RUNNER_TEMP/historical-exact-audit/first" "$SECOND_DIR" "$AUDIT_SHA" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          first = pathlib.Path(sys.argv[1])
+          second = pathlib.Path(sys.argv[2])
+          expected_sha = sys.argv[3]
+          first_coverage = json.loads((first / "coverage.json").read_text(encoding="utf-8"))
+          second_coverage = json.loads((second / "coverage.json").read_text(encoding="utf-8"))
+          assert second_coverage.get("missing") == 0, second_coverage
+          assert second_coverage.get("coverage_complete") is True, second_coverage
+          assert float(second_coverage.get("coverage_percent")) == 100.0, second_coverage
+          assert second_coverage.get("created_global_content_rows") == 0, second_coverage
+          assert second_coverage.get("created_global_duplicate_member_rows") == 0, second_coverage
+          assert first_coverage.get("before_counts") == first_coverage.get("after_counts"), first_coverage
+          assert second_coverage.get("before_counts") == second_coverage.get("after_counts"), second_coverage
+          first_plan = json.loads((first / "cleanup_plan.json").read_text(encoding="utf-8"))
+          second_plan = json.loads((second / "cleanup_plan.json").read_text(encoding="utf-8"))
+          first_canon = {row["sha256"]: row.get("proposed_canonical_id") for row in first_plan.get("groups", [])}
+          second_canon = {row["sha256"]: row.get("proposed_canonical_id") for row in second_plan.get("groups", [])}
+          assert first_canon == second_canon, "canonical proposal changed between bootstrap runs"
+          second_metadata = json.loads((second / "execution_metadata.json").read_text(encoding="utf-8"))
+          assert second_metadata.get("git_sha") == expected_sha, second_metadata
+          print("IDEMPOTENCY_GATE_PASS")
+          PY
+
+      - name: Upload production evidence to GitHub Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-exact-duplicate-cleanup-v1-${{ github.run_id }}
+          path: ${{ runner.temp }}/historical-exact-audit
+          if-no-files-found: warn
+
+      - name: Publish audit summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "### Historical Global Exact Duplicate Cleanup V1 · Phase A.1" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Execution SHA: `$AUDIT_SHA`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Temporary Cloud Run Job: `$JOB_NAME`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Evidence prefix: `$EVIDENCE_ROOT`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Phase B executed: **NO**" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Delete temporary Cloud Run Job after successful evidence collection
+        if: success()
+        env:
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          REGION: ${{ env.REGION }}
+          JOB_NAME: ${{ env.JOB_NAME }}
+        run: |
+          set -euo pipefail
+          gcloud run jobs delete "$JOB_NAME" --project "$PROJECT_ID" --region "$REGION" --quiet
+          echo "- Temporary Cloud Run Job: **deleted after evidence collection**" >> "$GITHUB_STEP_SUMMARY"
