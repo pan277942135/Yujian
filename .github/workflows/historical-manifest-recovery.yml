@@ -141,11 +141,29 @@ jobs:
             --max-retries=0 \
             --task-timeout=3600s \
             --quiet
-          gcloud run jobs execute "$JOB_NAME" \
+          EXECUTION="$(gcloud run jobs execute "$JOB_NAME" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --wait \
-            --format='value(name)'
+            --format='value(name)')"
+          echo "RECOVERY_EXECUTION=$EXECUTION" >> "$GITHUB_ENV"
+
+      - name: Inspect recovery execution output
+        if: always()
+        env:
+          BUCKET: ${{ steps.runtime.outputs.GCS_BUCKET }}
+          DATASET_VERSION: ${{ env.DATASET_VERSION }}
+        shell: bash
+        run: |
+          set +e
+          echo "Recovery execution: ${RECOVERY_EXECUTION:-unknown}"
+          if [[ -n "${RECOVERY_EXECUTION:-}" ]]; then
+            gcloud run jobs executions logs read "$RECOVERY_EXECUTION" \
+              --project "$PROJECT_ID" \
+              --region "$REGION" \
+              --limit=200
+          fi
+          gcloud storage ls "gs://${BUCKET}/datasets/${DATASET_VERSION}/manifest.csv" || true
 
       - name: Collect recovery evidence
         if: always()
