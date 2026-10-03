@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -298,3 +301,19 @@ def test_workflow_captures_execution_id_before_polling():
     assert "EXECUTION=$" in execute_block
     assert "executions describe \"$EXECUTION\"" in execute_block
     assert "gcloud run jobs execute \"$JOB_NAME\" --project \"$PROJECT_ID\" --region \"$REGION\" --update-env-vars=\"PHASE_B_MODE=${MODE}\" --wait" not in execute_block
+
+
+def test_direct_script_import_bootstrap():
+    repository_root = Path(__file__).resolve().parents[1]
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [sys.executable, "scripts/historical_exact_duplicate_phase_b.py", "--help"],
+        cwd=repository_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "usage:" in result.stdout.lower()
