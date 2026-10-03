@@ -160,11 +160,31 @@ jobs:
         run: |
           set -euo pipefail
           IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPOSITORY}/historical-exact-audit:${AUDIT_SHA:0:12}"
-          gcloud builds submit \
+          BUILD_ID="$(gcloud builds submit \
             --project "$PROJECT_ID" \
             --tag "$IMAGE_URI" \
+            --async \
+            --format='value(id)' \
             --quiet \
-            .
+            .)"
+          test -n "$BUILD_ID"
+          echo "Cloud Build ID: $BUILD_ID"
+          BUILD_STATUS=""
+          for attempt in $(seq 1 60); do
+            BUILD_STATUS="$(gcloud builds describe "$BUILD_ID" --project "$PROJECT_ID" --format='value(status)')"
+            echo "Cloud Build status: $BUILD_STATUS (poll $attempt/60)"
+            case "$BUILD_STATUS" in
+              SUCCESS)
+                break
+                ;;
+              FAILURE|INTERNAL_ERROR|TIMEOUT|CANCELLED|EXPIRED)
+                echo "Cloud Build failed with status: $BUILD_STATUS"
+                exit 1
+                ;;
+            esac
+            sleep 15
+          done
+          test "$BUILD_STATUS" = "SUCCESS"
           IMAGE_DIGEST="$(gcloud artifacts docker images describe "$IMAGE_URI" --project "$PROJECT_ID" --format='value(image_summary.digest)')"
           test -n "$IMAGE_DIGEST"
           echo "Image reused: NO"
@@ -178,6 +198,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Deploy temporary Cloud Run Job
+        id: deploy
         env:
           PROJECT_ID: ${{ env.PROJECT_ID }}
           REGION: ${{ env.REGION }}
@@ -325,7 +346,7 @@ jobs:
           test "$RUN_EXIT" -eq 0
 
       - name: Collect and verify first production evidence
-        if: always()
+        if: ${{ always() && steps.deploy.outcome == 'success' }}
         env:
           EXPECTED_SHA: ${{ env.AUDIT_SHA }}
           JOB_NAME: ${{ env.JOB_NAME }}
