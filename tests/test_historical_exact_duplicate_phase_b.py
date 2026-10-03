@@ -212,9 +212,9 @@ def test_phase_a_load_requires_pinned_cleanup_plan_sha(tmp_path, db):
 
 
 def test_phase_a_authority_constants_are_fresh():
-    assert PHASE_A_RUN_ID == "37111404649"
-    assert PHASE_A_ARTIFACT_ID == "11269314055"
-    assert PHASE_A_CLEANUP_PLAN_SHA256 == "280fbec8d5c0e19d993dd391cc43e24de72848f6e61f07b135d9c5e479e9dd58"
+    assert PHASE_A_RUN_ID == "37117694577"
+    assert PHASE_A_ARTIFACT_ID == "11271499460"
+    assert PHASE_A_CLEANUP_PLAN_SHA256 == "833b004a436d129f549f9c0780e75c366de6dc3283bd302f58a6b9c157dbd68f"
 
 
 def test_phase_b_second_apply_is_idempotent(db):

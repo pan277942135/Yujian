@@ -32,11 +32,11 @@ env:
   JOB_NAME: yujian-historical-exact-duplicate-phase-b-v1
   WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
   DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
-  PHASE_A_RUN_ID: "37111404649"
-  PHASE_A_ARTIFACT_ID: "11269314055"
-  PHASE_A_ARTIFACT_NAME: historical-exact-duplicate-production-37111404649
+  PHASE_A_RUN_ID: "37117694577"
+  PHASE_A_ARTIFACT_ID: "11271499460"
+  PHASE_A_ARTIFACT_NAME: historical-exact-duplicate-production-37117694577
   PHASE_A_AUDIT_SHA: 4de6de59704586fb52b9ae626bfe8f8b1c4d9abf
-  EXPECTED_PLAN_SHA: 280fbec8d5c0e19d993dd391cc43e24de72848f6e61f07b135d9c5e479e9dd58
+  EXPECTED_PLAN_SHA: 833b004a436d129f549f9c0780e75c366de6dc3283bd302f58a6b9c157dbd68f
   AR_REPOSITORY: yujian-training
   PREVIOUS_EXECUTION: yujian-historical-exact-duplicate-phase-b-v1-9fjgh
 
