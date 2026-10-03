@@ -18,7 +18,7 @@ env:
   JOB_NAME: yujian-historical-exact-audit-v1
   WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
   DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
-  AUDIT_SHA: 56b0f9469a5934a3207487d06a5be516005ab29c
+  AUDIT_SHA: 4de6de59704586fb52b9ae626bfe8f8b1c4d9abf
   AR_REPOSITORY: yujian-training
 
 jobs:
@@ -37,7 +37,7 @@ jobs:
       - name: Checkout exact audit implementation before WIF auth
         uses: actions/checkout@v4
         with:
-          ref: 56b0f9469a5934a3207487d06a5be516005ab29c
+          ref: ${{ env.AUDIT_SHA }}
           fetch-depth: 1
           clean: false
 
@@ -45,7 +45,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "56b0f9469a5934a3207487d06a5be516005ab29c"
           test "$(git rev-parse HEAD)" = "$AUDIT_SHA"
 
       - name: Authenticate to Google Cloud with existing WIF
@@ -150,7 +149,7 @@ jobs:
           print("Live Console DB/GCS/runtime configuration resolved without printing secret values.")
           PY
 
-      - name: Reuse verified existing audit image
+      - name: Build and publish corrected audit image
         id: image
         env:
           PROJECT_ID: ${{ env.PROJECT_ID }}
@@ -160,10 +159,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPOSITORY}/historical-exact-audit:${AUDIT_SHA:0:8}"
-          echo "Image reused: YES"
-          echo "New build: NO"
+          IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPOSITORY}/historical-exact-audit:${AUDIT_SHA:0:12}"
+          gcloud builds submit \
+            --project "$PROJECT_ID" \
+            --tag "$IMAGE_URI" \
+            --quiet \
+            .
+          IMAGE_DIGEST="$(gcloud artifacts docker images describe "$IMAGE_URI" --project "$PROJECT_ID" --format='value(image_summary.digest)')"
+          test -n "$IMAGE_DIGEST"
+          echo "Image reused: NO"
+          echo "New build: YES"
+          echo "IMAGE_DIGEST=$IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
           echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Corrected audit image"
+            echo "- Image tag: \`$IMAGE_URI\`"
+            echo "- Image digest: \`$IMAGE_DIGEST\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Deploy temporary Cloud Run Job
         env:
@@ -440,7 +452,7 @@ jobs:
             echo "- Phase B executed: **NO**"
           } >> "$GITHUB_STEP_SUMMARY"
           if [[ -f "$RUNNER_TEMP/historical-exact-audit/first/coverage.json" ]]; then
-            python3 - "$RUNNER_TEMP/historical-exact-audit/first" <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          python3 - "$RUNNER_TEMP/historical-exact-audit/first" <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json
           import pathlib
           import sys
@@ -461,12 +473,18 @@ jobs:
           truth = (metadata.get("audit_summary") or {}).get("truth_conflicts") or {}
           accepted = (metadata.get("audit_summary") or {}).get("accepted_pool_exposure") or {}
           frozen = (metadata.get("audit_summary") or {}).get("frozen_dataset_exposure") or {}
+          non_frozen = (metadata.get("audit_summary") or {}).get("non_frozen_dataset_exposure") or {}
           print(f"- truth_conflict_groups: **{truth.get('conflict_groups')}**")
           print(f"- truth_conflict_images: **{truth.get('conflict_members')}**")
           print(f"- accepted_pool_source_duplicate_groups: **{accepted.get('accepted_pool_source_duplicate_groups')}**")
           print(f"- accepted_pool_redundant_members: **{accepted.get('accepted_pool_redundant_members')}**")
           print(f"- duplicate_groups_present_in_frozen_datasets: **{frozen.get('duplicate_groups_present_in_frozen_datasets')}**")
           print(f"- cross_split_exact_duplicate_groups: **{frozen.get('cross_split_exact_duplicate_groups')}**")
+          print(f"- non_frozen_dataset_versions: **{non_frozen.get('non_frozen_dataset_versions')}**")
+          print(f"- non_frozen_dataset_items: **{non_frozen.get('non_frozen_dataset_items')}**")
+          print(f"- non_frozen_duplicate_groups: **{non_frozen.get('non_frozen_duplicate_groups')}**")
+          print(f"- non_frozen_duplicate_members: **{non_frozen.get('non_frozen_duplicate_members')}**")
+          print(f"- non_frozen_statuses: **{non_frozen.get('statuses')}**")
           PY
           fi
 

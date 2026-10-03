@@ -339,7 +339,8 @@ def bootstrap_global_registry(
         for row in db.scalars(select(ImageFingerprint).where(ImageFingerprint.image_asset_id.in_([a.id for a in assets]))).all()
     } if assets else {}
     client = None
-    processed = missing = created = historical_duplicates = 0
+    processed = missing = created = historical_duplicates = created_members = 0
+    missing_details = []
     for image in assets:
         fingerprint = fingerprints.get(image.id)
         digest = fingerprint.sha256 if fingerprint and fingerprint.sha256 else None
@@ -352,6 +353,15 @@ def bootstrap_global_registry(
                 LOGGER.info("global_sha_backfill_processed image_asset_id=%s sha256_prefix=%s", image.id, digest[:16])
             except Exception as exc:
                 missing += 1
+                missing_details.append(
+                    {
+                        "image_asset_id": image.id,
+                        "batch_id": image.batch_id,
+                        "image_id": image.image_id,
+                        "gcs_uri": image.gcs_uri,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
                 LOGGER.error("global_sha_backfill_missing image_asset_id=%s error=%s", image.id, exc)
                 continue
         digest = normalize_sha256(digest)
@@ -383,7 +393,8 @@ def bootstrap_global_registry(
                 row.canonical_object_name = image.object_name
                 row.lifecycle_status = ACTIVE
             historical_duplicates += 1
-        record_historical_member(db, sha256=digest, image=image)
+        if record_historical_member(db, sha256=digest, image=image):
+            created_members += 1
         processed += 1
     db.commit()
     coverage = (processed / len(assets)) if assets else 1.0
@@ -391,7 +402,9 @@ def bootstrap_global_registry(
         "processed": processed,
         "missing": missing,
         "created": created,
+        "created_global_duplicate_member_rows": created_members,
         "historical_duplicate_members": historical_duplicates,
+        "missing_details": missing_details,
         "coverage": coverage,
         "coverage_complete": missing == 0,
         "status": "COMPLETE" if missing == 0 else "BLOCKED_DEPENDENCY",
