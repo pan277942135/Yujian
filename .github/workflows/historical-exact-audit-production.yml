@@ -227,7 +227,7 @@ jobs:
           with open(sys.argv[1], encoding="utf-8") as handle:
               payload = json.load(handle)
           template = payload.get("template") or (payload.get("spec") or {}).get("template") or {}
-          task = template.get("template") or template.get("spec") or {}
+          task = template.get("template") or template.get("spec") or template
           containers = task.get("containers") or []
           if not containers:
               raise SystemExit("deployed Cloud Run Job has no container")
@@ -247,7 +247,6 @@ jobs:
           annotations = (task.get("metadata") or {}).get("annotations") or {}
           cloud_sql.extend(str(annotations.get("run.googleapis.com/cloudsql-instances") or "").split(","))
           cloud_sql = [item for item in cloud_sql if item]
-          expected_image = sys.argv[0]  # replaced below by environment in shell
           import os
           expected_image = os.environ["EXPECTED_IMAGE"]
           expected_connection = os.environ["EXPECTED_CONNECTION"]
