@@ -13,12 +13,14 @@ import argparse
 import hashlib
 import json
 import os
+import re
+import traceback
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, inspect, select
 
 from app.accepted_pool import (
     _pool_manifest_rows,
@@ -26,7 +28,7 @@ from app.accepted_pool import (
     start_accepted_pool_sync,
     step_accepted_pool_job,
 )
-from app.db import SessionLocal, _ensure_training_eligibility_columns
+from app.db import SessionLocal, _ensure_training_eligibility_columns, engine
 from app.dataset_models import DatasetItem
 from app.models import DatasetVersion, GlobalImageContent, GlobalImageDuplicateMember, ImageAsset
 
@@ -38,6 +40,18 @@ REASON_DUPLICATE = "GLOBAL_EXACT_DUPLICATE"
 REASON_CONFLICT = "GLOBAL_EXACT_TRUTH_CONFLICT"
 REASONS = {REASON_DUPLICATE, REASON_CONFLICT}
 REQUIRED_ARTIFACTS = {"cleanup_plan.json", "conflicts.json", "coverage.json", "execution_metadata.json"}
+SCHEMA_COLUMNS = (
+    "training_eligible",
+    "training_exclusion_reason",
+    "duplicate_of_image_asset_id",
+    "training_eligibility_source",
+    "training_eligibility_updated_at",
+)
+SCHEMA_INDEXES = (
+    "ix_image_assets_training_eligible",
+    "ix_image_assets_training_exclusion_reason",
+    "ix_image_assets_duplicate_of_image_asset_id",
+)
 
 
 class PhaseAPlanDrift(RuntimeError):
@@ -71,6 +85,91 @@ def _write_json(path: Path, value: Any) -> None:
 
 def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _schema_snapshot() -> dict[str, Any]:
+    inspector = inspect(engine)
+    if not inspector.has_table("image_assets"):
+        return {"status": "PASS", "table_exists": False, "columns": [], "indexes": [], "foreign_keys": []}
+    columns = {str(item["name"]) for item in inspector.get_columns("image_assets")}
+    indexes = {str(item["name"]) for item in inspector.get_indexes("image_assets")}
+    foreign_keys = [
+        {
+            "name": item.get("name"),
+            "constrained_columns": sorted(str(value) for value in item.get("constrained_columns") or []),
+            "referred_table": item.get("referred_table"),
+            "referred_columns": sorted(str(value) for value in item.get("referred_columns") or []),
+        }
+        for item in inspector.get_foreign_keys("image_assets")
+        if "duplicate_of_image_asset_id" in (item.get("constrained_columns") or [])
+    ]
+    return {
+        "status": "PASS",
+        "table_exists": True,
+        "columns": sorted(column for column in columns if column in SCHEMA_COLUMNS),
+        "indexes": sorted(index for index in indexes if index in SCHEMA_INDEXES),
+        "foreign_keys": foreign_keys,
+    }
+
+
+def _schema_diff(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "columns_added": sorted(set(after.get("columns") or []) - set(before.get("columns") or [])),
+        "indexes_added": sorted(set(after.get("indexes") or []) - set(before.get("indexes") or [])),
+        "fk_added": [item for item in after.get("foreign_keys") or [] if item not in (before.get("foreign_keys") or [])],
+    }
+
+
+def _sanitize_text(value: str) -> str:
+    text = str(value or "")
+    text = re.sub(r"(?i)(password|secret|token|authorization|credential)[^\n=]*=[^\n]*", r"\1=[REDACTED]", text)
+    text = re.sub(r"(?i)Bearer\s+[A-Za-z0-9._-]+", "Bearer [REDACTED]", text)
+    return text
+
+
+def _failure_metadata(*, mode: str, stage: str, exc: BaseException, schema_before: dict[str, Any] | None, schema_after: dict[str, Any] | None, authority: dict[str, Any] | None = None) -> dict[str, Any]:
+    authority = authority or {}
+    return {
+        "status": "FAILED",
+        "phase": "B",
+        "mode": mode,
+        "stage": stage,
+        "exception_type": type(exc).__name__,
+        "error_message": _sanitize_text(str(exc)),
+        "phase_a_run_id": authority.get("run_id", PHASE_A_RUN_ID),
+        "phase_a_audit_sha": authority.get("audit_sha", PHASE_A_AUDIT_SHA),
+        "cleanup_plan_sha256": authority.get("cleanup_plan_sha256", os.getenv("CLEANUP_PLAN_SHA256", "")),
+        "app_git_commit": os.getenv("APP_GIT_COMMIT", ""),
+        "schema_before": schema_before,
+        "schema_after": schema_after,
+        "schema_diff": _schema_diff(schema_before or {}, schema_after or {}),
+    }
+
+
+def _upload_evidence(output_dir: Path, prefix: str, *, storage_client_factory=None) -> dict[str, Any]:
+    value = str(prefix or "").strip()
+    if not value:
+        return {"status": "SKIPPED", "uploaded": []}
+    if not value.startswith("gs://") or "/" not in value[5:]:
+        raise ValueError("PHASE_B_OUTPUT_GCS_PREFIX must be a gs:// URI")
+    from google.cloud import storage
+
+    bucket_name, object_prefix = value[5:].split("/", 1)
+    client = (storage_client_factory or storage.Client)()
+    bucket = client.bucket(bucket_name)
+    uploaded = []
+    for path in sorted(output_dir.glob("*")):
+        if not path.is_file():
+            continue
+        blob_name = f"{object_prefix.rstrip('/')}/{path.name}"
+        blob = bucket.blob(blob_name)
+        blob.upload_from_filename(str(path))
+        if not blob.exists(client):
+            raise RuntimeError(f"evidence upload verification failed: {blob_name}")
+        uploaded.append(path.name)
+    if not uploaded:
+        raise RuntimeError("no Phase B evidence files were produced")
+    return {"status": "PASS", "prefix": value, "uploaded": uploaded}
 
 
 def _download_phase_a(prefix: str, destination: Path) -> Path:
@@ -496,7 +595,12 @@ def execute_phase_b(
     sync_pool: bool = False,
     idempotency_check: bool = False,
     fail_after: int | None = None,
+    stage_callback=None,
 ) -> dict[str, Any]:
+    def stage(value: str) -> None:
+        if stage_callback is not None:
+            stage_callback(value)
+
     output_dir.mkdir(parents=True, exist_ok=True)
     normal, conflicts = _groups(authority)
     expected = {
@@ -507,9 +611,12 @@ def execute_phase_b(
     }
     expected["target_total_exclusions"] = expected["target_redundant_images"] + expected["target_truth_conflict_images"]
     expected["expected_training_eligible"] = int((authority["plan"].get("summary") or {}).get("total_image_assets", 0)) - expected["target_total_exclusions"]
+    stage("LIVE_DRIFT_GATE")
     drift = _live_drift_gate(db, authority)
+    stage("FROZEN_SNAPSHOT")
     before = _counts(db)
     frozen_before = _frozen_snapshot(db)
+    stage("ACCEPTED_POOL_SNAPSHOT")
     pool_before = _pool_snapshot(db)
     plan_evidence = {
         "phase": "B",
@@ -528,6 +635,7 @@ def execute_phase_b(
         "truth_conflict_groups": [{"sha256": group["sha256"], "image_asset_ids": sorted(_expected_member_ids(group))} for group in conflicts],
         "frozen_before": frozen_before,
     }
+    stage("DRY_RUN_PLAN" if mode == "dry-run" else "APPLY")
     _write_json(output_dir / "phase_b_plan.json", plan_evidence)
     if mode == "dry-run":
         post = _post_audit(db, authority)
@@ -543,18 +651,22 @@ def execute_phase_b(
             "before": before,
             "expected": expected,
             "gcs_source_images_deleted": 0,
+            "app_git_commit": os.getenv("APP_GIT_COMMIT", ""),
         })
         return {"status": "DRY_RUN", "expected": expected, "before": before}
 
     apply_result = _apply(db, authority, fail_after=fail_after)
+    stage("POOL_SYNC")
     pool_result = _run_pool_sync(db, authority, pool_before) if sync_pool else {"status": "NOT_EXECUTED"}
     pool_after_snapshot = _pool_snapshot(db) if sync_pool else None
+    stage("POST_AUDIT")
     post = _post_audit(db, authority)
     frozen_after = _frozen_snapshot(db)
     if frozen_after["dataset_versions_sha256"] != frozen_before["dataset_versions_sha256"] or frozen_after["dataset_items_sha256"] != frozen_before["dataset_items_sha256"]:
         raise RuntimeError("frozen dataset lineage changed during Phase B")
     second = {"status": "NOT_EXECUTED"}
     if idempotency_check:
+        stage("IDEMPOTENCY")
         second = _apply(db, authority)
         second_post = _post_audit(db, authority)
         second_pool = _run_pool_sync(db, authority, pool_after_snapshot) if sync_pool and pool_after_snapshot else {"status": "NOT_EXECUTED"}
@@ -587,11 +699,12 @@ def execute_phase_b(
         "gcs_source_images_deleted": 0,
         "phase_c_started": False,
         "model_training_started": False,
+        "app_git_commit": os.getenv("APP_GIT_COMMIT", ""),
     })
     return {"status": "COMPLETE", "apply": apply_result, "after": post, "second_apply": second, "pool": pool_result}
 
 
-def main() -> int:
+def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--phase-a-dir", default=os.getenv("PHASE_A_ARTIFACT_DIR", ""))
     parser.add_argument("--output-dir", default="/tmp/historical-exact-duplicate-phase-b")
@@ -599,39 +712,119 @@ def main() -> int:
     parser.add_argument("--sync-pool", action="store_true")
     parser.add_argument("--idempotency-check", action="store_true")
     parser.add_argument("--fail-after", type=int)
-    args = parser.parse_args()
-    root = Path(args.phase_a_dir) if args.phase_a_dir else Path("/tmp/phase-a")
-    if not root.exists():
-        root = _download_phase_a(os.getenv("PHASE_A_PLAN_GCS_PREFIX", ""), root)
-    authority = load_phase_a_artifact(root)
-    # Phase A runs against an existing production schema and deliberately does
-    # not call SQLAlchemy create_all().  Phase B must do the same: the
-    # repository contains unrelated optional B-side metadata whose fixture is
-    # not part of this cleanup.  Apply only this additive, idempotent contract.
-    _ensure_training_eligibility_columns()
-    db = SessionLocal()
+    args = parser.parse_args(argv)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    mode = args.mode
+    stage = "LOAD_PHASE_A"
+    authority = None
+    schema_before = None
+    schema_after = None
+    db = None
+    exit_code = 0
+    caught_exception = None
+    caught_traceback = ""
+
+    def set_stage(value: str) -> None:
+        nonlocal stage
+        stage = value
+
     try:
+        root = Path(args.phase_a_dir) if args.phase_a_dir else Path("/tmp/phase-a")
+        if not root.exists():
+            root = _download_phase_a(os.getenv("PHASE_A_PLAN_GCS_PREFIX", ""), root)
+        authority = load_phase_a_artifact(root)
+
+        set_stage("SCHEMA_CONTRACT")
+        schema_before = _schema_snapshot()
+        # Phase A runs against an existing production schema and deliberately
+        # does not call SQLAlchemy create_all().  Phase B must do the same:
+        # apply only this additive, idempotent contract.
+        _ensure_training_eligibility_columns()
+        schema_after = _schema_snapshot()
+
+        set_stage("DB_CONNECT")
+        db = SessionLocal()
         result = execute_phase_b(
             db,
             authority,
-            Path(args.output_dir),
-            mode=args.mode,
+            output_dir,
+            mode=mode,
             sync_pool=args.sync_pool,
             idempotency_check=args.idempotency_check,
             fail_after=args.fail_after,
+            stage_callback=set_stage,
         )
+        metadata_path = output_dir / "execution_metadata.json"
+        metadata = _read_json(metadata_path)
+        metadata.update({
+            "mode": mode,
+            "stage": "PERSIST_EVIDENCE",
+            "schema_before": schema_before,
+            "schema_after": schema_after,
+            "schema_diff": _schema_diff(schema_before or {}, schema_after or {}),
+            "app_git_commit": os.getenv("APP_GIT_COMMIT", ""),
+        })
+        _write_json(metadata_path, metadata)
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
-        return 0
     except PhaseAPlanDrift as exc:
-        db.rollback()
+        caught_exception = exc
+        caught_traceback = traceback.format_exc()
+        exit_code = 20
+        if db is not None:
+            db.rollback()
         print(f"BLOCKED_DEPENDENCY — {PhaseAPlanDrift.code}: {exc}")
-        return 20
     except Exception as exc:
-        db.rollback()
+        caught_exception = exc
+        caught_traceback = traceback.format_exc()
+        exit_code = 1
+        if db is not None:
+            db.rollback()
         print(f"PHASE_B_FAILED: {type(exc).__name__}: {exc}")
-        return 1
     finally:
-        db.close()
+        if db is not None:
+            db.close()
+        if exit_code:
+            failure = _failure_metadata(
+                mode=mode,
+                stage=stage,
+                exc=caught_exception or RuntimeError("unknown Phase B failure"),
+                schema_before=schema_before,
+                schema_after=schema_after,
+                authority=authority,
+            )
+            _write_json(output_dir / "execution_metadata.json", failure)
+            _write_json(output_dir / "failure.json", {
+                "status": "FAILED",
+                "stage": stage,
+                "exception_type": failure["exception_type"],
+                "error_message": failure["error_message"],
+                "traceback": _sanitize_text(caught_traceback),
+            })
+        try:
+            upload = _upload_evidence(output_dir, os.getenv("PHASE_B_OUTPUT_GCS_PREFIX", ""))
+            print(json.dumps({"evidence_upload": upload}, ensure_ascii=False, sort_keys=True))
+        except Exception as upload_exc:
+            print(f"PHASE_B_EVIDENCE_UPLOAD_FAILED: {_sanitize_text(str(upload_exc))}")
+            if not exit_code:
+                exit_code = 1
+                failure = _failure_metadata(
+                    mode=mode,
+                    stage="PERSIST_EVIDENCE",
+                    exc=upload_exc,
+                    schema_before=schema_before,
+                    schema_after=schema_after,
+                    authority=authority,
+                )
+                _write_json(output_dir / "execution_metadata.json", failure)
+                _write_json(output_dir / "failure.json", {
+                    "status": "FAILED",
+                    "stage": "PERSIST_EVIDENCE",
+                    "exception_type": failure["exception_type"],
+                    "error_message": failure["error_message"],
+                    "traceback": _sanitize_text(traceback.format_exc()),
+                })
+    return exit_code
 
 
 if __name__ == "__main__":

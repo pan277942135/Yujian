@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,7 +20,9 @@ from scripts.historical_exact_duplicate_phase_b import (
     _apply,
     _counts,
     _post_audit,
+    _upload_evidence,
     execute_phase_b,
+    main,
 )
 
 
@@ -193,3 +196,105 @@ def test_freeze_gate_detects_reenabled_exact_duplicate(db):
     db.commit()
     with pytest.raises(ValueError, match="Training eligibility gate failed"):
         _training_eligibility_gate(db)
+
+
+class _FakeBlob:
+    def __init__(self, name, uploaded):
+        self.name = name
+        self.uploaded = uploaded
+
+    def upload_from_filename(self, filename):
+        self.uploaded.append((self.name, Path(filename).read_text(encoding="utf-8")))
+
+    def exists(self, _client):
+        return any(name == self.name for name, _content in self.uploaded)
+
+
+class _FakeBucket:
+    def __init__(self, uploaded):
+        self.uploaded = uploaded
+
+    def blob(self, name):
+        return _FakeBlob(name, self.uploaded)
+
+
+class _FakeStorageClient:
+    def __init__(self):
+        self.uploaded = []
+
+    def bucket(self, _name):
+        return _FakeBucket(self.uploaded)
+
+
+def test_success_evidence_upload_is_verified(tmp_path):
+    (tmp_path / "execution_metadata.json").write_text("{}", encoding="utf-8")
+    client = _FakeStorageClient()
+    result = _upload_evidence(tmp_path, "gs://bucket/phase-b", storage_client_factory=lambda: client)
+    assert result["status"] == "PASS"
+    assert result["uploaded"] == ["execution_metadata.json"]
+    assert client.uploaded == [("phase-b/execution_metadata.json", "{}")]
+
+
+def test_failure_before_db_session_writes_durable_failure_evidence(tmp_path, monkeypatch):
+    def fail_load(_root):
+        raise RuntimeError("load failed password=not-a-real-password")
+
+    monkeypatch.setattr("scripts.historical_exact_duplicate_phase_b.load_phase_a_artifact", fail_load)
+    client = _FakeStorageClient()
+    monkeypatch.setattr("google.cloud.storage.Client", lambda: client)
+    monkeypatch.setenv("PHASE_B_OUTPUT_GCS_PREFIX", "gs://bucket/failed-phase-b")
+    assert main(["--mode", "dry-run", "--phase-a-dir", str(tmp_path), "--output-dir", str(tmp_path)]) == 1
+    metadata = json.loads((tmp_path / "execution_metadata.json").read_text(encoding="utf-8"))
+    failure = json.loads((tmp_path / "failure.json").read_text(encoding="utf-8"))
+    assert metadata["status"] == "FAILED"
+    assert metadata["stage"] == "LOAD_PHASE_A"
+    assert metadata["exception_type"] == "RuntimeError"
+    assert "not-a-real-password" not in failure["traceback"]
+    uploaded_names = {name.rsplit("/", 1)[-1] for name, _content in client.uploaded}
+    assert {"execution_metadata.json", "failure.json"} <= uploaded_names
+
+
+def test_schema_contract_failure_is_reported_before_db_session(tmp_path, monkeypatch):
+    monkeypatch.setattr("scripts.historical_exact_duplicate_phase_b.load_phase_a_artifact", lambda _root: {"run_id": "r", "audit_sha": "a", "cleanup_plan_sha256": "p"})
+    monkeypatch.setattr("scripts.historical_exact_duplicate_phase_b._schema_snapshot", lambda: {"status": "PASS", "table_exists": True, "columns": [], "indexes": [], "foreign_keys": []})
+    monkeypatch.setattr("scripts.historical_exact_duplicate_phase_b._ensure_training_eligibility_columns", lambda: (_ for _ in ()).throw(RuntimeError("ALTER TABLE denied")))
+    assert main(["--mode", "dry-run", "--phase-a-dir", str(tmp_path), "--output-dir", str(tmp_path)]) == 1
+    metadata = json.loads((tmp_path / "execution_metadata.json").read_text(encoding="utf-8"))
+    assert metadata["stage"] == "SCHEMA_CONTRACT"
+    assert metadata["error_message"] == "ALTER TABLE denied"
+
+
+def test_live_drift_failure_is_reported_with_stage(tmp_path, db, monkeypatch):
+    authority = _authority(db)
+    monkeypatch.setattr("scripts.historical_exact_duplicate_phase_b.load_phase_a_artifact", lambda _root: authority)
+    monkeypatch.setattr("scripts.historical_exact_duplicate_phase_b._schema_snapshot", lambda: {"status": "PASS", "table_exists": True, "columns": [], "indexes": [], "foreign_keys": []})
+    monkeypatch.setattr("scripts.historical_exact_duplicate_phase_b._ensure_training_eligibility_columns", lambda: None)
+    monkeypatch.setattr("scripts.historical_exact_duplicate_phase_b.SessionLocal", lambda: db)
+    monkeypatch.setattr("scripts.historical_exact_duplicate_phase_b._live_drift_gate", lambda _db, _authority: (_ for _ in ()).throw(RuntimeError("live drift")))
+    monkeypatch.setattr("scripts.historical_exact_duplicate_phase_b._upload_evidence", lambda output, prefix: {"status": "PASS"})
+    assert main(["--mode", "dry-run", "--phase-a-dir", str(tmp_path), "--output-dir", str(tmp_path)]) == 1
+    metadata = json.loads((tmp_path / "execution_metadata.json").read_text(encoding="utf-8"))
+    assert metadata["stage"] == "LIVE_DRIFT_GATE"
+    assert metadata["error_message"] == "live drift"
+
+
+def test_dry_run_never_calls_apply_or_pool_sync(tmp_path, db, monkeypatch):
+    authority = _authority(db)
+    monkeypatch.setattr("scripts.historical_exact_duplicate_phase_b._apply", lambda *args, **kwargs: pytest.fail("dry-run called _apply"))
+    monkeypatch.setattr("scripts.historical_exact_duplicate_phase_b._run_pool_sync", lambda *args, **kwargs: pytest.fail("dry-run called pool sync"))
+    result = execute_phase_b(db, authority, tmp_path, mode="dry-run")
+    assert result["status"] == "DRY_RUN"
+    assert json.loads((tmp_path / "phase_b_apply.json").read_text(encoding="utf-8"))["status"] == "NOT_EXECUTED"
+    assert json.loads((tmp_path / "accepted_pool_post_sync.json").read_text(encoding="utf-8"))["status"] == "NOT_EXECUTED"
+
+
+def test_workflow_captures_execution_id_before_polling():
+    workflow = Path(".github/workflows/historical-exact-duplicate-phase-b-production.yml").read_text(encoding="utf-8")
+    execute_start = workflow.index("id: execute")
+    diagnostics_start = workflow.index("name: Persist execution diagnostics")
+    execute_block = workflow[execute_start:diagnostics_start]
+    assert "--async" in execute_block
+    assert "--format='value(metadata.name)'" in execute_block
+    assert "EXECUTION=$" in execute_block
+    assert "executions describe \"$EXECUTION\"" in execute_block
+    assert "gcloud run jobs execute \"$JOB_NAME\" --project \"$PROJECT_ID\" --region \"$REGION\" --update-env-vars=\"PHASE_B_MODE=${MODE}\" --wait" not in execute_block

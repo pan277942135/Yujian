@@ -38,6 +38,7 @@ env:
   PHASE_A_AUDIT_SHA: 4de6de59704586fb52b9ae626bfe8f8b1c4d9abf
   EXPECTED_PLAN_SHA: 6ab205d53b03b2dbb1aa4142ab424c9024d24fc5b2659ea25e77f8b351f5788c
   AR_REPOSITORY: yujian-training
+  PREVIOUS_EXECUTION: yujian-historical-exact-duplicate-phase-b-v1-9fjgh
 
 jobs:
   phase-b-production:
@@ -199,6 +200,44 @@ jobs:
           gcloud storage cp "$PHASE_A_DIR/report.md" "$ROOT/phase-a/report.md"
           echo "EVIDENCE_ROOT=$ROOT" >> "$GITHUB_ENV"
 
+      - name: Inspect previous failed Cloud Run execution
+        shell: bash
+        env:
+          PREVIOUS_EXECUTION: ${{ env.PREVIOUS_EXECUTION }}
+        run: |
+          set -euo pipefail
+          DESCRIBE="$RUNNER_TEMP/previous-execution-describe.json"
+          set +e
+          gcloud run jobs executions describe "$PREVIOUS_EXECUTION" \
+            --project "$PROJECT_ID" --region "$REGION" --format=json > "$DESCRIBE" 2>"$RUNNER_TEMP/previous-execution-describe.err"
+          DESCRIBE_STATUS=$?
+          set -e
+          if [[ "$DESCRIBE_STATUS" -ne 0 ]]; then
+            python3 - "$DESCRIBE" "$RUNNER_TEMP/previous-execution-describe.err" <<'PY'
+          import json, pathlib, sys
+          error = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")[:1000]
+          pathlib.Path(sys.argv[1]).write_text(json.dumps({"status": "UNAVAILABLE", "execution": "yujian-historical-exact-duplicate-phase-b-v1-9fjgh", "error": error}, ensure_ascii=False), encoding="utf-8")
+          PY
+          fi
+          gcloud storage cp "$DESCRIBE" "$EVIDENCE_ROOT/phase-b/previous-execution-describe.json"
+          test "$(gcloud storage ls "$EVIDENCE_ROOT/phase-b/previous-execution-describe.json" | wc -l)" -ge 1
+          LOGS="$RUNNER_TEMP/previous-execution-logs.json"
+          set +e
+          gcloud logging read \
+            "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"$JOB_NAME\" AND labels.\"run.googleapis.com/execution_name\"=\"$PREVIOUS_EXECUTION\"" \
+            --project "$PROJECT_ID" --limit=200 --freshness=4h --format=json > "$LOGS" 2>"$RUNNER_TEMP/previous-execution-logs.err"
+          LOG_STATUS=$?
+          set -e
+          if [[ "$LOG_STATUS" -ne 0 ]]; then
+            python3 - "$LOGS" "$RUNNER_TEMP/previous-execution-logs.err" <<'PY'
+          import json, pathlib, sys
+          error = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")[:1000]
+          pathlib.Path(sys.argv[1]).write_text(json.dumps({"status": "UNAVAILABLE", "error": error}, ensure_ascii=False), encoding="utf-8")
+          PY
+          fi
+          gcloud storage cp "$LOGS" "$EVIDENCE_ROOT/phase-b/previous-execution-logs.json"
+          test "$(gcloud storage ls "$EVIDENCE_ROOT/phase-b/previous-execution-logs.json" | wc -l)" -ge 1
+
       - name: Build and publish Phase B image
         id: image
         env:
@@ -236,12 +275,16 @@ jobs:
         run: |
           set -euo pipefail
           OUTPUT_PREFIX="$EVIDENCE_ROOT/phase-b"
+          JOB_ARGS="scripts/historical_exact_duplicate_phase_b.py,--mode=${MODE},--output-dir=/tmp/phase-b"
+          if [[ "$MODE" = "apply" ]]; then
+            JOB_ARGS="$JOB_ARGS,--sync-pool,--idempotency-check"
+          fi
           gcloud run jobs deploy "$JOB_NAME" \
             --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE_URI" \
             --command python \
-            --args=scripts/historical_exact_duplicate_phase_b.py,--mode="$MODE",--output-dir=/tmp/phase-b,--sync-pool,--idempotency-check \
+            --args="$JOB_ARGS" \
             --service-account "$RUNTIME_SA" --set-cloudsql-instances "$CONNECTION_NAME" \
-            --set-env-vars="GCS_BUCKET=${BUCKET},CLOUD_SQL_CONNECTION_NAME=${CONNECTION_NAME},DB_USER=${DB_USER},DB_NAME=${DB_NAME},PHASE_A_PLAN_GCS_PREFIX=${EVIDENCE_ROOT}/phase-a,AUDIT_ENVIRONMENT=production,APP_GIT_COMMIT=${GITHUB_SHA},PHASE_A_RUN_ID=${PHASE_A_RUN_ID},PHASE_A_AUDIT_SHA=${PHASE_A_AUDIT_SHA},CLEANUP_PLAN_SHA256=${EXPECTED_PLAN_SHA}" \
+            --set-env-vars="GCS_BUCKET=${BUCKET},CLOUD_SQL_CONNECTION_NAME=${CONNECTION_NAME},DB_USER=${DB_USER},DB_NAME=${DB_NAME},PHASE_A_PLAN_GCS_PREFIX=${EVIDENCE_ROOT}/phase-a,PHASE_B_OUTPUT_GCS_PREFIX=${OUTPUT_PREFIX},AUDIT_ENVIRONMENT=production,APP_GIT_COMMIT=${GITHUB_SHA},PHASE_A_RUN_ID=${PHASE_A_RUN_ID},PHASE_A_AUDIT_SHA=${PHASE_A_AUDIT_SHA},CLEANUP_PLAN_SHA256=${EXPECTED_PLAN_SHA}" \
             --set-secrets="DB_PASSWORD=${DB_SECRET}:latest" \
             --cpu=2 --memory=8Gi --tasks=1 --parallelism=1 --max-retries=0 --task-timeout=7200s --quiet
 
@@ -252,13 +295,70 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gcloud run jobs execute "$JOB_NAME" --project "$PROJECT_ID" --region "$REGION" --update-env-vars="PHASE_B_MODE=${MODE}" --wait --quiet
-          EXECUTION="$(gcloud run jobs executions list --job="$JOB_NAME" --project "$PROJECT_ID" --region "$REGION" --limit=1 --sort-by='~metadata.creationTimestamp' --format='value(metadata.name)')"
+          EXECUTION="$(gcloud run jobs execute "$JOB_NAME" --project "$PROJECT_ID" --region "$REGION" --update-env-vars="PHASE_B_MODE=${MODE}" --async --format='value(metadata.name)' --quiet)"
           test -n "$EXECUTION"
           echo "EXECUTION=$EXECUTION" >> "$GITHUB_OUTPUT"
+          echo "EXECUTION=$EXECUTION" >> "$GITHUB_ENV"
+          DESCRIBE="$RUNNER_TEMP/phase-b-execution-describe.json"
+          TERMINAL=""
+          for attempt in $(seq 1 720); do
+            gcloud run jobs executions describe "$EXECUTION" \
+              --project "$PROJECT_ID" --region "$REGION" --format=json > "$DESCRIBE"
+            TERMINAL="$(python3 - "$DESCRIBE" <<'PY'
+          import json, sys
+          payload = json.loads(open(sys.argv[1], encoding="utf-8").read())
+          status = payload.get("status") or {}
+          if status.get("completionTime"):
+              conditions = status.get("conditions") or []
+              failed = int(status.get("failedCount") or 0)
+              succeeded = int(status.get("succeededCount") or 0)
+              if failed or any(str(item.get("state")) == "CONDITION_FAILED" for item in conditions):
+                  print("FAILURE")
+              elif succeeded or any(str(item.get("state")) == "CONDITION_SUCCEEDED" for item in conditions):
+                  print("SUCCESS")
+              else:
+                  print("FAILURE")
+          else:
+              print("RUNNING")
+          PY
+            )"
+            echo "Cloud Run execution $EXECUTION: $TERMINAL ($attempt/720)"
+            if [[ "$TERMINAL" != "RUNNING" ]]; then break; fi
+            sleep 10
+          done
+          test "$TERMINAL" != "RUNNING"
+          echo "TERMINAL=$TERMINAL" >> "$GITHUB_OUTPUT"
+          echo "TERMINAL=$TERMINAL" >> "$GITHUB_ENV"
+
+      - name: Persist execution diagnostics
+        if: ${{ always() && steps.execute.outputs.EXECUTION != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          DESCRIBE="$RUNNER_TEMP/phase-b-execution-describe.json"
+          test -f "$DESCRIBE"
+          gcloud storage cp "$DESCRIBE" "$EVIDENCE_ROOT/phase-b/execution_describe.json"
+          test "$(gcloud storage ls "$EVIDENCE_ROOT/phase-b/execution_describe.json" | wc -l)" -ge 1
+          LOGS="$RUNNER_TEMP/phase-b-execution-logs.json"
+          set +e
+          gcloud logging read \
+            "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"$JOB_NAME\" AND labels.\"run.googleapis.com/execution_name\"=\"${{ steps.execute.outputs.EXECUTION }}\"" \
+            --project "$PROJECT_ID" --limit=200 --freshness=4h --format=json > "$LOGS" 2>"$RUNNER_TEMP/phase-b-execution-logs.err"
+          LOG_STATUS=$?
+          set -e
+          if [[ "$LOG_STATUS" -ne 0 ]]; then
+            python3 - "$LOGS" "$RUNNER_TEMP/phase-b-execution-logs.err" <<'PY'
+          import json, pathlib, sys
+          error = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")[:1000]
+          pathlib.Path(sys.argv[1]).write_text(json.dumps({"status": "UNAVAILABLE", "error": error}, ensure_ascii=False), encoding="utf-8")
+          PY
+          fi
+          gcloud storage cp "$LOGS" "$EVIDENCE_ROOT/phase-b/execution_logs.json"
+          test "$(gcloud storage ls "$EVIDENCE_ROOT/phase-b/execution_logs.json" | wc -l)" -ge 1
 
       - name: Collect and verify Phase B evidence
         id: verify
+        if: ${{ always() && steps.execute.outputs.EXECUTION != '' }}
         env:
           MODE: ${{ inputs.mode }}
         shell: bash
@@ -266,30 +366,43 @@ jobs:
           set -euo pipefail
           OUT="$RUNNER_TEMP/phase-b-evidence"
           mkdir -p "$OUT"
-          gcloud storage cp -r "$EVIDENCE_ROOT/phase-b/*" "$OUT/"
+          mapfile -t OBJECTS < <(gcloud storage ls "$EVIDENCE_ROOT/phase-b/*" || true)
+          for object in "${OBJECTS[@]}"; do
+            [[ -n "$object" ]] && gcloud storage cp "$object" "$OUT/"
+          done
           python3 - "$OUT" "$MODE" "$EXPECTED_PLAN_SHA" <<'PY'
           import json, pathlib, sys
           root = pathlib.Path(sys.argv[1])
           mode = sys.argv[2]
           expected_sha = sys.argv[3]
-          required = {"phase_b_plan.json", "phase_b_apply.json", "phase_b_post_audit.json", "accepted_pool_post_sync.json", "execution_metadata.json"}
-          assert required <= {item.name for item in root.iterdir()}, sorted(item.name for item in root.iterdir())
           metadata = json.loads((root / "execution_metadata.json").read_text(encoding="utf-8"))
-          assert metadata.get("cleanup_plan_sha256") == expected_sha, metadata
-          if mode == "dry-run":
-              assert metadata.get("status") == "DRY_RUN", metadata
+          status = metadata.get("status")
+          if status == "FAILED":
+              required = {"execution_metadata.json", "failure.json", "execution_describe.json"}
+              assert required <= {item.name for item in root.iterdir()}, sorted(item.name for item in root.iterdir())
+              print("PHASE_B_FAILURE_EVIDENCE_GATE_PASS")
           else:
-              assert metadata.get("status") == "COMPLETE", metadata
-              post = metadata.get("after") or {}
-              assert post.get("total_image_assets") == 9863, post
-              assert post.get("training_eligible") == 8161, post
-              assert post.get("GLOBAL_EXACT_DUPLICATE") == 1626, post
-              assert post.get("GLOBAL_EXACT_TRUTH_CONFLICT") == 76, post
-              assert post.get("eligible_exact_duplicate_groups") == 0, post
-              assert post.get("eligible_truth_conflict_members") == 0, post
-              assert metadata.get("gcs_source_images_deleted") == 0, metadata
-              assert metadata.get("phase_c_started") is False, metadata
-              assert metadata.get("model_training_started") is False, metadata
+              required = {"phase_b_plan.json", "phase_b_apply.json", "phase_b_post_audit.json", "accepted_pool_post_sync.json", "execution_metadata.json", "execution_describe.json"}
+              assert required <= {item.name for item in root.iterdir()}, sorted(item.name for item in root.iterdir())
+              assert metadata.get("cleanup_plan_sha256") == expected_sha, metadata
+              if mode == "dry-run":
+                  assert status == "DRY_RUN", metadata
+                  assert json.loads((root / "phase_b_apply.json").read_text()).get("status") == "NOT_EXECUTED"
+                  assert json.loads((root / "accepted_pool_post_sync.json").read_text()).get("status") == "NOT_EXECUTED"
+                  expected = json.loads((root / "phase_b_plan.json").read_text()).get("expected")
+                  assert expected == {"target_non_conflict_groups": 1201, "target_redundant_images": 1626, "target_truth_conflict_groups": 28, "target_truth_conflict_images": 76, "target_total_exclusions": 1702, "expected_training_eligible": 8161}, expected
+              else:
+                  assert status == "COMPLETE", metadata
+                  post = metadata.get("after") or {}
+                  assert post.get("total_image_assets") == 9863, post
+                  assert post.get("training_eligible") == 8161, post
+                  assert post.get("GLOBAL_EXACT_DUPLICATE") == 1626, post
+                  assert post.get("GLOBAL_EXACT_TRUTH_CONFLICT") == 76, post
+                  assert post.get("eligible_exact_duplicate_groups") == 0, post
+                  assert post.get("eligible_truth_conflict_members") == 0, post
+                  assert metadata.get("gcs_source_images_deleted") == 0, metadata
+                  assert metadata.get("phase_c_started") is False, metadata
+                  assert metadata.get("model_training_started") is False, metadata
           print("PHASE_B_EVIDENCE_GATE_PASS")
           PY
 
@@ -317,8 +430,16 @@ jobs:
             echo "- Model training: **NOT STARTED**"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Delete temporary Cloud Run Job after successful evidence collection
-        if: ${{ success() && steps.verify.outcome == 'success' }}
+      - name: Delete temporary Cloud Run Job after diagnostic collection
+        if: ${{ always() && steps.deploy.outcome == 'success' }}
         shell: bash
         run: |
           gcloud run jobs delete "$JOB_NAME" --project "$PROJECT_ID" --region "$REGION" --quiet
+
+      - name: Return production execution result
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${{ steps.execute.outputs.EXECUTION }}"
+          test "${{ steps.execute.outputs.TERMINAL }}" = "SUCCESS"
