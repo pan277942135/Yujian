@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.db import Base, get_db
 from app.factory import DOWNLOAD_RETRY, get_bucket_name
+from app.historical_duplicate_closure import assert_training_authority_writable
 from app.models import Batch, ImageAsset, ReviewEvent
 
 router = APIRouter(prefix="/api/presence", tags=["fish-presence"])
@@ -432,6 +433,7 @@ def scan_batch(db: Session, batch_id: str, limit: int = 40, rescan: bool = False
 
 
 def reject_no_fish(db: Session, batch_id: str) -> dict:
+    assert_training_authority_writable()
     if not db.get(Batch, batch_id):
         raise ValueError("batch not found")
     pairs = db.execute(
@@ -488,6 +490,7 @@ def api_presence_scan(payload: PresenceScanRequest, db: Session = Depends(get_db
 
 @router.post("/reject-no-fish")
 def api_reject_no_fish(payload: PresenceRejectRequest, db: Session = Depends(get_db)):
+    assert_training_authority_writable()
     try:
         return reject_no_fish(db, payload.batch_id)
     except Exception as exc:

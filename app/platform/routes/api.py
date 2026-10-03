@@ -35,6 +35,7 @@ from app.platform.services.crop_dataset import (
 )
 from app.training_api import TrainingCreate, queue_training_run
 from app.frozen_crop_bridge import _read_uri
+from app.historical_duplicate_closure import assert_training_authority_writable
 
 
 router = APIRouter(prefix="/api/platform", tags=["platform-api"])
@@ -348,6 +349,7 @@ def platform_review_queue(db: Session = Depends(get_db)) -> dict[str, Any]:
 
 @router.post("/review/batch-confirm")
 def platform_batch_confirm(payload: ReviewSelection, db: Session = Depends(get_db)) -> dict[str, Any]:
+    assert_training_authority_writable()
     images = _resolve_images(db, payload)
     try:
         changed = _apply_review_items(db, images, status="approved")
@@ -364,6 +366,7 @@ def platform_batch_confirm(payload: ReviewSelection, db: Session = Depends(get_d
 
 @router.post("/review/species")
 def platform_species_update(payload: ReviewSpeciesSelection, db: Session = Depends(get_db)) -> dict[str, Any]:
+    assert_training_authority_writable()
     images = _resolve_images(db, payload)
     try:
         # Preserve already-approved items through the same existing gate.
@@ -385,6 +388,7 @@ def platform_species_update(payload: ReviewSpeciesSelection, db: Session = Depen
 
 @router.post("/review/bbox")
 def platform_bbox_update(payload: ReviewBBoxSelection, db: Session = Depends(get_db)) -> dict[str, Any]:
+    assert_training_authority_writable()
     images = _resolve_images(db, payload)
     # BBox writes use the existing crop-review bridge so candidate_bbox remains
     # diagnostic and only an explicit accepted_bbox becomes training truth.
@@ -410,6 +414,7 @@ def platform_bbox_update(payload: ReviewBBoxSelection, db: Session = Depends(get
 
 @router.post("/review/batch-delete")
 def platform_batch_delete(payload: ReviewSelection, db: Session = Depends(get_db)) -> dict[str, Any]:
+    assert_training_authority_writable()
     images = _resolve_images(db, payload)
     try:
         changed = _apply_review_items(db, images, status="rejected")

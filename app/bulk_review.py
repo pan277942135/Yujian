@@ -17,6 +17,7 @@ from app.data_policy import review_group_clause, valid_truth_for_image
 from app.db import get_db
 from app.dedupe import ImageFingerprint
 from app.flywheel import species_names
+from app.historical_duplicate_closure import assert_training_authority_writable
 from app.models import Batch, BatchCropReview, FeedbackEvent, ImageAsset, ReviewEvent, SpeciesCatalog
 from app.presence import FishPresenceResult, effective_status
 
@@ -208,6 +209,7 @@ def api_bulk_images(
 
 @router.post("/api/bulk-review/apply")
 def api_bulk_apply(payload: BulkReviewApply, db: Session = Depends(get_db)):
+    assert_training_authority_writable()
     started_at = time.perf_counter()
     batch_ids = {item.batch_id or payload.batch_id for item in payload.items}
     if None in batch_ids:

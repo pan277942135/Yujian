@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.db import get_db
+from app.historical_duplicate_closure import assert_training_authority_writable
 from app.models import Batch, BatchCropReview, ImageAsset, ReviewEvent
 from app.presence import FishPresenceResult
 
@@ -222,6 +223,7 @@ def crop_review_items(
 
 @router.patch("/api/crop-review/{batch_id}/{image_id}")
 def update_crop_review(batch_id: str, image_id: str, payload: CropReviewUpdate, db: Session = Depends(get_db)) -> dict[str, Any]:
+    assert_training_authority_writable()
     image = _find_image(db, batch_id, image_id)
     decision = payload.decision.strip().upper()
     if decision == "SKIP":

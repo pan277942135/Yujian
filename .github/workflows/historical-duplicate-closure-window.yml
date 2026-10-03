@@ -1,0 +1,136 @@
+name: Historical Duplicate Cleanup Closure Window
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: historical-duplicate-closure-window
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: gemini-api-project-503706
+  GCS_BUCKET: yujian-model-factory-571785698442
+  REGION: asia-east1
+  SERVICE: yujian-model-factory-console
+  WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+  DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+
+jobs:
+  enable-window:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Enforce main-only execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+
+      - name: Checkout current main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Authenticate to Google Cloud with existing WIF
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          version: '>= 416.0.0'
+
+      - name: Capture baseline before enabling fence
+        env:
+          HISTORICAL_DUPLICATE_CLOSURE_WRITE_FENCE: 'false'
+          APP_GIT_COMMIT: ${{ github.sha }}
+          EXPECTED_FENCE: 'false'
+          OUTPUT_PATH: ${{ runner.temp }}/closure-window/before-fence.json
+          GCS_OUTPUT_URI: gs://${{ env.GCS_BUCKET }}/operator-audits/historical_exact_duplicate_cleanup_v1/closure-window-${{ github.run_id }}/before-fence.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          GIT_SHA="$(git rev-parse HEAD)" bash scripts/deploy_console_runtime.sh
+          bash scripts/capture_historical_duplicate_closure_fingerprint.sh
+
+      - name: Enable fence and capture immediate proof
+        env:
+          HISTORICAL_DUPLICATE_CLOSURE_WRITE_FENCE: 'true'
+          APP_GIT_COMMIT: ${{ github.sha }}
+          EXPECTED_FENCE: 'true'
+          OUTPUT_PATH: ${{ runner.temp }}/closure-window/after-fence.json
+          GCS_OUTPUT_URI: gs://${{ env.GCS_BUCKET }}/operator-audits/historical_exact_duplicate_cleanup_v1/closure-window-${{ github.run_id }}/after-fence.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          GIT_SHA="$(git rev-parse HEAD)" bash scripts/deploy_console_runtime.sh
+          bash scripts/capture_historical_duplicate_closure_fingerprint.sh
+
+      - name: Verify authority did not change across fence activation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "${{ runner.temp }}/closure-window/before-fence.json" "${{ runner.temp }}/closure-window/after-fence.json" <<'PY'
+          import json
+          import sys
+
+          before = json.loads(open(sys.argv[1], encoding="utf-8").read())
+          after = json.loads(open(sys.argv[2], encoding="utf-8").read())
+          keys = ("image_asset_count", "latest_updated_at", "truth_fingerprint")
+          for key in keys:
+              assert before.get(key) == after.get(key), {"key": key, "before": before, "after": after}
+          print("AUTHORITY_WRITE_FENCE_PROOF_PASS")
+          print(json.dumps({key: after.get(key) for key in keys}, ensure_ascii=False, sort_keys=True))
+          PY
+
+      - name: Confirm production service fence is active
+        shell: bash
+        run: |
+          set -euo pipefail
+          SERVICE_JSON="$RUNNER_TEMP/closure-service.json"
+          gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > "$SERVICE_JSON"
+          python3 - "$SERVICE_JSON" <<'PY'
+          import json
+          import sys
+
+          payload = json.loads(open(sys.argv[1], encoding="utf-8").read())
+          template = (payload.get("spec") or {}).get("template") or {}
+          containers = (template.get("spec") or {}).get("containers") or []
+          env = (containers[0].get("env") if containers else []) or []
+          value = next((item.get("value") for item in env if item.get("name") == "HISTORICAL_DUPLICATE_CLOSURE_WRITE_FENCE"), "")
+          assert str(value).lower() == "true", value
+          print("WRITE_FENCE_ACTIVE=YES")
+          PY
+
+      - name: Upload closure-window fingerprints
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-duplicate-closure-window-${{ github.run_id }}
+          path: ${{ runner.temp }}/closure-window
+          if-no-files-found: error
+
+      - name: Publish closure-window summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "${{ runner.temp }}/closure-window/before-fence.json" "${{ runner.temp }}/closure-window/after-fence.json" <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          import sys
+          before = json.loads(open(sys.argv[1], encoding="utf-8").read())
+          after = json.loads(open(sys.argv[2], encoding="utf-8").read())
+          print("### Historical Duplicate Cleanup Closure Window")
+          print("- WRITE_FENCE_ACTIVE: **YES**")
+          print("- Authority proof unchanged: **YES**")
+          for key in ("image_asset_count", "latest_updated_at", "truth_fingerprint"):
+              print(f"- {key}: `{after.get(key)}`")
+          PY

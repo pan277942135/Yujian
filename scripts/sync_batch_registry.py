@@ -15,6 +15,7 @@ from google.cloud import storage
 from sqlalchemy import select
 
 from app.db import SessionLocal, init_db
+from app.historical_duplicate_closure import assert_training_authority_writable
 from app.models import Batch, ImageAsset
 from app.services.manifest_normalizer import SPECIES_FIELD_ALIASES
 
@@ -43,6 +44,7 @@ def first(row: dict, *keys: str):
 
 
 def main():
+    assert_training_authority_writable()
     ap = argparse.ArgumentParser(description="Sync one immutable GCS batch into YuJian Registry")
     ap.add_argument("--bucket", default=os.getenv("GCS_BUCKET"), required=False)
     ap.add_argument("--batch-id", required=True)

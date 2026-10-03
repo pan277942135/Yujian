@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.factory import get_bucket_name
+from app.historical_duplicate_closure import assert_training_authority_writable
 from app.flywheel import record_feedback
 from app.models import InferenceAsset
 
@@ -254,6 +255,7 @@ async def upload_inference_asset(
     crop: UploadFile | None = File(default=None),
     db: Session = Depends(get_db),
 ):
+    assert_training_authority_writable()
     try:
         record_bytes = await _read_upload(record, MAX_RECORD_BYTES)
         document = _read_record(record_bytes)
@@ -355,6 +357,7 @@ async def upload_inference_asset(
 
 @router.post("/api/v1/inference/{image_id}/review")
 def review_inference_asset(image_id: str, payload: InferenceReviewRequest, db: Session = Depends(get_db)):
+    assert_training_authority_writable()
     try:
         image_id = _safe_image_id(image_id)
     except InferenceContractError as exc:

@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.db import Base, get_db
 from app.factory import DOWNLOAD_RETRY, get_bucket_name
+from app.historical_duplicate_closure import assert_training_authority_writable
 from app.models import Batch, ImageAsset, ReviewEvent
 
 router = APIRouter(prefix="/api/dedupe", tags=["image-dedupe"])
@@ -374,6 +375,7 @@ def scan_batch(db: Session, batch_id: str, limit: int = 100, rescan: bool = Fals
 
 
 def reject_duplicates(db: Session, batch_id: str) -> dict:
+    assert_training_authority_writable()
     if not db.get(Batch, batch_id):
         raise ValueError("batch not found")
     images = db.scalars(
@@ -447,6 +449,7 @@ def api_dedupe_scan(payload: DedupeScanRequest, db: Session = Depends(get_db)):
 
 @router.post("/reject-duplicates")
 def api_reject_duplicates(payload: DedupeFilterRequest, db: Session = Depends(get_db)):
+    assert_training_authority_writable()
     try:
         return reject_duplicates(db, payload.batch_id)
     except Exception as exc:

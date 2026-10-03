@@ -24,6 +24,7 @@ from app.crop_review import _candidate_boxes
 from app.db import get_db
 from app.detector_runtime import detect, normalize_android_source
 from app.frozen_crop_bridge import _read_uri
+from app.historical_duplicate_closure import assert_training_authority_writable
 from app.models import BatchCropReview, ImageAsset, ReviewEvent
 from app.presence import FishPresenceResult
 
@@ -297,6 +298,7 @@ def update_accepted_bbox(
     payload: AcceptedBBoxUpdate,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    assert_training_authority_writable()
     image = _find_image(db, batch_id, image_id)
     try:
         row = _apply(
@@ -329,6 +331,7 @@ def update_accepted_bbox(
 
 @router.post("/api/dataset-accepted-bbox/bulk")
 def bulk_accepted_bbox(payload: AcceptedBBoxBulk, db: Session = Depends(get_db)) -> dict[str, int]:
+    assert_training_authority_writable()
     try:
         for item in payload.items:
             image = _find_image(db, item.batch_id, item.image_id)

@@ -30,6 +30,7 @@ from app.exact_dedupe import (
     sha256_bytes,
 )
 from app.factory import IMAGE_EXTS, get_bucket_name
+from app.historical_duplicate_closure import assert_training_authority_writable
 from app.services.manifest_normalizer import (
     ManifestNormalizationError,
     normalize_manifest_text,
@@ -254,6 +255,7 @@ def _guarded_image_upload(
 ) -> dict:
     """Claim content before GCS upload and finalize the claim after success."""
 
+    assert_training_authority_writable()
     digest = sha256_bytes(data)
     db = SessionLocal()
     claim = None
@@ -453,6 +455,7 @@ def _manifest_error_response(exc: ManifestNormalizationError) -> JSONResponse:
 
 
 def _finalize_upload(batch_id: str, source: str, batch_name: str | None = None) -> dict:
+    assert_training_authority_writable()
     batch_id = _validate_batch_id(batch_id)
     bucket_name = get_bucket_name()
     client = storage.Client()
@@ -572,6 +575,7 @@ async def upload_batch_file(
     relative_path: str = Form(...),
     source: str = Form(default="manual"),
 ):
+    assert_training_authority_writable()
     try:
         batch_id = _validate_batch_id(batch_id)
         relative_path = _safe_relative_path(relative_path)
@@ -610,6 +614,7 @@ async def upload_batch_file(
 
 @router.post("/api/batches/upload-finalize")
 def finalize_batch_upload(payload: UploadFinalizeRequest):
+    assert_training_authority_writable()
     try:
         return _finalize_upload(payload.batch_id, payload.source, payload.batch_name)
     except ManifestNormalizationError as exc:
@@ -632,6 +637,7 @@ async def upload_batch_dataset(
     Cloud Run has a request-size ceiling, so real collection packages should use the
     folder uploader on /batches/upload, which sends one source file per request.
     """
+    assert_training_authority_writable()
     if not (file.filename or "").lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="只支持 ZIP；大数据包请使用文件夹上传")
 
