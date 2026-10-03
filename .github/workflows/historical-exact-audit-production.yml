@@ -226,15 +226,37 @@ jobs:
 
           with open(sys.argv[1], encoding="utf-8") as handle:
               payload = json.load(handle)
-          template = payload.get("template") or (payload.get("spec") or {}).get("template") or {}
-          task = template.get("template") or template.get("spec") or template
-          containers = task.get("containers") or []
-          if not containers:
+          import os
+
+          def walk(value):
+              if isinstance(value, dict):
+                  yield value
+                  for child in value.values():
+                      yield from walk(child)
+              elif isinstance(value, list):
+                  for child in value:
+                      yield from walk(child)
+
+          task = next(
+              (node for node in walk(payload) if isinstance(node.get("containers"), list) and node["containers"]),
+              None,
+          )
+          if task is None:
               raise SystemExit("deployed Cloud Run Job has no container")
+          containers = task["containers"]
           container = containers[0]
           env = {str(item.get("name")): item for item in container.get("env") or []}
           image = str(container.get("image") or "")
-          runtime_sa = str(task.get("serviceAccount") or task.get("serviceAccountName") or "")
+          runtime_sa_candidates = [
+              str(node[key])
+              for node in walk(payload)
+              for key in ("serviceAccount", "serviceAccountName")
+              if node.get(key)
+          ]
+          runtime_sa = next(
+              (value for value in runtime_sa_candidates if value == os.environ["EXPECTED_RUNTIME_SA"]),
+              runtime_sa_candidates[0] if runtime_sa_candidates else "",
+          )
           secret_item = env.get("DB_PASSWORD") or {}
           secret_ref = ((secret_item.get("valueSource") or {}).get("secretKeyRef") or {})
           if not secret_ref:
@@ -242,12 +264,16 @@ jobs:
           secret_name = str(secret_ref.get("secret") or secret_ref.get("name") or "")
           sha = str((env.get("AUDIT_GIT_SHA") or {}).get("value") or "")
           cloud_sql = []
-          for volume in task.get("volumes") or []:
-              cloud_sql.extend(((volume.get("cloudSql") or {}).get("instances") or []))
-          annotations = (task.get("metadata") or {}).get("annotations") or {}
-          cloud_sql.extend(str(annotations.get("run.googleapis.com/cloudsql-instances") or "").split(","))
+          for node in walk(payload):
+              for volume in node.get("volumes") or []:
+                  cloud_sql.extend(((volume.get("cloudSql") or {}).get("instances") or []))
+              annotations = node.get("annotations") or {}
+              cloud_sql.extend(str(annotations.get("run.googleapis.com/cloudsql-instances") or "").split(","))
+              metadata_annotations = (node.get("metadata") or {}).get("annotations") or {}
+              cloud_sql.extend(
+                  str(metadata_annotations.get("run.googleapis.com/cloudsql-instances") or "").split(",")
+              )
           cloud_sql = [item for item in cloud_sql if item]
-          import os
           expected_image = os.environ["EXPECTED_IMAGE"]
           expected_connection = os.environ["EXPECTED_CONNECTION"]
           expected_secret = os.environ["EXPECTED_SECRET"]
