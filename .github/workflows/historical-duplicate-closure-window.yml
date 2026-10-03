@@ -20,10 +20,10 @@ env:
   DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
 
 jobs:
-  enable-window:
+  post-fence-proof:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 15
     steps:
       - name: Enforce main-only execution
         shell: bash
@@ -50,87 +50,96 @@ jobs:
           project_id: ${{ env.PROJECT_ID }}
           version: '>= 416.0.0'
 
-      - name: Capture baseline before enabling fence
+      - name: Verify post-fence quiescence
+        id: quiescence
         env:
-          HISTORICAL_DUPLICATE_CLOSURE_WRITE_FENCE: 'false'
-          APP_GIT_COMMIT: ${{ github.sha }}
-          EXPECTED_FENCE: 'false'
-          OUTPUT_PATH: ${{ runner.temp }}/closure-window/before-fence.json
-          GCS_OUTPUT_URI: gs://${{ env.GCS_BUCKET }}/operator-audits/historical_exact_duplicate_cleanup_v1/closure-window-${{ github.run_id }}/before-fence.json
+          EXPECTED_APP_GIT_COMMITS: "d71212814dad499b2a6ff336b2d4d932cd699342,${{ github.sha }}"
+          OUTPUT_DIR: ${{ runner.temp }}/post-fence
+          GCS_OUTPUT_ROOT: gs://${{ env.GCS_BUCKET }}/operator-audits/historical_exact_duplicate_cleanup_v1/post-fence-${{ github.run_id }}
         shell: bash
         run: |
           set -euo pipefail
-          GIT_SHA="$(git rev-parse HEAD)" bash scripts/deploy_console_runtime.sh
-          bash scripts/capture_historical_duplicate_closure_fingerprint.sh
+          bash scripts/post_fence_quiescence_probe.sh
 
-      - name: Enable fence and capture immediate proof
+      - name: Verify protected mutation paths return HTTP 423
+        if: ${{ steps.quiescence.outcome == 'success' }}
         env:
-          HISTORICAL_DUPLICATE_CLOSURE_WRITE_FENCE: 'true'
-          APP_GIT_COMMIT: ${{ github.sha }}
-          EXPECTED_FENCE: 'true'
-          OUTPUT_PATH: ${{ runner.temp }}/closure-window/after-fence.json
-          GCS_OUTPUT_URI: gs://${{ env.GCS_BUCKET }}/operator-audits/historical_exact_duplicate_cleanup_v1/closure-window-${{ github.run_id }}/after-fence.json
+          SERVICE_URL: ${{ steps.quiescence.outputs.service_url }}
+          COOKIE_JAR: ${{ runner.temp }}/post-fence/console.cookies
         shell: bash
         run: |
           set -euo pipefail
-          GIT_SHA="$(git rev-parse HEAD)" bash scripts/deploy_console_runtime.sh
-          bash scripts/capture_historical_duplicate_closure_fingerprint.sh
+          CONSOLE_KEY="$(gcloud secrets versions access latest --secret=yujian-console-access-key --project="$PROJECT_ID")"
+          test -n "$CONSOLE_KEY"
+          echo "::add-mask::$CONSOLE_KEY"
+          LOGIN_STATUS="$(curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 30 -sS -o /dev/null -w '%{http_code}' -c "$COOKIE_JAR" -X POST "$SERVICE_URL/login" --data-urlencode "access_key=$CONSOLE_KEY")"
+          unset CONSOLE_KEY
+          test "$LOGIN_STATUS" = "303"
 
-      - name: Verify authority did not change across fence activation
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - "${{ runner.temp }}/closure-window/before-fence.json" "${{ runner.temp }}/closure-window/after-fence.json" <<'PY'
+          probe() {
+            local label="$1"
+            local method="$2"
+            local path="$3"
+            local payload="$4"
+            local body="$RUNNER_TEMP/post-fence/${label}.json"
+            local status
+            status="$(curl --retry 2 --retry-all-errors --retry-delay 1 --connect-timeout 10 --max-time 30 -sS               -o "$body" -w '%{http_code}' -b "$COOKIE_JAR" -H 'Content-Type: application/json'               -X "$method" --data "$payload" "$SERVICE_URL$path")"
+            python3 - "$body" "$status" "$label" <<'PY'
           import json
           import sys
-
-          before = json.loads(open(sys.argv[1], encoding="utf-8").read())
-          after = json.loads(open(sys.argv[2], encoding="utf-8").read())
-          keys = ("image_asset_count", "latest_updated_at", "truth_fingerprint")
-          for key in keys:
-              assert before.get(key) == after.get(key), {"key": key, "before": before, "after": after}
-          print("AUTHORITY_WRITE_FENCE_PROOF_PASS")
-          print(json.dumps({key: after.get(key) for key in keys}, ensure_ascii=False, sort_keys=True))
+          body = json.loads(open(sys.argv[1], encoding="utf-8").read())
+          status = int(sys.argv[2])
+          label = sys.argv[3]
+          assert status == 423, (label, status, body)
+          assert body == {
+              "code": "HISTORICAL_DUPLICATE_CLOSURE_IN_PROGRESS",
+              "message": "Historical duplicate cleanup maintenance window is active.",
+          }, (label, body)
+          print(f"{label}=PASS")
           PY
+          }
 
-      - name: Confirm production service fence is active
-        shell: bash
-        run: |
-          set -euo pipefail
-          SERVICE_JSON="$RUNNER_TEMP/closure-service.json"
-          gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > "$SERVICE_JSON"
-          python3 - "$SERVICE_JSON" <<'PY'
+          probe review  POST  /api/bulk-review/apply             '{"batch_id":"BATCH_FENCE_PROBE","items":[{"image_id":"IMAGE_FENCE_PROBE","review_status":"pending"}]}'
+          probe truth   PATCH /api/review/BATCH_FENCE_PROBE/IMAGE_FENCE_PROBE             '{"review_status":"pending"}'
+          probe ingest  POST  /api/batches/upload-finalize             '{"batch_id":"BATCH_FENCE_PROBE","source":"fence-probe"}'
+
+          curl --retry 2 --retry-all-errors --retry-delay 1 --connect-timeout 10 --max-time 30 -fsS             "$SERVICE_URL/health" > "$RUNNER_TEMP/post-fence/health.json"
+          python3 - "$RUNNER_TEMP/post-fence/health.json" <<'PY'
           import json
           import sys
-
           payload = json.loads(open(sys.argv[1], encoding="utf-8").read())
-          template = (payload.get("spec") or {}).get("template") or {}
-          containers = (template.get("spec") or {}).get("containers") or []
-          env = (containers[0].get("env") if containers else []) or []
-          value = next((item.get("value") for item in env if item.get("name") == "HISTORICAL_DUPLICATE_CLOSURE_WRITE_FENCE"), "")
-          assert str(value).lower() == "true", value
-          print("WRITE_FENCE_ACTIVE=YES")
+          assert payload.get("status") == "ok", payload
+          print("READ_ONLY_HEALTH=PASS")
           PY
 
-      - name: Upload closure-window fingerprints
+      - name: Upload post-fence evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: historical-duplicate-closure-window-${{ github.run_id }}
-          path: ${{ runner.temp }}/closure-window
-          if-no-files-found: error
+          name: historical-duplicate-post-fence-quiescence-${{ github.run_id }}
+          path: ${{ runner.temp }}/post-fence
+          if-no-files-found: warn
 
-      - name: Publish closure-window summary
+      - name: Publish post-fence summary
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
-          python3 - "${{ runner.temp }}/closure-window/before-fence.json" "${{ runner.temp }}/closure-window/after-fence.json" <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "Historical Duplicate Cleanup - Post-Fence Quiescence"
+            echo "Fence: ACTIVE"
+            echo "Pre-fence versus post-fence comparison: NOT USED"
+            echo "Required samples: T0, T+60, T+120"
+            echo "Business apply: NO"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f "$RUNNER_TEMP/post-fence/t0.json" ]]; then
+            python3 - "$RUNNER_TEMP/post-fence" <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json
+          import pathlib
           import sys
-          before = json.loads(open(sys.argv[1], encoding="utf-8").read())
-          after = json.loads(open(sys.argv[2], encoding="utf-8").read())
-          print("### Historical Duplicate Cleanup Closure Window")
-          print("- WRITE_FENCE_ACTIVE: **YES**")
-          print("- Authority proof unchanged: **YES**")
-          for key in ("image_asset_count", "latest_updated_at", "truth_fingerprint"):
-              print(f"- {key}: `{after.get(key)}`")
+          root = pathlib.Path(sys.argv[1])
+          for name in ("t0", "t60", "t120"):
+              payload = json.loads((root / (name + ".json")).read_text(encoding="utf-8"))
+              print("- " + name + ": count=" + str(payload.get("image_asset_count")) + ", updated_at=" + str(payload.get("latest_updated_at")) + ", fingerprint=" + str(payload.get("truth_fingerprint")))
           PY
+          fi
