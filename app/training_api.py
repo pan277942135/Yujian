@@ -18,6 +18,7 @@ from starlette.requests import Request
 
 from app.db import get_db
 from app.models import DatasetVersion, ModelVersion, TrainingRun
+from app.historical_duplicate_closure import assert_training_authority_writable
 from app.pipeline_contract import CROP_CLASSIFIER_V1, PIPELINE_TYPES, WHOLE_IMAGE_V1, validate_pipeline_type
 
 
@@ -250,6 +251,7 @@ def queue_training_run(
     payload: TrainingCreate,
     launcher: Callable[[str, str, str, str, dict], dict] | None = None,
 ) -> dict:
+    assert_training_authority_writable()
     dataset = db.get(DatasetVersion, payload.dataset_version)
     if not dataset:
         raise ValueError("数据集不存在，请先完成 Dataset Freeze")

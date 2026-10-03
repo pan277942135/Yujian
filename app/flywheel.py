@@ -11,6 +11,7 @@ from google.cloud import storage
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.historical_duplicate_closure import assert_feedback_species_allowed
 from app.dedupe import ImageFingerprint
 from app.data_policy import UNCONFIRMED_TRUTH, truth_distribution
 from app.factory import get_bucket_name
@@ -167,6 +168,7 @@ def record_feedback(
         return feedback_dict(existing)
 
     corrected = (corrected_species or "").strip() or None
+    assert_feedback_species_allowed(db, corrected)
     if corrected:
         known = db.scalar(select(SpeciesCatalog).where(SpeciesCatalog.common_name_zh == corrected))
         if not known:

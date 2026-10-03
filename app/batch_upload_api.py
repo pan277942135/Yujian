@@ -548,6 +548,7 @@ def batch_upload_page(request: Request):
 
 @router.post("/api/batches/upload-start")
 def start_batch_upload(payload: UploadStartRequest):
+    assert_training_authority_writable()
     try:
         batch_id = _validate_batch_id(payload.batch_id)
         bucket_name = get_bucket_name()

@@ -97,7 +97,8 @@ let batchCursor=0;
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function pct(v){return Number.isFinite(Number(v))?(Number(v)*100).toFixed(1)+'%':'-'}
 function showBanner(msg,bad=false){const el=document.getElementById('banner');el.style.display='block';el.style.background=bad?'#fff1f2':'#eef2ff';el.textContent=msg}
-async function jsonApi(url,opts={}){const r=await fetch(url,opts);let data={};try{data=await r.json()}catch{}if(!r.ok)throw new Error(data.detail||`HTTP ${r.status}`);return data}
+function apiErrorMessage(data,status){const detail=data&&data.detail;const detailMessage=detail&&typeof detail==='object'?detail.message:'';return detailMessage||data?.message||(typeof detail==='string'?detail:'')||data?.code||(detail&&typeof detail==='object'?detail.code:'')||`HTTP ${status}`}
+async function jsonApi(url,opts={}){const r=await fetch(url,opts);let data={};try{data=await r.json()}catch{}if(!r.ok)throw new Error(apiErrorMessage(data,r.status));return data}
 function selectedModel(){return document.getElementById('model').value}
 function truthOptions(value=''){return `<option value="">请选择真实鱼种</option>`+species.map(s=>`<option value="${esc(s.common_name_zh)}" ${s.common_name_zh===value?'selected':''}>${esc(s.common_name_zh)}</option>`).join('')}
 

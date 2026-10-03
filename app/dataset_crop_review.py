@@ -19,6 +19,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.crop_contract import canonical_crop
+from app.historical_duplicate_closure import assert_training_authority_writable
 from app.db import get_db
 from app.detector_runtime import normalize_android_source
 from app.frozen_crop_bridge import _read_uri, load_frozen_dataset
@@ -418,6 +419,7 @@ def update(
     payload: DatasetCropReviewUpdate,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    assert_training_authority_writable()
     rows = _ensure_rows(db, dataset_version)
     base = next((row for row in rows if row["image_id"] == image_id), None)
     if not base:

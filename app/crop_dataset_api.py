@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.historical_duplicate_closure import assert_training_authority_writable
 from app.db import get_db
 from app.factory import get_bucket_name
 from trainer.crop_dataset_pipeline import (
@@ -227,6 +228,7 @@ def _build_validation(root: Path, report: Mapping[str, Any]) -> dict[str, Any]:
 def build_crop_dataset_endpoint(payload: CropDatasetBuildRequest, db: Session = Depends(get_db)) -> dict:
     """Build reviewed crops; optionally publish/register them when explicitly frozen."""
 
+    assert_training_authority_writable()
     version = _safe_version(payload.dataset_version)
     source_type = _safe_source_type(payload.source_type)
     requested_pipeline = payload.pipeline_type or payload.pipeline
@@ -463,6 +465,7 @@ def freeze_crop_dataset_endpoint(
     payload: CropDatasetFreezeRequest,
     db: Session = Depends(get_db),
 ) -> dict:
+    assert_training_authority_writable()
     if not payload.confirm:
         raise HTTPException(status_code=400, detail="Freeze 需要 confirm=true")
     version = _safe_version(dataset_version)

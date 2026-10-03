@@ -231,6 +231,7 @@ def finalize_dataset_lineage(db: Session, dataset_version: str) -> dict:
 
 @router.post("/preview")
 def preview(payload: DatasetFreezePreviewRequest, db: Session = Depends(get_db)):
+    assert_training_authority_writable()
     try:
         return build_preview(db, payload)
     except Exception as exc:
