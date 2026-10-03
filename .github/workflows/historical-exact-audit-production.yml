@@ -34,20 +34,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/main"
 
-      - name: Authenticate to Google Cloud with existing WIF
-        uses: google-github-actions/auth@v3.0.0
-        with:
-          project_id: ${{ env.PROJECT_ID }}
-          workload_identity_provider: ${{ env.WIF_PROVIDER }}
-          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
-
-      - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@v3.0.1
-        with:
-          project_id: ${{ env.PROJECT_ID }}
-          version: '>= 416.0.0'
-
-      - name: Checkout exact audit implementation after WIF auth
+      - name: Checkout exact audit implementation before WIF auth
         uses: actions/checkout@v4
         with:
           ref: 56b0f9469a5934a3207487d06a5be516005ab29c
@@ -60,6 +47,19 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "56b0f9469a5934a3207487d06a5be516005ab29c"
           test "$(git rev-parse HEAD)" = "$AUDIT_SHA"
+
+      - name: Authenticate to Google Cloud with existing WIF
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          version: '>= 416.0.0'
 
       - name: Resolve live Console production configuration
         id: runtime
