@@ -126,4 +126,3 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "write_fence_active=true"
   } >> "$GITHUB_OUTPUT"
 fi
-
