@@ -199,12 +199,11 @@ def validate_manifest(data: bytes, snapshot: dict[str, Any], label: str) -> dict
 
 
 def upload_json(client: Any, value: dict[str, Any]) -> None:
-    name = f"{RECOVERY_OUTPUT_PREFIX}/{VERSION}_recovery.json"
     body = json.dumps(value, ensure_ascii=False, indent=2, default=json_default).encode("utf-8") + b"\n"
-    bucket_name, object_name = RECOVERY_OUTPUT_PREFIX[5:].split("/", 1)
-    client.bucket(bucket_name).blob(name.split(f"gs://{bucket_name}/", 1)[1]).upload_from_string(
-        body, content_type="application/json"
-    )
+    prefix_body = RECOVERY_OUTPUT_PREFIX[5:]
+    bucket_name, object_prefix = prefix_body.split("/", 1)
+    object_name = f"{object_prefix.rstrip('/')}/{VERSION}_recovery.json"
+    client.bucket(bucket_name).blob(object_name).upload_from_string(body, content_type="application/json")
 
 
 def main() -> int:
@@ -264,16 +263,20 @@ def main() -> int:
             if source_bytes != training_bytes:
                 raise RuntimeError("manifest_all.csv and training_manifest.csv are not byte-identical")
 
-        if exact_blobs(bucket, MISSING_NAME):
-            raise RuntimeError("destination manifest.csv already has a GCS generation")
-
         source_metadata = blob_metadata(source_blob)
         destination = bucket.blob(MISSING_NAME)
-        token = None
-        while True:
-            token, _, _ = destination.rewrite(source_blob, token=token, if_generation_match=0)
-            if not token:
-                break
+        existing_destination = current_blob(bucket, MISSING_NAME)
+        copy_performed = existing_destination is None
+        if copy_performed:
+            token = None
+            while True:
+                token, _, _ = destination.rewrite(source_blob, token=token, if_generation_match=0)
+                if not token:
+                    break
+        else:
+            existing_bytes = existing_destination.download_as_bytes(timeout=300)
+            if existing_bytes != source_bytes:
+                raise RuntimeError("existing destination manifest differs from authoritative source")
         restored_bytes = download(bucket, MISSING_NAME)
         destination_metadata = blob_metadata(bucket.get_blob(MISSING_NAME))
         if restored_bytes != source_bytes:
@@ -324,7 +327,8 @@ def main() -> int:
                 "dataset_version_after": after_db["dataset_version"],
                 "dataset_item_sha256_before": before_db["dataset_item_sha256"],
                 "dataset_item_sha256_after": after_db["dataset_item_sha256"],
-                "only_allowed_object_created": True,
+                "only_allowed_object_created": copy_performed,
+                "copy_performed_in_this_execution": copy_performed,
                 "gcs_source_images_deleted": 0,
             }
         )
