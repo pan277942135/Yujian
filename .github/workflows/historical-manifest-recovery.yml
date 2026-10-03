@@ -1,0 +1,193 @@
+name: Historical Frozen Manifest Recovery
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: gemini-api-project-503706
+  REGION: asia-east1
+  SERVICE: yujian-model-factory-console
+  JOB_NAME: yujian-historical-manifest-recovery-v1
+  WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+  DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+  RUNTIME_IMAGE: asia-east1-docker.pkg.dev/gemini-api-project-503706/yujian-training/historical-exact-audit:56b0f946
+  DATASET_VERSION: DS_CROP_M1_v0.2
+
+jobs:
+  recover:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: uat
+    steps:
+      - name: Enforce main-only execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+
+      - name: Checkout recovery operator before WIF auth
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          clean: false
+
+      - name: Authenticate to Google Cloud with existing WIF
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          version: '>= 416.0.0'
+
+      - name: Resolve live Console production configuration
+        id: runtime
+        shell: bash
+        env:
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          REGION: ${{ env.REGION }}
+          SERVICE: ${{ env.SERVICE }}
+        run: |
+          set -euo pipefail
+          SERVICE_JSON="$RUNNER_TEMP/yujian-console-service.json"
+          gcloud run services describe "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format=json > "$SERVICE_JSON"
+          python3 - "$SERVICE_JSON" "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+
+          def secret_reference(item):
+              value = ((item.get("valueFrom") or {}).get("secretKeyRef") or {})
+              value = value or ((item.get("valueSource") or {}).get("secretKeyRef") or {})
+              return str(value.get("name") or value.get("secret") or "").strip()
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              payload = json.load(handle)
+          template = ((payload.get("spec") or {}).get("template") or {})
+          spec = template.get("spec") or {}
+          containers = spec.get("containers") or []
+          if not containers:
+              raise SystemExit("live Console service has no container configuration")
+          values = {}
+          db_secret = ""
+          for item in containers[0].get("env") or []:
+              name = str(item.get("name") or "")
+              if name in {"GCS_BUCKET", "CLOUD_SQL_CONNECTION_NAME", "DB_USER", "DB_NAME"} and item.get("value"):
+                  values[name] = str(item["value"])
+              if name == "DB_PASSWORD":
+                  db_secret = secret_reference(item)
+          annotations = (template.get("metadata") or {}).get("annotations") or {}
+          values["CLOUD_SQL_CONNECTION_NAME"] = values.get("CLOUD_SQL_CONNECTION_NAME") or str(
+              annotations.get("run.googleapis.com/cloudsql-instances") or ""
+          ).split(",")[0]
+          values["RUNTIME_SA"] = str(spec.get("serviceAccountName") or "")
+          missing = [name for name in ("GCS_BUCKET", "CLOUD_SQL_CONNECTION_NAME", "DB_USER", "DB_NAME") if not values.get(name)]
+          if missing or not db_secret or not values["RUNTIME_SA"]:
+              raise SystemExit(f"live Console configuration incomplete: {','.join(missing)}")
+          with open(sys.argv[2], "a", encoding="utf-8") as handle:
+              for key, value in {**values, "DB_SECRET": db_secret}.items():
+                  handle.write(f"{key}={value}\n")
+          print("Live Console DB/GCS/runtime configuration resolved without printing secret values.")
+          PY
+
+      - name: Deploy and execute byte-identical recovery gate
+        id: recovery
+        continue-on-error: true
+        env:
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          REGION: ${{ env.REGION }}
+          JOB_NAME: ${{ env.JOB_NAME }}
+          IMAGE_URI: ${{ env.RUNTIME_IMAGE }}
+          DATASET_VERSION: ${{ env.DATASET_VERSION }}
+          BUCKET: ${{ steps.runtime.outputs.GCS_BUCKET }}
+          CONNECTION_NAME: ${{ steps.runtime.outputs.CLOUD_SQL_CONNECTION_NAME }}
+          DB_USER: ${{ steps.runtime.outputs.DB_USER }}
+          DB_NAME: ${{ steps.runtime.outputs.DB_NAME }}
+          DB_SECRET: ${{ steps.runtime.outputs.DB_SECRET }}
+          RUNTIME_SA: ${{ steps.runtime.outputs.RUNTIME_SA }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUN_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+          RECOVERY_PREFIX="gs://${BUCKET}/operator-audits/historical_exact_duplicate_cleanup_v1/manifest_recovery/${RUN_STAMP}-${DATASET_VERSION}"
+          SCRIPT_B64="$(base64 -w0 scripts/recover_frozen_manifest.py)"
+          echo "RECOVERY_PREFIX=$RECOVERY_PREFIX" >> "$GITHUB_ENV"
+          gcloud run jobs deploy "$JOB_NAME" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --image "$IMAGE_URI" \
+            --command python \
+            --args=-c,"import base64,os;exec(compile(base64.b64decode(os.environ['RECOVERY_SCRIPT_B64']),'recovery','exec'))" \
+            --service-account "$RUNTIME_SA" \
+            --set-cloudsql-instances "$CONNECTION_NAME" \
+            --set-env-vars="RECOVERY_SCRIPT_B64=${SCRIPT_B64},DATASET_VERSION=${DATASET_VERSION},GCS_BUCKET=${BUCKET},CLOUD_SQL_CONNECTION_NAME=${CONNECTION_NAME},DB_USER=${DB_USER},DB_NAME=${DB_NAME},GCP_PROJECT_ID=${PROJECT_ID},RECOVERY_OUTPUT_PREFIX=${RECOVERY_PREFIX}" \
+            --set-secrets="DB_PASSWORD=${DB_SECRET}:latest" \
+            --cpu=2 \
+            --memory=8Gi \
+            --tasks=1 \
+            --parallelism=1 \
+            --max-retries=0 \
+            --task-timeout=3600s \
+            --quiet
+          gcloud run jobs execute "$JOB_NAME" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --wait \
+            --format='value(name)'
+
+      - name: Collect recovery evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="artifacts/frozen_dataset_manifest_recovery_v1"
+          mkdir -p "$OUT"
+          if [[ -n "${RECOVERY_PREFIX:-}" ]]; then
+            gcloud storage cp "$RECOVERY_PREFIX/DS_CROP_M1_v0.2_recovery.json" "$OUT/DS_CROP_M1_v0.2_recovery.json" || true
+          fi
+          test -f "$OUT/DS_CROP_M1_v0.2_recovery.json"
+          python3 - "$OUT/DS_CROP_M1_v0.2_recovery.json" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              evidence = json.load(handle)
+          if evidence.get("manifest_recovery") != "RECOVERED":
+              raise SystemExit(evidence.get("error") or "manifest recovery did not complete")
+          if evidence.get("source_sha256") != evidence.get("destination_sha256"):
+              raise SystemExit("source/destination SHA256 mismatch")
+          print("FROZEN_MANIFEST_RECOVERY_PASS")
+          PY
+
+      - name: Upload recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frozen-dataset-manifest-recovery-${{ github.run_id }}
+          path: artifacts/frozen_dataset_manifest_recovery_v1
+          if-no-files-found: error
+
+      - name: Delete temporary recovery job
+        if: always()
+        shell: bash
+        run: |
+          gcloud run jobs delete "$JOB_NAME" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --quiet || true
+
+      - name: Fail unless recovery passed
+        if: steps.recovery.outcome != 'success'
+        shell: bash
+        run: exit 1
