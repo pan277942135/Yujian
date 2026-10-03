@@ -260,6 +260,20 @@ jobs:
           test "$STATUS" = SUCCESS
           echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_OUTPUT"
 
+      - name: Run direct-script import smoke gate
+        env:
+          IMAGE_URI: ${{ steps.image.outputs.IMAGE_URI }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+            gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+            docker run --rm "$IMAGE_URI" python scripts/historical_exact_duplicate_phase_b.py --help
+          else
+            python3 -m pip install --disable-pip-version-check --no-input -r requirements.txt
+            env -u PYTHONPATH python3 scripts/historical_exact_duplicate_phase_b.py --help
+          fi
+
       - name: Deploy temporary Phase B Cloud Run Job
         id: deploy
         env:
