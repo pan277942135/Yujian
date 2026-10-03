@@ -19,12 +19,18 @@ from app.accepted_pool import _source_rows
 from app.platform.services.crop_dataset import _accepted_pool_rows
 from app.presence import FishPresenceResult
 from scripts.historical_exact_duplicate_phase_b import (
+    PHASE_A_ARTIFACT_ID,
+    PHASE_A_CLEANUP_PLAN_SHA256,
+    PHASE_A_RUN_ID,
+    _derive_plan_counts,
     PhaseAPlanDrift,
     _apply,
     _counts,
     _post_audit,
+    _validate_plan_contract,
     _upload_evidence,
     execute_phase_b,
+    load_phase_a_artifact,
     main,
 )
 
@@ -86,8 +92,8 @@ def _authority(db):
             db.add(GlobalImageDuplicateMember(sha256=sha, image_asset_id=row.id, batch_id=row.batch_id, image_id=row.image_id, object_name=row.object_name))
     db.commit()
     return {
-        "run_id": "37101698837",
-        "artifact_id": "11265843128",
+        "run_id": "37111404649",
+        "artifact_id": "11269314055",
         "audit_sha": "4de6de59704586fb52b9ae626bfe8f8b1c4d9abf",
         "cleanup_plan_sha256": "plan-sha",
         "plan": {
@@ -132,6 +138,83 @@ def test_phase_b_quarantines_redundant_and_whole_conflict_group_without_review_m
     assert redundant.training_exclusion_reason == "GLOBAL_EXACT_DUPLICATE"
     assert redundant.duplicate_of_image_asset_id == canonical.id
     assert all(row.training_exclusion_reason == "GLOBAL_EXACT_TRUTH_CONFLICT" for row in db.scalars(select(ImageAsset).where(ImageAsset.image_id.like("conflict-%"))).all())
+
+
+def _authority_with_plan_summary(db):
+    authority = _authority(db)
+    summary = authority["plan"]["summary"]
+    summary.update({
+        "exact_duplicate_groups": 2,
+        "affected_images": 4,
+        "redundant_images": 1,
+        "manual_conflict_groups": 1,
+        "manual_conflict_images": 2,
+    })
+    return authority
+
+
+def _phase_a_metadata():
+    return {
+        "status": "COMPLETE",
+        "git_sha": "4de6de59704586fb52b9ae626bfe8f8b1c4d9abf",
+        "audit_summary": {"truth_conflicts": {"conflict_groups": 1, "conflict_members": 2}},
+    }
+
+
+def test_phase_a_plan_counts_are_derived_from_current_groups(db):
+    authority = _authority_with_plan_summary(db)
+    expected = _derive_plan_counts(authority["plan"])
+    assert expected == {
+        "target_non_conflict_groups": 1,
+        "target_redundant_images": 1,
+        "target_truth_conflict_groups": 1,
+        "target_truth_conflict_images": 2,
+        "target_total_exclusions": 3,
+        "expected_training_eligible": 1,
+    }
+    assert _validate_plan_contract(authority["plan"], _phase_a_metadata()) == expected
+    assert expected["target_truth_conflict_groups"] != 28
+    assert expected["target_truth_conflict_images"] != 76
+
+
+def test_phase_a_plan_contract_rejects_tampered_conflict_summary(db):
+    authority = _authority_with_plan_summary(db)
+    authority["plan"]["summary"]["manual_conflict_images"] = 76
+    with pytest.raises(ValueError, match="truth conflict member count"):
+        _validate_plan_contract(authority["plan"], _phase_a_metadata())
+
+
+def test_phase_a_plan_contract_rejects_missing_canonical(db):
+    authority = _authority_with_plan_summary(db)
+    authority["plan"]["groups"][0]["proposed_canonical_id"] = None
+    with pytest.raises(ValueError, match="no canonical"):
+        _validate_plan_contract(authority["plan"], _phase_a_metadata())
+
+
+def test_phase_a_plan_contract_rejects_canonical_on_conflict_group(db):
+    authority = _authority_with_plan_summary(db)
+    authority["plan"]["groups"][1]["proposed_canonical_id"] = 1
+    with pytest.raises(ValueError, match="conflict group proposes"):
+        _validate_plan_contract(authority["plan"], _phase_a_metadata())
+
+
+def test_phase_a_load_requires_pinned_cleanup_plan_sha(tmp_path, db):
+    authority = _authority_with_plan_summary(db)
+    (tmp_path / "cleanup_plan.json").write_text(json.dumps(authority["plan"]), encoding="utf-8")
+    (tmp_path / "conflicts.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "coverage.json").write_text(json.dumps({"status": "COMPLETE", "coverage_percent": 100.0, "missing": 0, "coverage_complete": True}), encoding="utf-8")
+    (tmp_path / "execution_metadata.json").write_text(json.dumps(_phase_a_metadata()), encoding="utf-8")
+    plan_sha = __import__("hashlib").sha256((tmp_path / "cleanup_plan.json").read_bytes()).hexdigest()
+    loaded = load_phase_a_artifact(tmp_path, cleanup_plan_sha256=plan_sha)
+    assert loaded["cleanup_plan_sha256"] == plan_sha
+    with pytest.raises(ValueError, match="cleanup plan SHA"):
+        load_phase_a_artifact(tmp_path, cleanup_plan_sha256="6ab205d53b03b2dbb1aa4142ab424c9024d24fc5b2659ea25e77f8b351f5788c")
+
+
+def test_phase_a_authority_constants_are_fresh():
+    assert PHASE_A_RUN_ID == "37111404649"
+    assert PHASE_A_ARTIFACT_ID == "11269314055"
+    assert PHASE_A_CLEANUP_PLAN_SHA256 == "280fbec8d5c0e19d993dd391cc43e24de72848f6e61f07b135d9c5e479e9dd58"
 
 
 def test_phase_b_second_apply_is_idempotent(db):
