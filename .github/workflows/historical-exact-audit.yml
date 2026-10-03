@@ -10,6 +10,7 @@ on:
         options:
           - historical_exact_audit
         default: historical_exact_audit
+  workflow_call:
 
 permissions:
   contents: read
@@ -31,7 +32,7 @@ env:
 
 jobs:
   historical-exact-audit:
-    if: github.ref == 'refs/heads/fix/historical-global-exact-duplicate-cleanup-v1' && inputs.operation == 'historical_exact_audit'
+    if: github.ref == 'refs/heads/fix/historical-global-exact-duplicate-cleanup-v1' && (inputs.operation == 'historical_exact_audit' || github.event_name == 'workflow_call')
     runs-on: ubuntu-latest
     timeout-minutes: 180
     environment: uat

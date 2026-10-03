@@ -9,6 +9,15 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      operation:
+        description: "Run normal UAT deploy or the branch-only Historical Exact Audit"
+        required: true
+        type: choice
+        options:
+          - deploy
+          - historical_exact_audit
+        default: deploy
 
 permissions:
   contents: read
@@ -60,6 +69,7 @@ jobs:
           WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
           DISPATCH_SHA: ${{ github.sha }}
+          OPERATION: ${{ inputs.operation || 'deploy' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -74,7 +84,7 @@ jobs:
           fi
 
           SHOULD_DEPLOY=false
-          if [[ "$AUTO_DEPLOY_ENABLED" == "true" && "$CI_OK" == "true" ]]; then
+          if [[ "$OPERATION" == "deploy" && "$AUTO_DEPLOY_ENABLED" == "true" && "$CI_OK" == "true" ]]; then
             SHOULD_DEPLOY=true
           fi
 
@@ -95,11 +105,12 @@ jobs:
             echo "- Deploy SHA: \`$DEPLOY_SHA\`"
             echo "- Latest main: \`$LATEST_MAIN\`"
             echo "- Stale run: \`$STALE\`"
+            echo "- Operation: \`$OPERATION\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
     needs: preflight
-    if: needs.preflight.outputs.should_deploy == 'true' && needs.preflight.outputs.stale != 'true'
+    if: needs.preflight.outputs.should_deploy == 'true' && needs.preflight.outputs.stale != 'true' && inputs.operation != 'historical_exact_audit'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: uat
@@ -984,3 +995,11 @@ jobs:
             echo "- Android API 28 production TFLite runtime: **PASS**"
             echo "- Android authenticated feedback transport: **PASS**"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  historical_exact_audit:
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'historical_exact_audit' && github.ref == 'refs/heads/fix/historical-global-exact-duplicate-cleanup-v1'
+    uses: ./.github/workflows/historical-exact-audit.yml
+    permissions:
+      contents: read
+      id-token: write
+    secrets: inherit
