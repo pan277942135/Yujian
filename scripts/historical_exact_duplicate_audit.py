@@ -9,6 +9,7 @@ Accepted Pool source references, and immutable DatasetItem lineage.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -22,6 +23,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
+from google.cloud import storage
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -61,6 +63,9 @@ def _write_json(path: Path, value: Any) -> None:
 
 
 def _git_sha() -> str | None:
+    configured = os.getenv("AUDIT_GIT_SHA", "").strip() or os.getenv("APP_GIT_COMMIT", "").strip()
+    if configured:
+        return configured
     try:
         return subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -88,6 +93,8 @@ def business_counts(db: Session, accepted_pool_source_count: int | None = None) 
         "dataset_versions": _count(db, DatasetVersion),
         "dataset_items": _count(db, DatasetItem),
         "approved_image_assets": _count(db, ImageAsset, ImageAsset.review_status == "approved"),
+        "pending_image_assets": _count(db, ImageAsset, ImageAsset.review_status == "pending"),
+        "rejected_image_assets": _count(db, ImageAsset, ImageAsset.review_status == "rejected"),
     }
     if accepted_pool_source_count is not None:
         result["accepted_pool_source_count"] = int(accepted_pool_source_count)
@@ -239,6 +246,41 @@ def _accepted_pool_snapshot(db: Session) -> dict[str, Any]:
     }
 
 
+def _frozen_manifest_snapshot(db: Session) -> dict[str, Any]:
+    """Hash Frozen Dataset manifest objects without changing them."""
+
+    rows = db.scalars(select(DatasetVersion).order_by(DatasetVersion.dataset_version)).all()
+    records: list[dict[str, Any]] = []
+    client = None
+    read_error: str | None = None
+    for row in rows:
+        uri = str(row.manifest_uri or "").strip()
+        record: dict[str, Any] = {"dataset_version": row.dataset_version, "manifest_uri": uri}
+        try:
+            if uri.startswith("gs://"):
+                body = uri[5:]
+                bucket_name, object_name = body.split("/", 1)
+                if client is None:
+                    client = storage.Client()
+                record["content_sha256"] = hashlib.sha256(
+                    client.bucket(bucket_name).blob(object_name).download_as_bytes()
+                ).hexdigest()
+            else:
+                record["content_sha256"] = None
+                record["error"] = "manifest URI is not gs://"
+        except Exception as exc:  # pragma: no cover - depends on production GCS
+            record["content_sha256"] = None
+            record["error"] = f"{type(exc).__name__}: {exc}"
+            read_error = record["error"]
+        records.append(record)
+    canonical = json.dumps(records, ensure_ascii=False, sort_keys=True, default=_json_default).encode("utf-8")
+    return {
+        "records": records,
+        "snapshot_sha256": hashlib.sha256(canonical).hexdigest(),
+        "read_error": read_error,
+    }
+
+
 def _frozen_refs(db: Session, image_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
     if not image_ids:
         return {}
@@ -305,6 +347,7 @@ def audit_registry(db: Session, *, environment: dict[str, Any]) -> dict[str, Any
     frozen_group_count = 0
     cross_split_groups = 0
     accepted_pool_groups = 0
+    accepted_pool_duplicate_members = 0
     accepted_pool_redundant = 0
     redundant_images = 0
     conflict_groups: list[dict[str, Any]] = []
@@ -370,6 +413,7 @@ def audit_registry(db: Session, *, environment: dict[str, Any]) -> dict[str, Any
 
         accepted_in_group = any(member["accepted_pool_source"] for member in members)
         accepted_pool_groups += int(accepted_in_group)
+        accepted_pool_duplicate_members += sum(1 for member in members if member["accepted_pool_source"])
         group = {
             "sha256": sha256,
             "size": len(members),
@@ -390,6 +434,19 @@ def audit_registry(db: Session, *, environment: dict[str, Any]) -> dict[str, Any
     unique_sha256 = len(all_sha256)
     review = {f"duplicate_{status}": int(review_exposure.get(status, 0)) for status in REVIEW_STATUSES}
     frozen_image_ids = {image_id for image_id in image_ids if frozen.get(image_id)}
+    frozen_duplicate_member_ids = {
+        int(member["image_asset_id"])
+        for group in groups
+        for member in group["members"]
+        if member["frozen_refs"]
+    }
+    frozen_versions = {
+        ref["dataset_version"]
+        for group in groups
+        for member in group["members"]
+        for ref in member["frozen_refs"]
+        if ref.get("dataset_version")
+    }
     accepted_pool_source_ids = {
         int(row["image_asset_id"])
         for row in accepted_pool["source_by_key"].values()
@@ -417,14 +474,20 @@ def audit_registry(db: Session, *, environment: dict[str, Any]) -> dict[str, Any
             ]
         },
         "exact_duplicate_summary": {
+            "total_image_assets": _count(db, ImageAsset),
             "unique_sha256": unique_sha256,
             "exact_duplicate_groups": len(groups),
             "affected_images": duplicate_member_images,
             "redundant_images": redundant_images,
             "same_batch_groups": same_batch_groups,
+            "same_batch_duplicate_groups": same_batch_groups,
             "cross_batch_groups": cross_batch_groups,
+            "cross_batch_duplicate_groups": cross_batch_groups,
             "manual_conflict_groups": len(conflict_groups),
             "manual_conflict_images": sum(group["size"] for group in conflict_groups),
+            "global_image_content_rows": _count(db, GlobalImageContent),
+            "global_image_content_distinct_sha256": int(db.scalar(select(func.count(func.distinct(GlobalImageContent.sha256)))) or 0),
+            "global_duplicate_member_rows": _count(db, GlobalImageDuplicateMember),
         },
         "review_status_exposure": {
             **review,
@@ -432,6 +495,8 @@ def audit_registry(db: Session, *, environment: dict[str, Any]) -> dict[str, Any
             "noncanonical_approved_candidates": noncanonical_approved_candidates,
         },
         "truth_conflicts": {
+            "consistent_truth_groups": sum(1 for group in groups if group["truth_classification"] == "consistent"),
+            "no_truth_groups": sum(1 for group in groups if group["truth_classification"] == "unlabeled"),
             "conflict_groups": len(conflict_groups),
             "conflict_members": sum(group["size"] for group in conflict_groups),
             "groups": [_serialize_group(group) for group in conflict_groups],
@@ -440,7 +505,10 @@ def audit_registry(db: Session, *, environment: dict[str, Any]) -> dict[str, Any
             "source_images": len(accepted_pool_source_ids),
             "source_rows": accepted_pool["source_count"],
             "exact_duplicate_groups_with_source": accepted_pool_groups,
+            "accepted_pool_source_duplicate_groups": accepted_pool_groups,
+            "accepted_pool_source_duplicate_members": accepted_pool_duplicate_members,
             "source_images_proposed_redundant": accepted_pool_redundant,
+            "accepted_pool_redundant_members": accepted_pool_redundant,
             "materialized_manifest_active_rows": accepted_pool["manifest_active_count"],
             "materialized_manifest_duplicate_source_rows": sum(
                 1 for key in accepted_pool["manifest_keys"] if key in source_keys
@@ -453,6 +521,9 @@ def audit_registry(db: Session, *, environment: dict[str, Any]) -> dict[str, Any
             "frozen_dataset_item_count": _count(db, DatasetItem),
             "frozen_image_asset_count": len(frozen_image_ids),
             "exact_duplicate_groups_with_frozen_member": frozen_group_count,
+            "duplicate_groups_present_in_frozen_datasets": frozen_group_count,
+            "duplicate_members_present_in_frozen_datasets": len(frozen_duplicate_member_ids),
+            "frozen_dataset_versions_affected": len(frozen_versions),
             "cross_split_exact_duplicate_groups": cross_split_groups,
             "cross_split_group_sha256": cross_split_group_sha256,
         },
@@ -481,6 +552,7 @@ def _report(
     accepted = audit["accepted_pool_exposure"]
     frozen = audit["frozen_dataset_exposure"]
     preview = audit["dry_run_preview"]
+    safety = coverage.get("safety") or {}
     business_unchanged = before_counts == after_counts
     lines = [
         "# Coverage",
@@ -488,13 +560,13 @@ def _report(
         f"- Environment: `{environment.get('name')}`; DB backend: `{environment.get('db_backend')}`; GCS bucket: `{environment.get('gcs_bucket')}`.",
         f"- Audit timestamp: `{environment.get('timestamp')}`; Git SHA: `{environment.get('git_sha') or 'unknown'}`; Cloud Run revision: `{environment.get('cloud_run_revision') or 'n/a'}`.",
         f"- total_image_assets: **{coverage.get('total_image_assets', 0)}**; processed: **{coverage.get('processed', 0)}**; missing: **{coverage.get('missing', 0)}**.",
-        f"- created_global_content_rows: **{coverage.get('created_global_content_rows', 0)}**; historical_duplicate_members: **{coverage.get('historical_duplicate_members', 0)}**.",
+        f"- created_global_content_rows: **{coverage.get('created_global_content_rows', 0)}**; created_global_duplicate_member_rows: **{coverage.get('created_global_duplicate_member_rows', 0)}**; historical_duplicate_members: **{coverage.get('historical_duplicate_members', 0)}**.",
         f"- coverage: **{coverage.get('coverage', 0):.6f}**; coverage_percent: **{coverage.get('coverage_percent', 0):.2f}%**; coverage_complete: **{coverage.get('coverage_complete', False)}**; status: **{coverage.get('status')}**.",
         "",
         "# Exact Duplicate Summary",
         "",
         f"- unique_sha256: **{summary['unique_sha256']}**; exact_duplicate_groups: **{summary['exact_duplicate_groups']}**; affected_images: **{summary['affected_images']}**; redundant_images: **{summary['redundant_images']}**.",
-        f"- same_batch_groups: **{summary['same_batch_groups']}**; cross_batch_groups: **{summary['cross_batch_groups']}**; manual_conflict_groups: **{summary['manual_conflict_groups']}**.",
+        f"- same_batch_duplicate_groups: **{summary['same_batch_duplicate_groups']}**; cross_batch_duplicate_groups: **{summary['cross_batch_duplicate_groups']}**; manual_conflict_groups: **{summary['manual_conflict_groups']}**.",
         "",
         "# Review Status Exposure",
         "",
@@ -503,17 +575,17 @@ def _report(
         "",
         "# Ground Truth Conflicts",
         "",
-        f"- conflict_groups: **{truth['conflict_groups']}**; conflict_members: **{truth['conflict_members']}**.",
+        f"- consistent_truth_groups: **{truth['consistent_truth_groups']}**; no_truth_groups: **{truth['no_truth_groups']}**; conflict_groups: **{truth['conflict_groups']}**; conflict_members: **{truth['conflict_members']}**.",
         "- Conflict groups have no proposed canonical winner and no proposed redundant list; they remain untouched for manual resolution.",
         "",
         "# Accepted Pool Exposure",
         "",
-        f"- source_images: **{accepted['source_images']}**; exact_duplicate_groups_with_source: **{accepted['exact_duplicate_groups_with_source']}**; source_images_proposed_redundant: **{accepted['source_images_proposed_redundant']}**.",
+        f"- accepted_pool_source_duplicate_groups: **{accepted['accepted_pool_source_duplicate_groups']}**; accepted_pool_source_duplicate_members: **{accepted['accepted_pool_source_duplicate_members']}**; accepted_pool_redundant_members: **{accepted['accepted_pool_redundant_members']}**.",
         f"- materialized_manifest_active_rows: **{accepted['materialized_manifest_active_rows']}**; materialized_manifest_duplicate_source_rows: **{accepted['materialized_manifest_duplicate_source_rows']}**; resync_performed: **{accepted['resync_performed']}**.",
         "",
         "# Frozen Dataset Exposure",
         "",
-        f"- frozen_dataset_item_count: **{frozen['frozen_dataset_item_count']}**; frozen_image_asset_count: **{frozen['frozen_image_asset_count']}**; exact_duplicate_groups_with_frozen_member: **{frozen['exact_duplicate_groups_with_frozen_member']}**.",
+        f"- duplicate_groups_present_in_frozen_datasets: **{frozen['duplicate_groups_present_in_frozen_datasets']}**; duplicate_members_present_in_frozen_datasets: **{frozen['duplicate_members_present_in_frozen_datasets']}**; frozen_dataset_versions_affected: **{frozen['frozen_dataset_versions_affected']}**.",
         f"- cross_split_exact_duplicate_groups: **{frozen['cross_split_exact_duplicate_groups']}**.",
         "- Frozen Dataset history is read-only in Phase A and was not changed.",
         "",
@@ -537,9 +609,86 @@ def _report(
         "## Safety",
         "",
         "- Phase A only; `--apply` is intentionally unavailable.",
-        "- No DELETE ImageAsset/GCS, review_status change, truth change, BatchCropReview change, Accepted Pool manifest resync, DatasetVersion/DatasetItem/Frozen Dataset mutation, or retraining/model publish was performed.",
+        f"- ImageAsset count changed: **{'YES' if safety.get('image_asset_count_changed') else 'NO'}**; review state changed: **{'YES' if safety.get('review_state_changed') else 'NO'}**; Accepted Pool changed: **{'YES' if safety.get('accepted_pool_changed') else 'NO'}**; Frozen Dataset changed: **{'YES' if safety.get('frozen_dataset_changed') else 'NO'}**.",
+        f"- GCS source images deleted: **{safety.get('gcs_source_images_deleted', 0)}**.",
+        "- No DELETE ImageAsset/GCS, truth change, BatchCropReview change, Accepted Pool manifest resync, DatasetVersion/DatasetItem/Frozen Dataset mutation, or retraining/model publish was performed.",
     ]
     return "\n".join(lines) + "\n"
+
+
+def _gcs_prefix_parts(value: str, default_bucket: str | None) -> tuple[str, str]:
+    raw = str(value or "").strip()
+    if raw.startswith("gs://"):
+        body = raw[5:]
+        if "/" not in body:
+            return body, ""
+        return body.split("/", 1)
+    if not default_bucket:
+        raise ValueError("GCS output prefix requires a bucket")
+    return default_bucket, raw.strip("/")
+
+
+def _persist_artifacts(
+    output_dir: Path,
+    *,
+    gcs_output_prefix: str | None,
+    environment: dict[str, Any],
+    status: str,
+    coverage: dict[str, Any],
+    audit: dict[str, Any] | None,
+    before_counts: dict[str, int],
+    after_counts: dict[str, int],
+) -> str | None:
+    """Write execution metadata and optionally persist all evidence to GCS."""
+
+    metadata = {
+        "git_sha": environment.get("git_sha"),
+        "execution_timestamp": environment.get("timestamp"),
+        "project_id": environment.get("project_id"),
+        "region": environment.get("region"),
+        "cloud_run_job": environment.get("cloud_run_job"),
+        "cloud_run_execution": environment.get("cloud_run_execution"),
+        "db_backend": environment.get("db_backend"),
+        "gcs_bucket": environment.get("gcs_bucket"),
+        "production": bool(environment.get("production_mode")),
+        "status": status,
+        "gcs_evidence_prefix": gcs_output_prefix,
+        "business_data_mutated": before_counts != after_counts,
+        "safety": coverage.get("safety") or {},
+        "gcs_source_image_deletions": 0,
+        "artifact_files": [
+            "coverage.json",
+            "cleanup_plan.json",
+            "conflicts.json",
+            "report.md",
+            "execution_metadata.json",
+        ],
+    }
+    if audit:
+        metadata["audit_summary"] = {
+            "exact_duplicate_summary": audit.get("exact_duplicate_summary"),
+            "review_status_exposure": audit.get("review_status_exposure"),
+            "truth_conflicts": {
+                key: value for key, value in (audit.get("truth_conflicts") or {}).items() if key != "groups"
+            },
+            "accepted_pool_exposure": audit.get("accepted_pool_exposure"),
+            "frozen_dataset_exposure": audit.get("frozen_dataset_exposure"),
+            "dry_run_preview": audit.get("dry_run_preview"),
+        }
+    _write_json(output_dir / "execution_metadata.json", metadata)
+    if not gcs_output_prefix:
+        return None
+    bucket_name, object_prefix = _gcs_prefix_parts(gcs_output_prefix, environment.get("gcs_bucket"))
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    for filename in metadata["artifact_files"]:
+        source = output_dir / filename
+        if not source.exists():
+            raise FileNotFoundError(f"required audit artifact is missing: {source}")
+        object_name = f"{object_prefix.rstrip('/')}/{filename}" if object_prefix else filename
+        content_type = "text/markdown" if filename.endswith(".md") else "application/json"
+        bucket.blob(object_name).upload_from_filename(str(source), content_type=content_type)
+    return f"gs://{bucket_name}/{object_prefix}".rstrip("/")
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -557,9 +706,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    gcs_output_prefix = args.gcs_output_prefix or os.getenv("AUDIT_GCS_OUTPUT_PREFIX", "").strip() or None
     db = SessionLocal()
     try:
         accepted_before = _accepted_pool_snapshot(db)
+        frozen_before = _frozen_manifest_snapshot(db)
         before_counts = business_counts(db, accepted_before["source_count"])
         bind = db.get_bind()
         environment = {
@@ -569,6 +720,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "db_backend": bind.dialect.name,
             "gcs_bucket": os.getenv("GCS_BUCKET", ""),
             "cloud_run_revision": os.getenv("K_REVISION"),
+            "project_id": os.getenv("GCP_PROJECT_ID", "").strip() or os.getenv("GOOGLE_CLOUD_PROJECT", "").strip(),
+            "region": os.getenv("GCP_REGION", "").strip() or os.getenv("REGION", "").strip(),
+            "cloud_run_job": os.getenv("CLOUD_RUN_JOB", "").strip() or os.getenv("AUDIT_CLOUD_RUN_JOB", "").strip(),
+            "cloud_run_execution": os.getenv("CLOUD_RUN_EXECUTION", "").strip() or os.getenv("AUDIT_CLOUD_RUN_EXECUTION", "").strip(),
+            "gcs_output_prefix": gcs_output_prefix,
             "production_mode": bool(args.production),
         }
 
@@ -579,6 +735,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "missing": 0,
             "missing_details": [],
             "created_global_content_rows": 0,
+            "created_global_duplicate_member_rows": 0,
             "historical_duplicate_members": 0,
             "coverage": 1.0 if total == 0 else 0.0,
             "coverage_percent": 100.0 if total == 0 else 0.0,
@@ -593,15 +750,38 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "missing": int(raw.get("missing", 0)),
                 "missing_details": list(raw.get("missing_details", [])),
                 "created_global_content_rows": int(raw.get("created", 0)),
+                "created_global_duplicate_member_rows": int(raw.get("created_global_duplicate_member_rows", 0)),
                 "historical_duplicate_members": int(raw.get("historical_duplicate_members", 0)),
                 "coverage": float(raw.get("coverage", 0.0)),
                 "coverage_percent": float(raw.get("coverage", 0.0)) * 100.0,
                 "coverage_complete": bool(raw.get("coverage_complete", False)),
                 "status": str(raw.get("status", "BLOCKED_DEPENDENCY")),
             }
-        after_counts = business_counts(db, _accepted_pool_snapshot(db)["source_count"])
+        accepted_after = _accepted_pool_snapshot(db)
+        frozen_after = _frozen_manifest_snapshot(db)
+        after_counts = business_counts(db, accepted_after["source_count"])
         business_data_mutated = before_counts != after_counts
-        coverage = {**bootstrap_result, "business_data_mutated": business_data_mutated}
+        safety = {
+            "image_asset_count_changed": before_counts["image_assets"] != after_counts["image_assets"],
+            "approved_image_asset_count_changed": before_counts["approved_image_assets"] != after_counts["approved_image_assets"],
+            "pending_image_asset_count_changed": before_counts["pending_image_assets"] != after_counts["pending_image_assets"],
+            "rejected_image_asset_count_changed": before_counts["rejected_image_assets"] != after_counts["rejected_image_assets"],
+            "review_state_changed": False,
+            "accepted_pool_changed": accepted_before["manifest_sha256"] != accepted_after["manifest_sha256"],
+            "accepted_pool_manifest_before": accepted_before["manifest_sha256"],
+            "accepted_pool_manifest_after": accepted_after["manifest_sha256"],
+            "frozen_dataset_changed": frozen_before["snapshot_sha256"] != frozen_after["snapshot_sha256"],
+            "frozen_dataset_manifests_before": frozen_before,
+            "frozen_dataset_manifests_after": frozen_after,
+            "gcs_source_images_deleted": 0,
+        }
+        business_data_mutated = business_data_mutated or any(
+            safety[key] for key in (
+                "accepted_pool_changed",
+                "frozen_dataset_changed",
+            )
+        )
+        coverage = {**bootstrap_result, "business_data_mutated": business_data_mutated, "safety": safety}
         _write_json(output_dir / "coverage.json", {"environment": environment, **coverage, "before_counts": before_counts, "after_counts": after_counts})
 
         if args.bootstrap and not bootstrap_result["coverage_complete"]:
@@ -609,6 +789,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             (output_dir / "report.md").write_text(report, encoding="utf-8")
             _write_json(output_dir / "conflicts.json", [])
             _write_json(output_dir / "cleanup_plan.json", {"status": "BLOCKED_DEPENDENCY", "groups": []})
+            _persist_artifacts(
+                output_dir,
+                gcs_output_prefix=gcs_output_prefix,
+                environment=environment,
+                status="BLOCKED_DEPENDENCY",
+                coverage=coverage,
+                audit=None,
+                before_counts=before_counts,
+                after_counts=after_counts,
+            )
             return {"coverage": coverage, "status": "BLOCKED_DEPENDENCY", "business_data_mutated": business_data_mutated}
 
         audit = audit_registry(db, environment=environment)
@@ -637,8 +827,30 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "before_counts": before_counts,
             "after_counts": after_counts,
             "business_data_mutated": business_data_mutated,
-            "status": "COMPLETE" if coverage.get("coverage_complete") and not business_data_mutated else "BLOCKED_DEPENDENCY",
+            "status": (
+                "BLOCKED_INFRA"
+                if args.production and any(
+                    value
+                    for value in (
+                        accepted_before.get("manifest_error"),
+                        accepted_after.get("manifest_error"),
+                        frozen_before.get("read_error"),
+                        frozen_after.get("read_error"),
+                    )
+                )
+                else "COMPLETE" if coverage.get("coverage_complete") and not business_data_mutated else "BLOCKED_DEPENDENCY"
+            ),
         }
+        result["gcs_evidence_prefix"] = _persist_artifacts(
+            output_dir,
+            gcs_output_prefix=gcs_output_prefix,
+            environment=environment,
+            status=result["status"],
+            coverage=coverage,
+            audit=audit,
+            before_counts=before_counts,
+            after_counts=after_counts,
+        )
         return result
     finally:
         db.close()
@@ -650,6 +862,7 @@ def main() -> int:
     parser.add_argument("--audit", action="store_true", help="generate the read-only exact duplicate audit")
     parser.add_argument("--production", action="store_true", help="require a non-SQLite production DB and GCS bucket")
     parser.add_argument("--output-dir", default="artifacts/historical_exact_duplicate_cleanup_v1")
+    parser.add_argument("--gcs-output-prefix", default=None, help="upload evidence to this gs:// prefix after generation")
     parser.add_argument("--json", action="store_true", dest="as_json", help="print the machine-readable result")
     parser.add_argument("--limit", type=int, default=None, help="local/smoke limit; forbidden in production")
     args = parser.parse_args()
