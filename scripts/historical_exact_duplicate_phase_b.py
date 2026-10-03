@@ -38,9 +38,10 @@ from app.dataset_models import DatasetItem
 from app.models import DatasetVersion, GlobalImageContent, GlobalImageDuplicateMember, ImageAsset
 
 
-PHASE_A_RUN_ID = "37101698837"
+PHASE_A_RUN_ID = "37111404649"
 PHASE_A_AUDIT_SHA = "4de6de59704586fb52b9ae626bfe8f8b1c4d9abf"
-PHASE_A_ARTIFACT_ID = "11265843128"
+PHASE_A_ARTIFACT_ID = "11269314055"
+PHASE_A_CLEANUP_PLAN_SHA256 = "280fbec8d5c0e19d993dd391cc43e24de72848f6e61f07b135d9c5e479e9dd58"
 REASON_DUPLICATE = "GLOBAL_EXACT_DUPLICATE"
 REASON_CONFLICT = "GLOBAL_EXACT_TRUTH_CONFLICT"
 REASONS = {REASON_DUPLICATE, REASON_CONFLICT}
@@ -196,7 +197,73 @@ def _download_phase_a(prefix: str, destination: Path) -> Path:
     return destination
 
 
-def load_phase_a_artifact(root: Path, *, audit_sha: str = PHASE_A_AUDIT_SHA) -> dict[str, Any]:
+def _derive_plan_counts(plan: dict[str, Any]) -> dict[str, int]:
+    groups = list(plan.get("groups") or [])
+    normal = []
+    conflicts = []
+    for group in groups:
+        members = list(group.get("members") or [])
+        if len(members) < 2:
+            raise ValueError(f"duplicate group has fewer than two members: {group.get('sha256')}")
+        is_conflict = bool(group.get("manual_conflict")) or group.get("truth_classification") == "conflict"
+        redundant = group.get("proposed_redundant_image_asset_ids")
+        if is_conflict:
+            if group.get("proposed_canonical_id") is not None or redundant is not None:
+                raise ValueError(f"conflict group proposes canonical or redundant members: {group.get('sha256')}")
+            conflicts.append(group)
+        else:
+            if group.get("proposed_canonical_id") is None:
+                raise ValueError(f"non-conflict group has no canonical: {group.get('sha256')}")
+            if not isinstance(redundant, list) or len(redundant) != len(members) - 1:
+                raise ValueError(f"non-conflict group redundant members are inconsistent: {group.get('sha256')}")
+            normal.append(group)
+    all_duplicate_excess = sum(max(len(group.get("members") or []) - 1, 0) for group in groups)
+    target_redundant_images = sum(len(group.get("proposed_redundant_image_asset_ids") or []) for group in normal)
+    target_truth_conflict_images = sum(len(group.get("members") or []) for group in conflicts)
+    target_total_exclusions = target_redundant_images + target_truth_conflict_images
+    if target_total_exclusions != all_duplicate_excess + len(conflicts):
+        raise ValueError("Phase A plan exclusion structure is inconsistent")
+    summary = plan.get("summary") or {}
+    total_image_assets = int(summary.get("total_image_assets", 0))
+    affected_images = sum(len(group.get("members") or []) for group in groups)
+    if int(summary.get("affected_images", -1)) != affected_images:
+        raise ValueError("Phase A affected image count is inconsistent with groups")
+    return {
+        "target_non_conflict_groups": len(normal),
+        "target_redundant_images": target_redundant_images,
+        "target_truth_conflict_groups": len(conflicts),
+        "target_truth_conflict_images": target_truth_conflict_images,
+        "target_total_exclusions": target_total_exclusions,
+        "expected_training_eligible": total_image_assets - target_total_exclusions,
+    }
+
+
+def _validate_plan_contract(plan: dict[str, Any], metadata: dict[str, Any]) -> dict[str, int]:
+    expected = _derive_plan_counts(plan)
+    summary = plan.get("summary") or {}
+    if int(summary.get("exact_duplicate_groups", -1)) != len(plan.get("groups") or []):
+        raise ValueError("Phase A exact duplicate group count is inconsistent with groups")
+    if int(summary.get("manual_conflict_groups", -1)) != expected["target_truth_conflict_groups"]:
+        raise ValueError("Phase A truth conflict group count is inconsistent with groups")
+    if int(summary.get("manual_conflict_images", -1)) != expected["target_truth_conflict_images"]:
+        raise ValueError("Phase A truth conflict member count is inconsistent with groups")
+    if int(summary.get("redundant_images", -1)) != expected["target_redundant_images"]:
+        raise ValueError("Phase A redundant image count is inconsistent with groups")
+    audit_summary = metadata.get("audit_summary") or {}
+    truth = audit_summary.get("truth_conflicts") or {}
+    if int(truth.get("conflict_groups", -1)) != expected["target_truth_conflict_groups"]:
+        raise ValueError("Phase A audit truth conflict group count mismatch")
+    if int(truth.get("conflict_members", -1)) != expected["target_truth_conflict_images"]:
+        raise ValueError("Phase A audit truth conflict member count mismatch")
+    return expected
+
+
+def load_phase_a_artifact(
+    root: Path,
+    *,
+    audit_sha: str = PHASE_A_AUDIT_SHA,
+    cleanup_plan_sha256: str | None = None,
+) -> dict[str, Any]:
     present = {item.name for item in root.iterdir() if item.is_file()}
     missing = REQUIRED_ARTIFACTS - present
     if missing:
@@ -205,29 +272,31 @@ def load_phase_a_artifact(root: Path, *, audit_sha: str = PHASE_A_AUDIT_SHA) -> 
     plan = _read_json(plan_path)
     metadata = _read_json(root / "execution_metadata.json")
     coverage = _read_json(root / "coverage.json")
-    summary = plan.get("summary") or {}
-    audit_summary = metadata.get("audit_summary") or {}
-    truth = audit_summary.get("truth_conflicts") or {}
     if metadata.get("status") != "COMPLETE":
         raise ValueError("Phase A execution_metadata.status is not COMPLETE")
-    if float(coverage.get("coverage_percent", -1)) != 100.0 or coverage.get("missing") != 0:
+    if (
+        coverage.get("status") != "COMPLETE"
+        or float(coverage.get("coverage_percent", -1)) != 100.0
+        or coverage.get("missing") != 0
+        or coverage.get("coverage_complete") is not True
+    ):
         raise ValueError("Phase A coverage gate failed")
     if str(metadata.get("git_sha") or "") != audit_sha:
         raise ValueError("Phase A audit SHA mismatch")
-    if int(summary.get("exact_duplicate_groups", -1)) != 1229:
-        raise ValueError("Phase A exact duplicate group count mismatch")
-    if int(truth.get("conflict_groups", -1)) != 28:
-        raise ValueError("Phase A truth conflict group count mismatch")
-    if int(truth.get("conflict_members", -1)) != 76:
-        raise ValueError("Phase A truth conflict member count mismatch")
+    expected_sha = cleanup_plan_sha256 or os.getenv("CLEANUP_PLAN_SHA256") or PHASE_A_CLEANUP_PLAN_SHA256
+    actual_sha = sha256_file(plan_path)
+    if actual_sha != expected_sha:
+        raise ValueError("Phase A cleanup plan SHA mismatch")
+    derived_expected = _validate_plan_contract(plan, metadata)
     return {
         "run_id": PHASE_A_RUN_ID,
         "artifact_id": PHASE_A_ARTIFACT_ID,
         "audit_sha": audit_sha,
-        "cleanup_plan_sha256": sha256_file(plan_path),
+        "cleanup_plan_sha256": actual_sha,
         "plan": plan,
         "metadata": metadata,
         "coverage": coverage,
+        "derived_expected": derived_expected,
     }
 
 

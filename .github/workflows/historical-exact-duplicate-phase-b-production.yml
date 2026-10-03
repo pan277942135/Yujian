@@ -32,11 +32,11 @@ env:
   JOB_NAME: yujian-historical-exact-duplicate-phase-b-v1
   WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
   DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
-  PHASE_A_RUN_ID: "37101698837"
-  PHASE_A_ARTIFACT_ID: "11265843128"
-  PHASE_A_ARTIFACT_NAME: historical-exact-duplicate-production-37101698837
+  PHASE_A_RUN_ID: "37111404649"
+  PHASE_A_ARTIFACT_ID: "11269314055"
+  PHASE_A_ARTIFACT_NAME: historical-exact-duplicate-production-37111404649
   PHASE_A_AUDIT_SHA: 4de6de59704586fb52b9ae626bfe8f8b1c4d9abf
-  EXPECTED_PLAN_SHA: 6ab205d53b03b2dbb1aa4142ab424c9024d24fc5b2659ea25e77f8b351f5788c
+  EXPECTED_PLAN_SHA: 280fbec8d5c0e19d993dd391cc43e24de72848f6e61f07b135d9c5e479e9dd58
   AR_REPOSITORY: yujian-training
   PREVIOUS_EXECUTION: yujian-historical-exact-duplicate-phase-b-v1-9fjgh
 
@@ -158,27 +158,35 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DRY_RUN_RUN_ID: ${{ inputs.dry_run_run_id }}
+          PHASE_A_DIR: ${{ steps.phase_a.outputs.PHASE_A_DIR }}
         shell: bash
         run: |
           set -euo pipefail
           DRY_DIR="$RUNNER_TEMP/prior-dry-run"
           gh run download "$DRY_RUN_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "historical-exact-duplicate-phase-b-$DRY_RUN_RUN_ID" --dir "$DRY_DIR"
-          python3 - "$DRY_DIR" "$EXPECTED_PLAN_SHA" <<'PY'
-          import json, pathlib, sys
+          python3 - "$DRY_DIR" "$PHASE_A_DIR/cleanup_plan.json" "$EXPECTED_PLAN_SHA" <<'PY'
+          import hashlib, json, pathlib, sys
           root = pathlib.Path(sys.argv[1])
+          phase_a_plan = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+          expected_sha = sys.argv[3]
           metadata = json.loads((root / "execution_metadata.json").read_text(encoding="utf-8"))
           plan = json.loads((root / "phase_b_plan.json").read_text(encoding="utf-8"))
           assert metadata.get("status") == "DRY_RUN", metadata
-          assert metadata.get("cleanup_plan_sha256") == sys.argv[2], metadata
+          assert metadata.get("cleanup_plan_sha256") == expected_sha, metadata
+          assert hashlib.sha256(pathlib.Path(sys.argv[2]).read_bytes()).hexdigest() == expected_sha
+          groups = phase_a_plan.get("groups") or []
+          conflicts = [group for group in groups if group.get("manual_conflict") or group.get("truth_classification") == "conflict"]
+          normal = [group for group in groups if group not in conflicts]
+          expected_from_authority = {
+              "target_non_conflict_groups": len(normal),
+              "target_redundant_images": sum(len(group.get("proposed_redundant_image_asset_ids") or []) for group in normal),
+              "target_truth_conflict_groups": len(conflicts),
+              "target_truth_conflict_images": sum(len(group.get("members") or []) for group in conflicts),
+          }
+          expected_from_authority["target_total_exclusions"] = expected_from_authority["target_redundant_images"] + expected_from_authority["target_truth_conflict_images"]
+          expected_from_authority["expected_training_eligible"] = int((phase_a_plan.get("summary") or {}).get("total_image_assets", 0)) - expected_from_authority["target_total_exclusions"]
           expected = plan.get("expected") or {}
-          assert expected == {
-              "target_non_conflict_groups": 1201,
-              "target_redundant_images": 1626,
-              "target_truth_conflict_groups": 28,
-              "target_truth_conflict_images": 76,
-              "target_total_exclusions": 1702,
-              "expected_training_eligible": 8161,
-          }, expected
+          assert expected == expected_from_authority, (expected, expected_from_authority)
           print("PRIOR_DRY_RUN_GATE_PASS")
           PY
 
@@ -384,11 +392,26 @@ jobs:
           for object in "${OBJECTS[@]}"; do
             [[ -n "$object" ]] && gcloud storage cp "$object" "$OUT/"
           done
+          gcloud storage cp "$EVIDENCE_ROOT/phase-a/cleanup_plan.json" "$OUT/phase_a_cleanup_plan.json"
           python3 - "$OUT" "$MODE" "$EXPECTED_PLAN_SHA" <<'PY'
-          import json, pathlib, sys
+          import hashlib, json, pathlib, sys
           root = pathlib.Path(sys.argv[1])
           mode = sys.argv[2]
           expected_sha = sys.argv[3]
+          phase_a_plan = json.loads((root / "phase_a_cleanup_plan.json").read_text(encoding="utf-8"))
+          assert hashlib.sha256((root / "phase_a_cleanup_plan.json").read_bytes()).hexdigest() == expected_sha
+          groups = phase_a_plan.get("groups") or []
+          conflicts = [group for group in groups if group.get("manual_conflict") or group.get("truth_classification") == "conflict"]
+          normal = [group for group in groups if group not in conflicts]
+          expected_from_authority = {
+              "target_non_conflict_groups": len(normal),
+              "target_redundant_images": sum(len(group.get("proposed_redundant_image_asset_ids") or []) for group in normal),
+              "target_truth_conflict_groups": len(conflicts),
+              "target_truth_conflict_images": sum(len(group.get("members") or []) for group in conflicts),
+          }
+          expected_from_authority["target_total_exclusions"] = expected_from_authority["target_redundant_images"] + expected_from_authority["target_truth_conflict_images"]
+          expected_from_authority["expected_training_eligible"] = int((phase_a_plan.get("summary") or {}).get("total_image_assets", 0)) - expected_from_authority["target_total_exclusions"]
+          total_image_assets = int((phase_a_plan.get("summary") or {}).get("total_image_assets", 0))
           metadata = json.loads((root / "execution_metadata.json").read_text(encoding="utf-8"))
           status = metadata.get("status")
           if status == "FAILED":
@@ -404,15 +427,17 @@ jobs:
                   assert json.loads((root / "phase_b_apply.json").read_text()).get("status") == "NOT_EXECUTED"
                   assert json.loads((root / "accepted_pool_post_sync.json").read_text()).get("status") == "NOT_EXECUTED"
                   expected = json.loads((root / "phase_b_plan.json").read_text()).get("expected")
-                  assert expected == {"target_non_conflict_groups": 1201, "target_redundant_images": 1626, "target_truth_conflict_groups": 28, "target_truth_conflict_images": 76, "target_total_exclusions": 1702, "expected_training_eligible": 8161}, expected
+                  assert expected == expected_from_authority, (expected, expected_from_authority)
               else:
                   assert status == "COMPLETE", metadata
                   post = metadata.get("after") or {}
-                  assert post.get("total_image_assets") == 9863, post
-                  assert post.get("training_eligible") == 8161, post
-                  assert post.get("GLOBAL_EXACT_DUPLICATE") == 1626, post
-                  assert post.get("GLOBAL_EXACT_TRUTH_CONFLICT") == 76, post
+                  assert post.get("total_image_assets") == total_image_assets, post
+                  assert post.get("training_eligible") == expected_from_authority["expected_training_eligible"], post
+                  assert post.get("GLOBAL_EXACT_DUPLICATE") == expected_from_authority["target_redundant_images"], post
+                  assert post.get("GLOBAL_EXACT_TRUTH_CONFLICT") == expected_from_authority["target_truth_conflict_images"], post
                   assert post.get("eligible_exact_duplicate_groups") == 0, post
+                  assert post.get("eligible_exact_duplicate_member_excess") == 0, post
+                  assert post.get("eligible_truth_conflict_groups") == 0, post
                   assert post.get("eligible_truth_conflict_members") == 0, post
                   assert metadata.get("gcs_source_images_deleted") == 0, metadata
                   assert metadata.get("phase_c_started") is False, metadata
