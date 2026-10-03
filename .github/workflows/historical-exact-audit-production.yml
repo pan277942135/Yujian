@@ -150,21 +150,227 @@ jobs:
           print("Live Console DB/GCS/runtime configuration resolved without printing secret values.")
           PY
 
-      - name: Build isolated audit image from exact SHA
+      - name: Full production capability preflight
+        id: preflight
+        env:
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          REGION: ${{ env.REGION }}
+          AR_REPOSITORY: ${{ env.AR_REPOSITORY }}
+          AUDIT_SHA: ${{ env.AUDIT_SHA }}
+          BUCKET: ${{ steps.runtime.outputs.GCS_BUCKET }}
+          CONNECTION_NAME: ${{ steps.runtime.outputs.CLOUD_SQL_CONNECTION_NAME }}
+          DB_SECRET: ${{ steps.runtime.outputs.DB_SECRET }}
+          RUNTIME_SA: ${{ steps.runtime.outputs.RUNTIME_SA }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          PREFLIGHT_DIR="$RUNNER_TEMP/historical-exact-preflight"
+          mkdir -p "$PREFLIGHT_DIR"
+          FAIL=0
+          IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPOSITORY}/historical-exact-audit:${AUDIT_SHA:0:8}"
+          BUILD_IDS=(
+            dcb263c1-f8a3-47ca-8aee-42051e7fdc60
+            459ad772-cc7a-4206-9e13-4cd81e101fe7
+          )
+
+          for build_id in "${BUILD_IDS[@]}"; do
+            if ! gcloud builds describe "$build_id" \
+              --project "$PROJECT_ID" --format=json > "$PREFLIGHT_DIR/$build_id.json"; then
+              echo "Cloud Build metadata unavailable: $build_id"
+              echo '{}' > "$PREFLIGHT_DIR/$build_id.json"
+              FAIL=1
+            fi
+          done
+
+          for build_id in "${BUILD_IDS[@]}"; do
+            status="$(gcloud builds describe "$build_id" --project "$PROJECT_ID" --format='value(status)' 2>/dev/null || true)"
+            case "$status" in
+              QUEUED|WORKING|PENDING)
+                echo "Polling existing Cloud Build $build_id without streaming logs."
+                for attempt in $(seq 1 40); do
+                  sleep 15
+                  status="$(gcloud builds describe "$build_id" --project "$PROJECT_ID" --format='value(status)' 2>/dev/null || true)"
+                  case "$status" in
+                    QUEUED|WORKING|PENDING) continue ;;
+                    *) break ;;
+                  esac
+                done
+                gcloud builds describe "$build_id" --project "$PROJECT_ID" --format=json > "$PREFLIGHT_DIR/$build_id.json" || FAIL=1
+                ;;
+            esac
+          done
+
+          if ! gcloud artifacts repositories describe "$AR_REPOSITORY" \
+            --project "$PROJECT_ID" --location "$REGION" --format=json > "$PREFLIGHT_DIR/repository.json"; then
+            echo "Artifact Registry repository unavailable: $AR_REPOSITORY"
+            FAIL=1
+          fi
+
+          IMAGE_STATE=MISSING
+          if gcloud artifacts docker images describe "$IMAGE_URI" \
+            --project "$PROJECT_ID" --format=json > "$PREFLIGHT_DIR/image.json" 2>/dev/null; then
+            IMAGE_STATE=EXISTS
+          else
+            echo '{}' > "$PREFLIGHT_DIR/image.json"
+          fi
+
+          SECRET_STATE=PASS
+          if ! gcloud secrets describe "$DB_SECRET" --project "$PROJECT_ID" \
+            --format='value(name)' > "$PREFLIGHT_DIR/secret.txt"; then
+            SECRET_STATE=FAIL
+            FAIL=1
+          fi
+
+          RUNTIME_STATE=PASS
+          if [[ -z "$RUNTIME_SA" ]] || ! gcloud iam service-accounts describe "$RUNTIME_SA" \
+            --project "$PROJECT_ID" --format='value(email)' > "$PREFLIGHT_DIR/runtime-sa.txt"; then
+            RUNTIME_STATE=FAIL
+            FAIL=1
+          fi
+
+          SQL_PROJECT="${CONNECTION_NAME%%:*}"
+          SQL_INSTANCE="${CONNECTION_NAME##*:}"
+          SQL_STATE=PASS
+          if [[ -z "$CONNECTION_NAME" || -z "$SQL_PROJECT" || -z "$SQL_INSTANCE" ]] || \
+             ! gcloud sql instances describe "$SQL_INSTANCE" --project "$SQL_PROJECT" \
+             --format='value(name)' > "$PREFLIGHT_DIR/sql.txt"; then
+            SQL_STATE=FAIL
+            FAIL=1
+          fi
+
+          GCS_STATE=PASS
+          if [[ -z "$BUCKET" ]] || ! gcloud storage buckets describe "gs://$BUCKET" \
+            --project "$PROJECT_ID" --format=json > "$PREFLIGHT_DIR/bucket.json"; then
+            GCS_STATE=FAIL
+            FAIL=1
+          fi
+
+          CONTROL_STATE=PASS
+          CONTROL_PERMISSIONS="$(gcloud projects test-iam-permissions "$PROJECT_ID" \
+            --permissions=run.jobs.create,run.jobs.update,run.jobs.get,run.jobs.delete,iam.serviceAccounts.actAs \
+            --format='value(permissions)' 2>/dev/null || true)"
+          for permission in run.jobs.create run.jobs.update run.jobs.get run.jobs.delete iam.serviceAccounts.actAs; do
+            if ! grep -Fq "$permission" <<< "$CONTROL_PERMISSIONS"; then
+              CONTROL_STATE=FAIL
+              FAIL=1
+            fi
+          done
+
+          AR_STATE=PASS
+          if [[ ! -s "$PREFLIGHT_DIR/repository.json" ]]; then
+            AR_STATE=FAIL
+            FAIL=1
+          fi
+
+          python3 - "$PREFLIGHT_DIR" "$IMAGE_URI" "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          root = pathlib.Path(sys.argv[1])
+          expected_image = sys.argv[2]
+          output_path = pathlib.Path(sys.argv[3])
+          builds = []
+          for build_id in (
+              "dcb263c1-f8a3-47ca-8aee-42051e7fdc60",
+              "459ad772-cc7a-4206-9e13-4cd81e101fe7",
+          ):
+              payload = json.loads((root / f"{build_id}.json").read_text(encoding="utf-8"))
+              results = payload.get("results") or {}
+              builds.append({
+                  "id": payload.get("id") or build_id,
+                  "status": payload.get("status") or "UNAVAILABLE",
+                  "createTime": payload.get("createTime"),
+                  "finishTime": payload.get("finishTime"),
+                  "images": results.get("images") or [],
+              })
+          image_exists = (root / "image.json").read_text(encoding="utf-8").strip() not in {"", "{}"}
+          image_uri = expected_image
+          if not image_exists:
+              for build in builds:
+                  if build["status"] == "SUCCESS":
+                      candidates = [image for image in build["images"] if "historical-exact-audit" in image]
+                      if candidates:
+                          image_uri = candidates[0]
+                          break
+          build_required = not image_exists and image_uri == expected_image
+          output_path.write_text(
+              f"IMAGE_URI={image_uri}\nBUILD_REQUIRED={'true' if build_required else 'false'}\n",
+              encoding="utf-8",
+          )
+          print("Cloud Build metadata:")
+          for build in builds:
+              print(json.dumps(build, sort_keys=True))
+          print(f"Expected audit image: {'EXISTS' if image_exists else 'MISSING'}")
+          print(f"BUILD_REQUIRED={'YES' if build_required else 'NO'}")
+          PY
+
+          echo "Preflight matrix:"
+          echo "WIF                           PASS"
+          echo "Console config                PASS"
+          echo "DB secret exists              $SECRET_STATE"
+          echo "Cloud SQL instance            $SQL_STATE"
+          echo "GCS bucket                    $GCS_STATE"
+          echo "Runtime SA                    $RUNTIME_STATE"
+          for build_id in "${BUILD_IDS[@]}"; do
+            echo "Existing build $build_id       $(gcloud builds describe "$build_id" --project "$PROJECT_ID" --format='value(status)' 2>/dev/null || echo UNAVAILABLE)"
+          done
+          echo "Expected audit image          $IMAGE_STATE"
+          echo "Cloud Run Job control         $CONTROL_STATE"
+          echo "Artifact Registry             $AR_STATE"
+          if [[ "$FAIL" -ne 0 ]]; then
+            echo "Production preflight FAILED; no build or audit execution will start."
+            exit 1
+          fi
+
+      - name: Ensure isolated audit image
         id: image
         env:
           PROJECT_ID: ${{ env.PROJECT_ID }}
           REGION: ${{ env.REGION }}
           AR_REPOSITORY: ${{ env.AR_REPOSITORY }}
           AUDIT_SHA: ${{ env.AUDIT_SHA }}
+          IMAGE_URI: ${{ steps.preflight.outputs.IMAGE_URI }}
+          BUILD_REQUIRED: ${{ steps.preflight.outputs.BUILD_REQUIRED }}
         shell: bash
         run: |
           set -euo pipefail
-          gcloud artifacts repositories describe "$AR_REPOSITORY" \
-            --project "$PROJECT_ID" --location "$REGION" --format='value(name)' >/dev/null
-          IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPOSITORY}/historical-exact-audit:${AUDIT_SHA:0:8}"
-          gcloud builds submit . --project "$PROJECT_ID" --tag "$IMAGE_URI"
+          if [[ "$BUILD_REQUIRED" == "true" ]]; then
+            BUILD_ID="$(gcloud builds submit . \
+              --project "$PROJECT_ID" --tag "$IMAGE_URI" --async --format='value(id)')"
+            test -n "$BUILD_ID"
+            while true; do
+              STATUS="$(gcloud builds describe "$BUILD_ID" --project "$PROJECT_ID" --format='value(status)')"
+              case "$STATUS" in
+                SUCCESS) break ;;
+                FAILURE|INTERNAL_ERROR|TIMEOUT|CANCELLED|EXPIRED)
+                  echo "Cloud Build $BUILD_ID ended with $STATUS"
+                  exit 1
+                  ;;
+                *) sleep 15 ;;
+              esac
+            done
+            gcloud artifacts docker images describe "$IMAGE_URI" \
+              --project "$PROJECT_ID" --format='value(image_summary.digest)' >/dev/null
+            echo "New build: YES"
+            echo "Build ID: $BUILD_ID"
+            echo "Build status: SUCCESS"
+          else
+            echo "Image reused: YES"
+            echo "New build: NO"
+          fi
           echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+
+      - name: Verify DB secret exists before Cloud Run Job
+        env:
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          DB_SECRET: ${{ steps.runtime.outputs.DB_SECRET }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud secrets describe "$DB_SECRET" \
+            --project "$PROJECT_ID" --format='value(name)' >/dev/null
+          echo "Secret Manager reference exists: $DB_SECRET"
 
       - name: Deploy temporary Cloud Run Job
         env:
@@ -182,10 +388,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gcloud secrets describe "$DB_SECRET" \
-            --project "$PROJECT_ID" \
-            --format='value(name)' >/dev/null
-          echo "Secret Manager reference exists: $DB_SECRET"
           RUN_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
           EVIDENCE_ROOT="gs://${BUCKET}/operator-audits/historical_exact_duplicate_cleanup_v1/${RUN_STAMP}-${AUDIT_SHA:0:8}"
           SECOND_PREFIX="${EVIDENCE_ROOT}/idempotency"
