@@ -630,6 +630,8 @@ def sync_batch_registry(db: Session, batch_id: str, bucket_name: str | None = No
         batch.image_count = batch_doc.get("image_count", batch.image_count)
         batch.manifest_uri = manifest_uri
         batch.raw_uri = batch_doc["raw_uri"]
+        if batch.status in {"INGESTED", "REGISTERED"}:
+            batch.status = "REGISTERED"
         if batch_doc.get("batch_name"):
             batch.notes = str(batch_doc["batch_name"]).strip()[:128]
 
