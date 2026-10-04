@@ -18,6 +18,7 @@ from app.db import SessionLocal, init_db
 from app.historical_duplicate_closure import assert_training_authority_writable
 from app.models import Batch, ImageAsset
 from app.services.manifest_normalizer import SPECIES_FIELD_ALIASES
+from app.services.source_metadata import normalize_source_metadata, validate_source_metadata
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 VALID_REVIEW = {"approved", "needs_review", "rejected", "hard_case", "pending"}
@@ -122,12 +123,25 @@ def main():
             if incoming_review not in VALID_REVIEW:
                 incoming_review = "pending"
 
+            source_metadata = normalize_source_metadata(
+                first(row, "source_platform", "platform", "source"),
+                first(row, "source_url", "url"),
+                batch_id=args.batch_id,
+                image_id=image_id,
+                file_name=resolved_file,
+            )
+            validate_source_metadata(
+                source_metadata,
+                batch_id=args.batch_id,
+                image_id=image_id,
+                file_name=resolved_file,
+            )
             values = dict(
                 file_name=resolved_file,
                 object_name=object_name,
                 gcs_uri=f"gs://{args.bucket}/{object_name}",
-                source_url=first(row, "source_url", "url"),
-                source_platform=first(row, "source_platform", "platform", "source"),
+                source_url=source_metadata.source_url,
+                source_platform=source_metadata.source_platform,
                 claimed_species=next(
                     (str(row.get(key) or "").strip() for key in SPECIES_FIELD_ALIASES if str(row.get(key) or "").strip()),
                     None,
@@ -139,8 +153,14 @@ def main():
                 notes=first(row, "notes"),
             )
             if existing:
+                review_is_complete = bool(
+                    existing.reviewed_at
+                    or existing.reviewed_by
+                    or existing.review_status in {"approved", "rejected", "hard_case"}
+                )
+                protected_review_fields = {"truth_species", "notes"} if review_is_complete else set()
                 for key, value in values.items():
-                    if value is not None:
+                    if value is not None and key not in protected_review_fields:
                         setattr(existing, key, value)
                 updated += 1
             else:

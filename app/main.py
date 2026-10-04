@@ -1,4 +1,5 @@
 import json
+import logging
 import mimetypes
 import os
 from datetime import datetime, timezone
@@ -50,6 +51,7 @@ from app.presence import FishPresenceResult
 from app.crop_review import _candidate_boxes
 from app.services.manifest_normalizer import ManifestNormalizationError
 from app.services.review_prefill import parse_review_signals, trusted_truth_prefill
+from app.services.source_metadata import SourceMetadataError
 from app.historical_duplicate_closure import (
     HistoricalDuplicateClosureWriteFenceLocked,
     assert_feedback_species_allowed,
@@ -64,6 +66,8 @@ TRUTH_VALUES = {
     "WRONG_LABEL_SUSPECTED",
     "EXPERT_HOLD",
 }
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="YuJian AI Model Factory", version="0.1.0")
 templates = Jinja2Templates(directory="app/templates")
@@ -459,9 +463,19 @@ def batch_sync(payload: BatchSync, db: Session = Depends(get_db)):
     except GlobalExactGuardUnavailable as exc:
         db.rollback()
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except SourceMetadataError as exc:
+        db.rollback()
+        logger.exception(
+            "batch source metadata validation failed batch_id=%s image_id=%s field=%s",
+            payload.batch_id,
+            exc.image_id,
+            exc.field,
+        )
+        return JSONResponse(status_code=400, content=exc.as_dict())
     except Exception as exc:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        logger.exception("batch registry sync failed batch_id=%s", payload.batch_id)
+        raise HTTPException(status_code=400, detail="数据登记失败，服务端已记录详细错误") from exc
 
 
 @app.get("/api/review")

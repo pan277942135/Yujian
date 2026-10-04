@@ -24,6 +24,7 @@ from app.services.manifest_normalizer import (
     image_id_from_path,
 )
 from app.services.review_prefill import SIGNAL_PREFIX, encode_review_signals
+from app.services.source_metadata import normalize_source_metadata, validate_source_metadata
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 TARGET_SPECIES = ["草鱼", "鳙鱼", "白鲢", "鲤鱼", "鲫鱼", "加州鲈", "黑鱼", "黄骨鱼", "青鱼"]
@@ -629,7 +630,8 @@ def sync_batch_registry(db: Session, batch_id: str, bucket_name: str | None = No
         batch.image_count = batch_doc.get("image_count", batch.image_count)
         batch.manifest_uri = manifest_uri
         batch.raw_uri = batch_doc["raw_uri"]
-        batch.status = "REGISTERED"
+        if batch.status in {"INGESTED", "REGISTERED"}:
+            batch.status = "REGISTERED"
         if batch_doc.get("batch_name"):
             batch.notes = str(batch_doc["batch_name"]).strip()[:128]
 
@@ -697,12 +699,25 @@ def sync_batch_registry(db: Session, batch_id: str, bucket_name: str | None = No
         if audit.get("auto_reasons"):
             auto_note = f"[auto_v1:{audit.get('auto_status')}] {audit.get('auto_reasons')}"
             notes = f"{notes}\n{auto_note}".strip()
+        source_metadata = normalize_source_metadata(
+            row.get("source_platform") or row.get("platform") or row.get("source"),
+            row.get("source_url") or row.get("url"),
+            batch_id=batch_id,
+            image_id=image_id,
+            file_name=resolved_file,
+        )
+        validate_source_metadata(
+            source_metadata,
+            batch_id=batch_id,
+            image_id=image_id,
+            file_name=resolved_file,
+        )
         values = {
             "file_name": resolved_file,
             "object_name": object_name,
             "gcs_uri": f"gs://{bucket_name}/{object_name}",
-            "source_url": row.get("source_url") or row.get("url"),
-            "source_platform": row.get("source_platform") or row.get("platform") or row.get("source"),
+            "source_url": source_metadata.source_url,
+            "source_platform": source_metadata.source_platform,
             "claimed_species": claimed_species,
             "truth_species": truth_species,
             "scene": row.get("scene"),
@@ -712,8 +727,14 @@ def sync_batch_registry(db: Session, batch_id: str, bucket_name: str | None = No
             "notes": notes or None,
         }
         if existing:
+            review_is_complete = bool(
+                existing.reviewed_at
+                or existing.reviewed_by
+                or existing.review_status in {"approved", "rejected", "hard_case"}
+            )
+            protected_review_fields = {"truth_species", "notes"} if review_is_complete else set()
             for key, value in values.items():
-                if value is not None:
+                if value is not None and key not in protected_review_fields:
                     setattr(existing, key, value)
             mark_global_image_active(
                 db,

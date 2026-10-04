@@ -8,7 +8,15 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping
 
 
-OUTPUT_FIELDS = ("image_path", "image_id", "claimed_species", "species_key", "source")
+OUTPUT_FIELDS = (
+    "image_path",
+    "image_id",
+    "claimed_species",
+    "species_key",
+    "source",
+    "source_platform",
+    "source_url",
+)
 
 IMAGE_FIELD_ALIASES = ("image_path", "file_name", "filename", "image_name")
 SPECIES_FIELD_ALIASES = (
@@ -21,7 +29,8 @@ SPECIES_FIELD_ALIASES = (
     "species",
 )
 SPECIES_KEY_ALIASES = ("species_key", "class_name", "category_key")
-SOURCE_FIELD_ALIASES = ("source_platform", "source", "dataset_source")
+SOURCE_FIELD_ALIASES = ("source_platform", "platform", "source", "dataset_source")
+SOURCE_URL_FIELD_ALIASES = ("source_url", "url")
 
 
 class ManifestNormalizationError(ValueError):
@@ -172,13 +181,17 @@ def _iter_rows(
                 available_fields=available_fields,
             )
         species_key = _pick(row, lookup, SPECIES_KEY_ALIASES)
-        source = _pick(row, lookup, SOURCE_FIELD_ALIASES) or "unknown"
+        source_platform = _pick(row, lookup, SOURCE_FIELD_ALIASES) or "unknown"
+        source_url = _pick(row, lookup, SOURCE_URL_FIELD_ALIASES)
         yield {
             "image_path": image_path,
             "image_id": image_id,
             "claimed_species": claimed_species,
             "species_key": species_key,
-            "source": source,
+            # Keep "source" as a compatibility alias for existing manifests.
+            "source": source_platform,
+            "source_platform": source_platform,
+            "source_url": source_url,
         }
     if seen_rows == 0:
         raise ManifestNormalizationError("manifest is empty", source_path=source_name)
