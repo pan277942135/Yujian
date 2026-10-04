@@ -7,6 +7,7 @@ from app.services.manifest_normalizer import (
     ManifestNormalizationError,
     image_id_from_path,
     normalize_manifest,
+    normalize_manifest_text,
 )
 
 
@@ -70,6 +71,8 @@ def test_asset_manifest_is_converted_to_fixed_training_contract(tmp_path):
         "claimed_species": "鳙鱼",
         "species_key": "bighead_carp",
         "source": "image_search",
+        "source_platform": "image_search",
+        "source_url": "",
     }]
 
 
@@ -212,6 +215,59 @@ def test_doubao_manifest_aliases_generate_all_900_rows(tmp_path):
     assert first["species_key"] == "crucian_carp"
     assert first["source"] == "doubao"
 
+
+
+
+def test_asset_manifest_preserves_long_source_url_and_separate_platform(tmp_path):
+    source_url = "https://www.google.com.hk/imgres?q=grass+carp&" + ("query=" + "x" * 500)
+    write_manifest(
+        tmp_path,
+        "metadata/manifest.csv",
+        [{
+            "image_id": "GRASS_001",
+            "file_name": "grass_carp_001.jpg",
+            "species_name": "草鱼",
+            "source_url": source_url,
+            "source_platform": "google_images",
+        }],
+        ["image_id", "file_name", "species_name", "source_url", "source_platform"],
+    )
+
+    result = normalize_manifest(tmp_path)
+    row = next(csv.DictReader(result.output_path.open(encoding="utf-8", newline="")))
+
+    assert row["source_platform"] == "google_images"
+    assert row["source_url"] == source_url
+
+
+def test_asset_manifest_keeps_misplaced_platform_url_for_registry_recovery(tmp_path):
+    source_url = "https://www.google.com.hk/imgres?q=grass+carp&" + ("x" * 300)
+    write_manifest(
+        tmp_path,
+        "metadata/manifest.csv",
+        [{
+            "image_id": "GRASS_002",
+            "file_name": "grass_carp_002.jpg",
+            "species_name": "草鱼",
+            "source_platform": source_url,
+        }],
+        ["image_id", "file_name", "species_name", "source_platform"],
+    )
+
+    result = normalize_manifest(tmp_path)
+    row = next(csv.DictReader(result.output_path.open(encoding="utf-8", newline="")))
+
+    assert row["source_platform"] == source_url
+    assert row["source_url"] == ""
+
+
+def test_asset_manifest_accepts_legacy_platform_alias():
+    text = "image_id,file_name,species_name,platform\nA01,a.jpg,草鱼,bing_images\n"
+    normalized, _ = normalize_manifest_text(text)
+    row = next(csv.DictReader(io.StringIO(normalized)))
+
+    assert row["source_platform"] == "bing_images"
+    assert row["source"] == "bing_images"
 
 def test_missing_species_is_a_manifest_invalid_error(tmp_path):
     write_manifest(

@@ -3,7 +3,9 @@ import base64
 import csv
 import hashlib
 import io
+import json
 import zipfile
+from datetime import datetime, timezone
 
 from fastapi import UploadFile
 import pytest
@@ -14,7 +16,7 @@ import app.batch_upload_api as upload_api
 import app.exact_dedupe as exact_dedupe
 import app.factory as factory
 from app.db import Base
-from app.models import GlobalDuplicateAudit, GlobalImageContent
+from app.models import Batch, GlobalDuplicateAudit, GlobalImageContent, ImageAsset
 
 
 class RecoveryBlob:
@@ -391,3 +393,148 @@ def test_P6_upload_to_prepare_boundary_accepts_ingested_items(recovery_db, monke
 
     assert result["manifest_rows"] == 2
     assert result["linked_unique_images"] == 2
+
+
+
+def _seed_registry_batch(
+    bucket: RecoveryBucket,
+    *,
+    batch_id: str,
+    image_id: str,
+    source_platform: str,
+    source_url: str = "",
+    truth_species: str = "",
+    notes: str = "",
+):
+    prefix = f"raw/batches/{batch_id}"
+    manifest_uri = f"gs://test-bucket/{prefix}/metadata/fish_manifest.csv"
+    raw_uri = f"gs://test-bucket/{prefix}/"
+    bucket.put(
+        f"{prefix}/batch.json",
+        json.dumps(
+            {
+                "batch_id": batch_id,
+                "source": "other",
+                "image_count": 1,
+                "manifest_uri": manifest_uri,
+                "raw_uri": raw_uri,
+            }
+        ).encode("utf-8"),
+    )
+    manifest = io.StringIO(newline="")
+    writer = csv.DictWriter(
+        manifest,
+        fieldnames=[
+            "image_path",
+            "image_id",
+            "claimed_species",
+            "truth_species",
+            "source_platform",
+            "source_url",
+            "notes",
+        ],
+        lineterminator="\n",
+    )
+    writer.writeheader()
+    writer.writerow(
+        {
+            "image_path": "images/grass_carp/草鱼_001.jpg",
+            "image_id": image_id,
+            "claimed_species": "草鱼",
+            "truth_species": truth_species,
+            "source_platform": source_platform,
+            "source_url": source_url,
+            "notes": notes,
+        }
+    )
+    bucket.put(f"{prefix}/metadata/fish_manifest.csv", manifest.getvalue().encode("utf-8"))
+    bucket.put(f"{prefix}/images/grass_carp/草鱼_001.jpg", b"fish-image-bytes")
+
+
+def test_P7_production_shaped_google_url_in_platform_inserts_with_recovered_metadata(
+    recovery_db, monkeypatch
+):
+    batch_id = "BATCH_20261004_DB_XP_001"
+    image_id = "BATCH_EDP_M1_R01_grass_carp_001"
+    source_url = "https://www.google.com.hk/imgres?q=草鱼&imgurl=source-image&" + ("query=" + "x" * 500)
+    bucket = RecoveryBucket()
+    _seed_registry_batch(
+        bucket,
+        batch_id=batch_id,
+        image_id=image_id,
+        source_platform=source_url,
+    )
+    client = RecoveryClient(bucket)
+    monkeypatch.setattr(factory.storage, "Client", lambda: client)
+
+    with recovery_db() as db:
+        result = factory.sync_batch_registry(db, batch_id, "test-bucket")
+
+    assert result["inserted"] == 1
+    with recovery_db() as db:
+        image = db.scalar(
+            select(ImageAsset).where(
+                ImageAsset.batch_id == batch_id,
+                ImageAsset.image_id == image_id,
+            )
+        )
+        assert image is not None
+        assert image.file_name == "草鱼_001.jpg"
+        assert image.object_name == f"raw/batches/{batch_id}/images/grass_carp/草鱼_001.jpg"
+        assert image.source_platform == "google_images"
+        assert image.source_url == source_url
+
+
+def test_P8_registry_retry_reuses_asset_and_preserves_manual_review_state(
+    recovery_db, monkeypatch
+):
+    batch_id = "BATCH_20261004_DB_XP_001"
+    image_id = "BATCH_EDP_M1_R01_grass_carp_001"
+    source_url = "https://www.google.com.hk/imgres?q=草鱼&imgurl=source-image"
+    bucket = RecoveryBucket()
+    _seed_registry_batch(
+        bucket,
+        batch_id=batch_id,
+        image_id=image_id,
+        source_platform="google_images",
+        source_url=source_url,
+        truth_species="鲤鱼",
+        notes="source note",
+    )
+    client = RecoveryClient(bucket)
+    monkeypatch.setattr(factory.storage, "Client", lambda: client)
+
+    with recovery_db() as db:
+        first = factory.sync_batch_registry(db, batch_id, "test-bucket")
+        image = db.scalar(select(ImageAsset).where(ImageAsset.batch_id == batch_id))
+        image.review_status = "approved"
+        image.truth_species = "草鱼"
+        image.truth_status = "LIKELY_CORRECT"
+        image.reviewed_by = "manual-reviewer"
+        image.reviewed_at = datetime.now(timezone.utc)
+        image.notes = "manual review note"
+        db.get(Batch, batch_id).status = "REVIEWED"
+        db.commit()
+
+    with recovery_db() as db:
+        second = factory.sync_batch_registry(db, batch_id, "test-bucket")
+
+    with recovery_db() as db:
+        images = db.scalars(
+            select(ImageAsset).where(
+                ImageAsset.batch_id == batch_id,
+                ImageAsset.image_id == image_id,
+            )
+        ).all()
+        batch = db.get(Batch, batch_id)
+
+    assert first["inserted"] == 1
+    assert second["inserted"] == 0
+    assert second["updated"] == 1
+    assert len(images) == 1
+    assert images[0].review_status == "approved"
+    assert images[0].truth_species == "草鱼"
+    assert images[0].truth_status == "LIKELY_CORRECT"
+    assert images[0].reviewed_by == "manual-reviewer"
+    assert images[0].notes == "manual review note"
+    assert batch.status == "REVIEWED"
