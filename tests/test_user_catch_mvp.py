@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 
 import pytest
 from PIL import Image
@@ -103,15 +104,20 @@ def test_authenticated_catch_save_list_and_statistics(tmp_path, monkeypatch):
             confidence=0.92,
             model_version="MODEL_M1_v0.5",
             detector_result={"detector_version": "DET_FISH_v0.1"},
-            classifier_result={"prediction_species": "grass_carp"},
+            classifier_result={"prediction_species": "grass_carp", "story": "第一条黑鱼。"},
         ),
         user,
         db,
     )
     assert first.saved is True
     assert first.catch.image_url.endswith(f"/{first.catch_id}/media")
+    assert first.catch.story == "第一条黑鱼。"
     persisted = db.get(FishCatch, first.catch_id)
     assert persisted.detector_result_json == '{"detector_version":"DET_FISH_v0.1"}'
+    assert persisted.classifier_result_json == '{"prediction_species":"grass_carp","story":"第一条黑鱼。"}'
+    fetched = list_catches(user=user, db=db)
+    assert len(fetched) == 1
+    assert fetched[0].story == "第一条黑鱼。"
 
     second_upload = asyncio.run(upload_catch_image(_image_upload(), user))
     create_catch(
@@ -134,3 +140,13 @@ def test_authenticated_catch_save_list_and_statistics(tmp_path, monkeypatch):
     assert statistics.top_species[0].count == 2
     assert statistics.recent_species == "草鱼"
     db.close()
+
+
+@pytest.mark.parametrize("story", ["", "   ", "null", "undefined", None])
+def test_catch_response_omits_empty_or_sentinel_story(story):
+    from app.catches_api import _catch_story
+
+    class Row:
+        classifier_result_json = json.dumps({"story": story})
+
+    assert _catch_story(Row()) is None
