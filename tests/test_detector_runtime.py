@@ -166,6 +166,76 @@ def test_detector_retries_only_no_fish_and_maps_rotated_detection_to_original(mo
     assert run.detections[0].area_ratio >= 0.08
 
 
+def test_retry_arbitration_uses_both_rotations_and_selects_good_over_earlier_weak(monkeypatch):
+    original = Image.new("RGB", (100, 200), (10, 20, 30))
+    empty = np.zeros((1, 1, 6), dtype=np.float32)
+    cw_weak = _row_for_box((0.1, 0.1, 0.8, 0.8), 200, 100, 2.08, 0.23)
+    ccw_good = _row_for_box((0.1, 0.1, 0.8, 0.8), 200, 100, 2.08, 0.71)
+    outputs = [empty, cw_weak, ccw_good]
+    calls = 0
+
+    class FakeSession:
+        def run(self, _outputs, _feeds):
+            nonlocal calls
+            result = outputs[calls]
+            calls += 1
+            return [result]
+
+    model = SimpleNamespace(
+        model_version="DET_FISH_v0.1",
+        onnx_sha256="d" * 64,
+        input_size=416,
+        input_name="images",
+        session=FakeSession(),
+    )
+    monkeypatch.setattr("app.detector_runtime.load_detector", lambda: model)
+
+    run = detect(original)
+
+    assert calls == 3
+    assert [attempt.orientation_attempt for attempt in run.attempt_trace] == ["ORIGINAL", "CW90", "CCW90"]
+    assert [(attempt.quality_status, attempt.quality_level) for attempt in run.attempt_trace] == [
+        ("no_fish", "INVALID"),
+        ("uncertain", "WARNING"),
+        ("ready", "GOOD"),
+    ]
+    assert run.selected_attempt == "CCW90"
+    assert run.selection_reason == "GOOD_HIGHEST_RANK_SCORE"
+    assert run.detections[0].confidence == pytest.approx(0.71)
+
+
+def test_retry_arbitration_selects_higher_rank_score_within_good_class(monkeypatch):
+    original = Image.new("RGB", (100, 200), (10, 20, 30))
+    empty = np.zeros((1, 1, 6), dtype=np.float32)
+    cw_good = _row_for_box((0.1, 0.1, 0.8, 0.8), 200, 100, 2.08, 0.55)
+    ccw_good = _row_for_box((0.1, 0.1, 0.8, 0.8), 200, 100, 2.08, 0.70)
+    outputs = [empty, cw_good, ccw_good]
+    calls = 0
+
+    class FakeSession:
+        def run(self, _outputs, _feeds):
+            nonlocal calls
+            result = outputs[calls]
+            calls += 1
+            return [result]
+
+    model = SimpleNamespace(
+        model_version="DET_FISH_v0.1",
+        onnx_sha256="e" * 64,
+        input_size=416,
+        input_name="images",
+        session=FakeSession(),
+    )
+    monkeypatch.setattr("app.detector_runtime.load_detector", lambda: model)
+
+    run = detect(original)
+
+    assert calls == 3
+    assert run.selected_attempt == "CCW90"
+    assert run.selection_reason == "GOOD_HIGHEST_RANK_SCORE"
+    assert run.detections[0].confidence == pytest.approx(0.70)
+
+
 @pytest.mark.parametrize("confidence", [0.9, 0.25])
 def test_detector_does_not_rotate_after_any_non_no_fish_assessment(monkeypatch, confidence):
     original = Image.new("RGB", (100, 200), (10, 20, 30))
@@ -223,3 +293,5 @@ def test_detector_exhaustion_reports_none_without_changing_thresholds(monkeypatc
     assert run.orientation_attempt == "CCW90"
     assert run.detections == ()
     assert len(run.attempt_trace) == 3
+    assert run.selection_reason == "NO_FISH_AFTER_BOUNDED_RETRIES"
+    assert [attempt.quality_status for attempt in run.attempt_trace] == ["no_fish"] * 3

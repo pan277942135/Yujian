@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 
 import onnxruntime as ort
-from PIL import Image, ImageOps
+from PIL import Image
 
 from app.detector_runtime import (
     DETECTOR_ORIENTATIONS,
@@ -24,7 +24,6 @@ from app.detector_runtime import (
     decode_yolox_candidates,
     decode_yolox_output,
     map_box_to_original,
-    normalize_android_source,
 )
 from app.recognition_pipeline import BBox, PipelineStatus, assess_detections, load_contract
 
@@ -108,9 +107,17 @@ def main() -> None:
 
     for image_path in args.images:
         with Image.open(image_path) as source:
-            image = ImageOps.exif_transpose(source).convert("RGB")
-        normalized = normalize_android_source(image)
-        image.close()
+            orientation = int(source.getexif().get(274, 1))
+            if orientation != 1:
+                raise SystemExit(
+                    f"{image_path}: EXIF orientation {orientation} would change source direction; "
+                    "diagnostic requires an orientation-1 source raster"
+                )
+            # Decode the supplied source raster directly. Do not resize, crop,
+            # normalize, or re-encode it before the detector probe.
+            normalized = source.convert("RGB")
+        if normalized.size != source.size:
+            raise SystemExit(f"{image_path}: decoder changed source dimensions")
         gt = _ground_truth(gt_document, image_path)
         weak_confidence = float(contract["detector"]["weak_confidence"])
         matches: dict[str, tuple[float, float] | None] = {}

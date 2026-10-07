@@ -32,11 +32,12 @@ def test_recognition_log_contains_full_pipeline_and_intermediates(monkeypatch):
             original_width=100,
             original_height=200,
             selected_attempt="CCW90",
-            retry_policy_version="DETECTOR_ORIENTATION_RETRY_v1",
+            selection_reason="GOOD_HIGHEST_RANK_SCORE",
+            retry_policy_version="DETECTOR_ORIENTATION_RETRY_v2",
             attempt_trace=(
-                DetectorAttemptTrace("ORIGINAL", 0, None),
-                DetectorAttemptTrace("CW90", 0, None),
-                DetectorAttemptTrace("CCW90", 1, 0.92),
+                DetectorAttemptTrace("ORIGINAL", 0, None, "no_fish", "INVALID"),
+                DetectorAttemptTrace("CW90", 0, None, "no_fish", "INVALID"),
+                DetectorAttemptTrace("CCW90", 1, 0.92, "ready", "GOOD"),
             ),
         ),
     )
@@ -86,11 +87,14 @@ def test_recognition_log_contains_full_pipeline_and_intermediates(monkeypatch):
     assert log["detector_trace"]["original_width"] == 100
     assert log["detector_trace"]["original_height"] == 200
     assert log["detector_trace"]["selected_attempt"] == "CCW90"
+    assert log["detector_trace"]["selection_reason"] == "GOOD_HIGHEST_RANK_SCORE"
     assert [attempt["orientation_attempt"] for attempt in log["detector_trace"]["attempts"]] == [
         "ORIGINAL",
         "CW90",
         "CCW90",
     ]
+    assert log["detector_trace"]["attempts"][-1]["quality_status"] == "ready"
+    assert log["detector_trace"]["attempts"][-1]["quality_level"] == "GOOD"
     assert log["detector_trace"]["detector_onnx_sha256"] == "a" * 64
     assert "raw_candidates" not in result["detector"]
     assert log["detector_trace"]["final_bbox_normalized"] == {

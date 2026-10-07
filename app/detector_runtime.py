@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import threading
 import time
@@ -16,6 +17,7 @@ from PIL import Image, ImageOps
 from app.recognition_pipeline import (
     BBox,
     Detection,
+    PipelineAssessment,
     PipelineStatus,
     assess_detections,
     load_contract,
@@ -26,7 +28,7 @@ DETECTOR_MODEL_VERSION = os.getenv("DETECTOR_MODEL_VERSION", "DET_FISH_v0.1").st
 DETECTOR_MODEL_FILENAME = "fish_detector_yolox_nano_v0_1.onnx"
 YOLOX_LETTERBOX_FILL = 114
 ANDROID_MAX_SOURCE_DIMENSION = 2048
-ORIENTATION_RETRY_POLICY_VERSION = "DETECTOR_ORIENTATION_RETRY_v1"
+ORIENTATION_RETRY_POLICY_VERSION = "DETECTOR_ORIENTATION_RETRY_v2"
 DETECTOR_ORIENTATIONS = ("ORIGINAL", "CW90", "CCW90")
 
 
@@ -49,6 +51,8 @@ class DetectorAttemptTrace:
     orientation_attempt: str
     detection_count: int
     top_confidence: float | None
+    quality_status: str = "unknown"
+    quality_level: str = "unknown"
 
 
 @dataclass(frozen=True)
@@ -75,6 +79,7 @@ class DetectorRun:
     original_height: int | None = None
     orientation_attempt: str = "ORIGINAL"
     selected_attempt: str = "ORIGINAL"
+    selection_reason: str = "ORIGINAL_ASSESSMENT_PRESERVED"
     attempt_trace: tuple[DetectorAttemptTrace, ...] = ()
     retry_policy_version: str = ORIENTATION_RETRY_POLICY_VERSION
 
@@ -240,6 +245,49 @@ def map_box_to_original(box: BBox, orientation_attempt: str) -> BBox:
     raise ValueError(f"unknown detector orientation attempt: {orientation_attempt}")
 
 
+def _quality_level(assessment: PipelineAssessment) -> str:
+    if assessment.status is PipelineStatus.READY:
+        return "GOOD"
+    if assessment.status in {
+        PipelineStatus.UNCERTAIN,
+        PipelineStatus.MULTIPLE_FISH,
+        PipelineStatus.INCOMPLETE_FISH,
+    }:
+        return "WARNING"
+    return "INVALID"
+
+
+def _assessment_priority(assessment: PipelineAssessment) -> int:
+    quality_level = _quality_level(assessment)
+    classifier_eligible = assessment.crop_box is not None
+    if classifier_eligible and quality_level == "GOOD":
+        return 4
+    if classifier_eligible and quality_level == "WARNING":
+        return 3
+    if assessment.primary is not None:
+        return 2
+    if assessment.status is PipelineStatus.NO_FISH:
+        return 1
+    return 0
+
+
+def _assessment_rank_score(assessment: PipelineAssessment) -> float:
+    primary = assessment.primary
+    if primary is None:
+        return 0.0
+    return max(0.0, primary.confidence) * math.sqrt(max(0.0, primary.area_ratio))
+
+
+def _selection_reason(assessment: PipelineAssessment) -> str:
+    if assessment.crop_box is not None and _quality_level(assessment) == "GOOD":
+        return "GOOD_HIGHEST_RANK_SCORE"
+    if assessment.crop_box is not None and _quality_level(assessment) == "WARNING":
+        return "WARNING_HIGHEST_RANK_SCORE"
+    if assessment.primary is not None:
+        return "FISH_PRESENT_HIGHEST_RANK_SCORE"
+    return "NO_FISH_AFTER_BOUNDED_RETRIES"
+
+
 def _iou(left: BBox, right: BBox) -> float:
     a = left.normalized()
     b = right.normalized()
@@ -359,9 +407,8 @@ def detect(image: Image.Image) -> DetectorRun:
     contract = load_contract()
     source_width, source_height = image.width, image.height
     attempt_trace: list[DetectorAttemptTrace] = []
-    final_run: DetectorRun | None = None
 
-    for orientation_attempt in DETECTOR_ORIENTATIONS:
+    def evaluate(orientation_attempt: str) -> tuple[DetectorRun, PipelineAssessment]:
         if orientation_attempt == "ORIGINAL":
             attempt_image = image
         elif orientation_attempt == "CW90":
@@ -387,14 +434,6 @@ def detect(image: Image.Image) -> DetectorRun:
             if attempt_image is not image:
                 attempt_image.close()
 
-        attempt_trace.append(
-            DetectorAttemptTrace(
-                orientation_attempt=orientation_attempt,
-                detection_count=len(detections),
-                top_confidence=max((item.confidence for item in detections), default=None),
-            )
-        )
-        assessment = assess_detections(detections, contract)
         mapped_detections = tuple(
             Detection(
                 confidence=item.confidence,
@@ -403,7 +442,19 @@ def detect(image: Image.Image) -> DetectorRun:
             )
             for item in detections
         )
-        final_run = DetectorRun(
+        # Run the unchanged gate after coordinate mapping, matching Android's
+        # order and ensuring the final selection/crop always uses source space.
+        assessment = assess_detections(mapped_detections, contract)
+        attempt_trace.append(
+            DetectorAttemptTrace(
+                orientation_attempt=orientation_attempt,
+                detection_count=len(detections),
+                top_confidence=max((item.confidence for item in detections), default=None),
+                quality_status=assessment.status.value,
+                quality_level=_quality_level(assessment),
+            )
+        )
+        run = DetectorRun(
             model_version=model.model_version,
             onnx_sha256=model.onnx_sha256,
             input_size=model.input_size,
@@ -415,15 +466,47 @@ def detect(image: Image.Image) -> DetectorRun:
             original_width=source_width,
             original_height=source_height,
             orientation_attempt=orientation_attempt,
-            selected_attempt=(
-                orientation_attempt if assessment.status is not PipelineStatus.NO_FISH else "NONE"
-            ),
+        )
+        return run, assessment
+
+    original_run, original_assessment = evaluate("ORIGINAL")
+    if original_assessment.status is not PipelineStatus.NO_FISH:
+        selected = replace(
+            original_run,
+            latency_ms=round((time.perf_counter() - started) * 1000.0, 1),
+            selected_attempt="ORIGINAL",
+            selection_reason="ORIGINAL_ASSESSMENT_PRESERVED",
             attempt_trace=tuple(attempt_trace),
         )
-        # Rotation is a bounded recovery path. Any non-NO_FISH assessment keeps
-        # the original runtime decision and prevents additional detector calls.
-        if assessment.status is not PipelineStatus.NO_FISH:
-            break
+        return selected
 
-    assert final_run is not None
-    return replace(final_run, latency_ms=round((time.perf_counter() - started) * 1000.0, 1))
+    recovered = [evaluate("CW90"), evaluate("CCW90")]
+    # Python's max is stable on ties because it keeps the first row: CW90 is
+    # therefore the deterministic tie-break after the existing rank score.
+    selected_index, (selected_run, selected_assessment) = max(
+        enumerate(recovered),
+        key=lambda item: (
+            _assessment_priority(item[1][1]),
+            _assessment_rank_score(item[1][1]),
+            -item[0],
+        ),
+    )
+    if selected_assessment.status is PipelineStatus.NO_FISH:
+        selected_run = replace(
+            recovered[-1][0],
+            orientation_attempt="CCW90",
+            detections=(),
+            selected_attempt="NONE",
+            selection_reason="NO_FISH_AFTER_BOUNDED_RETRIES",
+        )
+    else:
+        selected_run = replace(
+            selected_run,
+            selected_attempt=("CW90", "CCW90")[selected_index],
+            selection_reason=_selection_reason(selected_assessment),
+        )
+    return replace(
+        selected_run,
+        latency_ms=round((time.perf_counter() - started) * 1000.0, 1),
+        attempt_trace=tuple(attempt_trace),
+    )

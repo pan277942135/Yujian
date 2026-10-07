@@ -458,10 +458,13 @@ def _predict_bytes(db: Session, model_version: str, data: bytes, *, include_inte
                 "orientation_attempt": attempt.orientation_attempt,
                 "detection_count": attempt.detection_count,
                 "top_confidence": attempt.top_confidence,
+                "quality_status": attempt.quality_status,
+                "quality_level": attempt.quality_level,
             }
             for attempt in detector_run.attempt_trace
         ],
         "selected_attempt": detector_run.selected_attempt,
+        "selection_reason": detector_run.selection_reason,
         "final_bbox_normalized": _serialize_box(assessment.primary.box if assessment.primary else None),
     }
     gate_status = gate_payload["quality_status"]
