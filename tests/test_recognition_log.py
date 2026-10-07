@@ -40,22 +40,26 @@ def test_recognition_log_contains_full_pipeline_and_intermediates(monkeypatch):
             ),
         ),
     )
+    classifier_inputs = []
     monkeypatch.setattr(
         inference_api,
         "_classifier_prediction",
-        lambda _row, _crop: {
-            "model_status": "CANDIDATE",
-            "image_size": 224,
-            "top1": {"species": "草鱼", "confidence": 0.82},
-            "top3": [
-                {"species": "草鱼", "confidence": 0.82},
-                {"species": "鲤鱼", "confidence": 0.10},
-                {"species": "鲫鱼", "confidence": 0.08},
-            ],
-            "low_confidence": False,
-            "low_confidence_threshold": 0.55,
-            "classifier_latency_ms": 2.1,
-        },
+        lambda _row, crop: (
+            classifier_inputs.append(crop.size)
+            or {
+                "model_status": "CANDIDATE",
+                "image_size": 224,
+                "top1": {"species": "草鱼", "confidence": 0.82},
+                "top3": [
+                    {"species": "草鱼", "confidence": 0.82},
+                    {"species": "鲤鱼", "confidence": 0.10},
+                    {"species": "鲫鱼", "confidence": 0.08},
+                ],
+                "low_confidence": False,
+                "low_confidence_threshold": 0.55,
+                "classifier_latency_ms": 2.1,
+            }
+        ),
     )
     db = SimpleNamespace(
         get=lambda _model, version: SimpleNamespace(
@@ -89,6 +93,15 @@ def test_recognition_log_contains_full_pipeline_and_intermediates(monkeypatch):
     ]
     assert log["detector_trace"]["detector_onnx_sha256"] == "a" * 64
     assert "raw_candidates" not in result["detector"]
+    assert log["detector_trace"]["final_bbox_normalized"] == {
+        "x1": 0.0,
+        "y1": 0.02,
+        "x2": 0.75,
+        "y2": 0.82,
+        "area_ratio": 0.6,
+    }
+    assert log["artifacts"]["classifier_crop"]["pixels"] == [0, 0, 87, 188]
+    assert classifier_inputs == [(87, 188)]
     assert log["classifier"]["top3"][0]["species"] == "草鱼"
     assert log["artifacts"]["detector_overlay"]["data_url"].startswith("data:image/png;base64,")
     assert log["artifacts"]["classifier_crop"]["data_url"].startswith("data:image/png;base64,")

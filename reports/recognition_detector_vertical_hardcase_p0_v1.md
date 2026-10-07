@@ -14,6 +14,15 @@ Ground-truth boxes below were manually estimated from the visible fish, independ
 - Case B: `ORIENTATION_RECALL_GAP`. Best correct candidates were `0.004820` ORIGINAL, `0.018577` CW90, and `0.635500` CCW90. The original production gate returned `NO_FISH`; CCW90 produced a strong correct detection with mapped area `0.147351`, above the unchanged 8% gate.
 - No `DECODE_OR_NMS_DEFECT` evidence: no correct ORIGINAL candidate reached `0.20` in either table.
 
+## Bounded production-runtime replay
+
+| Fixture | Attempt trace | Selected | Gate | Original-coordinate bbox | Area | Expanded crop pixels |
+|---|---|---|---|---|---:|---|
+| Case A screenshot proxy | ORIGINAL, CW90, CCW90 | NONE | NO_FISH | — | — | — |
+| Case B raw photo | ORIGINAL, CW90, CCW90 | CCW90 | READY | `[0.342930, 0.363650, 0.605436, 0.924975]` | `0.147351` | `[349, 429, 743, 1536]` |
+
+The Case B replay used the same ONNX SHA above. The mapped bbox passed the existing area gate and generated the crop from the original bitmap; no rotated bitmap was sent to the classifier.
+
 model_version=DET_FISH_v0.1
 onnx_sha256=12b97f7c081987f33f99d255cdd2e935fb9cf93b893146f54ff98b9c4e3a8e4f
 weak_confidence=0.2 nms_iou=0.45
