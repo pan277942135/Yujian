@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from PIL import Image
 
 from app import inference_api
-from app.detector_runtime import DetectorRun
+from app.detector_runtime import DetectorAttemptTrace, DetectorRun
 from app.recognition_pipeline import BBox, Detection
 
 
@@ -29,6 +29,15 @@ def test_recognition_log_contains_full_pipeline_and_intermediates(monkeypatch):
             input_draw_height=416,
             latency_ms=3.2,
             detections=(Detection(0.92, BBox(0.0, 0.02, 0.75, 0.82)),),
+            original_width=100,
+            original_height=200,
+            selected_attempt="CCW90",
+            retry_policy_version="DETECTOR_ORIENTATION_RETRY_v1",
+            attempt_trace=(
+                DetectorAttemptTrace("ORIGINAL", 0, None),
+                DetectorAttemptTrace("CW90", 0, None),
+                DetectorAttemptTrace("CCW90", 1, 0.92),
+            ),
         ),
     )
     monkeypatch.setattr(
@@ -70,6 +79,16 @@ def test_recognition_log_contains_full_pipeline_and_intermediates(monkeypatch):
     ]
     assert log["decision"]["classifier_allowed"] is True
     assert log["classifier"]["invoked"] is True
+    assert log["detector_trace"]["original_width"] == 100
+    assert log["detector_trace"]["original_height"] == 200
+    assert log["detector_trace"]["selected_attempt"] == "CCW90"
+    assert [attempt["orientation_attempt"] for attempt in log["detector_trace"]["attempts"]] == [
+        "ORIGINAL",
+        "CW90",
+        "CCW90",
+    ]
+    assert log["detector_trace"]["detector_onnx_sha256"] == "a" * 64
+    assert "raw_candidates" not in result["detector"]
     assert log["classifier"]["top3"][0]["species"] == "草鱼"
     assert log["artifacts"]["detector_overlay"]["data_url"].startswith("data:image/png;base64,")
     assert log["artifacts"]["classifier_crop"]["data_url"].startswith("data:image/png;base64,")
