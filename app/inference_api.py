@@ -315,6 +315,7 @@ def _build_recognition_log(
     inference_id: str | None = None,
     file_name: str | None = None,
     image_gcs_uri: str | None = None,
+    detector_trace: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build an additive, downloadable record of one recognition execution.
 
@@ -363,6 +364,10 @@ def _build_recognition_log(
             "reason": result.get("reason"),
         },
         "detector": detector,
+        # Runtime retry metadata is kept in the downloadable/internal trace and
+        # out of the consumer-facing detector payload. Raw diagnostic ONNX rows
+        # are never attached to a recognition response.
+        "detector_trace": detector_trace,
         "boundary_check": result.get("boundary_check") or {},
         "classifier": classifier,
         "artifacts": {
@@ -386,6 +391,7 @@ def _attach_recognition_log(
     inference_id: str | None = None,
     file_name: str | None = None,
     image_gcs_uri: str | None = None,
+    detector_trace: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     result["recognition_log"] = _build_recognition_log(
         result,
@@ -393,6 +399,7 @@ def _attach_recognition_log(
         inference_id=inference_id,
         file_name=file_name,
         image_gcs_uri=image_gcs_uri,
+        detector_trace=detector_trace,
     )
     return result
 
@@ -440,6 +447,26 @@ def _predict_bytes(db: Session, model_version: str, data: bytes, *, include_inte
         "strong_detection_count": len(assessment.strong_detections),
         "weak_detection_count": len(assessment.weak_detections),
     }
+    detector_trace = {
+        "retry_policy_version": detector_run.retry_policy_version,
+        "original_width": detector_run.original_width or image.width,
+        "original_height": detector_run.original_height or image.height,
+        "detector_model_version": detector_run.model_version,
+        "detector_onnx_sha256": detector_run.onnx_sha256,
+        "attempts": [
+            {
+                "orientation_attempt": attempt.orientation_attempt,
+                "detection_count": attempt.detection_count,
+                "top_confidence": attempt.top_confidence,
+                "quality_status": attempt.quality_status,
+                "quality_level": attempt.quality_level,
+            }
+            for attempt in detector_run.attempt_trace
+        ],
+        "selected_attempt": detector_run.selected_attempt,
+        "selection_reason": detector_run.selection_reason,
+        "final_bbox_normalized": _serialize_box(assessment.primary.box if assessment.primary else None),
+    }
     gate_status = gate_payload["quality_status"]
     stages.append(_stage("boundary_gate", gate_status, gate_started, **boundary_payload, quality_status=gate_payload["quality_status"]))
 
@@ -482,7 +509,7 @@ def _predict_bytes(db: Session, model_version: str, data: bytes, *, include_inte
         result["latency_ms"] = round((time.perf_counter() - pipeline_started) * 1000.0, 1)
         stages.append(_stage("crop", "SKIPPED", time.perf_counter(), reason="quality_gate_blocked"))
         stages.append(_stage("classifier", "SKIPPED", time.perf_counter(), reason="quality_gate_blocked"))
-        return _attach_recognition_log(result, stages)
+        return _attach_recognition_log(result, stages, detector_trace=detector_trace)
 
     assert assessment.crop_box is not None
     crop_started = time.perf_counter()
@@ -518,7 +545,7 @@ def _predict_bytes(db: Session, model_version: str, data: bytes, *, include_inte
                 "latency_ms": round((time.perf_counter() - pipeline_started) * 1000.0, 1),
             }
         )
-        return _attach_recognition_log(result, stages)
+        return _attach_recognition_log(result, stages, detector_trace=detector_trace)
 
     model_row = db.get(ModelVersion, model_version)
     if not model_row:
@@ -554,7 +581,7 @@ def _predict_bytes(db: Session, model_version: str, data: bytes, *, include_inte
             "latency_ms": round((time.perf_counter() - pipeline_started) * 1000.0, 1),
         }
     )
-    return _attach_recognition_log(result, stages)
+    return _attach_recognition_log(result, stages, detector_trace=detector_trace)
 
 
 def _safe_model_component(model_version: str) -> str:

@@ -5,6 +5,8 @@ import os
 import torch.nn as nn
 from yolox.exp import Exp as BaseExp
 
+from trainer.detector_orientation_augmentation import DiscreteQuarterTurnTrainTransform
+
 
 class Exp(BaseExp):
     """YuJian one-class fish detector based on YOLOX-Nano."""
@@ -22,6 +24,7 @@ class Exp(BaseExp):
         self.enable_mixup = False
         self.mixup_prob = 0.0
         self.data_dir = os.environ.get("DETECTOR_DATASET_ROOT", "/tmp/yujian-detector-dataset")
+        self.dataset_version = os.environ.get("DETECTOR_DATASET_VERSION", "DET_DS_v0.1").strip()
         self.train_ann = "instances_train2017.json"
         self.val_ann = "instances_val2017.json"
         self.test_ann = "instances_test2017.json"
@@ -38,6 +41,21 @@ class Exp(BaseExp):
         self.test_conf = 0.01
         self.nmsthre = 0.45
         self.seed = int(os.environ.get("DETECTOR_SEED", "20260831"))
+
+    def get_data_loader(self, batch_size, is_distributed, no_aug=False, cache_img=None):
+        """Add quarter-turns only for the explicitly versioned v0.2 dataset run."""
+        train_loader = super().get_data_loader(
+            batch_size=batch_size,
+            is_distributed=is_distributed,
+            no_aug=no_aug,
+            cache_img=cache_img,
+        )
+        if self.dataset_version == "DET_DS_v0.2":
+            # YOLOX builds a MosaicDetection dataset and its DataLoader first. Workers
+            # are created when iteration begins, so replacing this callable here
+            # applies to both mosaic and non-mosaic samples without touching v0.1.
+            self.dataset.preproc = DiscreteQuarterTurnTrainTransform(self.dataset.preproc)
+        return train_loader
 
     def get_model(self, sublinear: bool = False):
         def init_yolo(module):

@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from typing import Any, Iterable
 
@@ -13,13 +14,22 @@ import numpy as np
 from google.cloud import storage
 from PIL import Image, ImageOps
 
-from app.recognition_pipeline import BBox, Detection, load_contract
+from app.recognition_pipeline import (
+    BBox,
+    Detection,
+    PipelineAssessment,
+    PipelineStatus,
+    assess_detections,
+    load_contract,
+)
 
 
 DETECTOR_MODEL_VERSION = os.getenv("DETECTOR_MODEL_VERSION", "DET_FISH_v0.1").strip()
 DETECTOR_MODEL_FILENAME = "fish_detector_yolox_nano_v0_1.onnx"
 YOLOX_LETTERBOX_FILL = 114
 ANDROID_MAX_SOURCE_DIMENSION = 2048
+ORIENTATION_RETRY_POLICY_VERSION = "DETECTOR_ORIENTATION_RETRY_v2"
+DETECTOR_ORIENTATIONS = ("ORIGINAL", "CW90", "CCW90")
 
 
 class DetectorRuntimeError(RuntimeError):
@@ -37,6 +47,25 @@ class DetectorModel:
 
 
 @dataclass(frozen=True)
+class DetectorAttemptTrace:
+    orientation_attempt: str
+    detection_count: int
+    top_confidence: float | None
+    quality_status: str = "unknown"
+    quality_level: str = "unknown"
+
+
+@dataclass(frozen=True)
+class DetectorCandidate:
+    rank: int
+    objectness: float
+    fish_probability: float
+    confidence: float
+    box: BBox
+    area_ratio: float
+
+
+@dataclass(frozen=True)
 class DetectorRun:
     model_version: str
     onnx_sha256: str
@@ -46,6 +75,13 @@ class DetectorRun:
     input_draw_height: int
     latency_ms: float
     detections: tuple[Detection, ...]
+    original_width: int | None = None
+    original_height: int | None = None
+    orientation_attempt: str = "ORIGINAL"
+    selected_attempt: str = "ORIGINAL"
+    selection_reason: str = "ORIGINAL_ASSESSMENT_PRESERVED"
+    attempt_trace: tuple[DetectorAttemptTrace, ...] = ()
+    retry_policy_version: str = ORIENTATION_RETRY_POLICY_VERSION
 
 
 _MODEL_LOCK = threading.Lock()
@@ -197,6 +233,61 @@ def _prepare_yolox_input(image: Image.Image, input_size: int) -> tuple[np.ndarra
     return tensor, scale, draw_width, draw_height
 
 
+def map_box_to_original(box: BBox, orientation_attempt: str) -> BBox:
+    """Map an axis-aligned normalized box from a 90-degree view to source coordinates."""
+    b = box.normalized()
+    if orientation_attempt == "ORIGINAL":
+        return b
+    if orientation_attempt == "CW90":
+        return BBox(b.y1, 1.0 - b.x2, b.y2, 1.0 - b.x1).normalized()
+    if orientation_attempt == "CCW90":
+        return BBox(1.0 - b.y2, b.x1, 1.0 - b.y1, b.x2).normalized()
+    raise ValueError(f"unknown detector orientation attempt: {orientation_attempt}")
+
+
+def _quality_level(assessment: PipelineAssessment) -> str:
+    if assessment.status is PipelineStatus.READY:
+        return "GOOD"
+    if assessment.status in {
+        PipelineStatus.UNCERTAIN,
+        PipelineStatus.MULTIPLE_FISH,
+        PipelineStatus.INCOMPLETE_FISH,
+    }:
+        return "WARNING"
+    return "INVALID"
+
+
+def _assessment_priority(assessment: PipelineAssessment) -> int:
+    quality_level = _quality_level(assessment)
+    classifier_eligible = assessment.crop_box is not None
+    if classifier_eligible and quality_level == "GOOD":
+        return 4
+    if classifier_eligible and quality_level == "WARNING":
+        return 3
+    if assessment.primary is not None:
+        return 2
+    if assessment.status is PipelineStatus.NO_FISH:
+        return 1
+    return 0
+
+
+def _assessment_rank_score(assessment: PipelineAssessment) -> float:
+    primary = assessment.primary
+    if primary is None:
+        return 0.0
+    return max(0.0, primary.confidence) * math.sqrt(max(0.0, primary.area_ratio))
+
+
+def _selection_reason(assessment: PipelineAssessment) -> str:
+    if assessment.crop_box is not None and _quality_level(assessment) == "GOOD":
+        return "GOOD_HIGHEST_RANK_SCORE"
+    if assessment.crop_box is not None and _quality_level(assessment) == "WARNING":
+        return "WARNING_HIGHEST_RANK_SCORE"
+    if assessment.primary is not None:
+        return "FISH_PRESENT_HIGHEST_RANK_SCORE"
+    return "NO_FISH_AFTER_BOUNDED_RETRIES"
+
+
 def _iou(left: BBox, right: BBox) -> float:
     a = left.normalized()
     b = right.normalized()
@@ -255,28 +346,167 @@ def decode_yolox_output(
     return nms(decoded, nms_iou)
 
 
+def decode_yolox_candidates(
+    output: np.ndarray,
+    *,
+    scale: float,
+    source_width: int,
+    source_height: int,
+    min_confidence: float = 0.0,
+    top_k: int = 20,
+) -> tuple[DetectorCandidate, ...]:
+    """Decode raw ONNX rows for diagnostics without production thresholding or NMS."""
+    if scale <= 0.0 or source_width <= 0 or source_height <= 0:
+        raise DetectorRuntimeError("invalid detector decode dimensions")
+    if top_k < 1:
+        raise ValueError("top_k must be positive")
+    rows = np.asarray(output, dtype=np.float32)
+    if rows.ndim == 3:
+        if rows.shape[0] != 1:
+            raise DetectorRuntimeError(f"unexpected detector batch size: {rows.shape}")
+        rows = rows[0]
+    if rows.ndim != 2 or rows.shape[1] < 6:
+        raise DetectorRuntimeError(f"unexpected YOLOX output shape: {rows.shape}")
+
+    decoded: list[tuple[float, float, float, BBox]] = []
+    for row in rows:
+        cx, cy, width, height, objectness, fish_probability = (float(v) for v in row[:6])
+        confidence = objectness * fish_probability
+        if not np.isfinite(confidence) or confidence < min_confidence or not all(
+            np.isfinite(value)
+            for value in (cx, cy, width, height, objectness, fish_probability)
+        ):
+            continue
+        box = BBox(
+            (cx - width / 2.0) / scale / source_width,
+            (cy - height / 2.0) / scale / source_height,
+            (cx + width / 2.0) / scale / source_width,
+            (cy + height / 2.0) / scale / source_height,
+        ).normalized()
+        if box.area_ratio <= 0.0:
+            continue
+        decoded.append((confidence, objectness, fish_probability, box))
+
+    decoded.sort(key=lambda item: item[0], reverse=True)
+    return tuple(
+        DetectorCandidate(
+            rank=rank,
+            confidence=confidence,
+            objectness=objectness,
+            fish_probability=fish_probability,
+            box=box,
+            area_ratio=box.area_ratio,
+        )
+        for rank, (confidence, objectness, fish_probability, box) in enumerate(decoded[:top_k], 1)
+    )
+
+
 def detect(image: Image.Image) -> DetectorRun:
     started = time.perf_counter()
     model = load_detector()
-    tensor, scale, draw_width, draw_height = _prepare_yolox_input(image, model.input_size)
-    output = model.session.run(None, {model.input_name: tensor})[0]
     contract = load_contract()
-    detections = decode_yolox_output(
-        output,
-        scale=scale,
-        source_width=image.width,
-        source_height=image.height,
-        nms_iou=float(contract["detector"]["nms_iou"]),
-        # Scores below the weak gate cannot change NMS or any quality-gate outcome.
-        min_confidence=float(contract["detector"]["weak_confidence"]),
+    source_width, source_height = image.width, image.height
+    attempt_trace: list[DetectorAttemptTrace] = []
+
+    def evaluate(orientation_attempt: str) -> tuple[DetectorRun, PipelineAssessment]:
+        if orientation_attempt == "ORIGINAL":
+            attempt_image = image
+        elif orientation_attempt == "CW90":
+            attempt_image = image.transpose(Image.Transpose.ROTATE_270)
+        else:
+            attempt_image = image.transpose(Image.Transpose.ROTATE_90)
+
+        try:
+            tensor, scale, draw_width, draw_height = _prepare_yolox_input(
+                attempt_image, model.input_size
+            )
+            output = model.session.run(None, {model.input_name: tensor})[0]
+            detections = decode_yolox_output(
+                output,
+                scale=scale,
+                source_width=attempt_image.width,
+                source_height=attempt_image.height,
+                nms_iou=float(contract["detector"]["nms_iou"]),
+                # Keep the production weak threshold unchanged on every attempt.
+                min_confidence=float(contract["detector"]["weak_confidence"]),
+            )
+        finally:
+            if attempt_image is not image:
+                attempt_image.close()
+
+        mapped_detections = tuple(
+            Detection(
+                confidence=item.confidence,
+                box=map_box_to_original(item.box, orientation_attempt),
+                class_name=item.class_name,
+            )
+            for item in detections
+        )
+        # Run the unchanged gate after coordinate mapping, matching Android's
+        # order and ensuring the final selection/crop always uses source space.
+        assessment = assess_detections(mapped_detections, contract)
+        attempt_trace.append(
+            DetectorAttemptTrace(
+                orientation_attempt=orientation_attempt,
+                detection_count=len(detections),
+                top_confidence=max((item.confidence for item in detections), default=None),
+                quality_status=assessment.status.value,
+                quality_level=_quality_level(assessment),
+            )
+        )
+        run = DetectorRun(
+            model_version=model.model_version,
+            onnx_sha256=model.onnx_sha256,
+            input_size=model.input_size,
+            input_scale=scale,
+            input_draw_width=draw_width,
+            input_draw_height=draw_height,
+            latency_ms=0.0,
+            detections=mapped_detections,
+            original_width=source_width,
+            original_height=source_height,
+            orientation_attempt=orientation_attempt,
+        )
+        return run, assessment
+
+    original_run, original_assessment = evaluate("ORIGINAL")
+    if original_assessment.status is not PipelineStatus.NO_FISH:
+        selected = replace(
+            original_run,
+            latency_ms=round((time.perf_counter() - started) * 1000.0, 1),
+            selected_attempt="ORIGINAL",
+            selection_reason="ORIGINAL_ASSESSMENT_PRESERVED",
+            attempt_trace=tuple(attempt_trace),
+        )
+        return selected
+
+    recovered = [evaluate("CW90"), evaluate("CCW90")]
+    # Python's max is stable on ties because it keeps the first row: CW90 is
+    # therefore the deterministic tie-break after the existing rank score.
+    selected_index, (selected_run, selected_assessment) = max(
+        enumerate(recovered),
+        key=lambda item: (
+            _assessment_priority(item[1][1]),
+            _assessment_rank_score(item[1][1]),
+            -item[0],
+        ),
     )
-    return DetectorRun(
-        model_version=model.model_version,
-        onnx_sha256=model.onnx_sha256,
-        input_size=model.input_size,
-        input_scale=scale,
-        input_draw_width=draw_width,
-        input_draw_height=draw_height,
+    if selected_assessment.status is PipelineStatus.NO_FISH:
+        selected_run = replace(
+            recovered[-1][0],
+            orientation_attempt="CCW90",
+            detections=(),
+            selected_attempt="NONE",
+            selection_reason="NO_FISH_AFTER_BOUNDED_RETRIES",
+        )
+    else:
+        selected_run = replace(
+            selected_run,
+            selected_attempt=("CW90", "CCW90")[selected_index],
+            selection_reason=_selection_reason(selected_assessment),
+        )
+    return replace(
+        selected_run,
         latency_ms=round((time.perf_counter() - started) * 1000.0, 1),
-        detections=detections,
+        attempt_trace=tuple(attempt_trace),
     )
