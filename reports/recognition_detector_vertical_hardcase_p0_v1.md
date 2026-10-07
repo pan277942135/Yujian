@@ -20,7 +20,7 @@ Android repair target is based on the existing WIP commit `f0fe3dffefa556eed2e79
 | Case A original, 1440x1920 | 0.001103 | 0.002218 | 0.004249 | all views NO_FISH; selected NONE | `DOMAIN_RECALL_GAP` |
 | Case B night/flash, 1152x1536 | 0.004820 | 0.018577 | 0.635500 | CCW90 selected; READY | `ORIENTATION_RECALL_GAP` |
 
-Case A's earlier `PROVISIONAL_DOMAIN_RECALL_GAP` based on a `327x436` result-screen viewport proxy is revoked. The original source confirms that all correct candidates remain well below `0.20`; this is not an orientation-recall or threshold-borderline case. The best correct confidence across all Case A views is `0.004249`.
+Case A's earlier `PROVISIONAL_DOMAIN_RECALL_GAP` based on a `327x436` result-screen viewport proxy is revoked. The original source confirms that all correct candidates remain well below `0.20`; this is not an orientation-recall or threshold-borderline case. The best correct confidence across all Case A views is `0.004249`. The original photo is kept as a held-out incident source and is not committed as an Android test asset because it contains an identifiable person. Its SHA and diagnostic rows are retained here; Case B is the byte-identical Android instrumentation fixture.
 
 Case B confirms orientation recall recovery: the correct fish candidate is under `0.20` in ORIGINAL and CW90, then reaches `0.635500` in CCW90. No evidence indicates a decode/NMS defect for either incident: neither original view has a correct candidate at or above `0.20` while production emits NO_FISH.
 
@@ -178,6 +178,6 @@ Each executed attempt records orientation, detection count, top confidence, qual
 
 - Case A diagnosis: `DOMAIN_RECALL_GAP`, final on original source.
 - Case B bounded detector implementation: awaiting Android CI and physical-device acceptance.
-- Android regression fixture and instrumentation test are authored; CI runtime matrix remains the required execution gate.
+- Android runtime repair branch HEAD `2e7f85a1f8501eaacac5e37ae050a7715bb359f8`; the prior CI attempt exposed an `Int` tolerance assertion compile error in the Case B instrumentation test. The assertion was fixed to compare absolute crop-edge error against the documented ±24 px tolerance, and CI is rerunning on the repair branch. CI runtime matrix remains the required execution gate.
 - APK status: not produced until the Android build and required gates pass.
 - Overall incident remains `IN_PROGRESS_CASE_A_FIXTURE_AND_DET_FISH_V0_2`; the Case A diagnosis is closed, but this detector repair does not recover Case A and v0.2 data/training remains open.
