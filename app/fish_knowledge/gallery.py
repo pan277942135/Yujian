@@ -23,6 +23,10 @@ GALLERY_MIME_SUFFIXES = {
 }
 KNOWLEDGE_ASSET_TYPES = frozenset({"COVER", "HERO", "IDENTIFICATION", "ECO", "GEAR", "SKILL"})
 KNOWLEDGE_ASSET_MAX_BYTES = 10 * 1024 * 1024
+V13_ASSET_ROLES = frozenset({
+    "COVER_LIST", "COVER_HERO", "TRANSPARENT_MAIN", "TRANSPARENT_ALT",
+    "HERO", "IDENTIFICATION", "ECO", "GEAR", "SKILL",
+})
 
 
 class GalleryUploadError(ValueError):
@@ -48,7 +52,11 @@ def inspect_knowledge_asset(data: bytes) -> dict[str, object]:
         with Image.open(io.BytesIO(data)) as image:
             width, height = image.size
             image_format = (image.format or "").upper()
+            if width <= 0 or height <= 0 or width * height > 40_000_000:
+                raise GalleryUploadError("图片尺寸超出安全范围")
             image.verify()
+    except GalleryUploadError:
+        raise
     except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
         raise GalleryUploadError("仅支持 JPEG、PNG 或 WEBP 图片") from exc
 
@@ -80,8 +88,59 @@ def inspect_knowledge_asset(data: bytes) -> dict[str, object]:
         "size_bytes": len(data),
         "stored_size_bytes": len(webp_data),
         "sha256": hashlib.sha256(data).hexdigest(),
+        "derived_sha256": hashlib.sha256(webp_data).hexdigest(),
         "webp_data": webp_data,
     }
+
+
+def validate_knowledge_asset_role(data: bytes, asset_role: str) -> tuple[dict[str, object], list[dict[str, str]], list[dict[str, str]]]:
+    """Inspect an asset and apply the V1.3 slot contract without altering its ratio."""
+
+    role = str(asset_role or "").strip().upper()
+    if role not in V13_ASSET_ROLES:
+        raise GalleryUploadError("未知 Fish Knowledge Asset 角色")
+    metadata = inspect_knowledge_asset(data)
+    width, height = int(metadata["width"]), int(metadata["height"])
+    ratio = width / height
+    errors: list[dict[str, str]] = []
+    warnings: list[dict[str, str]] = []
+
+    if role in {"COVER_LIST", "HERO", "IDENTIFICATION", "ECO", "GEAR", "SKILL"}:
+        if abs(ratio - 1.0) > 0.05:
+            errors.append({"code": "INVALID_ASPECT_RATIO", "message": f"{role} 要求接近 1:1，当前 {width}×{height}"})
+        elif abs(ratio - 1.0) > 0.02:
+            warnings.append({"code": "ASPECT_RATIO_WARNING", "message": f"{role} 比例偏离 1:1：{width}×{height}"})
+    elif role == "COVER_HERO":
+        target_ratio = 673 / 923
+        relative_delta = abs(ratio - target_ratio) / target_ratio
+        if relative_delta > 0.12:
+            errors.append({"code": "INVALID_ASPECT_RATIO", "message": f"COVER_HERO 目标比例约 673:923，当前 {width}×{height}"})
+        elif relative_delta > 0.06:
+            warnings.append({"code": "ASPECT_RATIO_WARNING", "message": f"COVER_HERO 接近但未达到 673:923：{width}×{height}"})
+
+    if min(width, height) < 512:
+        errors.append({"code": "RESOLUTION_TOO_LOW", "message": f"{width}×{height}；最短边至少 512px"})
+    elif min(width, height) < 1024:
+        warnings.append({"code": "RESOLUTION_WARNING", "message": f"{width}×{height}；建议最短边至少 1024px"})
+
+    if role in {"TRANSPARENT_MAIN", "TRANSPARENT_ALT"}:
+        try:
+            with Image.open(io.BytesIO(data)) as image:
+                has_alpha = "A" in image.getbands() or "transparency" in image.info
+                rgba = image.convert("RGBA")
+                alpha = rgba.getchannel("A")
+                alpha_min, alpha_max = alpha.getextrema()
+                alpha_bounds = alpha.getbbox()
+            if not has_alpha or alpha_min == 255 or alpha_bounds is None or alpha_max == 0:
+                errors.append({"code": "ALPHA_REQUIRED", "message": "透明鱼体必须含有有效的非不透明 Alpha 区域"})
+            else:
+                warnings.append({"code": "TRANSPARENT_VISUAL_QA_REQUIRED", "message": "请审核鱼体方向、主体边界和透明边缘"})
+        except (OSError, ValueError) as exc:
+            errors.append({"code": "ALPHA_READ_FAILED", "message": f"无法读取 Alpha 通道：{exc}"})
+
+    if role in {"HERO", "IDENTIFICATION", "ECO", "GEAR", "SKILL"} and (width, height) != (1254, 1254):
+        warnings.append({"code": "APPROVED_CANVAS_SIZE_WARNING", "message": f"当前为 {width}×{height}；本批 V2 知识卡画板为 1254×1254"})
+    return metadata, errors, warnings
 
 
 def knowledge_asset_object_name(species_id: str, asset_type: str) -> str:

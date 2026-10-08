@@ -9,7 +9,7 @@ def test_fish_knowledge_workspace_route_and_template_are_registered():
     assert "/fish-knowledge" in app.openapi()["paths"]
     source, _filename, _uptodate = templates.env.loader.get_source(templates.env, "fish_knowledge.html")
     for marker in (
-        "鱼鉴内容工作台",
+        "Fish Knowledge CMS v1.3",
         "鱼种资产包",
         "列表 Cover Card",
         "五张黑金鱼鉴卡",

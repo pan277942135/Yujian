@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import os
 import sys
+from tempfile import SpooledTemporaryFile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,8 +45,11 @@ def fake_persist(**_kwargs) -> str:
 
 
 def upload(name: str) -> UploadFile:
+    body = SpooledTemporaryFile(max_size=1024 * 1024)
+    body.write(b"fake-image-bytes")
+    body.seek(0)
     return UploadFile(
-        file=io.BytesIO(b"fake-image-bytes"),
+        file=body,
         filename=name,
         headers=Headers({"content-type": "image/jpeg"}),
     )
@@ -72,6 +75,7 @@ def main() -> None:
                 status="FROZEN",
             )
         )
+        db.flush()
         db.add(
             TrainingRun(
                 run_id="RUN_SMOKE",
@@ -85,6 +89,7 @@ def main() -> None:
                 metrics_uri="gs://smoke-bucket/models/MODEL_SMOKE/metrics.json",
             )
         )
+        db.flush()
         db.add(
             ModelVersion(
                 model_version="MODEL_SMOKE",

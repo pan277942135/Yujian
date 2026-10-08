@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse, Response
 from google.cloud import storage
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -133,6 +133,9 @@ class SpeciesFullDetailOut(SpeciesDetailOut):
     cards: list[CardOut]
     knowledge: dict[str, Any]
     dynamic: dict[str, Any]
+    cover_hero_image: str | None = None
+    cover_assets: dict[str, Any] = Field(default_factory=dict)
+    knowledge_assets: dict[str, Any] = Field(default_factory=dict)
 
 
 def _string_list(value: Any) -> list[str]:
@@ -382,7 +385,29 @@ def get_fish_species_full_detail(species_id: str, db: Session = Depends(get_db))
     row = load_species_with_knowledge(db, species_id, active_only=True)
     if row is None:
         raise HTTPException(status_code=404, detail="fish species not found")
-    return build_species_full_detail(row)
+    result = build_species_full_detail(row)
+    from app.fish_knowledge.import_batch import FishKnowledgeAssetVersion, _asset_role_for_version
+
+    active_versions = db.scalars(select(FishKnowledgeAssetVersion).where(
+        FishKnowledgeAssetVersion.species_id == row.id,
+        FishKnowledgeAssetVersion.status == "ACTIVE",
+    )).all()
+    assets: dict[str, Any] = {}
+    for version in active_versions:
+        role = _asset_role_for_version(version)
+        assets[role] = {
+            "asset_role": role,
+            "image_url": version.image_url,
+            "version": version.version,
+            "version_id": version.id,
+        }
+    legacy_cover = managed_knowledge_asset_url(row.id, "COVER", row.cover.image_url) if row.cover and row.cover.status == "ACTIVE" else None
+    cover_assets = {role: assets[role] for role in ("COVER_LIST", "COVER_HERO", "TRANSPARENT_MAIN", "TRANSPARENT_ALT") if role in assets}
+    if legacy_cover and "COVER_LIST" not in cover_assets:
+        cover_assets["COVER_LIST"] = {"asset_role": "COVER_LIST", "image_url": legacy_cover, "version": None}
+    knowledge_assets = {role: assets[role] for role in ("HERO", "IDENTIFICATION", "ECO", "GEAR", "SKILL") if role in assets}
+    cover_hero = cover_assets.get("COVER_HERO", {}).get("image_url")
+    return result.model_copy(update={"cover_hero_image": cover_hero, "cover_assets": cover_assets, "knowledge_assets": knowledge_assets})
 
 
 @router.get("/species/{species_id}", response_model=SpeciesDetailOut)
@@ -432,8 +457,14 @@ def get_gallery_media(image_id: int, db: Session = Depends(get_db)):
 def get_knowledge_media(species_id: str, asset_type: str, asset_key: str, db: Session = Depends(get_db)):
     """Serve a managed cover/card image without adding a media table."""
 
-    normalized_type = normalize_card_type(asset_type) if asset_type.upper() != "COVER" else "cover"
-    if normalized_type != "cover" and normalized_type not in {"HERO", "IDENTIFICATION", "ECO", "GEAR", "SKILL"}:
+    role_by_path = {
+        "cover_list": "COVER_LIST", "cover_hero": "COVER_HERO",
+        "transparent_main": "TRANSPARENT_MAIN", "transparent_alt": "TRANSPARENT_ALT",
+    }
+    path_key = asset_type.strip().lower()
+    requested_role = role_by_path.get(path_key)
+    normalized_type = "cover" if path_key == "cover" else (requested_role or normalize_card_type(asset_type))
+    if normalized_type != "cover" and normalized_type not in {"COVER_LIST", "COVER_HERO", "TRANSPARENT_MAIN", "TRANSPARENT_ALT", "HERO", "IDENTIFICATION", "ECO", "GEAR", "SKILL"}:
         raise HTTPException(status_code=404, detail="knowledge asset not found")
     is_hashed_asset = bool(re.fullmatch(r"[a-f0-9]{64}\.(?:jpg|png|webp)", asset_key))
     is_version_asset = bool(re.fullmatch(r"v\d+\.webp", asset_key))
@@ -447,26 +478,28 @@ def get_knowledge_media(species_id: str, asset_type: str, asset_key: str, db: Se
     expected_url = f"/api/v1/fish/knowledge-media/{row.id}/{storage_type}/{asset_key}"
     version = None
     if is_version_asset:
-        from app.fish_knowledge.import_batch import FishKnowledgeAssetVersion
+        from app.fish_knowledge.import_batch import FishKnowledgeAssetVersion, _asset_role_for_version
 
-        version = db.scalar(select(FishKnowledgeAssetVersion).where(
+        candidates = db.scalars(select(FishKnowledgeAssetVersion).where(
             FishKnowledgeAssetVersion.species_id == row.id,
-            FishKnowledgeAssetVersion.asset_type == ("COVER" if normalized_type == "cover" else normalized_type),
-            FishKnowledgeAssetVersion.image_url == expected_url,
             FishKnowledgeAssetVersion.status == "ACTIVE",
-        ))
+        )).all()
+        expected_role = "COVER_LIST" if normalized_type == "cover" else normalized_type
+        version = next((candidate for candidate in candidates if _asset_role_for_version(candidate) == expected_role and candidate.image_url == expected_url), None)
         is_referenced = version is not None
     elif normalized_type == "cover":
         is_referenced = (
             row.cover is not None
             and managed_knowledge_asset_url(row.id, "COVER", row.cover.image_url) == expected_url
         )
-    else:
+    elif normalized_type in {"HERO", "IDENTIFICATION", "ECO", "GEAR", "SKILL"}:
         is_referenced = any(
             normalize_card_type(card.card_type) == normalized_type
             and managed_knowledge_asset_url(row.id, normalized_type, card.image_url) == expected_url
             for card in row.cards
         )
+    else:
+        is_referenced = False
     if not is_referenced:
         raise HTTPException(status_code=404, detail="knowledge asset not found")
 
