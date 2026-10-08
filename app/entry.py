@@ -46,7 +46,7 @@ from app.fish_knowledge.admin import (
     compat_router as fish_knowledge_admin_compat_router,
     router as fish_knowledge_admin_router,
 )
-from app.fish_knowledge.import_batch import page_router as fish_asset_import_page_router, router as fish_asset_import_router
+from app.fish_knowledge.import_batch import asset_router as fish_knowledge_asset_v13_router, page_router as fish_asset_import_page_router, router as fish_asset_import_router
 from app.fish_knowledge.content_seed import seed_fish_knowledge_content
 from app.fish_knowledge.seed import seed_initial_fish_knowledge
 from app.p0_automation import install_feedback_automation, router as automation_router
@@ -190,6 +190,7 @@ app.include_router(fish_knowledge_admin_router)
 app.include_router(fish_knowledge_admin_compat_router)
 
 app.include_router(fish_asset_import_router)
+app.include_router(fish_knowledge_asset_v13_router)
 app.include_router(fish_asset_import_page_router)
 app.include_router(platform_pages_router)
 app.include_router(platform_portrait_router)

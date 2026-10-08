@@ -1,4 +1,5 @@
 from io import BytesIO
+import json
 
 from PIL import Image
 from sqlalchemy import create_engine
@@ -6,7 +7,9 @@ from sqlalchemy.orm import sessionmaker
 
 from app import models  # noqa: F401
 from app.db import Base
+from app.platform import models as platform_models  # noqa: F401
 from app.fish_knowledge.import_batch import (
+    _asset_role_for_filename,
     _asset_type_for_filename,
     _bind_imported_version,
     _cover_variant_for_filename,
@@ -88,6 +91,13 @@ def test_asset_mapping_contract():
     assert _asset_type_for_filename("04_gear.jpg") == "GEAR"
     assert _asset_type_for_filename("05_skill.png") == "SKILL"
     assert _asset_type_for_filename("06_gallery.png") is None
+    assert _asset_role_for_filename("00_cover.png") == "COVER_LIST"
+    assert _asset_role_for_filename("00_cover_list.png") == "COVER_LIST"
+    assert _asset_role_for_filename("00_cover_hero.png") == "COVER_HERO"
+    assert _asset_role_for_filename("01_transparent_main.png") == "TRANSPARENT_MAIN"
+    assert _asset_role_for_filename("02_transparent_alt.png") == "TRANSPARENT_ALT"
+    assert _asset_role_for_filename("03_eco.png") == "ECO"
+    assert _asset_role_for_filename("05_fishing.png") == "SKILL"
 
 
 def test_alias_resolves_to_canonical_species(tmp_path):
@@ -128,7 +138,9 @@ def test_valid_image_scan_marks_square_file(tmp_path, monkeypatch):
     )
     assert item.species_id == "sharpbelly"
     assert item.asset_type == "HERO"
-    assert item.validation_status == "VALID"
+    assert item.asset_role == "HERO"
+    assert item.validation_status == "WARNING"
+    assert any(warning["code"] == "APPROVED_CANVAS_SIZE_WARNING" for warning in json.loads(item.validation_warnings))
     assert item.width == 1024
     assert item.height == 1024
 
@@ -159,7 +171,7 @@ def test_scan_resolves_species_after_browser_selected_outer_folder(tmp_path, mon
     item = _scan_item(db, None, Bucket(), batch, Blob.name)
     assert item.species_id == "sharpbelly"
     assert item.asset_type == "HERO"
-    assert item.validation_status == "VALID"
+    assert item.validation_status == "WARNING"
 
 
 def test_imported_version_binds_existing_draft_card_without_overwriting_content(tmp_path):
@@ -248,7 +260,7 @@ def test_imported_transparent_cover_is_reference_only(tmp_path):
     db.add(version)
     db.flush()
 
-    assert _bind_imported_version(db, version) == "REFERENCE_ONLY"
+    assert _bind_imported_version(db, version) == "ROLE_ONLY"
     assert db.query(FishSpeciesCover).filter(FishSpeciesCover.species_id == "sharpbelly").count() == 0
 
 
@@ -279,3 +291,29 @@ def test_imported_version_binds_existing_draft_cover(tmp_path):
     assert _bind_imported_version(db, version) == "BOUND"
     assert cover.image_url == version.image_url
     assert cover.status == "DRAFT"
+
+
+def test_role_validation_uses_slot_specific_aspect_and_alpha_contracts():
+    from app.fish_knowledge.gallery import validate_knowledge_asset_role
+
+    square = BytesIO()
+    Image.new("RGB", (1254, 1254), "white").save(square, format="PNG")
+    _meta, errors, warnings = validate_knowledge_asset_role(square.getvalue(), "HERO")
+    assert not errors
+    assert not warnings
+
+    portrait = BytesIO()
+    Image.new("RGB", (673, 923), "white").save(portrait, format="PNG")
+    _meta, errors, warnings = validate_knowledge_asset_role(portrait.getvalue(), "COVER_HERO")
+    assert not errors
+    assert any(item["code"] == "RESOLUTION_WARNING" for item in warnings)
+
+    opaque = BytesIO()
+    Image.new("RGB", (1024, 1024), "white").save(opaque, format="PNG")
+    _meta, errors, _warnings = validate_knowledge_asset_role(opaque.getvalue(), "TRANSPARENT_MAIN")
+    assert any(item["code"] == "ALPHA_REQUIRED" for item in errors)
+
+    wide = BytesIO()
+    Image.new("RGB", (1500, 900), "white").save(wide, format="PNG")
+    _meta, errors, _warnings = validate_knowledge_asset_role(wide.getvalue(), "ECO")
+    assert any(item["code"] == "INVALID_ASPECT_RATIO" for item in errors)

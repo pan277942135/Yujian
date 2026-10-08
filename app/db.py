@@ -1,4 +1,6 @@
 import os
+import json
+import re
 from pathlib import Path
 
 from sqlalchemy import create_engine, inspect
@@ -55,7 +57,9 @@ def init_db():
     from app import models  # noqa: F401
     from app import fish_knowledge  # noqa: F401
     from app.platform import models as platform_models  # noqa: F401
+    from app.fish_knowledge import import_batch as fish_asset_models  # noqa: F401
 
+    _ensure_fish_knowledge_asset_v13()
     Base.metadata.create_all(bind=engine)
     _ensure_production_pipeline_columns()
     _ensure_fish_knowledge_crud_constraints()
@@ -71,6 +75,156 @@ def init_db():
         seed_bside_asset_registry(seed_db)
     finally:
         seed_db.close()
+
+
+def _ensure_fish_knowledge_asset_v13() -> None:
+    """Add role-aware Fish Knowledge asset columns and per-role versioning.
+
+    Old COVER rows are mapped from their preserved cover_variant metadata;
+    untagged historical COVER rows remain COVER_LIST. The operation is
+    additive and idempotent for the supported SQLite and PostgreSQL stores.
+    """
+
+    additions = {
+        "fish_asset_import_batches": {
+            "warnings_acknowledged": "BOOLEAN NOT NULL DEFAULT FALSE",
+            "warnings_acknowledged_at": "TIMESTAMP WITH TIME ZONE",
+            "warnings_acknowledged_by": "VARCHAR(256)",
+        },
+        "fish_asset_import_items": {"asset_role": "VARCHAR(32)"},
+        "fish_knowledge_asset_versions": {"asset_role": "VARCHAR(32)"},
+        "fish_knowledge_asset_reviews": {
+            "binding_type": "VARCHAR(32)",
+            "binding_id": "INTEGER",
+            "binding_status": "VARCHAR(16)",
+            "binding_image_url": "TEXT",
+            "cms_content_sha256": "VARCHAR(64)",
+            "asset_status": "VARCHAR(16)",
+            "validation_warnings_json": "TEXT NOT NULL DEFAULT '[]'",
+            "warnings_acknowledged_at": "TIMESTAMP WITH TIME ZONE",
+            "warnings_acknowledged_by": "VARCHAR(256)",
+        },
+    }
+    with engine.connect() as connection:
+        if engine.dialect.name == "sqlite":
+            # SQLite cannot drop the historical table-level uniqueness rule on
+            # (species_id, asset_type, version). Disable FK enforcement before
+            # opening the transaction; the replacement preserves all FK rows.
+            connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+            connection.commit()
+        try:
+            with connection.begin():
+                for table, columns in additions.items():
+                    if not inspect(connection).has_table(table):
+                        continue
+                    existing = {column["name"] for column in inspect(connection).get_columns(table)}
+                    for name, definition in columns.items():
+                        if name not in existing:
+                            connection.exec_driver_sql(f'ALTER TABLE "{table}" ADD COLUMN "{name}" {definition}')
+
+                if inspect(connection).has_table("fish_knowledge_asset_versions"):
+                    rows = connection.exec_driver_sql(
+                        'SELECT id, asset_type, metadata_json, asset_role FROM "fish_knowledge_asset_versions"'
+                    ).mappings().all()
+                    for row in rows:
+                        if row["asset_role"]:
+                            continue
+                        metadata = {}
+                        try:
+                            metadata = json.loads(row["metadata_json"] or "{}")
+                        except (TypeError, ValueError):
+                            pass
+                        role = str(metadata.get("asset_role") or "").strip().upper() if isinstance(metadata, dict) else ""
+                        variant = str(metadata.get("cover_variant") or "").strip().upper() if isinstance(metadata, dict) else ""
+                        if role not in {"COVER_LIST", "COVER_HERO", "TRANSPARENT_MAIN", "TRANSPARENT_ALT", "HERO", "IDENTIFICATION", "ECO", "GEAR", "SKILL"}:
+                            role = {
+                                "COVER_CARD_TRANSPARENT_LEFT": "TRANSPARENT_MAIN",
+                                "COVER_CARD_TRANSPARENT_RIGHT": "TRANSPARENT_ALT",
+                                "COVER_HERO": "COVER_HERO",
+                            }.get(variant, "COVER_LIST" if row["asset_type"] == "COVER" else row["asset_type"])
+                        connection.exec_driver_sql(
+                            'UPDATE "fish_knowledge_asset_versions" SET asset_role = ? WHERE id = ?'
+                            if engine.dialect.name == "sqlite"
+                            else 'UPDATE "fish_knowledge_asset_versions" SET asset_role = %s WHERE id = %s',
+                            (role, row["id"]),
+                        )
+
+                if inspect(connection).has_table("fish_asset_import_items"):
+                    rows = connection.exec_driver_sql(
+                        'SELECT id, asset_type, source_filename, asset_role FROM "fish_asset_import_items"'
+                    ).mappings().all()
+                    for row in rows:
+                        if row["asset_role"]:
+                            continue
+                        stem = re.sub(r"\.[^.]+$", "", str(row["source_filename"] or "")).lower()
+                        role = (
+                            "COVER_HERO" if re.fullmatch(r"00_cover_hero(?:_.*)?", stem)
+                            else "TRANSPARENT_MAIN" if re.fullmatch(r"01_transparent_main(?:_.*)?", stem)
+                            else "TRANSPARENT_ALT" if re.fullmatch(r"02_transparent_alt(?:_.*)?", stem)
+                            else "COVER_LIST" if row["asset_type"] == "COVER"
+                            else row["asset_type"]
+                        )
+                        connection.exec_driver_sql(
+                            'UPDATE "fish_asset_import_items" SET asset_role = ? WHERE id = ?'
+                            if engine.dialect.name == "sqlite"
+                            else 'UPDATE "fish_asset_import_items" SET asset_role = %s WHERE id = %s',
+                            (role, row["id"]),
+                        )
+
+                if inspect(connection).has_table("fish_knowledge_asset_versions"):
+                    if engine.dialect.name == "postgresql":
+                        connection.exec_driver_sql(
+                            'ALTER TABLE "fish_knowledge_asset_versions" '
+                            'DROP CONSTRAINT IF EXISTS "uq_fish_knowledge_asset_version_slot"'
+                        )
+                        connection.exec_driver_sql('DROP INDEX IF EXISTS "uq_fish_knowledge_asset_version_slot"')
+                    else:
+                        unique_constraints = inspect(connection).get_unique_constraints("fish_knowledge_asset_versions")
+                        old_rule = any(
+                            row.get("column_names") == ["species_id", "asset_type", "version"]
+                            for row in unique_constraints
+                        )
+                        if old_rule:
+                            connection.exec_driver_sql(
+                                'CREATE TABLE "__fish_knowledge_asset_versions_v13" ('
+                                '"id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, '
+                                '"species_id" VARCHAR(128) NOT NULL, "asset_type" VARCHAR(32) NOT NULL, '
+                                '"asset_role" VARCHAR(32), "version" INTEGER NOT NULL, '
+                                '"object_name" TEXT NOT NULL UNIQUE, "image_url" TEXT NOT NULL UNIQUE, '
+                                '"status" VARCHAR(16) NOT NULL DEFAULT \'DRAFT\', "sha256" VARCHAR(64) NOT NULL, '
+                                '"metadata_json" TEXT NOT NULL DEFAULT \'{}\', "batch_id" VARCHAR(128), '
+                                '"item_id" INTEGER, "created_at" DATETIME NOT NULL, "updated_at" DATETIME NOT NULL, '
+                                'CONSTRAINT "ck_fish_knowledge_asset_version_type" '
+                                'CHECK (asset_type IN (\'COVER\',\'HERO\',\'IDENTIFICATION\',\'ECO\',\'GEAR\',\'SKILL\')), '
+                                'CONSTRAINT "ck_fish_knowledge_asset_version_status" '
+                                'CHECK (status IN (\'DRAFT\',\'ACTIVE\',\'ARCHIVED\')), '
+                                'FOREIGN KEY("species_id") REFERENCES fish_species(id) ON DELETE CASCADE, '
+                                'FOREIGN KEY("batch_id") REFERENCES fish_asset_import_batches(batch_id) ON DELETE SET NULL)'
+                            )
+                            connection.exec_driver_sql(
+                                'INSERT INTO "__fish_knowledge_asset_versions_v13" '
+                                '(id,species_id,asset_type,asset_role,version,object_name,image_url,status,sha256,metadata_json,batch_id,item_id,created_at,updated_at) '
+                                'SELECT id,species_id,asset_type,asset_role,version,object_name,image_url,status,sha256,metadata_json,batch_id,item_id,created_at,updated_at '
+                                'FROM "fish_knowledge_asset_versions"'
+                            )
+                            connection.exec_driver_sql('DROP TABLE "fish_knowledge_asset_versions"')
+                            connection.exec_driver_sql(
+                                'ALTER TABLE "__fish_knowledge_asset_versions_v13" RENAME TO "fish_knowledge_asset_versions"'
+                            )
+                    connection.exec_driver_sql(
+                        'CREATE UNIQUE INDEX IF NOT EXISTS "uq_fish_knowledge_asset_role_version" '
+                        'ON "fish_knowledge_asset_versions" ("species_id", "asset_role", "version")'
+                    )
+        finally:
+            if engine.dialect.name == "sqlite":
+                try:
+                    if connection.in_transaction():
+                        connection.rollback()
+                    connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+                    connection.commit()
+                except Exception:
+                    connection.invalidate()
+                    raise
 
 
 def _ensure_production_pipeline_columns() -> None:

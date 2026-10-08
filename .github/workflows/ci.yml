@@ -93,6 +93,8 @@ jobs:
         run: test -f schemas/0015_fish_cards_v11.sql && test -f schemas/0016_fish_species_cover_v11.sql
       - name: Validate Fish Knowledge CRUD migration exists
         run: test -f schemas/0017_fish_knowledge_crud_v1.sql
+      - name: Validate Fish Knowledge Asset V1.3 migration exists
+        run: test -f schemas/0030_fish_knowledge_assets_v13.sql
       - name: Validate MVP user-catch migration exists
         run: test -f schemas/0020_user_catches_mvp_v1.sql
       - name: Validate Qwen B-side migration exists
