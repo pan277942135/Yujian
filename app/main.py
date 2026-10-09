@@ -351,9 +351,44 @@ def species_page(request: Request):
 
 
 @app.get("/fish-knowledge", response_class=HTMLResponse)
-def fish_knowledge_page(request: Request):
-    """Content workspace for the Fish Knowledge asset package."""
-    return templates.TemplateResponse(request=request, name="fish_knowledge.html", context={})
+def fish_knowledge_page(request: Request, species_id: str | None = None):
+    """Fish Knowledge v1.4 landing page; each workspace is a separate route."""
+    return templates.TemplateResponse(
+        request=request,
+        name="fish_knowledge_v14.html",
+        context={"section": "overview", "species_id": species_id or ""},
+    )
+
+
+@app.get("/fish-knowledge/assets/import", response_class=HTMLResponse, include_in_schema=False)
+def fish_knowledge_batch_import_page():
+    """Keep the proven v1.3 batch-import workflow reachable from v1.4 navigation."""
+    with open("app/templates/fish_asset_import.html", encoding="utf-8") as handle:
+        return HTMLResponse(handle.read())
+
+
+@app.get("/fish-knowledge/{section}", response_class=HTMLResponse)
+def fish_knowledge_section_page(request: Request, section: str, species_id: str | None = None):
+    sections = {"overview", "basic", "assets", "cards", "batch-import", "publication", "extensions", "history"}
+    if section not in sections:
+        raise HTTPException(status_code=404, detail="fish knowledge workspace not found")
+    return templates.TemplateResponse(
+        request=request,
+        name="fish_knowledge_v14.html",
+        context={"section": section, "species_id": species_id or ""},
+    )
+
+
+@app.get("/fish-knowledge/{species_id}/{section}", response_class=HTMLResponse)
+def fish_knowledge_species_section_page(request: Request, species_id: str, section: str):
+    sections = {"overview", "basic", "assets", "cards", "batch-import", "publication", "extensions", "history"}
+    if section not in sections:
+        raise HTTPException(status_code=404, detail="fish knowledge workspace not found")
+    return templates.TemplateResponse(
+        request=request,
+        name="fish_knowledge_v14.html",
+        context={"section": section, "species_id": species_id},
+    )
 
 
 @app.get("/feedback", response_class=HTMLResponse)

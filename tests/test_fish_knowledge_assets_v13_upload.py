@@ -16,12 +16,17 @@ from app.fish_knowledge.import_batch import (
     ExecuteBatchPayload,
     FishAssetImportBatch,
     FishKnowledgeAssetVersion,
+    AssetReviewPayload,
     activate_asset_version_v13,
     create_local_batch,
     execute_batch,
     upload_batch_file,
     upload_single_asset_v13,
+    review_asset_version_v13,
+    get_unified_card_workspace,
 )
+from app.fish_knowledge.publication import save_bound_card_content
+from app.fish_knowledge.api import build_species_full_detail
 from app.fish_knowledge.species import FishSpecies
 from app.models import SpeciesCatalog
 
@@ -122,7 +127,9 @@ def test_single_upload_uses_batch_core_and_keeps_roles_independent(monkeypatch, 
     bucket = MemoryBucket()
     client = MemoryStorageClient(bucket)
     monkeypatch.setattr("app.fish_knowledge.import_batch.storage.Client", lambda: client)
+    monkeypatch.setattr("app.fish_knowledge.publication.storage.Client", lambda: client)
     monkeypatch.setattr("app.fish_knowledge.import_batch.get_bucket_name", lambda: "test-bucket")
+    monkeypatch.setattr("app.fish_knowledge.publication.get_bucket_name", lambda: "test-bucket")
     try:
         hero = asyncio.run(upload_single_asset_v13(
             species_id="sharpbelly",
@@ -152,10 +159,106 @@ def test_single_upload_uses_batch_core_and_keeps_roles_independent(monkeypatch, 
         assert db.scalar(select(FishCard).where(FishCard.species_id == "sharpbelly", FishCard.card_type == "HERO")).status == "DRAFT"
         assert len([name for name in bucket.blobs if "/hero/" in name or "/cover_list/" in name]) == 2
         assert not any(version.status == "ACTIVE" for version in db.scalars(select(FishKnowledgeAssetVersion)).all())
+        hero_workspace = get_unified_card_workspace("sharpbelly", db=db)["roles"]["HERO"]
+        assert hero_workspace["active_version"] is None
+        assert hero_workspace["draft_version"]["id"] == hero_version.id
+        assert hero_workspace["selected_version_id"] == hero_version.id
+        assert hero_workspace["card_id"] == db.scalar(select(FishCard.id).where(FishCard.asset_version_id == hero_version.id))
+
+        with pytest.raises(HTTPException) as qa_required:
+            activate_asset_version_v13(hero_version.id, db)
+        assert qa_required.value.status_code == 409
+        assert db.get(FishKnowledgeAssetVersion, hero_version.id).status == "DRAFT"
+
+        save_bound_card_content(
+            db,
+            species_id="sharpbelly",
+            role="HERO",
+            version_id=hero_version.id,
+            title="白条识别卡",
+            description='{"type":"HERO","description":"中上层小型鱼"}',
+        )
+        review_asset_version_v13(
+            hero_version.id,
+            AssetReviewPayload(
+                batch_id=hero["batch_id"],
+                visual_qa_result="PASS",
+                content_qa_result="PASS",
+                reviewer="test-reviewer",
+            ),
+            db,
+        )
         published = activate_asset_version_v13(hero_version.id, db)
         assert published["status"] == "ACTIVE"
         assert db.get(FishKnowledgeAssetVersion, hero_version.id).status == "ACTIVE"
         assert db.get(FishKnowledgeAssetVersion, cover_version.id).status == "DRAFT"
+        assert published["validation"]["public_detail_readback"] == "PASS"
+
+        repeated = activate_asset_version_v13(hero_version.id, db)
+        assert repeated["idempotent"] is True
+        assert db.get(FishKnowledgeAssetVersion, hero_version.id).status == "ACTIVE"
+
+        hero_v2 = asyncio.run(upload_single_asset_v13(
+            species_id="sharpbelly",
+            asset_role="HERO",
+            file=MemoryUpload(_png((180, 40, 90)), "hero-v2.png"),
+            allow_warnings=False,
+            db=db,
+        ))
+        next_version = db.get(FishKnowledgeAssetVersion, hero_v2["version"]["id"])
+        next_card = db.scalar(select(FishCard).where(FishCard.asset_version_id == next_version.id))
+        assert next_version.status == "DRAFT"
+        assert next_card is not None and next_card.status == "DRAFT"
+        save_bound_card_content(
+            db,
+            species_id="sharpbelly",
+            role="HERO",
+            version_id=next_version.id,
+            title="白条识别卡 v2",
+            description='{"type":"HERO","description":"新版中上层小型鱼"}',
+        )
+        review_asset_version_v13(
+            next_version.id,
+            AssetReviewPayload(
+                batch_id=hero_v2["batch_id"],
+                visual_qa_result="PASS",
+                content_qa_result="BLOCKED_CONTENT_MISMATCH",
+                reviewer="test-reviewer",
+            ),
+            db,
+        )
+        with pytest.raises(HTTPException) as retryable_failure:
+            activate_asset_version_v13(next_version.id, db)
+        assert retryable_failure.value.status_code == 409
+        assert db.get(FishKnowledgeAssetVersion, hero_version.id).status == "ACTIVE"
+        assert db.get(FishKnowledgeAssetVersion, next_version.id).status == "DRAFT"
+        assert db.get(FishCard, next_card.id).status == "DRAFT"
+
+        review_asset_version_v13(
+            next_version.id,
+            AssetReviewPayload(
+                batch_id=hero_v2["batch_id"],
+                visual_qa_result="PASS",
+                content_qa_result="PASS",
+                reviewer="test-reviewer",
+            ),
+            db,
+        )
+
+        published_v2 = activate_asset_version_v13(next_version.id, db)
+        assert published_v2["publication_status"] == "ACTIVE"
+        assert db.get(FishKnowledgeAssetVersion, hero_version.id).status == "ARCHIVED"
+        assert db.get(FishKnowledgeAssetVersion, next_version.id).status == "ACTIVE"
+        assert db.get(FishCard, next_card.id).status == "ACTIVE"
+        assert db.get(FishCard, db.scalar(select(FishCard.id).where(FishCard.asset_version_id == hero_version.id))).status == "DRAFT"
+        hero_workspace = get_unified_card_workspace("sharpbelly", db=db)["roles"]["HERO"]
+        assert hero_workspace["active_version"]["id"] == next_version.id
+        assert hero_workspace["draft_version"] is None
+        assert {row["status"] for row in hero_workspace["history"]["versions"]} == {"ACTIVE", "ARCHIVED"}
+        public_detail = build_species_full_detail(db.get(FishSpecies, "sharpbelly"), db)
+        public_hero = next(card for card in public_detail.cards if card.card_type == "HERO")
+        assert public_hero.image_url == public_detail.knowledge_assets["HERO"]["image_url"] == next_version.image_url
+        assert public_detail.knowledge_assets["HERO"]["version_id"] == next_version.id
     finally:
         db.close()
 

@@ -3,7 +3,7 @@ import json
 import re
 from pathlib import Path
 
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, func, inspect
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -61,6 +61,7 @@ def init_db():
 
     _ensure_fish_knowledge_asset_v13()
     Base.metadata.create_all(bind=engine)
+    _ensure_fish_knowledge_publication_v14()
     _ensure_production_pipeline_columns()
     _ensure_fish_knowledge_crud_constraints()
     _ensure_user_catch_columns()
@@ -284,6 +285,109 @@ def _ensure_production_pipeline_columns() -> None:
             for name, definition in columns.items():
                 if name not in existing:
                     connection.exec_driver_sql(f'ALTER TABLE "{table}" ADD COLUMN "{name}" {definition}')
+
+
+def _ensure_fish_knowledge_publication_v14() -> None:
+    """Add exact FishCard→asset-version binding without rewriting content.
+
+    Existing rows are linked only when species, canonical role and full image
+    URL produce a one-to-one match. Ambiguous legacy rows remain unbound for
+    explicit admin repair; this migration never picks a row by database order.
+    """
+
+    if not inspect(engine).has_table("fish_cards"):
+        return
+    additions = {
+        "asset_version_id": "INTEGER REFERENCES fish_knowledge_asset_versions(id) ON DELETE RESTRICT",
+        "content_revision": "INTEGER NOT NULL DEFAULT 1",
+    }
+    with engine.begin() as connection:
+        existing = {column["name"] for column in inspect(connection).get_columns("fish_cards")}
+        for name, definition in additions.items():
+            if name not in existing:
+                connection.exec_driver_sql(f'ALTER TABLE "fish_cards" ADD COLUMN "{name}" {definition}')
+        connection.exec_driver_sql(
+            'CREATE INDEX IF NOT EXISTS "ix_fish_cards_asset_version_id" '
+            'ON "fish_cards" ("asset_version_id")'
+        )
+
+    from app.fish_knowledge.cards import FishCard, normalize_card_type
+    from app.fish_knowledge.import_batch import (
+        FishCardContentRevision,
+        FishKnowledgeAssetVersion,
+        _asset_role_for_version,
+    )
+    from sqlalchemy import select
+
+    session = SessionLocal()
+    try:
+        cards = session.scalars(select(FishCard).where(FishCard.asset_version_id.is_(None))).all()
+        versions = session.scalars(select(FishKnowledgeAssetVersion)).all()
+        versions_by_key: dict[tuple[str, str, str], list] = {}
+        cards_by_key: dict[tuple[str, str, str], list] = {}
+        for version in versions:
+            role = _asset_role_for_version(version)
+            versions_by_key.setdefault((version.species_id, role, version.image_url), []).append(version)
+        for card in cards:
+            role = normalize_card_type(card.card_type)
+            cards_by_key.setdefault((card.species_id, role, card.image_url or ""), []).append(card)
+
+        for key, matches in versions_by_key.items():
+            candidate_cards = cards_by_key.get(key, [])
+            if len(matches) != 1 or len(candidate_cards) != 1:
+                continue
+            version, card = matches[0], candidate_cards[0]
+            if card.asset_version_id is not None:
+                continue
+            card.asset_version_id = version.id
+            if session.scalar(select(FishCardContentRevision.id).where(
+                FishCardContentRevision.card_id == card.id,
+                FishCardContentRevision.content_revision == card.content_revision,
+            )) is None:
+                session.add(FishCardContentRevision(
+                    card_id=card.id,
+                    asset_version_id=version.id,
+                    content_revision=card.content_revision,
+                    title=card.title,
+                    description=card.description,
+                    image_url=card.image_url,
+                ))
+        session.flush()
+        duplicates = session.execute(
+            select(FishCard.asset_version_id)
+            .where(FishCard.asset_version_id.is_not(None))
+            .group_by(FishCard.asset_version_id)
+            .having(func.count(FishCard.id) > 1)
+        ).all()
+        active_by_role: dict[tuple[str, str], int] = {}
+        for version in versions:
+            if version.status != "ACTIVE":
+                continue
+            role = _asset_role_for_version(version)
+            key = (version.species_id, role)
+            active_by_role[key] = active_by_role.get(key, 0) + 1
+        active_conflicts = [key for key, count in active_by_role.items() if count > 1]
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+    # Preserve pre-existing duplicate content for manual review rather than
+    # failing after the additive columns were applied.
+    if not duplicates:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                'CREATE UNIQUE INDEX IF NOT EXISTS "uq_fish_cards_asset_version_id" '
+                'ON "fish_cards" ("asset_version_id") WHERE "asset_version_id" IS NOT NULL'
+            )
+    if not active_conflicts:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                'CREATE UNIQUE INDEX IF NOT EXISTS "uq_fish_knowledge_asset_active_role" '
+                'ON "fish_knowledge_asset_versions" ("species_id", "asset_role") WHERE "status" = \'ACTIVE\' AND "asset_role" IS NOT NULL'
+            )
 
 
 def _ensure_fish_knowledge_crud_constraints() -> None:

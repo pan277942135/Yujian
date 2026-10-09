@@ -67,50 +67,30 @@ def test_cms_crud_creates_updates_cover_and_cards(tmp_path):
             SpeciesPatch(
                 name="测试鱼修订",
                 description="修订后的简介",
-                display_tag="河湾目标鱼",
-                rarity=2,
-                power=3,
-                challenge=4,
-                recommendation=5,
             ),
             db,
         )
         assert updated["name_cn"] == "测试鱼修订"
         assert updated["summary"] == "修订后的简介"
-        assert updated["display_tag"] == "河湾目标鱼"
-
-        cover = compat_put_species_cover(
-            "crud_test_fish",
-            CoverPut(url="https://cdn.example/crud-cover.png", status="DRAFT"),
-            db,
-        )
-        assert cover["image_url"] == "https://cdn.example/crud-cover.png"
-        assert cover["status"] == "DRAFT"
-
-        for card_type in CARD_TYPE_ORDER:
-            card = compat_put_species_card(
+        with pytest.raises(HTTPException) as old_cover:
+            compat_put_species_cover(
                 "crud_test_fish",
-                card_type.lower(),
-                CardPatch(
-                    title=f"测试鱼 {card_type}",
-                    image_url=f"https://cdn.example/{card_type.lower()}.png",
-                    content={"type": card_type, "description": f"{card_type} 内容"},
-                    status="DRAFT",
-                ),
+                CoverPut(url="https://cdn.example/crud-cover.png", status="ACTIVE"),
                 db,
             )
-            assert card["card_type"] == card_type
-
-        cards = list_species_cards("crud_test_fish", db)
-        assert [card["card_type"] for card in cards] == list(CARD_TYPE_ORDER)
-        assert len({card["card_type"] for card in cards}) == 5
-
-        deleted_card = update_species_card(
-            cards[-1]["id"], CardPatch(title="待删除卡"), db
-        )
-        assert deleted_card["title"] == "待删除卡"
-        assert delete_species_card(cards[-1]["id"], db)["deleted"] is True
-        assert len(list_species_cards("crud_test_fish", db)) == 4
+        assert old_cover.value.status_code == 409
+        with pytest.raises(HTTPException) as old_card:
+            compat_put_species_card(
+                "crud_test_fish",
+                "hero",
+                CardPatch(image_url="https://cdn.example/hero.png", status="ACTIVE"),
+                db,
+            )
+        assert old_card.value.status_code == 409
+        with pytest.raises(HTTPException) as old_hero_content:
+            compat_update_admin_species("crud_test_fish", SpeciesPatch(display_tag="旧 HERO 字段"), db)
+        assert old_hero_content.value.status_code == 409
+        assert list_species_cards("crud_test_fish", db) == []
     finally:
         db.close()
 
@@ -119,17 +99,24 @@ def test_cms_soft_delete_hides_species_without_orphaning_content(tmp_path):
     db = _session(tmp_path)
     try:
         _create_species(db)
-        cover = compat_put_species_cover(
-            "crud_test_fish",
-            CoverPut(url="https://cdn.example/cover.png"),
-            db,
+        cover = FishSpeciesCover(
+            species_id="crud_test_fish",
+            image_url="https://cdn.example/cover.png",
+            style="ANIME_CARD",
+            title="历史封面",
+            status="ACTIVE",
         )
-        card = compat_put_species_card(
-            "crud_test_fish",
-            "hero",
-            CardPatch(image_url="https://cdn.example/hero.png"),
-            db,
+        card = FishCard(
+            species_id="crud_test_fish",
+            card_type="HERO",
+            title="历史卡片",
+            image_url="https://cdn.example/hero.png",
+            description="历史内容",
+            sort_order=0,
+            status="ACTIVE",
         )
+        db.add_all([cover, card])
+        db.commit()
 
         deleted = delete_admin_species("crud_test_fish", db)
         assert deleted == {
@@ -140,8 +127,8 @@ def test_cms_soft_delete_hides_species_without_orphaning_content(tmp_path):
         }
         row = db.get(FishSpecies, "crud_test_fish")
         assert row is not None and row.status == "DELETED"
-        assert db.get(FishSpeciesCover, cover["id"]) is not None
-        assert db.get(FishCard, card["id"]) is not None
+        assert db.scalar(select(FishSpeciesCover).where(FishSpeciesCover.species_id == "crud_test_fish")) is not None
+        assert db.get(FishCard, card.id) is not None
 
         assert all(item["id"] != "crud_test_fish" for item in list_admin_species(db))
         with pytest.raises(HTTPException) as hidden:
@@ -158,29 +145,32 @@ def test_completion_and_publish_validate_all_required_content(tmp_path):
     db = _session(tmp_path)
     try:
         _create_species(db)
-        with pytest.raises(HTTPException) as missing:
-            publish_admin_species("crud_test_fish", db)
-        assert missing.value.status_code == 409
-        assert missing.value.detail["success"] is False
-        assert "cover" in missing.value.detail["missing"]
-        assert "hero" in missing.value.detail["missing"]
-        assert "knowledge" in missing.value.detail["missing"]
+        published_species_only = publish_admin_species("crud_test_fish", db)
+        assert published_species_only["success"] is True
+        assert published_species_only["published_modules"] == ["SPECIES"]
+        assert published_species_only["assets_changed"] is False
+        assert db.get(FishSpecies, "crud_test_fish").status == "ACTIVE"
+        assert db.scalar(select(FishSpeciesCover).where(FishSpeciesCover.species_id == "crud_test_fish")) is None
+        assert db.scalars(select(FishCard).where(FishCard.species_id == "crud_test_fish")).all() == []
 
-        compat_put_species_cover(
-            "crud_test_fish",
-            CoverPut(url="https://cdn.example/publish-cover.png", status="ACTIVE"),
-            db,
-        )
+        db.add(FishSpeciesCover(
+            species_id="crud_test_fish",
+            image_url="https://cdn.example/publish-cover.png",
+            style="ANIME_CARD",
+            title="发布前封面",
+            status="ACTIVE",
+        ))
         for card_type in CARD_TYPE_ORDER:
-            compat_put_species_card(
-                "crud_test_fish",
-                card_type,
-                CardPatch(
-                    image_url=f"https://cdn.example/publish-{card_type.lower()}.png",
-                    status="ACTIVE",
-                ),
-                db,
-            )
+            db.add(FishCard(
+                species_id="crud_test_fish",
+                card_type=card_type,
+                title=f"{card_type} 历史卡",
+                image_url=f"https://cdn.example/publish-{card_type.lower()}.png",
+                description="{}",
+                sort_order=CARD_TYPE_ORDER.index(card_type),
+                status="ACTIVE",
+            ))
+        db.commit()
         compat_put_profile(
             "crud_test_fish",
             ProfileUpsert(body_shape="体型修长", features=["鳞片明显"]),
@@ -207,29 +197,35 @@ def test_completion_and_publish_validate_all_required_content(tmp_path):
         published = publish_admin_species("crud_test_fish", db)
         assert published["success"] is True
         assert db.get(FishSpecies, "crud_test_fish").status == "ACTIVE"
+        # Existing legacy active rows stay visible without being changed.
+        cover = db.scalar(select(FishSpeciesCover).where(FishSpeciesCover.species_id == "crud_test_fish"))
+        assert cover is not None and cover.status == "ACTIVE"
     finally:
         db.close()
 
 
-def test_publish_promotes_complete_draft_asset_package(tmp_path):
+def test_species_publish_preserves_legacy_asset_draft_status(tmp_path):
     db = _session(tmp_path)
     try:
         _create_species(db)
-        compat_put_species_cover(
-            "crud_test_fish",
-            CoverPut(url="/api/v1/fish/knowledge-media/crud_test_fish/cover/cover.webp", status="DRAFT"),
-            db,
-        )
+        db.add(FishSpeciesCover(
+            species_id="crud_test_fish",
+            image_url="/api/v1/fish/knowledge-media/crud_test_fish/cover/cover.webp",
+            style="ANIME_CARD",
+            title="历史草稿封面",
+            status="DRAFT",
+        ))
         for card_type in CARD_TYPE_ORDER:
-            compat_put_species_card(
-                "crud_test_fish",
-                card_type,
-                CardPatch(
-                    image_url=f"/api/v1/fish/knowledge-media/crud_test_fish/{card_type.lower()}/{card_type.lower()}.webp",
-                    status="DRAFT",
-                ),
-                db,
-            )
+            db.add(FishCard(
+                species_id="crud_test_fish",
+                card_type=card_type,
+                title=f"{card_type} 历史草稿",
+                image_url=f"/api/v1/fish/knowledge-media/crud_test_fish/{card_type.lower()}/{card_type.lower()}.webp",
+                description="{}",
+                sort_order=CARD_TYPE_ORDER.index(card_type),
+                status="DRAFT",
+            ))
+        db.commit()
         compat_put_profile(
             "crud_test_fish",
             ProfileUpsert(body_shape="体型修长", features=["鳞片明显"]),
@@ -243,13 +239,14 @@ def test_publish_promotes_complete_draft_asset_package(tmp_path):
 
         published = publish_admin_species("crud_test_fish", db)
         assert published["success"] is True
+        assert published["assets_changed"] is False
         assert db.get(FishSpecies, "crud_test_fish").status == "ACTIVE"
         cover = db.scalar(select(FishSpeciesCover).where(FishSpeciesCover.species_id == "crud_test_fish"))
-        assert cover is not None and cover.status == "ACTIVE"
+        assert cover is not None and cover.status == "DRAFT"
         cards = db.scalars(
             select(FishCard).where(FishCard.species_id == "crud_test_fish").order_by(FishCard.sort_order)
         ).all()
-        assert [card.status for card in cards] == ["ACTIVE"] * 5
+        assert [card.status for card in cards] == ["DRAFT"] * 5
     finally:
         db.close()
 

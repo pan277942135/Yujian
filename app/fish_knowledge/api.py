@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_db
 from app.factory import DOWNLOAD_RETRY, get_bucket_name
-from app.fish_knowledge.cards import FishCard, normalize_card_type
+from app.fish_knowledge.cards import CARD_TYPE_ORDER, FishCard, normalize_card_type
 from app.fish_knowledge.cover import FishSpeciesCover
 from app.fish_knowledge.content import card_display_description, parse_card_content
 from app.fish_knowledge.fishing import FishFishing
@@ -32,6 +32,9 @@ class SpeciesListItem(BaseModel):
     name_cn: str
     category: str
     cover_image: str | None
+    cover_hero_image: str | None = None
+    cover_hero_version_id: int | None = None
+    cover_hero_status: str = "MISSING"
     summary: str
 
 
@@ -117,6 +120,8 @@ class CardOut(BaseModel):
     content: dict[str, Any]
     sort_order: int
     status: str
+    asset_version_id: int | None = None
+    publication_source: str = "LEGACY_CARD"
 
 
 class SpeciesDetailOut(BaseModel):
@@ -134,8 +139,11 @@ class SpeciesFullDetailOut(SpeciesDetailOut):
     knowledge: dict[str, Any]
     dynamic: dict[str, Any]
     cover_hero_image: str | None = None
+    cover_hero_version_id: int | None = None
+    cover_hero_status: str = "MISSING"
     cover_assets: dict[str, Any] = Field(default_factory=dict)
     knowledge_assets: dict[str, Any] = Field(default_factory=dict)
+    publication_conflicts: list[dict[str, Any]] = Field(default_factory=list)
 
 
 def _string_list(value: Any) -> list[str]:
@@ -208,7 +216,13 @@ def _cover_image(species: FishSpecies) -> str | None:
     return species.gallery[0].url if species.gallery else None
 
 
-def _card(row: FishCard) -> CardOut:
+def _card(
+    row: FishCard,
+    *,
+    image_url: str | None = None,
+    publication_source: str = "LEGACY_CARD",
+    asset_version_id: int | None = None,
+) -> CardOut:
     card_type = normalize_card_type(row.card_type)
     content = parse_card_content(row.description)
     return CardOut(
@@ -217,11 +231,13 @@ def _card(row: FishCard) -> CardOut:
         card_type=card_type,
         type=card_type,
         title=row.title,
-        image_url=managed_knowledge_asset_url(row.species_id, card_type, row.image_url),
+        image_url=image_url or managed_knowledge_asset_url(row.species_id, card_type, row.image_url),
         description=card_display_description(content, row.description),
         content=content,
         sort_order=row.sort_order,
         status=row.status,
+        asset_version_id=asset_version_id if asset_version_id is not None else row.asset_version_id,
+        publication_source=publication_source,
     )
 
 
@@ -306,10 +322,109 @@ def build_species_detail(
     )
 
 
-def build_species_full_detail(row: FishSpecies) -> SpeciesFullDetailOut:
+def _published_role_projection(db: Session, species_id: str, role: str) -> dict[str, Any]:
+    from app.fish_knowledge.import_batch import FishKnowledgeAssetVersion, _asset_role_for_version
+
+    active = db.scalars(select(FishKnowledgeAssetVersion).where(
+        FishKnowledgeAssetVersion.species_id == species_id,
+        FishKnowledgeAssetVersion.status == "ACTIVE",
+    )).all()
+    active = [item for item in active if _asset_role_for_version(item) == role]
+    if len(active) != 1:
+        return {"asset_version_id": None, "asset_image_url": None, "card_id": None, "card_image_url": None}
+    version = active[0]
+    cards = db.scalars(select(FishCard).where(FishCard.asset_version_id == version.id)).all()
+    if len(cards) != 1:
+        return {"asset_version_id": version.id, "asset_image_url": version.image_url, "card_id": None, "card_image_url": None}
+    card = cards[0]
+    if card.status != "ACTIVE" or normalize_card_type(card.card_type) != role or card.image_url != version.image_url:
+        return {"asset_version_id": version.id, "asset_image_url": version.image_url, "card_id": card.id, "card_image_url": card.image_url}
+    return {
+        "asset_version_id": version.id,
+        "asset_image_url": version.image_url,
+        "card_id": card.id,
+        "card_image_url": card.image_url,
+    }
+
+
+def build_species_full_detail(row: FishSpecies, db: Session) -> SpeciesFullDetailOut:
     base = build_species_detail(row)
-    active_card_rows = [item for item in row.cards if item.status == "ACTIVE"]
-    cards = [_card(item) for item in active_card_rows]
+    from app.fish_knowledge.import_batch import FishKnowledgeAssetVersion, _asset_role_for_version
+
+    active_versions = db.scalars(select(FishKnowledgeAssetVersion).where(
+        FishKnowledgeAssetVersion.species_id == row.id,
+        FishKnowledgeAssetVersion.status == "ACTIVE",
+    )).all()
+    versions_by_role: dict[str, list[FishKnowledgeAssetVersion]] = {}
+    for version in active_versions:
+        role = _asset_role_for_version(version)
+        versions_by_role.setdefault(role, []).append(version)
+
+    cards: list[CardOut] = []
+    active_card_rows: list[FishCard] = []
+    knowledge_assets: dict[str, Any] = {}
+    conflicts: list[dict[str, Any]] = []
+    for role in CARD_TYPE_ORDER:
+        versions = versions_by_role.get(role, [])
+        if len(versions) > 1:
+            conflicts.append({"role": role, "code": "ACTIVE_VERSION_CONFLICT", "active_version_ids": [item.id for item in versions]})
+            continue
+        if versions:
+            version = versions[0]
+            bound = db.scalars(select(FishCard).where(FishCard.asset_version_id == version.id)).all()
+            if len(bound) != 1:
+                conflicts.append({"role": role, "code": "VERSION_BINDING_MISSING" if not bound else "DUPLICATE_VERSION_BINDING", "version_id": version.id})
+                continue
+            card = bound[0]
+            if (
+                card.status != "ACTIVE"
+                or card.species_id != row.id
+                or normalize_card_type(card.card_type) != role
+                or card.image_url != version.image_url
+            ):
+                conflicts.append({"role": role, "code": "VERSION_BINDING_MISMATCH", "version_id": version.id, "card_id": card.id})
+                continue
+            cards.append(_card(card, image_url=version.image_url, publication_source="VERSIONED_ASSET", asset_version_id=version.id))
+            active_card_rows.append(card)
+            knowledge_assets[role] = {
+                "asset_role": role,
+                "image_url": version.image_url,
+                "version": version.version,
+                "version_id": version.id,
+                "asset_status": "ACTIVE",
+                "source_sha256": version.sha256,
+                "publication_source": "VERSIONED_ASSET",
+                "card_id": card.id,
+            }
+            continue
+
+        # Compatibility is explicit and limited to unbound legacy cards when
+        # no versioned publication exists for that role.
+        legacy = [
+            item for item in row.cards
+            if item.status == "ACTIVE"
+            and item.asset_version_id is None
+            and normalize_card_type(item.card_type) == role
+        ]
+        if len(legacy) == 1:
+            card = legacy[0]
+            cards.append(_card(card, publication_source="LEGACY_CARD"))
+            active_card_rows.append(card)
+            knowledge_assets[role] = {
+                "asset_role": role,
+                "image_url": managed_knowledge_asset_url(row.id, role, card.image_url),
+                "version": None,
+                "version_id": None,
+                "asset_status": "ACTIVE",
+                "source_sha256": None,
+                "publication_source": "LEGACY_CARD",
+                "card_id": card.id,
+            }
+        elif len(legacy) > 1:
+            conflicts.append({"role": role, "code": "LEGACY_ACTIVE_CARD_CONFLICT", "card_ids": [item.id for item in legacy]})
+        else:
+            conflicts.append({"role": role, "code": "ACTIVE_CARD_MISSING"})
+
     profile = base.profile
     fishing = base.fishing
     card_content = {
@@ -319,9 +434,51 @@ def build_species_full_detail(row: FishSpecies) -> SpeciesFullDetailOut:
     ecology = card_content.get("ECO", {})
     gear = card_content.get("GEAR", {})
     skill = card_content.get("SKILL", {})
+    cover_assets: dict[str, Any] = {}
+    for role in ("COVER_LIST", "COVER_HERO", "TRANSPARENT_MAIN", "TRANSPARENT_ALT"):
+        versions = versions_by_role.get(role, [])
+        if len(versions) > 1:
+            conflicts.append({"role": role, "code": "ACTIVE_VERSION_CONFLICT", "active_version_ids": [item.id for item in versions]})
+            continue
+        if not versions:
+            continue
+        version = versions[0]
+        if role == "COVER_LIST" and (row.cover is None or row.cover.status != "ACTIVE" or row.cover.image_url != version.image_url):
+            conflicts.append({"role": role, "code": "COVER_BINDING_MISMATCH", "version_id": version.id})
+            continue
+        cover_assets[role] = {
+            "asset_role": role,
+            "image_url": version.image_url,
+            "version": version.version,
+            "version_id": version.id,
+            "asset_status": "ACTIVE",
+            "source_sha256": version.sha256,
+            "publication_source": "VERSIONED_ASSET",
+        }
+    if "COVER_LIST" not in cover_assets and row.cover is not None and row.cover.status == "ACTIVE":
+        cover_assets["COVER_LIST"] = {
+            "asset_role": "COVER_LIST",
+            "image_url": managed_knowledge_asset_url(row.id, "COVER", row.cover.image_url),
+            "version": None,
+            "version_id": None,
+            "asset_status": "ACTIVE",
+            "source_sha256": None,
+            "publication_source": "LEGACY_COVER",
+        }
+
+    active_cover_hero = versions_by_role.get("COVER_HERO", [])
+    cover_hero_status = "ACTIVE" if len(active_cover_hero) == 1 and "COVER_HERO" in cover_assets else (
+        "CONFLICT" if len(active_cover_hero) > 1 else "MISSING"
+    )
+    cover_hero_version = active_cover_hero[0] if cover_hero_status == "ACTIVE" else None
+
+    legacy_cover = _cover_dict(row.cover)
+    if "COVER_LIST" in cover_assets:
+        legacy_cover = {**legacy_cover, "image_url": cover_assets["COVER_LIST"]["image_url"]}
+
     return SpeciesFullDetailOut(
         species=base.species,
-        cover=_cover_dict(row.cover),
+        cover=legacy_cover,
         cards=cards,
         gallery=base.gallery,
         profile=profile,
@@ -362,18 +519,38 @@ def build_species_full_detail(row: FishSpecies) -> SpeciesFullDetailOut:
         # Dynamic user catches/rankings are intentionally a stable placeholder
         # until their separate content domain is implemented.
         dynamic={},
+        cover_assets=cover_assets,
+        knowledge_assets=knowledge_assets,
+        cover_hero_image=cover_assets.get("COVER_HERO", {}).get("image_url"),
+        cover_hero_version_id=cover_hero_version.id if cover_hero_version else None,
+        cover_hero_status=cover_hero_status,
+        publication_conflicts=conflicts,
     )
 
 
 @router.get("/species", response_model=list[SpeciesListItem])
 def list_fish_species(db: Session = Depends(get_db)) -> list[SpeciesListItem]:
     rows = db.scalars(_active_species_query()).all()
+    from app.fish_knowledge.import_batch import FishKnowledgeAssetVersion, _asset_role_for_version
+
+    species_ids = [row.id for row in rows]
+    active_cover_hero: dict[str, list[FishKnowledgeAssetVersion]] = {species_id: [] for species_id in species_ids}
+    versions = db.scalars(select(FishKnowledgeAssetVersion).where(
+        FishKnowledgeAssetVersion.species_id.in_(species_ids or ["__none__"]),
+        FishKnowledgeAssetVersion.status == "ACTIVE",
+    )).all()
+    for version in versions:
+        if version.species_id in active_cover_hero and _asset_role_for_version(version) == "COVER_HERO":
+            active_cover_hero[version.species_id].append(version)
     return [
         SpeciesListItem(
             id=row.id,
             name_cn=row.name_cn,
             category=row.category,
             cover_image=_cover_image(row),
+            cover_hero_image=(active_cover_hero[row.id][0].image_url if len(active_cover_hero[row.id]) == 1 else None),
+            cover_hero_version_id=(active_cover_hero[row.id][0].id if len(active_cover_hero[row.id]) == 1 else None),
+            cover_hero_status=("ACTIVE" if len(active_cover_hero[row.id]) == 1 else "CONFLICT" if len(active_cover_hero[row.id]) > 1 else "MISSING"),
             summary=row.summary,
         )
         for row in rows
@@ -385,29 +562,7 @@ def get_fish_species_full_detail(species_id: str, db: Session = Depends(get_db))
     row = load_species_with_knowledge(db, species_id, active_only=True)
     if row is None:
         raise HTTPException(status_code=404, detail="fish species not found")
-    result = build_species_full_detail(row)
-    from app.fish_knowledge.import_batch import FishKnowledgeAssetVersion, _asset_role_for_version
-
-    active_versions = db.scalars(select(FishKnowledgeAssetVersion).where(
-        FishKnowledgeAssetVersion.species_id == row.id,
-        FishKnowledgeAssetVersion.status == "ACTIVE",
-    )).all()
-    assets: dict[str, Any] = {}
-    for version in active_versions:
-        role = _asset_role_for_version(version)
-        assets[role] = {
-            "asset_role": role,
-            "image_url": version.image_url,
-            "version": version.version,
-            "version_id": version.id,
-        }
-    legacy_cover = managed_knowledge_asset_url(row.id, "COVER", row.cover.image_url) if row.cover and row.cover.status == "ACTIVE" else None
-    cover_assets = {role: assets[role] for role in ("COVER_LIST", "COVER_HERO", "TRANSPARENT_MAIN", "TRANSPARENT_ALT") if role in assets}
-    if legacy_cover and "COVER_LIST" not in cover_assets:
-        cover_assets["COVER_LIST"] = {"asset_role": "COVER_LIST", "image_url": legacy_cover, "version": None}
-    knowledge_assets = {role: assets[role] for role in ("HERO", "IDENTIFICATION", "ECO", "GEAR", "SKILL") if role in assets}
-    cover_hero = cover_assets.get("COVER_HERO", {}).get("image_url")
-    return result.model_copy(update={"cover_hero_image": cover_hero, "cover_assets": cover_assets, "knowledge_assets": knowledge_assets})
+    return build_species_full_detail(row, db)
 
 
 @router.get("/species/{species_id}", response_model=SpeciesDetailOut)

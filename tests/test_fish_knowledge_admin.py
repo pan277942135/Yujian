@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from starlette.datastructures import Headers, UploadFile
 
 from app import models  # noqa: F401
+from app.platform import models as platform_models  # noqa: F401
 from app.db import Base
 from app.fish_knowledge import FishCard, FishFishing, FishGalleryImage, FishProfile, FishSimilarity, FishSpecies, FishVideo
 from app.fish_knowledge.admin import (
@@ -39,6 +40,7 @@ from app.fish_knowledge.admin import (
     upload_fish_asset,
 )
 from app.fish_knowledge.api import get_fish_species, get_gallery_media, get_knowledge_media
+from app.fish_knowledge import import_batch as fish_knowledge_import_batch  # noqa: F401
 from app.models import SpeciesCatalog
 
 
@@ -266,8 +268,8 @@ def test_admin_uploads_knowledge_asset_and_binds_draft_card(monkeypatch, tmp_pat
     try:
         create_admin_species(_species_payload(), db)
         data = _png_bytes()
-        result = asyncio.run(
-            upload_fish_asset(
+        with pytest.raises(HTTPException) as blocked:
+            asyncio.run(upload_fish_asset(
                 "grass_carp",
                 asset_type="HERO",
                 file=UploadFile(
@@ -276,29 +278,11 @@ def test_admin_uploads_knowledge_asset_and_binds_draft_card(monkeypatch, tmp_pat
                     headers=Headers({"content-type": "image/png"}),
                 ),
                 db=db,
-            )
-        )
-        assert result["asset_type"] == "HERO"
-        assert result["status"] == "DRAFT"
-        assert result["image_url"].startswith("/api/v1/fish/knowledge-media/grass_carp/hero/")
-        assert result["storage"] == "CREATED"
-
-        card = db.scalar(select(FishCard).where(FishCard.species_id == "grass_carp"))
-        assert card is not None
-        key = result["image_url"].rsplit("/", 1)[-1]
-        response = get_knowledge_media("grass_carp", "HERO", key, db)
-        assert response.body == data
-
-        duplicate = asyncio.run(
-            upload_fish_asset(
-                "grass_carp",
-                asset_type="HERO",
-                file=UploadFile(file=io.BytesIO(data), filename="hero.png"),
-                db=db,
-            )
-        )
-        assert duplicate["storage"] == "SKIP"
-        assert db.query(FishCard).count() == 1
+            ))
+        assert blocked.value.status_code == 409
+        assert blocked.value.detail["code"] == "UNIFIED_VERSION_UPLOAD_REQUIRED"
+        assert db.query(FishCard).count() == 0
+        assert bucket.blobs == {}
     finally:
         db.close()
 
