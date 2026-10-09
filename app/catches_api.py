@@ -64,6 +64,10 @@ class CatchOut(BaseModel):
     model_version: str
     captured_at: datetime
     created_at: datetime
+    # Story remains stored inside classifier_result_json, but is projected as
+    # a stable record field so clients can restore user-authored text without
+    # exposing the rest of the classifier payload (including local paths).
+    story: str | None = None
     bside_status: str = "NONE"
     bside_uri: str | None = None
 
@@ -108,6 +112,24 @@ def _upload_media_url(upload_id: str) -> str:
 
 def _catch_media_url(catch_id: str) -> str:
     return f"/api/v1/catches/{catch_id}/media"
+
+
+def _catch_story(row: FishCatch) -> str | None:
+    if not row.classifier_result_json:
+        return None
+    try:
+        classifier_result = json.loads(row.classifier_result_json)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(classifier_result, dict):
+        return None
+    value = classifier_result.get("story")
+    if not isinstance(value, str):
+        return None
+    story = value.strip()
+    if not story or story.casefold() in {"null", "undefined"}:
+        return None
+    return story
 
 
 def _bside_media_url(catch_id: str) -> str:
@@ -169,6 +191,7 @@ def _catch_out(row: FishCatch) -> CatchOut:
         model_version=row.model_version,
         captured_at=row.captured_at,
         created_at=row.created_at,
+        story=_catch_story(row),
         bside_status=str(row.bside_status or "NONE"),
         bside_uri=_bside_media_url(row.id) if row.bside_status == "READY" and row.bside_result_object_name else None,
     )
