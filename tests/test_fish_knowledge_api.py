@@ -200,6 +200,9 @@ def test_species_list_returns_active_species_and_gallery_cover(tmp_path, monkeyp
         "name_cn": "草鱼",
         "category": "淡水鱼",
         "cover_image": "https://cdn.example/grass-standard.jpg",
+        "cover_hero_image": None,
+        "cover_hero_version_id": None,
+        "cover_hero_status": "MISSING",
         "summary": "体型修长，是常见的大型淡水目标鱼",
     }
     assert body[1]["cover_image"] is None
