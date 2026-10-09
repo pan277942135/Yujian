@@ -1,7 +1,7 @@
 # 09 — E2E Final Report
 
 **Audit date:** 2026-10-09 (Asia/Shanghai)  
-**Overall:** `PARTIAL_COMPLETE_WITH_BLOCKERS`  
+**Final status:** `BLOCKED_MIGRATION`  
 **Production safety:** no production migration/deploy/upload/activation/object mutation was performed.
 
 ## Gate summary
