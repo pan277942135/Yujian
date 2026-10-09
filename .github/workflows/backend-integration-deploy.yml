@@ -1,0 +1,104 @@
+name: Backend integration direct deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Full SHA of the CI-passing integration branch head
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+
+concurrency:
+  group: yujian-backend-integration-deploy
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: gemini-api-project-503706
+  PROJECT_NUMBER: '571785698442'
+  REGION: asia-east1
+  SERVICE: yujian-model-factory-console
+  WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+  DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      target_sha: ${{ steps.gate.outputs.target_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+      - name: Require the exact integration branch head
+        id: gate
+        env:
+          REQUESTED_SHA: ${{ inputs.target_sha }}
+          WORKFLOW_SHA: ${{ github.sha }}
+          WORKFLOW_REF: ${{ github.ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$WORKFLOW_REF" = "refs/heads/integration/backend-cms-catch-metadata-v1"
+          [[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$REQUESTED_SHA" = "$WORKFLOW_SHA"
+          echo "target_sha=$REQUESTED_SHA" >> "$GITHUB_OUTPUT"
+      - name: Require successful pull request CI for this exact SHA
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.gate.outputs.target_sha }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const result = await github.rest.actions.listWorkflowRuns({
+              owner,
+              repo,
+              workflow_id: "ci.yml",
+              head_sha: process.env.TARGET_SHA,
+              per_page: 20,
+            });
+            const passed = result.data.workflow_runs.some((run) =>
+              run.head_sha === process.env.TARGET_SHA &&
+              run.event === "pull_request" &&
+              run.status === "completed" &&
+              run.conclusion === "success"
+            );
+            if (!passed) {
+              core.setFailed(`No successful pull request CI run found for ${process.env.TARGET_SHA}`);
+            }
+
+  deploy:
+    needs: preflight
+    if: needs.preflight.outputs.target_sha != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: yujian-backend-dev
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preflight.outputs.target_sha }}
+          fetch-depth: 1
+      - name: Authenticate with the existing Google Cloud WIF identity
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          version: '>= 416.0.0'
+      - name: Back up Cloud SQL and deploy only the Backend service
+        id: deploy
+        env:
+          DEPLOY_SHA: ${{ needs.preflight.outputs.target_sha }}
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          PROJECT_NUMBER: ${{ env.PROJECT_NUMBER }}
+          REGION: ${{ env.REGION }}
+          SERVICE: ${{ env.SERVICE }}
+        run: bash scripts/deploy_backend_integration.sh
