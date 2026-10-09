@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship, synonym
 
 from app.db import Base
@@ -99,6 +99,11 @@ class FishCatch(Base):
     """One user-confirmed recognition result in the MVP fishing archive."""
 
     __tablename__ = "fish_catches"
+    __table_args__ = (
+        UniqueConstraint("user_id", "client_record_id", name="uq_fish_catches_user_client_record"),
+        CheckConstraint("length_cm IS NULL OR (length_cm > 0 AND length_cm <= 1000)", name="ck_fish_catches_length_cm_range"),
+        CheckConstraint("weight_kg IS NULL OR (weight_kg > 0 AND weight_kg <= 1000)", name="ck_fish_catches_weight_kg_range"),
+    )
 
     id = Column(String(36), primary_key=True)
     user_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
@@ -112,6 +117,15 @@ class FishCatch(Base):
     model_version = Column(String(128), nullable=False, index=True)
     detector_result_json = Column(Text)
     classifier_result_json = Column(Text)
+    # Product-facing metadata is stored independently of the diagnostic JSON.
+    # metadata_version=0 marks legacy rows eligible for read-only JSON fallback;
+    # new writes set it to 1, making explicit nulls authoritative.
+    length_cm = Column(Float)
+    weight_kg = Column(Float)
+    location = Column(Text)
+    story = Column(Text)
+    metadata_version = Column(Integer, nullable=False, default=0, server_default="0")
+    client_record_id = Column(String(128))
     captured_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
     # The record remains the product-facing source of truth; the job stores

@@ -14,8 +14,9 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Up
 from fastapi.responses import Response
 from google.cloud import storage
 from PIL import Image, ImageOps, UnidentifiedImageError
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import desc, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth_api import get_current_user
@@ -34,6 +35,8 @@ UPLOAD_URL_PATTERN = re.compile(r"/api/v1/catches/uploads/([0-9a-f-]{36})/media$
 
 
 class CatchCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     # image_upload_id is the normal Android path. image_url is accepted as a
     # compatibility alias for clients following the initial MVP request shape.
     image_upload_id: str | None = None
@@ -45,6 +48,11 @@ class CatchCreate(BaseModel):
     detector_result: dict[str, Any] | None = None
     classifier_result: dict[str, Any] | None = None
     captured_at: datetime | None = None
+    length_cm: float | None = Field(default=None, gt=0, le=1000, allow_inf_nan=False)
+    weight_kg: float | None = Field(default=None, gt=0, le=1000, allow_inf_nan=False)
+    location: str | None = Field(default=None, max_length=512)
+    story: str | None = Field(default=None, max_length=4096)
+    client_record_id: str | None = Field(default=None, max_length=128)
 
     @field_validator("species_id", "species_name", "model_version")
     @classmethod
@@ -54,6 +62,12 @@ class CatchCreate(BaseModel):
             raise ValueError("must not be blank")
         return value
 
+    @field_validator("location", "story", "client_record_id")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        value = value.strip() if value is not None else None
+        return value or None
+
 
 class CatchOut(BaseModel):
     id: str
@@ -62,6 +76,11 @@ class CatchOut(BaseModel):
     species_name: str
     confidence: float
     model_version: str
+    length_cm: float | None = None
+    weight_kg: float | None = None
+    location: str | None = None
+    story: str | None = None
+    client_record_id: str | None = None
     captured_at: datetime
     created_at: datetime
     bside_status: str = "NONE"
@@ -96,6 +115,12 @@ class CatchStatisticsOut(BaseModel):
     species_count: int
     top_species: list[SpeciesCount]
     recent_species: str | None
+
+
+class CatchCapabilitiesOut(BaseModel):
+    metadata_version: int = 1
+    idempotency_keys: bool = True
+    lookup_by_client_record_id: bool = True
 
 
 def _upload_object_name(user_id: str, upload_id: str, suffix: str) -> str:
@@ -159,7 +184,73 @@ def _content_type_for_name(name: str) -> str:
     return {".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}.get(PurePosixPath(name).suffix.lower(), "application/octet-stream")
 
 
+def _legacy_classifier_result(row: FishCatch) -> dict[str, Any]:
+    """Return the old classifier payload only for rows marked legacy."""
+    if int(row.metadata_version or 0) > 0 or not row.classifier_result_json:
+        return {}
+    try:
+        value = json.loads(row.classifier_result_json)
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _legacy_numeric(value: Any, maximum: float) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if 0 < number <= maximum and number != float("inf") and number == number else None
+
+
+def _same_idempotent_request(
+    row: FishCatch,
+    payload: CatchCreate,
+    length_cm: float | None,
+    weight_kg: float | None,
+    location: str | None,
+    story: str | None,
+) -> bool:
+    if not (
+        row.species_id == payload.species_id
+        and row.species_name == payload.species_name
+        and row.model_version == payload.model_version
+        and row.confidence == payload.confidence
+        and row.length_cm == length_cm
+        and row.weight_kg == weight_kg
+        and row.location == (location or None)
+        and row.story == (story or None)
+    ):
+        return False
+    if payload.captured_at is None:
+        return True
+    actual = row.captured_at
+    expected = payload.captured_at
+    if actual.tzinfo is None and expected.tzinfo is not None:
+        actual = actual.replace(tzinfo=expected.tzinfo)
+    elif expected.tzinfo is None and actual.tzinfo is not None:
+        expected = expected.replace(tzinfo=actual.tzinfo)
+    elif actual.tzinfo is None and expected.tzinfo is None:
+        actual = actual.replace(tzinfo=timezone.utc)
+        expected = expected.replace(tzinfo=timezone.utc)
+    return actual == expected
+
+
 def _catch_out(row: FishCatch) -> CatchOut:
+    # Formal business columns always win. The JSON compatibility path is
+    # limited to the same legacy row and only fills columns that are NULL.
+    legacy = _legacy_classifier_result(row)
+    length_cm = row.length_cm if row.length_cm is not None else _legacy_numeric(
+        legacy.get("length_cm", legacy.get("length")), 1000
+    )
+    weight_kg = row.weight_kg if row.weight_kg is not None else _legacy_numeric(
+        legacy.get("weight_kg", legacy.get("weight")), 1000
+    )
+    location = row.location if row.location is not None else legacy.get("location", legacy.get("location_name"))
+    story = row.story if row.story is not None else legacy.get("story")
+    if not isinstance(location, str):
+        location = None
+    if not isinstance(story, str):
+        story = None
     return CatchOut(
         id=row.id,
         image_url=_catch_media_url(row.id),
@@ -167,6 +258,11 @@ def _catch_out(row: FishCatch) -> CatchOut:
         species_name=row.species_name,
         confidence=row.confidence,
         model_version=row.model_version,
+        length_cm=length_cm,
+        weight_kg=weight_kg,
+        location=location or None,
+        story=story or None,
+        client_record_id=row.client_record_id,
         captured_at=row.captured_at,
         created_at=row.created_at,
         bside_status=str(row.bside_status or "NONE"),
@@ -226,6 +322,35 @@ def create_catch(
     user: AppUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> CatchCreateResponse:
+    classifier = payload.classifier_result or {}
+    # Explicit top-level nulls are authoritative; fall back to the historic
+    # classifier envelope only when an older client omitted that top-level key.
+    length_cm = payload.length_cm if "length_cm" in payload.model_fields_set else _legacy_numeric(
+        classifier.get("length_cm", classifier.get("length")), 1000
+    )
+    weight_kg = payload.weight_kg if "weight_kg" in payload.model_fields_set else _legacy_numeric(
+        classifier.get("weight_kg", classifier.get("weight")), 1000
+    )
+    location = payload.location if "location" in payload.model_fields_set else classifier.get(
+        "location", classifier.get("location_name")
+    )
+    story = payload.story if "story" in payload.model_fields_set else classifier.get("story")
+    if not isinstance(location, str):
+        location = None
+    if not isinstance(story, str):
+        story = None
+    if payload.client_record_id:
+        existing = db.scalar(
+            select(FishCatch).where(
+                FishCatch.user_id == user.id,
+                FishCatch.client_record_id == payload.client_record_id,
+            )
+        )
+        if existing is not None:
+            if not _same_idempotent_request(existing, payload, length_cm, weight_kg, location, story):
+                raise HTTPException(status_code=409, detail="该客户端记录标识已用于不同鱼获数据")
+            return CatchCreateResponse(catch_id=existing.id, saved=True, catch=_catch_out(existing))
+
     upload_id = _resolve_upload_id(payload)
     try:
         _client, blob = _find_uploaded_blob(user, upload_id)
@@ -246,10 +371,31 @@ def create_catch(
         model_version=payload.model_version,
         detector_result_json=json.dumps(payload.detector_result, ensure_ascii=False, separators=(",", ":")) if payload.detector_result else None,
         classifier_result_json=json.dumps(payload.classifier_result, ensure_ascii=False, separators=(",", ":")) if payload.classifier_result else None,
+        length_cm=length_cm,
+        weight_kg=weight_kg,
+        location=location or None,
+        story=story or None,
+        metadata_version=1,
+        client_record_id=payload.client_record_id,
         captured_at=captured_at,
     )
     db.add(row)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        if payload.client_record_id:
+            existing = db.scalar(
+                select(FishCatch).where(
+                    FishCatch.user_id == user.id,
+                    FishCatch.client_record_id == payload.client_record_id,
+                )
+            )
+            if existing is not None and _same_idempotent_request(
+                existing, payload, length_cm, weight_kg, location, story
+            ):
+                return CatchCreateResponse(catch_id=existing.id, saved=True, catch=_catch_out(existing))
+        raise
     db.refresh(row)
     return CatchCreateResponse(catch_id=row.id, saved=True, catch=_catch_out(row))
 
@@ -298,6 +444,42 @@ def catch_statistics(
         top_species=[SpeciesCount(species_id=row.species_id, species=row.species_name, count=int(row.count)) for row in top_rows],
         recent_species=recent,
     )
+
+
+@router.get("/capabilities", response_model=CatchCapabilitiesOut)
+def catch_capabilities(
+    user: AppUser = Depends(get_current_user),
+) -> CatchCapabilitiesOut:
+    # Authentication prevents exposing unnecessary API surface to anonymous callers.
+    del user
+    return CatchCapabilitiesOut()
+
+
+@router.get("/by-client-record/{client_record_id}", response_model=CatchOut)
+def get_catch_by_client_record_id(
+    client_record_id: str,
+    user: AppUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CatchOut:
+    """Resolve an idempotent client save/migration key for crash recovery."""
+    key = client_record_id.strip()
+    if not key or len(key) > 128:
+        raise HTTPException(status_code=422, detail="客户端记录标识无效")
+    row = db.scalar(
+        select(FishCatch).where(FishCatch.user_id == user.id, FishCatch.client_record_id == key)
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="鱼获记录不存在")
+    return _catch_out(row)
+
+
+@router.get("/{catch_id}", response_model=CatchOut)
+def get_catch(
+    catch_id: str,
+    user: AppUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CatchOut:
+    return _catch_out(_owned_catch_or_404(catch_id, user, db))
 
 
 def _owned_catch_or_404(catch_id: str, user: AppUser, db: Session) -> FishCatch:

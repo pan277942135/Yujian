@@ -434,6 +434,12 @@ def _ensure_user_catch_columns() -> None:
     existing = {column["name"] for column in inspector.get_columns("fish_catches")}
     additions = {
         "image_object_name": "TEXT",
+        "length_cm": "DOUBLE PRECISION CHECK (length_cm IS NULL OR (length_cm > 0 AND length_cm <= 1000))",
+        "weight_kg": "DOUBLE PRECISION CHECK (weight_kg IS NULL OR (weight_kg > 0 AND weight_kg <= 1000))",
+        "location": "TEXT",
+        "story": "TEXT",
+        "metadata_version": "INTEGER NOT NULL DEFAULT 0",
+        "client_record_id": "VARCHAR(128)",
         "bside_status": "VARCHAR(16) NOT NULL DEFAULT 'NONE'",
         "bside_result_uri": "TEXT",
         "bside_result_object_name": "TEXT",
@@ -444,6 +450,22 @@ def _ensure_user_catch_columns() -> None:
         for name, definition in additions.items():
             if name not in existing:
                 connection.exec_driver_sql(f'ALTER TABLE "fish_catches" ADD COLUMN "{name}" {definition}')
+        if engine.dialect.name == "postgresql":
+            existing_checks = {
+                check.get("name") for check in inspect(connection).get_check_constraints("fish_catches")
+            }
+            for name, expression in (
+                ("ck_fish_catches_length_cm_range", "length_cm IS NULL OR (length_cm > 0 AND length_cm <= 1000)"),
+                ("ck_fish_catches_weight_kg_range", "weight_kg IS NULL OR (weight_kg > 0 AND weight_kg <= 1000)"),
+            ):
+                if name not in existing_checks:
+                    connection.exec_driver_sql(
+                        f'ALTER TABLE "fish_catches" ADD CONSTRAINT "{name}" CHECK ({expression}) NOT VALID'
+                    )
+        connection.exec_driver_sql(
+            'CREATE UNIQUE INDEX IF NOT EXISTS "uq_fish_catches_user_client_record" '
+            'ON "fish_catches" ("user_id", "client_record_id") WHERE "client_record_id" IS NOT NULL'
+        )
 
     job_table = "fish_bside_job"
     if not inspect(engine).has_table(job_table):
