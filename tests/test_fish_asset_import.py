@@ -201,8 +201,23 @@ def test_imported_version_binds_existing_draft_card_without_overwriting_content(
     db.flush()
 
     assert _bind_imported_version(db, version) == "BOUND"
-    assert card.image_url == version.image_url
+    db.flush()
+    # v1.4 deliberately does not guess which legacy blank-image draft to reuse.
+    # The imported image gets its own immutable version binding and DRAFT row.
+    assert card.image_url == ""
+    assert card.asset_version_id is None
     assert card.description == '{"type":"HERO","tag":"保留标签"}'
+    drafts = db.query(FishCard).filter(
+        FishCard.species_id == "sharpbelly",
+        FishCard.card_type == "HERO",
+        FishCard.status == "DRAFT",
+    ).all()
+    assert len(drafts) == 2
+    imported = next(row for row in drafts if row.asset_version_id == version.id)
+    assert imported.image_url == version.image_url
+    assert imported.id != card.id
+    assert _bind_imported_version(db, version) == "ALREADY_BOUND"
+    assert db.query(FishCard).filter(FishCard.species_id == "sharpbelly").count() == 2
 
 
 def test_imported_version_keeps_active_card_and_creates_draft(tmp_path):
