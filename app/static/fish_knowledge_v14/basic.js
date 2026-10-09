@@ -10,19 +10,20 @@ export async function start(initialId) {
     byId("scientificName").value = row.scientific_name || "";
     byId("family").value = row.family || "";
     byId("genus").value = row.genus || "";
-    byId("aliases").value = JSON.stringify(row.alias || [], null, 2);
+    byId("aliases").value = (row.alias || []).join("\n");
     byId("summary").value = row.summary || "";
     byId("basicStatus").textContent = `当前鱼种状态：${row.status || "UNKNOWN"}`;
+    const notice = byId("basicExposureNotice");
+    notice.textContent = row.status === "ACTIVE" ? "ACTIVE：保存基本信息后将即时公开到鱼种 API。" : "非 ACTIVE：基本信息会立即保存到 CMS，但当前不会由公共鱼种 API 返回。";
+    notice.classList.toggle("active", row.status === "ACTIVE");
+    window.fishBasicStatus = row.status || "UNKNOWN";
   } catch (error) { message(error.message, true); }
 
   byId("saveBasic").addEventListener("click", async () => {
-    let aliases;
+    const aliases = byId("aliases").value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+    if (window.fishBasicStatus === "ACTIVE" && !window.confirm("此鱼种当前为 ACTIVE。保存后，中文名、类别、学名、别名和简介会立即更新公共 API。继续保存吗？")) return;
     try {
-      aliases = JSON.parse(byId("aliases").value || "[]");
-      if (!Array.isArray(aliases)) throw new Error("别名必须是 JSON 数组");
-    } catch (error) { return message(error.message || "别名格式错误", true); }
-    try {
-      await api(`/api/v1/admin/fish/species/${encodeURIComponent(speciesId)}`, {
+      const saved = await api(`/api/v1/admin/fish/species/${encodeURIComponent(speciesId)}`, {
         method: "PATCH", headers: jsonHeaders,
         body: JSON.stringify({
           name_cn: byId("nameCn").value,
@@ -34,7 +35,8 @@ export async function start(initialId) {
           summary: byId("summary").value,
         }),
       });
-      message("鱼种基本信息已保存；资产发布状态未更改");
+      byId("basicStatus").textContent = `已保存 · 当前鱼种状态：${saved.species?.status || saved.status || window.fishBasicStatus}`;
+      message(window.fishBasicStatus === "ACTIVE" ? "鱼种基本信息已保存并即时公开；资产发布状态未更改。" : "鱼种基本信息已保存；资产发布状态未更改。请通过公共 API 核验后再认定是否公开。");
     } catch (error) { message(error.message, true); }
   });
 }

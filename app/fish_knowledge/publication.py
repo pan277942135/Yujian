@@ -115,6 +115,34 @@ def _validate_card_content(card: FishCard, version: FishKnowledgeAssetVersion) -
     }
 
 
+def _record_post_commit_readback_failure(
+    db: Session,
+    audit_id: int | None,
+    readback_error: Any,
+) -> None:
+    """Best-effort annotate the committed publication audit without masking it."""
+
+    if audit_id is None:
+        return
+    try:
+        # Clear only a failed read transaction. The preceding ACTIVE change has
+        # already committed and is never undone by this rollback.
+        db.rollback()
+        audit = db.get(FishKnowledgePublicationAudit, audit_id)
+        if audit is None:
+            return
+        validation = _read_json(audit.validation_json, {})
+        validation = validation if isinstance(validation, dict) else {}
+        validation["public_detail_readback"] = "FAILED_AFTER_COMMIT"
+        validation["public_detail_readback_error"] = (
+            readback_error if isinstance(readback_error, dict) else str(readback_error)
+        )
+        audit.validation_json = json.dumps(validation, ensure_ascii=False, sort_keys=True)
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
 def publish_asset_version(
     db: Session,
     version_id: int,
@@ -124,6 +152,9 @@ def publish_asset_version(
 ) -> dict[str, Any]:
     """Atomically activate the exact image version and its bound content row."""
 
+    db_committed = False
+    committed_identity: dict[str, Any] = {}
+    audit_row: FishKnowledgePublicationAudit | None = None
     try:
         version = db.scalar(
             select(FishKnowledgeAssetVersion)
@@ -248,7 +279,7 @@ def publish_asset_version(
             "content_qa": review.content_qa_result,
             "review_id": review.id,
         }
-        db.add(FishKnowledgePublicationAudit(
+        audit_row = FishKnowledgePublicationAudit(
             species_id=version.species_id,
             asset_role=role,
             asset_version_id=version.id,
@@ -259,7 +290,8 @@ def publish_asset_version(
             validation_json=json.dumps(validation, ensure_ascii=False, sort_keys=True),
             actor=(actor or "admin")[:256],
             created_at=utcnow(),
-        ))
+        )
+        db.add(audit_row)
         db.flush()
 
         # Validate the public response projection while all changes are still
@@ -276,7 +308,15 @@ def publish_asset_version(
             ):
                 _blocked(409, "PUBLICATION_PROJECTION_MISMATCH", "公共详情投影与待发布版本不一致")
 
+        committed_identity = {
+            "species_id": version.species_id,
+            "role": role,
+            "version_id": version.id,
+            "card_id": card.id if card else None,
+            "audit_id": audit_row.id if audit_row else None,
+        }
         db.commit()
+        db_committed = True
         # Re-read the same public serializer after commit and verify the
         # committed API contract. DRAFT species are not externally visible
         # yet, but the internal public projection still remains testable.
@@ -325,10 +365,34 @@ def publish_asset_version(
                 "species_visibility": refreshed_species.status,
             },
         }
-    except HTTPException:
+    except HTTPException as exc:
+        if db_committed:
+            original = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
+            _record_post_commit_readback_failure(db, committed_identity.get("audit_id"), original)
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "code": "PUBLICATION_COMMITTED_READBACK_FAILED",
+                    "message": "数据库发布已提交，但提交后的公共详情核验失败；请先核对版本状态，再决定是否重试。",
+                    "publication_committed": True,
+                    **committed_identity,
+                    "readback_error": original,
+                },
+            ) from exc
         db.rollback()
         raise
     except Exception as exc:
+        if db_committed:
+            _record_post_commit_readback_failure(db, committed_identity.get("audit_id"), exc)
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "code": "PUBLICATION_COMMITTED_READBACK_FAILED",
+                    "message": "数据库发布已提交，但提交后的核验失败；请先核对版本状态，再决定是否重试。",
+                    "publication_committed": True,
+                    **committed_identity,
+                },
+            ) from exc
         db.rollback()
         raise HTTPException(
             status_code=409,
@@ -384,18 +448,55 @@ def save_bound_card_content(
     ))
     if review is not None:
         review.content_qa_result = "PENDING"
+        review.content_qa_note = ""
+        review.content_qa_reviewer = "admin"
+        review.content_qa_reviewed_at = None
         review.reviewed_at = None
         review.review_note = "结构化内容已更新；需要重新完成内容 QA"
+    expected_revision = int(card.content_revision)
+    expected_card_id = int(card.id)
+    expected_version_id = int(version.id)
     try:
         db.commit()
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail={"code": "CONTENT_SAVE_CONFLICT", "message": "内容保存冲突，未写入更改"}) from exc
+    try:
+        db.expire_all()
+        saved_card = db.get(FishCard, expected_card_id)
+        saved_version = db.get(FishKnowledgeAssetVersion, expected_version_id)
+        saved_review = db.scalar(select(FishKnowledgeAssetReview).where(FishKnowledgeAssetReview.version_id == expected_version_id))
+        if (
+            saved_card is None
+            or saved_version is None
+            or saved_card.asset_version_id != expected_version_id
+            or saved_card.species_id != species_id
+            or normalize_card_type(saved_card.card_type) != role
+            or saved_card.content_revision != expected_revision
+            or saved_card.description != description
+            or saved_version.status != "DRAFT"
+        ):
+            raise RuntimeError("content revision or exact version binding mismatch")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "CONTENT_SAVE_COMMITTED_READBACK_FAILED",
+                "message": "知识卡草稿已提交，但保存后读回核验失败。请先刷新并核对 revision，再决定是否重试。",
+                "content_committed": True,
+                "species_id": species_id,
+                "role": role,
+                "version_id": expected_version_id,
+                "card_id": expected_card_id,
+                "content_revision": expected_revision,
+            },
+        ) from exc
     return {
         "species_id": species_id,
         "role": role,
-        "version_id": version.id,
-        "card_id": card.id,
-        "content_revision": card.content_revision,
+        "version_id": expected_version_id,
+        "card_id": expected_card_id,
+        "content_revision": expected_revision,
+        "content_qa_result": saved_review.content_qa_result if saved_review else "PENDING",
         "binding_status": "BOUND_DRAFT",
     }

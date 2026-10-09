@@ -19,7 +19,7 @@
   <header>
     <div class="brand"><div><strong>鱼种知识工作区</strong><small>v1.4 · 资产版本与内容绑定统一管理</small></div><a href="/">模型工厂</a></div>
     <nav>
-      {% for key, label in [('overview','鱼种概览'),('basic','基本信息'),('assets','图片资产'),('cards','五张知识卡'),('batch-import','批量导入'),('publication','发布中心'),('extensions','扩展内容'),('history','历史与审计')] %}
+      {% for key, label in [('overview','鱼种概览'),('basic','基本信息'),('assets','图片资产'),('cards','五张知识卡'),('publication','发布审核'),('history','历史与审计')] %}
       <a data-section-link="{{ key }}" class="{% if section == key %}active{% endif %}" href="/fish-knowledge/{{ key }}">{{ label }}</a>
       {% endfor %}
     </nav>

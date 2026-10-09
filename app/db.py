@@ -104,6 +104,12 @@ def _ensure_fish_knowledge_asset_v13() -> None:
             "validation_warnings_json": "TEXT NOT NULL DEFAULT '[]'",
             "warnings_acknowledged_at": "TIMESTAMP WITH TIME ZONE",
             "warnings_acknowledged_by": "VARCHAR(256)",
+            "visual_qa_note": "TEXT NOT NULL DEFAULT ''",
+            "visual_qa_reviewer": "VARCHAR(256) NOT NULL DEFAULT 'admin'",
+            "visual_qa_reviewed_at": "TIMESTAMP WITH TIME ZONE",
+            "content_qa_note": "TEXT NOT NULL DEFAULT ''",
+            "content_qa_reviewer": "VARCHAR(256) NOT NULL DEFAULT 'admin'",
+            "content_qa_reviewed_at": "TIMESTAMP WITH TIME ZONE",
         },
     }
     with engine.connect() as connection:

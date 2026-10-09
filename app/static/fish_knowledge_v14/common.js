@@ -30,6 +30,9 @@ export async function api(path, options = {}) {
     const msg = typeof detail === "string" ? detail : (detail?.message || body?.message || JSON.stringify(detail || body));
     const error = new Error(msg);
     error.code = detail?.code || body?.error;
+    error.detail = detail;
+    error.publicationCommitted = detail?.publication_committed === true;
+    error.contentCommitted = detail?.content_committed === true;
     throw error;
   }
   return body;
@@ -54,6 +57,10 @@ export async function loadSpecies(initialId = "") {
 export function updateLinks() {
   for (const link of document.querySelectorAll("[data-section-link]")) {
     const section = link.dataset.sectionLink;
+    link.href = speciesId ? `/fish-knowledge/${encodeURIComponent(speciesId)}/${section}` : `/fish-knowledge/${section}`;
+  }
+  for (const link of document.querySelectorAll("[data-workspace-link]")) {
+    const section = link.dataset.workspaceLink;
     link.href = speciesId ? `/fish-knowledge/${encodeURIComponent(speciesId)}/${section}` : `/fish-knowledge/${section}`;
   }
 }

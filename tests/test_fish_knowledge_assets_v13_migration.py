@@ -84,6 +84,8 @@ def test_v13_migration_preserves_history_and_versions_roles_independently(tmp_pa
         assert {
             "binding_type", "binding_id", "binding_status", "binding_image_url", "cms_content_sha256", "asset_status",
             "validation_warnings_json", "warnings_acknowledged_at", "warnings_acknowledged_by",
+            "visual_qa_note", "visual_qa_reviewer", "visual_qa_reviewed_at",
+            "content_qa_note", "content_qa_reviewer", "content_qa_reviewed_at",
         } <= review_columns
         assert connection.execute(text("SELECT version_id FROM fish_knowledge_asset_reviews")).scalar_one() == 1
         assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []

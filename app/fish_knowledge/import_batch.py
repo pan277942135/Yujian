@@ -180,6 +180,12 @@ class FishKnowledgeAssetReview(Base):
     content_qa_result = Column(String(32), nullable=False, default="PENDING")
     review_note = Column(Text, nullable=False, default="")
     reviewer = Column(String(256), nullable=False, default="admin")
+    visual_qa_note = Column(Text, nullable=False, default="")
+    visual_qa_reviewer = Column(String(256), nullable=False, default="admin")
+    visual_qa_reviewed_at = Column(DateTime(timezone=True))
+    content_qa_note = Column(Text, nullable=False, default="")
+    content_qa_reviewer = Column(String(256), nullable=False, default="admin")
+    content_qa_reviewed_at = Column(DateTime(timezone=True))
     binding_type = Column(String(32), nullable=True)
     binding_id = Column(Integer, nullable=True)
     binding_status = Column(String(16), nullable=True)
@@ -191,6 +197,32 @@ class FishKnowledgeAssetReview(Base):
     reviewed_at = Column(DateTime(timezone=True), nullable=True)
     frozen_at = Column(DateTime(timezone=True), nullable=True, index=True)
     code_head = Column(String(64), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class FishKnowledgeAssetQAAudit(Base):
+    """Immutable, per-stage QA evidence tied to an exact asset/content revision."""
+
+    __tablename__ = "fish_knowledge_asset_qa_audits"
+    __table_args__ = (
+        CheckConstraint("qa_stage IN ('VISUAL','CONTENT')", name="ck_fish_knowledge_qa_stage"),
+        Index("ix_fish_knowledge_asset_qa_version_stage", "version_id", "qa_stage"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    version_id = Column(Integer, ForeignKey("fish_knowledge_asset_versions.id", ondelete="RESTRICT"), nullable=False, index=True)
+    species_id = Column(String(128), ForeignKey("fish_species.id", ondelete="RESTRICT"), nullable=False, index=True)
+    asset_role = Column(String(32), nullable=False)
+    qa_stage = Column(String(16), nullable=False)
+    result = Column(String(32), nullable=False)
+    reviewer = Column(String(256), nullable=False)
+    evidence_note = Column(Text, nullable=False, default="")
+    content_revision = Column(Integer, nullable=True)
+    card_id = Column(Integer, ForeignKey("fish_cards.id", ondelete="RESTRICT"), nullable=True)
+    source_sha256 = Column(String(64), nullable=False)
+    derived_media_sha256 = Column(String(64), nullable=False)
+    object_name = Column(Text, nullable=False)
+    object_generation = Column(String(64), nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
@@ -261,10 +293,30 @@ class ExecuteBatchPayload(BaseModel):
 
 class AssetReviewPayload(BaseModel):
     batch_id: str | None = Field(default=None, min_length=3, max_length=128)
-    visual_qa_result: Literal["PASS", "BLOCKED_VISUAL_QA"]
-    content_qa_result: Literal["PASS", "BLOCKED_CONTENT_MISMATCH"]
+    visual_qa_result: Literal["PASS", "BLOCKED_VISUAL_QA"] | None = None
+    visual_qa_note: str = Field(default="", max_length=4000)
+    visual_qa_reviewer: str | None = Field(default=None, min_length=1, max_length=256)
+    content_qa_result: Literal["PASS", "BLOCKED_CONTENT_MISMATCH"] | None = None
+    content_qa_note: str = Field(default="", max_length=4000)
+    content_qa_reviewer: str | None = Field(default=None, min_length=1, max_length=256)
     review_note: str = Field(default="", max_length=4000)
     reviewer: str = Field(default="admin", min_length=1, max_length=256)
+
+
+class PublicAPIReadbackPayload(BaseModel):
+    status: Literal["PUBLIC_API_OK", "API_MISMATCH", "IMAGE_UNREADABLE"]
+    reviewer: str = Field(min_length=1, max_length=256)
+    observed_version_id: int | None = None
+    public_image_sha256: str | None = Field(default=None, max_length=64)
+    preview_image_sha256: str | None = Field(default=None, max_length=64)
+    detail: str = Field(default="", max_length=4000)
+
+
+class ClientAcceptancePayload(BaseModel):
+    result: Literal["CLIENT_PASSED", "CLIENT_FAILED"]
+    reviewer: str = Field(min_length=1, max_length=256)
+    observed_version_id: int
+    detail: str = Field(default="", max_length=4000)
 
 
 router = APIRouter(prefix="/api/v1/admin/fish/assets/import-batches", tags=["fish-knowledge-asset-import"])
@@ -1317,6 +1369,7 @@ def _version_admin_dict(version: FishKnowledgeAssetVersion, db: Session) -> dict
         "asset_role": role,
         "version": version.version,
         "status": version.status,
+        "image_url": version.image_url,
         "source_filename": metadata.get("source_filename"),
         "source_format": metadata.get("source_format") or metadata.get("original_content_type"),
         "source_sha256": metadata.get("source_sha256") or version.sha256,
@@ -1339,6 +1392,12 @@ def _version_admin_dict(version: FishKnowledgeAssetVersion, db: Session) -> dict
             "reviewer": review.reviewer,
             "review_note": review.review_note,
             "reviewed_at": review.reviewed_at.isoformat() if review and review.reviewed_at else None,
+            "visual_qa_note": review.visual_qa_note,
+            "visual_qa_reviewer": review.visual_qa_reviewer,
+            "visual_qa_reviewed_at": review.visual_qa_reviewed_at.isoformat() if review and review.visual_qa_reviewed_at else None,
+            "content_qa_note": review.content_qa_note,
+            "content_qa_reviewer": review.content_qa_reviewer,
+            "content_qa_reviewed_at": review.content_qa_reviewed_at.isoformat() if review and review.content_qa_reviewed_at else None,
         } if review else None,
     }
 
@@ -1469,6 +1528,10 @@ def get_unified_card_workspace(
             FishKnowledgePublicationAudit.species_id == species.id,
             FishKnowledgePublicationAudit.asset_role == role,
         ).order_by(FishKnowledgePublicationAudit.created_at.desc(), FishKnowledgePublicationAudit.id.desc())).all()
+        qa_history = db.scalars(select(FishKnowledgeAssetQAAudit).where(
+            FishKnowledgeAssetQAAudit.species_id == species.id,
+            FishKnowledgeAssetQAAudit.asset_role == role,
+        ).order_by(FishKnowledgeAssetQAAudit.created_at.desc(), FishKnowledgeAssetQAAudit.id.desc())).all()
 
         roles[role] = {
             "asset_role": role,
@@ -1537,6 +1600,21 @@ def get_unified_card_workspace(
                     "actor": value.actor,
                     "created_at": value.created_at.isoformat() if value.created_at else None,
                 } for value in publication_history],
+                "qa_audits": [{
+                    "id": value.id,
+                    "version_id": value.version_id,
+                    "stage": value.qa_stage,
+                    "result": value.result,
+                    "reviewer": value.reviewer,
+                    "evidence_note": value.evidence_note,
+                    "content_revision": value.content_revision,
+                    "card_id": value.card_id,
+                    "source_sha256": value.source_sha256,
+                    "derived_media_sha256": value.derived_media_sha256,
+                    "object_name": value.object_name,
+                    "object_generation": value.object_generation,
+                    "created_at": value.created_at.isoformat() if value.created_at else None,
+                } for value in qa_history],
                 "legacy_cards": [{
                     "card_id": value.id,
                     "status": value.status,
@@ -1577,6 +1655,7 @@ async def upload_single_asset_v13(
     asset_role: str = Form(...),
     file: UploadFile = File(...),
     allow_warnings: bool = Form(False),
+    preflight_only: bool = Form(False),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Stage and import one slot through the same batch scan/execute core."""
@@ -1612,19 +1691,26 @@ async def upload_single_asset_v13(
     item.source_filename = original_name
     db.commit()
     if item.validation_status == "INVALID":
-        return {"batch_id": batch_id, "status": "READY", "validation_status": "INVALID", "item": _item_dict(item, base=f"/api/v1/admin/fish/assets/import-batches/{batch_id}", db=db)}
+        return {"batch_id": batch_id, "status": "READY", "validation_status": "INVALID", "next_action": "EDIT_OR_REJECT", "item": _item_dict(item, base=f"/api/v1/admin/fish/assets/import-batches/{batch_id}", db=db)}
     warnings = _read_json(item.validation_warnings, [])
-    if warnings and not allow_warnings:
-        return {"batch_id": batch_id, "status": "READY", "validation_status": "WARNING", "needs_warning_confirmation": True, "item": _item_dict(item, base=f"/api/v1/admin/fish/assets/import-batches/{batch_id}", db=db)}
-    result = execute_batch(batch_id, ExecuteBatchPayload(allow_warnings=allow_warnings), db)
+    warnings_confirmed = allow_warnings is True
+    if warnings and not warnings_confirmed:
+        return {"batch_id": batch_id, "status": "READY", "validation_status": "WARNING", "needs_warning_confirmation": True, "next_action": "CONFIRM_WARNING", "item": _item_dict(item, base=f"/api/v1/admin/fish/assets/import-batches/{batch_id}", db=db)}
+    if preflight_only is True:
+        return {"batch_id": batch_id, "status": "READY", "validation_status": "VALID", "next_action": "UPLOAD_DRAFT", "item": _item_dict(item, base=f"/api/v1/admin/fish/assets/import-batches/{batch_id}", db=db)}
+    result = execute_batch(batch_id, ExecuteBatchPayload(allow_warnings=warnings_confirmed), db)
     item = db.get(FishAssetImportItem, item.id)
     version = db.get(FishKnowledgeAssetVersion, item.version_id) if item and item.version_id else None
+    if item is None or version is None:
+        return {"batch_id": batch_id, "status": result.get("status"), "validation_status": "FAILED", "next_action": "RETRY_OR_DIAGNOSE", "item": _item_dict(item, base=f"/api/v1/admin/fish/assets/import-batches/{batch_id}", db=db) if item else None, "version": None}
+    persisted_version = db.get(FishKnowledgeAssetVersion, version.id)
     return {
         "batch_id": batch_id,
         "status": result.get("status"),
         "validation_status": item.validation_status if item else "FAILED",
+        "next_action": "DRAFT_CREATED" if persisted_version and persisted_version.status == "DRAFT" else "ALREADY_EXISTS",
         "item": _item_dict(item, base=f"/api/v1/admin/fish/assets/import-batches/{batch_id}", db=db) if item else None,
-        "version": _version_admin_dict(version, db) if version else None,
+        "version": _version_admin_dict(persisted_version, db) if persisted_version else None,
     }
 
 
@@ -1650,11 +1736,156 @@ def activate_asset_version_v13(version_id: int, db: Session = Depends(get_db)) -
     return activate_version(version.batch_id, version.id, db)
 
 
-@asset_router.put("/versions/{version_id}/review")
-def review_asset_version_v13(version_id: int, payload: AssetReviewPayload, db: Session = Depends(get_db)) -> dict[str, Any]:
+@asset_router.post("/versions/{version_id}/public-api-check")
+def record_public_api_readback_v14(
+    version_id: int,
+    payload: PublicAPIReadbackPayload,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Persist an operator's real public HTTP/API and image-byte verification."""
+
     version = db.get(FishKnowledgeAssetVersion, version_id)
     if version is None:
         raise HTTPException(status_code=404, detail={"code": "VERSION_NOT_FOUND", "message": "素材版本不存在"})
+    if version.status != "ACTIVE":
+        raise HTTPException(status_code=409, detail={"code": "PUBLIC_API_CHECK_REQUIRES_ACTIVE", "message": "公共 API 生效检查只接受真实 ACTIVE 版本"})
+    role = _asset_role_for_version(version)
+    audit = db.scalar(select(FishKnowledgePublicationAudit).where(
+        FishKnowledgePublicationAudit.asset_version_id == version.id,
+        FishKnowledgePublicationAudit.species_id == version.species_id,
+        FishKnowledgePublicationAudit.asset_role == role,
+    ).order_by(FishKnowledgePublicationAudit.created_at.desc(), FishKnowledgePublicationAudit.id.desc()))
+    if audit is None:
+        raise HTTPException(status_code=409, detail={"code": "PUBLICATION_AUDIT_MISSING", "message": "缺少此 ACTIVE 版本的发布审计记录"})
+
+    if payload.status == "PUBLIC_API_OK":
+        expected_media_sha = _read_json(version.metadata_json, {})
+        expected_media_sha = str(expected_media_sha.get("derived_sha256") or "").lower() if isinstance(expected_media_sha, dict) else ""
+        evidence_hashes = (payload.public_image_sha256 or "", payload.preview_image_sha256 or "")
+        if payload.observed_version_id != version.id or any(not re.fullmatch(r"[0-9a-f]{64}", value.lower()) for value in evidence_hashes):
+            raise HTTPException(status_code=400, detail={"code": "PUBLIC_API_EVIDENCE_INVALID", "message": "成功核验必须包含目标 version_id 与有效的公共/预览图片 SHA-256"})
+        if evidence_hashes[0].lower() != evidence_hashes[1].lower() or evidence_hashes[0].lower() != expected_media_sha:
+            raise HTTPException(status_code=409, detail={"code": "PUBLIC_API_IMAGE_MISMATCH", "message": "公共图片、目标版本预览与已存派生 SHA-256 不一致"})
+        species = db.get(FishSpecies, version.species_id)
+        if species is None or species.status != "ACTIVE":
+            raise HTTPException(status_code=409, detail={"code": "SPECIES_NOT_PUBLIC", "message": "非 ACTIVE 鱼种不能记录为公共 API 已生效"})
+        from app.fish_knowledge.api import build_species_full_detail, list_fish_species
+
+        detail = build_species_full_detail(species, db)
+        if role == "COVER_HERO":
+            list_item = next((item for item in list_fish_species(db) if item.id == species.id), None)
+            verified = bool(
+                list_item
+                and list_item.cover_hero_status == "ACTIVE"
+                and list_item.cover_hero_version_id == version.id
+                and list_item.cover_hero_image == version.image_url
+                and detail.cover_hero_status == "ACTIVE"
+                and detail.cover_hero_version_id == version.id
+                and detail.cover_hero_image == version.image_url
+            )
+        elif role in {"HERO", "IDENTIFICATION", "ECO", "GEAR", "SKILL"}:
+            asset = detail.knowledge_assets.get(role)
+            card = next((item for item in detail.cards if item.card_type == role), None)
+            verified = bool(
+                asset
+                and asset.get("asset_status") == "ACTIVE"
+                and asset.get("version_id") == version.id
+                and asset.get("image_url") == version.image_url
+                and card
+                and card.status == "ACTIVE"
+                and card.species_id == species.id
+                and card.card_type == role
+                and card.asset_version_id == version.id
+                and card.image_url == version.image_url
+            )
+        else:
+            asset = detail.cover_assets.get(role)
+            verified = bool(asset and asset.get("asset_status") == "ACTIVE" and asset.get("version_id") == version.id and asset.get("image_url") == version.image_url)
+        if not verified:
+            raise HTTPException(status_code=409, detail={"code": "PUBLIC_API_PROJECTION_MISMATCH", "message": "数据库公共 API 投影与已观测的 version_id 不一致"})
+
+    validation = _read_json(audit.validation_json, {})
+    validation = validation if isinstance(validation, dict) else {}
+    checked_at = utcnow()
+    validation["public_api_check"] = {
+        "status": payload.status,
+        "version_id": version.id,
+        "species_id": version.species_id,
+        "asset_role": role,
+        "reviewer": payload.reviewer,
+        "checked_at": checked_at.isoformat(),
+        "observed_version_id": payload.observed_version_id,
+        "public_image_sha256": payload.public_image_sha256,
+        "preview_image_sha256": payload.preview_image_sha256,
+        "detail": payload.detail,
+    }
+    audit.validation_json = _json(validation)
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail={"code": "PUBLIC_API_CHECK_NOT_SAVED", "message": "API 检查结果未能保存到发布审计；请重试"}) from exc
+    return validation["public_api_check"]
+
+
+@asset_router.post("/versions/{version_id}/client-check")
+def record_client_acceptance_v14(
+    version_id: int,
+    payload: ClientAcceptancePayload,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Record independent Android/client acceptance for the exact ACTIVE asset."""
+
+    version = db.get(FishKnowledgeAssetVersion, version_id)
+    if version is None:
+        raise HTTPException(status_code=404, detail={"code": "VERSION_NOT_FOUND", "message": "素材版本不存在"})
+    if version.status != "ACTIVE":
+        raise HTTPException(status_code=409, detail={"code": "CLIENT_CHECK_REQUIRES_ACTIVE", "message": "客户端实测只接受真实 ACTIVE 版本"})
+    if payload.observed_version_id != version.id:
+        raise HTTPException(status_code=400, detail={"code": "CLIENT_VERSION_MISMATCH", "message": "客户端实测必须确认此精确 ACTIVE version_id"})
+    role = _asset_role_for_version(version)
+    audit = db.scalar(select(FishKnowledgePublicationAudit).where(
+        FishKnowledgePublicationAudit.asset_version_id == version.id,
+        FishKnowledgePublicationAudit.species_id == version.species_id,
+        FishKnowledgePublicationAudit.asset_role == role,
+    ).order_by(FishKnowledgePublicationAudit.created_at.desc(), FishKnowledgePublicationAudit.id.desc()))
+    if audit is None:
+        raise HTTPException(status_code=409, detail={"code": "PUBLICATION_AUDIT_MISSING", "message": "缺少此 ACTIVE 版本的发布审计记录"})
+    validation = _read_json(audit.validation_json, {})
+    validation = validation if isinstance(validation, dict) else {}
+    if payload.result == "CLIENT_PASSED":
+        api_check = validation.get("public_api_check") if isinstance(validation.get("public_api_check"), dict) else {}
+        if api_check.get("status") != "PUBLIC_API_OK" or api_check.get("version_id") != version.id:
+            raise HTTPException(status_code=409, detail={"code": "PUBLIC_API_CHECK_REQUIRED", "message": "客户端实测通过前，必须先记录同一 version_id 的 PUBLIC_API_OK"})
+    client_check = {
+        "status": payload.result,
+        "version_id": version.id,
+        "species_id": version.species_id,
+        "asset_role": role,
+        "reviewer": payload.reviewer,
+        "checked_at": utcnow().isoformat(),
+        "observed_version_id": payload.observed_version_id,
+        "detail": payload.detail,
+    }
+    validation["client_acceptance"] = client_check
+    audit.validation_json = _json(validation)
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail={"code": "CLIENT_CHECK_NOT_SAVED", "message": "客户端实测结果未能保存到发布审计；请重试"}) from exc
+    return client_check
+
+
+@asset_router.put("/versions/{version_id}/review")
+def review_asset_version_v13(version_id: int, payload: AssetReviewPayload, db: Session = Depends(get_db)) -> dict[str, Any]:
+    if payload.visual_qa_result is None and payload.content_qa_result is None:
+        raise HTTPException(status_code=400, detail={"code": "QA_STAGE_REQUIRED", "message": "至少提交视觉 QA 或内容 QA 其中一个阶段"})
+    version = db.get(FishKnowledgeAssetVersion, version_id)
+    if version is None:
+        raise HTTPException(status_code=404, detail={"code": "VERSION_NOT_FOUND", "message": "素材版本不存在"})
+    if version.status != "DRAFT":
+        raise HTTPException(status_code=409, detail={"code": "QA_REQUIRES_DRAFT", "message": "QA 只能更新指定 DRAFT 版本；ACTIVE 和历史版本只读"})
     role = _asset_role_for_version(version)
     batch_id = (payload.batch_id or version.batch_id or "").strip()
     if not batch_id:
@@ -1667,6 +1898,8 @@ def review_asset_version_v13(version_id: int, payload: AssetReviewPayload, db: S
     ))
     if review and review.frozen_at:
         raise HTTPException(status_code=409, detail={"code": "ASSET_FROZEN", "message": "冻结版本为只读；更新必须创建新版本"})
+    if payload.visual_qa_result is not None and payload.content_qa_result is not None:
+        raise HTTPException(status_code=400, detail={"code": "QA_STAGES_MUST_BE_SEPARATE", "message": "视觉 QA 与内容 QA 必须分别提交并留存审核记录"})
     item = db.scalar(select(FishAssetImportItem).where(
         FishAssetImportItem.batch_id == batch_id,
         FishAssetImportItem.species_id == version.species_id,
@@ -1699,11 +1932,58 @@ def review_asset_version_v13(version_id: int, payload: AssetReviewPayload, db: S
             validation_warnings_json=_json(warnings),
         )
         db.add(review)
-    review.visual_qa_result = payload.visual_qa_result
-    review.content_qa_result = payload.content_qa_result
-    review.review_note = payload.review_note
+    reviewed_at = utcnow()
+    if payload.visual_qa_result is not None:
+        review.visual_qa_result = payload.visual_qa_result
+        review.visual_qa_note = payload.visual_qa_note or payload.review_note
+        review.visual_qa_reviewer = payload.visual_qa_reviewer or payload.reviewer
+        review.visual_qa_reviewed_at = reviewed_at
+    if payload.content_qa_result is not None:
+        review.content_qa_result = payload.content_qa_result
+        review.content_qa_note = payload.content_qa_note or payload.review_note
+        review.content_qa_reviewer = payload.content_qa_reviewer or payload.reviewer
+        review.content_qa_reviewed_at = reviewed_at
+    review.review_note = payload.review_note or "；".join(filter(None, (review.visual_qa_note, review.content_qa_note)))
     review.reviewer = payload.reviewer
-    review.reviewed_at = utcnow()
+    review.reviewed_at = reviewed_at
+    metadata = _read_json(version.metadata_json, {})
+    metadata = metadata if isinstance(metadata, dict) else {}
+    bound_cards = db.scalars(select(FishCard).where(FishCard.asset_version_id == version.id)).all()
+    bound_card = bound_cards[0] if len(bound_cards) == 1 else None
+    if payload.visual_qa_result is not None:
+        db.add(FishKnowledgeAssetQAAudit(
+            version_id=version.id,
+            species_id=version.species_id,
+            asset_role=role,
+            qa_stage="VISUAL",
+            result=payload.visual_qa_result,
+            reviewer=payload.visual_qa_reviewer or payload.reviewer,
+            evidence_note=payload.visual_qa_note or payload.review_note,
+            content_revision=int(bound_card.content_revision or 1) if bound_card else None,
+            card_id=bound_card.id if bound_card else None,
+            source_sha256=str(version.sha256 or ""),
+            derived_media_sha256=str(metadata.get("derived_sha256") or ""),
+            object_name=version.object_name,
+            object_generation=str(metadata.get("gcs_generation") or ""),
+            created_at=reviewed_at,
+        ))
+    if payload.content_qa_result is not None:
+        db.add(FishKnowledgeAssetQAAudit(
+            version_id=version.id,
+            species_id=version.species_id,
+            asset_role=role,
+            qa_stage="CONTENT",
+            result=payload.content_qa_result,
+            reviewer=payload.content_qa_reviewer or payload.reviewer,
+            evidence_note=payload.content_qa_note or payload.review_note,
+            content_revision=int(bound_card.content_revision or 1) if bound_card else None,
+            card_id=bound_card.id if bound_card else None,
+            source_sha256=str(version.sha256 or ""),
+            derived_media_sha256=str(metadata.get("derived_sha256") or ""),
+            object_name=version.object_name,
+            object_generation=str(metadata.get("gcs_generation") or ""),
+            created_at=reviewed_at,
+        ))
     db.commit()
     return {
         "version_id": version.id,
@@ -1712,7 +1992,13 @@ def review_asset_version_v13(version_id: int, payload: AssetReviewPayload, db: S
         "asset_role": role,
         "validation_result": review.validation_result,
         "visual_qa_result": review.visual_qa_result,
+        "visual_qa_note": review.visual_qa_note,
+        "visual_qa_reviewer": review.visual_qa_reviewer,
+        "visual_qa_reviewed_at": review.visual_qa_reviewed_at.isoformat() if review.visual_qa_reviewed_at else None,
         "content_qa_result": review.content_qa_result,
+        "content_qa_note": review.content_qa_note,
+        "content_qa_reviewer": review.content_qa_reviewer,
+        "content_qa_reviewed_at": review.content_qa_reviewed_at.isoformat() if review.content_qa_reviewed_at else None,
         "frozen": bool(review.frozen_at),
     }
 
@@ -1736,7 +2022,13 @@ def _freeze_manifest_rows(db: Session, batch_id: str) -> list[dict[str, Any]]:
         "validation_result": row.validation_result,
         "validation_warnings": _read_json(row.validation_warnings_json, []),
         "visual_qa_result": row.visual_qa_result,
+        "visual_qa_note": row.visual_qa_note,
+        "visual_qa_reviewer": row.visual_qa_reviewer,
+        "visual_qa_reviewed_at": row.visual_qa_reviewed_at.isoformat() if row.visual_qa_reviewed_at else None,
         "content_qa_result": row.content_qa_result,
+        "content_qa_note": row.content_qa_note,
+        "content_qa_reviewer": row.content_qa_reviewer,
+        "content_qa_reviewed_at": row.content_qa_reviewed_at.isoformat() if row.content_qa_reviewed_at else None,
         "warnings_acknowledged_at": row.warnings_acknowledged_at.isoformat() if row.warnings_acknowledged_at else None,
         "warnings_acknowledged_by": row.warnings_acknowledged_by,
         "binding_type": row.binding_type,

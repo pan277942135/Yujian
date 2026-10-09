@@ -1,13 +1,14 @@
 <section class="panel">
   <h1>基本信息</h1>
-  <p class="muted">编辑鱼种身份与说明。此处保存不会发布图片资产或五张知识卡；鱼种可见性在发布中心单独管理。</p>
+  <p id="basicExposureNotice" class="status"></p>
+  <p class="muted">保存会直接更新鱼种基本字段；图片与知识卡版本状态不会改变。对于 ACTIVE 鱼种，这些字段会即时出现在公共 API。</p>
   <div class="stack">
     <label>中文名<input id="nameCn" class="wide" maxlength="128"></label>
     <label>类别<input id="category" class="wide" maxlength="64"></label>
     <label>学名<input id="scientificName" class="wide" maxlength="256"></label>
     <label>科<input id="family" class="wide" maxlength="128"></label>
     <label>属<input id="genus" class="wide" maxlength="128"></label>
-    <label>别名（JSON 数组）<textarea id="aliases"></textarea></label>
+    <label>别名（每行一个）<textarea id="aliases" placeholder="例如：鲩鱼&#10;草鲩"></textarea></label>
     <label>简介<textarea id="summary"></textarea></label>
     <div><button id="saveBasic" class="primary">保存基本信息</button> <span id="basicStatus" class="muted"></span></div>
   </div>
