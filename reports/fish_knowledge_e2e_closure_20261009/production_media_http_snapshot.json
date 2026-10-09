@@ -1,0 +1,1292 @@
+{
+  "base_url": "https://yujian-model-factory-console-571785698442.asia-east1.run.app",
+  "method": "read-only HTTP GET",
+  "distinct_urls": 101,
+  "api_rows": [
+    {
+      "species_id": "grass_carp",
+      "asset_role": "COVER_HERO",
+      "image_url": "/api/v1/fish/knowledge-media/grass_carp/cover_hero/v1.webp",
+      "surface": "detail.cover_hero_image"
+    },
+    {
+      "species_id": "grass_carp",
+      "asset_role": "HERO",
+      "image_url": "/api/v1/fish/knowledge-media/grass_carp/hero/v2.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "grass_carp",
+      "asset_role": "IDENTIFICATION",
+      "image_url": "/api/v1/fish/knowledge-media/grass_carp/identification/v2.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "grass_carp",
+      "asset_role": "ECO",
+      "image_url": "/api/v1/fish/knowledge-media/grass_carp/eco/v2.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "grass_carp",
+      "asset_role": "GEAR",
+      "image_url": "/api/v1/fish/knowledge-media/grass_carp/gear/gear.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "grass_carp",
+      "asset_role": "SKILL",
+      "image_url": "/api/v1/fish/knowledge-media/grass_carp/skill/skill.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "grass_carp",
+      "asset_role": "HERO",
+      "image_url": "/api/v1/fish/knowledge-media/grass_carp/hero/v2.webp",
+      "surface": "knowledge_assets",
+      "asset_version_id": 136,
+      "asset_status": null
+    },
+    {
+      "species_id": "grass_carp",
+      "asset_role": "IDENTIFICATION",
+      "image_url": "/api/v1/fish/knowledge-media/grass_carp/identification/v2.webp",
+      "surface": "knowledge_assets",
+      "asset_version_id": 137,
+      "asset_status": null
+    },
+    {
+      "species_id": "grass_carp",
+      "asset_role": "ECO",
+      "image_url": "/api/v1/fish/knowledge-media/grass_carp/eco/v2.webp",
+      "surface": "knowledge_assets",
+      "asset_version_id": 138,
+      "asset_status": null
+    },
+    {
+      "species_id": "bighead_carp",
+      "asset_role": "HERO",
+      "image_url": "/api/v1/fish/knowledge-media/bighead_carp/hero/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "bighead_carp",
+      "asset_role": "IDENTIFICATION",
+      "image_url": "/api/v1/fish/knowledge-media/bighead_carp/identification/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "bighead_carp",
+      "asset_role": "ECO",
+      "image_url": "/api/v1/fish/knowledge-media/bighead_carp/eco/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "bighead_carp",
+      "asset_role": "GEAR",
+      "image_url": "/api/v1/fish/knowledge-media/bighead_carp/gear/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "bighead_carp",
+      "asset_role": "SKILL",
+      "image_url": "/api/v1/fish/knowledge-media/bighead_carp/skill/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "silver_carp",
+      "asset_role": "HERO",
+      "image_url": "/api/v1/fish/knowledge-media/silver_carp/hero/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "silver_carp",
+      "asset_role": "IDENTIFICATION",
+      "image_url": "/api/v1/fish/knowledge-media/silver_carp/identification/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "silver_carp",
+      "asset_role": "ECO",
+      "image_url": "/api/v1/fish/knowledge-media/silver_carp/eco/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "silver_carp",
+      "asset_role": "GEAR",
+      "image_url": "/api/v1/fish/knowledge-media/silver_carp/gear/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "silver_carp",
+      "asset_role": "SKILL",
+      "image_url": "/api/v1/fish/knowledge-media/silver_carp/skill/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "common_carp",
+      "asset_role": "HERO",
+      "image_url": "/api/v1/fish/knowledge-media/common_carp/hero/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "common_carp",
+      "asset_role": "IDENTIFICATION",
+      "image_url": "/api/v1/fish/knowledge-media/common_carp/identification/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "common_carp",
+      "asset_role": "ECO",
+      "image_url": "/api/v1/fish/knowledge-media/common_carp/eco/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "common_carp",
+      "asset_role": "GEAR",
+      "image_url": "/api/v1/fish/knowledge-media/common_carp/gear/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "common_carp",
+      "asset_role": "SKILL",
+      "image_url": "/api/v1/fish/knowledge-media/common_carp/skill/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "crucian_carp",
+      "asset_role": "HERO",
+      "image_url": "/api/v1/fish/knowledge-media/crucian_carp/hero/hero.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "crucian_carp",
+      "asset_role": "IDENTIFICATION",
+      "image_url": "/api/v1/fish/knowledge-media/crucian_carp/identification/identification.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "crucian_carp",
+      "asset_role": "ECO",
+      "image_url": "/api/v1/fish/knowledge-media/crucian_carp/eco/eco.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "crucian_carp",
+      "asset_role": "GEAR",
+      "image_url": "/api/v1/fish/knowledge-media/crucian_carp/gear/gear.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "crucian_carp",
+      "asset_role": "SKILL",
+      "image_url": "/api/v1/fish/knowledge-media/crucian_carp/skill/skill.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "largemouth_bass",
+      "asset_role": "HERO",
+      "image_url": "/api/v1/fish/knowledge-media/largemouth_bass/hero/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "largemouth_bass",
+      "asset_role": "IDENTIFICATION",
+      "image_url": "/api/v1/fish/knowledge-media/largemouth_bass/identification/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "largemouth_bass",
+      "asset_role": "ECO",
+      "image_url": "/api/v1/fish/knowledge-media/largemouth_bass/eco/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "largemouth_bass",
+      "asset_role": "GEAR",
+      "image_url": "/api/v1/fish/knowledge-media/largemouth_bass/gear/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "largemouth_bass",
+      "asset_role": "SKILL",
+      "image_url": "/api/v1/fish/knowledge-media/largemouth_bass/skill/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "snakehead",
+      "asset_role": "HERO",
+      "image_url": "/api/v1/fish/knowledge-media/snakehead/hero/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "snakehead",
+      "asset_role": "IDENTIFICATION",
+      "image_url": "/api/v1/fish/knowledge-media/snakehead/identification/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "snakehead",
+      "asset_role": "ECO",
+      "image_url": "/api/v1/fish/knowledge-media/snakehead/eco/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "snakehead",
+      "asset_role": "GEAR",
+      "image_url": "/api/v1/fish/knowledge-media/snakehead/gear/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "snakehead",
+      "asset_role": "SKILL",
+      "image_url": "/api/v1/fish/knowledge-media/snakehead/skill/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "yellow_catfish",
+      "asset_role": "HERO",
+      "image_url": "/api/v1/fish/knowledge-media/yellow_catfish/hero/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "yellow_catfish",
+      "asset_role": "IDENTIFICATION",
+      "image_url": "/api/v1/fish/knowledge-media/yellow_catfish/identification/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "yellow_catfish",
+      "asset_role": "ECO",
+      "image_url": "/api/v1/fish/knowledge-media/yellow_catfish/eco/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "yellow_catfish",
+      "asset_role": "GEAR",
+      "image_url": "/api/v1/fish/knowledge-media/yellow_catfish/gear/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "yellow_catfish",
+      "asset_role": "SKILL",
+      "image_url": "/api/v1/fish/knowledge-media/yellow_catfish/skill/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "black_carp",
+      "asset_role": "HERO",
+      "image_url": "/api/v1/fish/knowledge-media/black_carp/hero/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "black_carp",
+      "asset_role": "IDENTIFICATION",
+      "image_url": "/api/v1/fish/knowledge-media/black_carp/identification/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "black_carp",
+      "asset_role": "ECO",
+      "image_url": "/api/v1/fish/knowledge-media/black_carp/eco/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "black_carp",
+      "asset_role": "GEAR",
+      "image_url": "/api/v1/fish/knowledge-media/black_carp/gear/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "black_carp",
+      "asset_role": "SKILL",
+      "image_url": "/api/v1/fish/knowledge-media/black_carp/skill/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "tilapia",
+      "asset_role": "HERO",
+      "image_url": "/api/v1/fish/knowledge-media/tilapia/hero/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "tilapia",
+      "asset_role": "IDENTIFICATION",
+      "image_url": "/api/v1/fish/knowledge-media/tilapia/identification/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "tilapia",
+      "asset_role": "ECO",
+      "image_url": "/api/v1/fish/knowledge-media/tilapia/eco/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "tilapia",
+      "asset_role": "GEAR",
+      "image_url": "/api/v1/fish/knowledge-media/tilapia/gear/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "tilapia",
+      "asset_role": "SKILL",
+      "image_url": "/api/v1/fish/knowledge-media/tilapia/skill/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "mandarin_fish",
+      "asset_role": "HERO",
+      "image_url": "/api/v1/fish/knowledge-media/mandarin_fish/hero/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "mandarin_fish",
+      "asset_role": "IDENTIFICATION",
+      "image_url": "/api/v1/fish/knowledge-media/mandarin_fish/identification/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "mandarin_fish",
+      "asset_role": "ECO",
+      "image_url": "/api/v1/fish/knowledge-media/mandarin_fish/eco/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "mandarin_fish",
+      "asset_role": "GEAR",
+      "image_url": "/api/v1/fish/knowledge-media/mandarin_fish/gear/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "mandarin_fish",
+      "asset_role": "SKILL",
+      "image_url": "/api/v1/fish/knowledge-media/mandarin_fish/skill/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "topmouth_culter",
+      "asset_role": "HERO",
+      "image_url": "/api/v1/fish/knowledge-media/topmouth_culter/hero/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "topmouth_culter",
+      "asset_role": "IDENTIFICATION",
+      "image_url": "/api/v1/fish/knowledge-media/topmouth_culter/identification/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "topmouth_culter",
+      "asset_role": "ECO",
+      "image_url": "/api/v1/fish/knowledge-media/topmouth_culter/eco/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "topmouth_culter",
+      "asset_role": "GEAR",
+      "image_url": "/api/v1/fish/knowledge-media/topmouth_culter/gear/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "topmouth_culter",
+      "asset_role": "SKILL",
+      "image_url": "/api/v1/fish/knowledge-media/topmouth_culter/skill/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "blunt_snout_bream",
+      "asset_role": "HERO",
+      "image_url": "/api/v1/fish/knowledge-media/blunt_snout_bream/hero/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "blunt_snout_bream",
+      "asset_role": "IDENTIFICATION",
+      "image_url": "/api/v1/fish/knowledge-media/blunt_snout_bream/identification/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "blunt_snout_bream",
+      "asset_role": "ECO",
+      "image_url": "/api/v1/fish/knowledge-media/blunt_snout_bream/eco/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "blunt_snout_bream",
+      "asset_role": "GEAR",
+      "image_url": "/api/v1/fish/knowledge-media/blunt_snout_bream/gear/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "blunt_snout_bream",
+      "asset_role": "SKILL",
+      "image_url": "/api/v1/fish/knowledge-media/blunt_snout_bream/skill/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "chinese_catfish",
+      "asset_role": "HERO",
+      "image_url": "/api/v1/fish/knowledge-media/chinese_catfish/hero/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "chinese_catfish",
+      "asset_role": "IDENTIFICATION",
+      "image_url": "/api/v1/fish/knowledge-media/chinese_catfish/identification/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "chinese_catfish",
+      "asset_role": "ECO",
+      "image_url": "/api/v1/fish/knowledge-media/chinese_catfish/eco/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "chinese_catfish",
+      "asset_role": "GEAR",
+      "image_url": "/api/v1/fish/knowledge-media/chinese_catfish/gear/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "chinese_catfish",
+      "asset_role": "SKILL",
+      "image_url": "/api/v1/fish/knowledge-media/chinese_catfish/skill/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "mud_carp",
+      "asset_role": "HERO",
+      "image_url": "/api/v1/fish/knowledge-media/mud_carp/hero/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "mud_carp",
+      "asset_role": "IDENTIFICATION",
+      "image_url": "/api/v1/fish/knowledge-media/mud_carp/identification/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "mud_carp",
+      "asset_role": "ECO",
+      "image_url": "/api/v1/fish/knowledge-media/mud_carp/eco/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "mud_carp",
+      "asset_role": "GEAR",
+      "image_url": "/api/v1/fish/knowledge-media/mud_carp/gear/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "mud_carp",
+      "asset_role": "SKILL",
+      "image_url": "/api/v1/fish/knowledge-media/mud_carp/skill/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "sharpbelly",
+      "asset_role": "HERO",
+      "image_url": "/api/v1/fish/knowledge-media/sharpbelly/hero/hero.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "sharpbelly",
+      "asset_role": "IDENTIFICATION",
+      "image_url": "/api/v1/fish/knowledge-media/sharpbelly/identification/identification.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "sharpbelly",
+      "asset_role": "ECO",
+      "image_url": "/api/v1/fish/knowledge-media/sharpbelly/eco/eco.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "sharpbelly",
+      "asset_role": "GEAR",
+      "image_url": "/api/v1/fish/knowledge-media/sharpbelly/gear/gear.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "sharpbelly",
+      "asset_role": "SKILL",
+      "image_url": "/api/v1/fish/knowledge-media/sharpbelly/skill/skill.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "chinese_hooksnout_carp",
+      "asset_role": "HERO",
+      "image_url": "/api/v1/fish/knowledge-media/chinese_hooksnout_carp/hero/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "chinese_hooksnout_carp",
+      "asset_role": "IDENTIFICATION",
+      "image_url": "/api/v1/fish/knowledge-media/chinese_hooksnout_carp/identification/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "chinese_hooksnout_carp",
+      "asset_role": "ECO",
+      "image_url": "/api/v1/fish/knowledge-media/chinese_hooksnout_carp/eco/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "chinese_hooksnout_carp",
+      "asset_role": "GEAR",
+      "image_url": "/api/v1/fish/knowledge-media/chinese_hooksnout_carp/gear/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "chinese_hooksnout_carp",
+      "asset_role": "SKILL",
+      "image_url": "/api/v1/fish/knowledge-media/chinese_hooksnout_carp/skill/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "yellowcheek",
+      "asset_role": "HERO",
+      "image_url": "/api/v1/fish/knowledge-media/yellowcheek/hero/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "yellowcheek",
+      "asset_role": "IDENTIFICATION",
+      "image_url": "/api/v1/fish/knowledge-media/yellowcheek/identification/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "yellowcheek",
+      "asset_role": "ECO",
+      "image_url": "/api/v1/fish/knowledge-media/yellowcheek/eco/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "yellowcheek",
+      "asset_role": "GEAR",
+      "image_url": "/api/v1/fish/knowledge-media/yellowcheek/gear/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "yellowcheek",
+      "asset_role": "SKILL",
+      "image_url": "/api/v1/fish/knowledge-media/yellowcheek/skill/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "yellowfin_culter",
+      "asset_role": "HERO",
+      "image_url": "/api/v1/fish/knowledge-media/yellowfin_culter/hero/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "yellowfin_culter",
+      "asset_role": "IDENTIFICATION",
+      "image_url": "/api/v1/fish/knowledge-media/yellowfin_culter/identification/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "yellowfin_culter",
+      "asset_role": "ECO",
+      "image_url": "/api/v1/fish/knowledge-media/yellowfin_culter/eco/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "yellowfin_culter",
+      "asset_role": "GEAR",
+      "image_url": "/api/v1/fish/knowledge-media/yellowfin_culter/gear/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "yellowfin_culter",
+      "asset_role": "SKILL",
+      "image_url": "/api/v1/fish/knowledge-media/yellowfin_culter/skill/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "redfin_culter",
+      "asset_role": "HERO",
+      "image_url": "/api/v1/fish/knowledge-media/redfin_culter/hero/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "redfin_culter",
+      "asset_role": "IDENTIFICATION",
+      "image_url": "/api/v1/fish/knowledge-media/redfin_culter/identification/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "redfin_culter",
+      "asset_role": "ECO",
+      "image_url": "/api/v1/fish/knowledge-media/redfin_culter/eco/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "redfin_culter",
+      "asset_role": "GEAR",
+      "image_url": "/api/v1/fish/knowledge-media/redfin_culter/gear/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    },
+    {
+      "species_id": "redfin_culter",
+      "asset_role": "SKILL",
+      "image_url": "/api/v1/fish/knowledge-media/redfin_culter/skill/v1.webp",
+      "surface": "cards[]",
+      "cards_status": "ACTIVE",
+      "asset_version_id": null
+    }
+  ],
+  "url_results": {
+    "/api/v1/fish/knowledge-media/grass_carp/cover_hero/v1.webp": {
+      "http_status": 200,
+      "content_type": "image/webp",
+      "size_bytes": 354890,
+      "sha256": "69db953044f8985969a273a6c5a1fe59928e6804e1bd4bb4c9b7c4d372f60b80",
+      "image_signature": "52494646426a050057454250"
+    },
+    "/api/v1/fish/knowledge-media/grass_carp/hero/v2.webp": {
+      "http_status": 200,
+      "content_type": "image/webp",
+      "size_bytes": 380476,
+      "sha256": "84a41334b7667b09ee469ea9d1509606ae55e3dff52ddfeb3d822da377684e01",
+      "image_signature": "5249464634ce050057454250"
+    },
+    "/api/v1/fish/knowledge-media/grass_carp/identification/v2.webp": {
+      "http_status": 200,
+      "content_type": "image/webp",
+      "size_bytes": 442242,
+      "sha256": "b606030d31d8efcf189e865ad733a1f912f352e750ba50112a9522cb21004b0d",
+      "image_signature": "524946467abf060057454250"
+    },
+    "/api/v1/fish/knowledge-media/grass_carp/eco/v2.webp": {
+      "http_status": 200,
+      "content_type": "image/webp",
+      "size_bytes": 413806,
+      "sha256": "fab9deaa11ccc12495bf6932a02531f9167778d687780c72387f34d28fdb98fa",
+      "image_signature": "524946466650060057454250"
+    },
+    "/api/v1/fish/knowledge-media/grass_carp/gear/gear.webp": {
+      "http_status": 200,
+      "content_type": "image/webp",
+      "size_bytes": 317096,
+      "sha256": "4fe2e1c597d07bdffc1b0b234e6c633c71687afa039d1ac6d48dbc17d0d22e2a",
+      "image_signature": "52494646a0d6040057454250"
+    },
+    "/api/v1/fish/knowledge-media/grass_carp/skill/skill.webp": {
+      "http_status": 200,
+      "content_type": "image/webp",
+      "size_bytes": 420460,
+      "sha256": "0d9b0633c7057d640945a58ac67a74ada7fa551fb2bd8753feb4c0961ddd4a41",
+      "image_signature": "52494646646a060057454250"
+    },
+    "/api/v1/fish/knowledge-media/bighead_carp/hero/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/bighead_carp/identification/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/bighead_carp/eco/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/bighead_carp/gear/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/bighead_carp/skill/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/silver_carp/hero/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/silver_carp/identification/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/silver_carp/eco/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/silver_carp/gear/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/silver_carp/skill/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/common_carp/hero/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/common_carp/identification/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/common_carp/eco/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/common_carp/gear/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/common_carp/skill/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/crucian_carp/hero/hero.webp": {
+      "http_status": 200,
+      "content_type": "image/webp",
+      "size_bytes": 519454,
+      "sha256": "9429258b89864d4936eb694786a462bcd6fdf93979f8947de9b784396e806f7b",
+      "image_signature": "5249464616ed070057454250"
+    },
+    "/api/v1/fish/knowledge-media/crucian_carp/identification/identification.webp": {
+      "http_status": 200,
+      "content_type": "image/webp",
+      "size_bytes": 357136,
+      "sha256": "936b872a086455942beb905e41dc42776adf314294d9875d415f3a2db27bc6ab",
+      "image_signature": "524946460873050057454250"
+    },
+    "/api/v1/fish/knowledge-media/crucian_carp/eco/eco.webp": {
+      "http_status": 200,
+      "content_type": "image/webp",
+      "size_bytes": 357136,
+      "sha256": "936b872a086455942beb905e41dc42776adf314294d9875d415f3a2db27bc6ab",
+      "image_signature": "524946460873050057454250"
+    },
+    "/api/v1/fish/knowledge-media/crucian_carp/gear/gear.webp": {
+      "http_status": 200,
+      "content_type": "image/webp",
+      "size_bytes": 289578,
+      "sha256": "8f8287cc8b7604fb202eee13b824b3cdc28d76961d8853c049a19a3fb044539c",
+      "image_signature": "52494646226b040057454250"
+    },
+    "/api/v1/fish/knowledge-media/crucian_carp/skill/skill.webp": {
+      "http_status": 200,
+      "content_type": "image/webp",
+      "size_bytes": 459120,
+      "sha256": "3d737bd52f358f3e09feda2a55da80d6fd09dc1ff01b550a436c5b6366050472",
+      "image_signature": "524946466801070057454250"
+    },
+    "/api/v1/fish/knowledge-media/largemouth_bass/hero/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/largemouth_bass/identification/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/largemouth_bass/eco/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/largemouth_bass/gear/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/largemouth_bass/skill/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/snakehead/hero/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/snakehead/identification/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/snakehead/eco/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/snakehead/gear/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/snakehead/skill/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/yellow_catfish/hero/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/yellow_catfish/identification/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/yellow_catfish/eco/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/yellow_catfish/gear/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/yellow_catfish/skill/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/black_carp/hero/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/black_carp/identification/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/black_carp/eco/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/black_carp/gear/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/black_carp/skill/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/tilapia/hero/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/tilapia/identification/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/tilapia/eco/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/tilapia/gear/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/tilapia/skill/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/mandarin_fish/hero/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/mandarin_fish/identification/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/mandarin_fish/eco/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/mandarin_fish/gear/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/mandarin_fish/skill/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/topmouth_culter/hero/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/topmouth_culter/identification/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/topmouth_culter/eco/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/topmouth_culter/gear/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/topmouth_culter/skill/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/blunt_snout_bream/hero/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/blunt_snout_bream/identification/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/blunt_snout_bream/eco/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/blunt_snout_bream/gear/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/blunt_snout_bream/skill/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/chinese_catfish/hero/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/chinese_catfish/identification/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/chinese_catfish/eco/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/chinese_catfish/gear/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/chinese_catfish/skill/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/mud_carp/hero/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/mud_carp/identification/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/mud_carp/eco/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/mud_carp/gear/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/mud_carp/skill/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/sharpbelly/hero/hero.webp": {
+      "http_status": 200,
+      "content_type": "image/webp",
+      "size_bytes": 409740,
+      "sha256": "531e607149e8c66b35efc8d17573ef297501a18c57456e9ee56b4464fdfe8fe5",
+      "image_signature": "524946468440060057454250"
+    },
+    "/api/v1/fish/knowledge-media/sharpbelly/identification/identification.webp": {
+      "http_status": 200,
+      "content_type": "image/webp",
+      "size_bytes": 349548,
+      "sha256": "00f625e7f925fac4b5e2e9207c9b6038102dc4dd1cc935a3b13c4f30a554b648",
+      "image_signature": "524946466455050057454250"
+    },
+    "/api/v1/fish/knowledge-media/sharpbelly/eco/eco.webp": {
+      "http_status": 200,
+      "content_type": "image/webp",
+      "size_bytes": 386128,
+      "sha256": "96bb75301eca18d4cce6e1a7d7575281ab9812e5d4aa75358acc253116f8d51e",
+      "image_signature": "5249464648e4050057454250"
+    },
+    "/api/v1/fish/knowledge-media/sharpbelly/gear/gear.webp": {
+      "http_status": 200,
+      "content_type": "image/webp",
+      "size_bytes": 258092,
+      "sha256": "0d0743476d0ddc9a3eb2b0922c49d29c2046f259434e775e7b0b21c4b172f3ba",
+      "image_signature": "5249464624f0030057454250"
+    },
+    "/api/v1/fish/knowledge-media/sharpbelly/skill/skill.webp": {
+      "http_status": 200,
+      "content_type": "image/webp",
+      "size_bytes": 373812,
+      "sha256": "e6a64938d4cb0b8e01ac23b3ae4e7d49e4992aaaa439e434d5b31ad00b117594",
+      "image_signature": "524946462cb4050057454250"
+    },
+    "/api/v1/fish/knowledge-media/chinese_hooksnout_carp/hero/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/chinese_hooksnout_carp/identification/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/chinese_hooksnout_carp/eco/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/chinese_hooksnout_carp/gear/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/chinese_hooksnout_carp/skill/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/yellowcheek/hero/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/yellowcheek/identification/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/yellowcheek/eco/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/yellowcheek/gear/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/yellowcheek/skill/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/yellowfin_culter/hero/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/yellowfin_culter/identification/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/yellowfin_culter/eco/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/yellowfin_culter/gear/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/yellowfin_culter/skill/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/redfin_culter/hero/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/redfin_culter/identification/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/redfin_culter/eco/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/redfin_culter/gear/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    },
+    "/api/v1/fish/knowledge-media/redfin_culter/skill/v1.webp": {
+      "http_status": 404,
+      "error": "Not Found"
+    }
+  },
+  "captured_at_asia_shanghai": "2026-10-09T15:23:09.624576+08:00"
+}
