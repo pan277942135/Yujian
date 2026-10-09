@@ -69,6 +69,25 @@ def test_v14_fish_workspace_is_the_rendered_route_and_has_independent_sections()
     assert fish_knowledge_batch_import_page.__code__.co_consts
 
 
+def test_v14_workspace_hides_unused_legacy_rows_but_keeps_versioned_history():
+    assets = Path("app/static/fish_knowledge_v14/assets.js").read_text(encoding="utf-8")
+    cards = Path("app/static/fish_knowledge_v14/cards.js").read_text(encoding="utf-8")
+    history = Path("app/static/fish_knowledge_v14/history.js").read_text(encoding="utf-8")
+    history_template, _filename, _uptodate = templates.env.loader.get_source(
+        templates.env,
+        "fish_knowledge_v14/history.html",
+    )
+
+    assert "legacy_active" not in assets
+    assert "legacy_active" not in cards
+    assert "history.legacy_cards" not in history
+    assert "旧版 FishCard" not in history
+    assert "history.versions" in history
+    assert "history.publication_audits" in history
+    assert "history.content_revisions" in history
+    assert "历史版本、内容修订与发布校验记录均为只读" in history_template
+
+
 def test_fish_knowledge_upload_ui_binds_url_and_reports_persistence_state():
     source, _filename, _uptodate = templates.env.loader.get_source(templates.env, "fish_knowledge.html")
     for marker in (

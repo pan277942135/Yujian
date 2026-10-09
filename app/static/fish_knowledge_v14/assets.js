@@ -4,9 +4,8 @@ function render(workspace) {
   byId("assetSlots").innerHTML = ALL_ROLES.map(role => {
     const slot = workspace.roles[role];
     const active = slot.active_versions.map(v => `<div><span class="status active">ACTIVE v${v.version}</span> · ${escapeHtml(v.source_sha256 || "-")}</div>`).join("") || '<span class="muted">无 ACTIVE</span>';
-    const legacy = slot.legacy_active?.length ? `<div><span class="status">LEGACY ACTIVE · 只读</span> · ${slot.legacy_active.length} 条</div>` : "";
     const drafts = slot.draft_versions.map(v => `<div><span class="status draft">DRAFT v${v.version}</span> · #${v.id} · ${escapeHtml(v.source_sha256 || "-")}</div>`).join("") || '<span class="muted">无 DRAFT</span>';
-    return `<article class="tile"><h3>${LABEL[role]} <span class="muted">${role}</span></h3><div>${active}${legacy}</div><hr><div>${drafts}</div><p class="muted">历史版本：${slot.history.versions.length}</p></article>`;
+    return `<article class="tile"><h3>${LABEL[role]} <span class="muted">${role}</span></h3><div>${active}</div><hr><div>${drafts}</div></article>`;
   }).join("");
 }
 export async function start(initialId) {

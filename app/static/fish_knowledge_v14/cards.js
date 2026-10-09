@@ -7,13 +7,12 @@ function render(workspace) {
     const selected = slot.selected_version;
     const options = versions.map(v => `<option value="${v.id}" ${selected?.id === v.id ? "selected" : ""}>${v.status} v${v.version} · #${v.id}</option>`).join("");
     const active = slot.active_version;
-    const legacyActive = slot.legacy_active?.length ? slot.legacy_active.map(row => `<p><span class="status">旧版线上内容 · 只读</span> · #${row.card_id} · ${escapeHtml(row.title || "")}</p>`).join("") : "";
     const preview = selected?.preview_url || selected?.image_url || "";
     const content = JSON.stringify(slot.structured_content || {}, null, 2);
     const disabled = !selected || selected.status !== "DRAFT" || slot.binding_status === "MISSING";
     return `<article class="tile card-editor" data-role="${role}">
       <h3>${LABEL[role]} <span class="muted">${role}</span></h3>
-      <p>${active ? `<span class="status active">线上 ACTIVE v${active.version}</span> · #${active.id}` : '<span class="status">无版本化线上 ACTIVE</span>'}${legacyActive}</p>
+      <p>${active ? `<span class="status active">线上 ACTIVE v${active.version}</span> · #${active.id}` : '<span class="status">无版本化线上 ACTIVE</span>'}</p>
       <label>编辑目标版本<select class="wide version-select">${options || '<option value="">暂无版本</option>'}</select></label>
       ${preview ? `<img class="preview" src="${escapeHtml(preview)}" alt="${LABEL[role]} 版本预览">` : '<div class="preview empty">选择素材版本查看预览</div>'}
       <p class="muted">绑定状态：${escapeHtml(slot.binding_status)} · revision ${escapeHtml(slot.content_revision ?? "-")}</p>
