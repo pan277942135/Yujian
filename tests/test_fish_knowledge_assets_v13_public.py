@@ -6,6 +6,7 @@ from app import models  # noqa: F401
 from app.db import Base
 from app.platform import models as platform_models  # noqa: F401
 from app.fish_knowledge.api import get_fish_species_full_detail, get_knowledge_media, list_fish_species
+from app.fish_knowledge.cards import FishCard
 from app.fish_knowledge.import_batch import FishKnowledgeAssetVersion
 from app.fish_knowledge.species import FishSpecies
 from app.models import SpeciesCatalog
@@ -97,6 +98,82 @@ def test_public_contract_preserves_legacy_fields_and_never_exposes_draft(monkeyp
             assert error.status_code == 404
         else:
             raise AssertionError("public media API must hide DRAFT versions")
+    finally:
+        db.close()
+
+
+def test_version_shaped_legacy_card_url_is_readable_without_binding_but_draft_is_not(monkeypatch, tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy-version-media.db'}")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine, autoflush=False, autocommit=False)()
+    db.add_all([
+        FishSpecies(id="legacy_route_fish", name_cn="兼容鱼", category="淡水鱼", summary="兼容测试", status="ACTIVE"),
+        FishSpecies(id="draft_route_fish", name_cn="草稿鱼", category="淡水鱼", summary="草稿测试", status="ACTIVE"),
+        FishSpecies(id="active_version_route_fish", name_cn="版本鱼", category="淡水鱼", summary="版本测试", status="ACTIVE"),
+        FishCard(
+            species_id="legacy_route_fish", card_type="HERO", title="旧版卡片",
+            image_url="/api/v1/fish/knowledge-media/legacy_route_fish/hero/v1.webp",
+            description="{}", sort_order=0, status="ACTIVE", asset_version_id=None,
+        ),
+        FishKnowledgeAssetVersion(
+            species_id="draft_route_fish", asset_type="HERO", asset_role="HERO", version=1,
+            object_name="fish-assets/fish-knowledge/draft_route_fish/hero/v1.webp",
+            image_url="/api/v1/fish/knowledge-media/draft_route_fish/hero/v1.webp",
+            status="DRAFT", sha256="d" * 64, metadata_json="{}",
+        ),
+        FishKnowledgeAssetVersion(
+            species_id="active_version_route_fish", asset_type="HERO", asset_role="HERO", version=2,
+            object_name="fish-assets/fish-knowledge/active_version_route_fish/hero/v2.webp",
+            image_url="/api/v1/fish/knowledge-media/active_version_route_fish/hero/v2.webp",
+            status="ACTIVE", sha256="e" * 64, metadata_json="{}",
+        ),
+        FishCard(
+            species_id="draft_route_fish", card_type="HERO", title="未绑定旧卡片",
+            image_url="/api/v1/fish/knowledge-media/draft_route_fish/hero/v1.webp",
+            description="{}", sort_order=0, status="ACTIVE", asset_version_id=None,
+        ),
+        FishCard(
+            species_id="active_version_route_fish", card_type="HERO", title="过期旧卡片",
+            image_url="/api/v1/fish/knowledge-media/active_version_route_fish/hero/v1.webp",
+            description="{}", sort_order=0, status="ACTIVE", asset_version_id=None,
+        ),
+    ])
+    db.commit()
+    requested_objects = []
+
+    class RecordingBlob(MemoryPublicBlob):
+        def __init__(self, name):
+            requested_objects.append(name)
+            super().__init__(name)
+
+    class RecordingBucket:
+        def blob(self, name):
+            return RecordingBlob(name)
+
+    class RecordingStorage:
+        def bucket(self, _name):
+            return RecordingBucket()
+
+    monkeypatch.setattr("app.fish_knowledge.api.storage.Client", lambda: RecordingStorage())
+    monkeypatch.setattr("app.fish_knowledge.api.get_bucket_name", lambda: "test-bucket")
+    try:
+        response = get_knowledge_media("legacy_route_fish", "hero", "v1.webp", db)
+        assert response.body == b"active-webp"
+        assert requested_objects == ["fish-assets/fish-knowledge/legacy_route_fish/hero/v1.webp"]
+
+        try:
+            get_knowledge_media("draft_route_fish", "hero", "v1.webp", db)
+        except HTTPException as error:
+            assert error.status_code == 404
+        else:
+            raise AssertionError("public media API must not fall back to a DRAFT asset version")
+        try:
+            get_knowledge_media("active_version_route_fish", "hero", "v1.webp", db)
+        except HTTPException as error:
+            assert error.status_code == 404
+        else:
+            raise AssertionError("legacy media must not bypass another ACTIVE version for the same role")
+        assert len(requested_objects) == 1
     finally:
         db.close()
 

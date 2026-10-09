@@ -632,16 +632,43 @@ def get_knowledge_media(species_id: str, asset_type: str, asset_key: str, db: Se
     storage_type = "cover" if normalized_type == "cover" else normalized_type.lower()
     expected_url = f"/api/v1/fish/knowledge-media/{row.id}/{storage_type}/{asset_key}"
     version = None
+    legacy_version_object_name = None
     if is_version_asset:
         from app.fish_knowledge.import_batch import FishKnowledgeAssetVersion, _asset_role_for_version
 
         candidates = db.scalars(select(FishKnowledgeAssetVersion).where(
             FishKnowledgeAssetVersion.species_id == row.id,
-            FishKnowledgeAssetVersion.status == "ACTIVE",
         )).all()
         expected_role = "COVER_LIST" if normalized_type == "cover" else normalized_type
-        version = next((candidate for candidate in candidates if _asset_role_for_version(candidate) == expected_role and candidate.image_url == expected_url), None)
+        role_candidates = [candidate for candidate in candidates if _asset_role_for_version(candidate) == expected_role]
+        exact_url_versions = [candidate for candidate in role_candidates if candidate.image_url == expected_url]
+        active_role_versions = [candidate for candidate in role_candidates if candidate.status == "ACTIVE"]
+        if len(active_role_versions) == 1 and active_role_versions[0].image_url == expected_url:
+            version = active_role_versions[0]
         is_referenced = version is not None
+        if (
+            not active_role_versions
+            and not exact_url_versions
+            and normalized_type in {"HERO", "IDENTIFICATION", "ECO", "GEAR", "SKILL"}
+        ):
+            # Older public cards can already point at a version-shaped URL
+            # before the exact asset-version binding was backfilled. Keep
+            # those ACTIVE legacy rows readable, but only when no version row
+            # (including a DRAFT) claims the same URL. This never promotes or
+            # serves a DRAFT version.
+            legacy_cards = [
+                card for card in row.cards
+                if card.status == "ACTIVE"
+                and card.species_id == row.id
+                and card.asset_version_id is None
+                and normalize_card_type(card.card_type) == expected_role
+                and card.image_url == expected_url
+            ]
+            if len(legacy_cards) == 1:
+                is_referenced = True
+                legacy_version_object_name = (
+                    f"fish-assets/fish-knowledge/{row.id}/{expected_role.lower()}/{asset_key}"
+                )
     elif normalized_type == "cover":
         is_referenced = (
             row.cover is not None
@@ -662,6 +689,8 @@ def get_knowledge_media(species_id: str, asset_type: str, asset_key: str, db: Se
         client = storage.Client()
         if version is not None:
             blob = client.bucket(get_bucket_name()).blob(version.object_name)
+        elif legacy_version_object_name is not None:
+            blob = client.bucket(get_bucket_name()).blob(legacy_version_object_name)
         else:
             object_prefix = "fish_knowledge" if is_hashed_asset else "fish-assets"
             object_directory = storage_type if is_hashed_asset else ("cover" if storage_type == "cover" else "cards")
