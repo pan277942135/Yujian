@@ -107,14 +107,14 @@ def test_freeze_requires_review_and_records_provenance_without_activation(monkey
     db.commit()
     monkeypatch.setenv("APP_GIT_COMMIT", "a" * 40)
 
+    review_asset_version_v13(
+        version.id,
+        AssetReviewPayload(batch_id=batch_id, visual_qa_result="PASS", visual_qa_note="Visual evidence.", visual_qa_reviewer="qa-user"),
+        db,
+    )
     review = review_asset_version_v13(
         version.id,
-        AssetReviewPayload(
-            batch_id=batch_id,
-            visual_qa_result="PASS",
-            content_qa_result="PASS",
-            reviewer="qa-user",
-        ),
+        AssetReviewPayload(batch_id=batch_id, content_qa_result="PASS", content_qa_note="Content evidence.", content_qa_reviewer="qa-user"),
         db,
     )
     assert review["validation_result"] == "PASS"

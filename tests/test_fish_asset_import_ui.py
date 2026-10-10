@@ -19,6 +19,8 @@ def test_fish_asset_batch_import_api_and_page_are_registered():
     assert "/api/v1/admin/fish/assets/versions/{version_id}/preview" in paths
     assert "/api/v1/admin/fish/assets/versions/{version_id}/review" in paths
     assert "/api/v1/admin/fish/assets/versions/{version_id}/activate" in paths
+    assert "/api/v1/admin/fish/assets/versions/{version_id}/public-api-check" in paths
+    assert "/api/v1/admin/fish/assets/versions/{version_id}/client-check" in paths
     assert "/api/v1/admin/fish/assets/batches/{batch_id}/freeze" in paths
     assert "/api/v1/admin/fish/assets/batches/{batch_id}/freeze-manifest" in paths
     assert "/api/v1/admin/fish/assets/batches/{batch_id}/freeze-manifest.csv" in paths
@@ -49,6 +51,8 @@ def test_fish_asset_batch_import_api_and_page_are_registered():
     ):
         assert marker in source
     templates.env.from_string(source)
+    assert "save-stage-qa" in source
+    assert "单独保存" in source
 
 
 def test_fish_knowledge_asset_v13_controls_show_roles_preview_and_freeze_evidence():

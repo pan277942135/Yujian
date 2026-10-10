@@ -9,6 +9,7 @@ from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.orm import sessionmaker
 
 from app import models  # noqa: F401
+from app.platform import models as platform_models  # noqa: F401
 from app.db import Base, get_db
 from app.fish_knowledge import FishCard, FishSpeciesCover
 from app.fish_knowledge.admin import (
@@ -28,6 +29,8 @@ from app.fish_knowledge.admin import (
 )
 from app.fish_knowledge.api import get_fish_species_full_detail, router as fish_router
 from app.fish_knowledge.cards import CARD_TYPE_ORDER
+from app.fish_knowledge.content import card_description
+from app.fish_knowledge import import_batch as fish_knowledge_import_batch  # noqa: F401
 from app.fish_knowledge.seed import seed_initial_fish_knowledge
 
 
@@ -110,19 +113,17 @@ def _public_app(session):
 def _create_five_cards(db, *, status="ACTIVE", with_images=True):
     rows = []
     for order, card_type in enumerate(CARD_TYPE_ORDER):
-        rows.append(
-            create_species_card(
-                "grass_carp",
-                CardCreate(
-                    card_type=card_type,
-                    title=f"草鱼{card_type}",
-                    image_url=f"https://cdn.example/grass-{card_type.lower()}.png" if with_images else "",
-                    sort_order=order,
-                    status=status,
-                ),
-                db,
-            )
-        )
+        rows.append(FishCard(
+            species_id="grass_carp",
+            card_type=card_type,
+            title=f"草鱼{card_type}",
+            image_url=f"https://cdn.example/grass-{card_type.lower()}.png" if with_images else "",
+            description="{}",
+            sort_order=order,
+            status=status,
+        ))
+    db.add_all(rows)
+    db.commit()
     return rows
 
 
@@ -130,20 +131,23 @@ def test_cover_crud_and_five_card_slots(tmp_path):
     db = _session(tmp_path)
     try:
         create_admin_species(_species_payload(), db)
-        cover = create_species_cover(
-            "grass_carp",
-            CoverCreate(
-                image_url="https://cdn.example/grass-cover.png",
-                title="草鱼图鉴卡",
-                status="ACTIVE",
-            ),
-            db,
+        with pytest.raises(HTTPException) as old_cover_write:
+            create_species_cover("grass_carp", CoverCreate(image_url="https://cdn.example/grass-cover.png", status="ACTIVE"), db)
+        assert old_cover_write.value.status_code == 409
+        cover = FishSpeciesCover(
+            species_id="grass_carp",
+            image_url="https://cdn.example/grass-cover.png",
+            title="草鱼图鉴卡",
+            style="ANIME_CARD",
+            status="ACTIVE",
         )
-        assert cover["style"] == "ANIME_CARD"
+        db.add(cover)
+        db.commit()
+        assert cover.style == "ANIME_CARD"
         assert get_species_cover("grass_carp", db)["image_url"].endswith("grass-cover.png")
 
         cards = _create_five_cards(db)
-        assert [card["card_type"] for card in cards] == list(CARD_TYPE_ORDER)
+        assert [card.card_type for card in cards] == list(CARD_TYPE_ORDER)
         assert [card["sort_order"] for card in list_species_cards("grass_carp", db)] == [0, 1, 2, 3, 4]
     finally:
         db.close()
@@ -153,11 +157,6 @@ def test_duplicate_active_card_type_is_rejected(tmp_path):
     db = _session(tmp_path)
     try:
         create_admin_species(_species_payload(), db)
-        create_species_card(
-            "grass_carp",
-            CardCreate(card_type="HERO", image_url="https://cdn.example/hero.png", status="ACTIVE"),
-            db,
-        )
         with pytest.raises(HTTPException) as conflict:
             create_species_card(
                 "grass_carp",
@@ -166,14 +165,7 @@ def test_duplicate_active_card_type_is_rejected(tmp_path):
             )
         assert conflict.value.status_code == 409
 
-        # The original v1.1 names remain accepted and are normalized to the
-        # product's ECO/GEAR/SKILL card vocabulary.
-        draft = create_species_card(
-            "grass_carp",
-            CardCreate(type="ECOLOGY", title="生态草稿", status="DRAFT"),
-            db,
-        )
-        assert draft["card_type"] == "ECO"
+        assert conflict.value.detail["code"] == "UNIFIED_VERSION_WORKSPACE_REQUIRED"
     finally:
         db.close()
 
@@ -182,17 +174,11 @@ def test_detail_aggregate_contains_cover_cards_and_filters_draft(tmp_path):
     db = _session(tmp_path)
     try:
         create_admin_species(_species_payload(), db)
-        create_species_cover(
-            "grass_carp",
-            CoverCreate(image_url="https://cdn.example/grass-cover.png", status="ACTIVE"),
-            db,
-        )
+        db.add(FishSpeciesCover(species_id="grass_carp", image_url="https://cdn.example/grass-cover.png", title="封面", status="ACTIVE"))
+        db.commit()
         _create_five_cards(db)
-        create_species_card(
-            "grass_carp",
-            CardCreate(card_type="HERO", title="未发布草稿", status="DRAFT"),
-            db,
-        )
+        db.add(FishCard(species_id="grass_carp", card_type="HERO", title="未发布草稿", image_url="", description="{}", sort_order=0, status="DRAFT"))
+        db.commit()
 
         detail = get_fish_species_full_detail("grass_carp", db)
         assert detail.cover["image_url"].endswith("grass-cover.png")
@@ -214,40 +200,12 @@ def test_structured_card_content_round_trips_through_admin_and_public_detail(tmp
     db = _session(tmp_path)
     try:
         create_admin_species(_species_payload(), db)
-        create_species_cover(
-            "grass_carp",
-            CoverCreate(image_url="https://cdn.example/grass-cover.png", status="ACTIVE"),
-            db,
-        )
-        create_species_card(
-            "grass_carp",
-            CardCreate(
-                card_type="HERO",
-                title="草鱼英雄卡",
-                image_url="https://cdn.example/grass-hero.png",
-                content={"type": "HERO", "tag": "中上层快鱼", "rarity": 2, "power": 4, "challenge": 3},
-                status="ACTIVE",
-            ),
-            db,
-        )
-        create_species_card(
-            "grass_carp",
-            CardCreate(
-                card_type="ECO",
-                title="草鱼生态卡",
-                image_url="https://cdn.example/grass-eco.png",
-                content={
-                    "type": "ECO",
-                    "habitat": ["江河", "水库"],
-                    "water_layer": "中下层",
-                    "season": "夏季",
-                    "behavior": "沿岸觅食",
-                    "diet": "植物性食物",
-                },
-                status="ACTIVE",
-            ),
-            db,
-        )
+        db.add_all([
+            FishSpeciesCover(species_id="grass_carp", image_url="https://cdn.example/grass-cover.png", title="封面", status="ACTIVE"),
+            FishCard(species_id="grass_carp", card_type="HERO", title="草鱼英雄卡", image_url="https://cdn.example/grass-hero.png", description=card_description({"type": "HERO", "tag": "中上层快鱼", "rarity": 2, "power": 4, "challenge": 3}), sort_order=0, status="ACTIVE"),
+            FishCard(species_id="grass_carp", card_type="ECO", title="草鱼生态卡", image_url="https://cdn.example/grass-eco.png", description=card_description({"type": "ECO", "habitat": ["江河", "水库"], "water_layer": "中下层", "season": "夏季", "behavior": "沿岸觅食", "diet": "植物性食物"}), sort_order=2, status="ACTIVE"),
+        ])
+        db.commit()
 
         admin_cards = list_species_cards("grass_carp", db)
         assert admin_cards[0]["content"]["tag"] == "中上层快鱼"
@@ -281,21 +239,10 @@ def test_completion_counts_content_without_publishing_draft_cards(tmp_path):
     db = _session(tmp_path)
     try:
         create_admin_species(_species_payload(), db)
-        create_species_cover(
-            "grass_carp",
-            CoverCreate(image_url="https://cdn.example/grass-cover.png", status="DRAFT"),
-            db,
-        )
+        db.add(FishSpeciesCover(species_id="grass_carp", image_url="https://cdn.example/grass-cover.png", title="草稿", status="DRAFT"))
         for card_type in CARD_TYPE_ORDER[:2]:
-            create_species_card(
-                "grass_carp",
-                CardCreate(
-                    card_type=card_type,
-                    image_url=f"https://cdn.example/{card_type.lower()}.png",
-                    status="DRAFT",
-                ),
-                db,
-            )
+            db.add(FishCard(species_id="grass_carp", card_type=card_type, title=card_type, image_url=f"https://cdn.example/{card_type.lower()}.png", description="{}", sort_order=CARD_TYPE_ORDER.index(card_type), status="DRAFT"))
+        db.commit()
         for order in range(5):
             create_gallery_item(
                 "grass_carp",

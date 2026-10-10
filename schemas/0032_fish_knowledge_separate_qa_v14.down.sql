@@ -1,0 +1,2 @@
+-- Review-stage notes, reviewers, and timestamps are audit evidence and are
+-- intentionally retained when rolling application code back.

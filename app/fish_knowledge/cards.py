@@ -68,6 +68,16 @@ class FishCard(Base):
     description = Column(Text, nullable=False, default="")
     sort_order = Column(Integer, nullable=False, default=0)
     status = Column(String(16), nullable=False, default="DRAFT", index=True)
+    # v1.4 binds editable content to the exact image version.  The nullable
+    # column keeps pre-v1.4 cards readable while allowing several drafts for
+    # one role to coexist without URL-based slot guessing.
+    asset_version_id = Column(
+        Integer,
+        ForeignKey("fish_knowledge_asset_versions.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    content_revision = Column(Integer, nullable=False, default=1, server_default="1")
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
 

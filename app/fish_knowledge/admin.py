@@ -498,6 +498,16 @@ def _get_species_cover(db: Session, species_id: str) -> FishSpeciesCover | None:
     return db.scalar(select(FishSpeciesCover).where(FishSpeciesCover.species_id == species_id))
 
 
+def _legacy_asset_editor_closed() -> None:
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "UNIFIED_VERSION_WORKSPACE_REQUIRED",
+            "message": "旧封面与 FishCard 编辑入口仅保留历史读取；请在绑定素材版本的统一工作区编辑和发布",
+        },
+    )
+
+
 def _gallery_dict(row: FishGalleryImage) -> dict:
     return {
         "id": row.id,
@@ -617,31 +627,7 @@ def _sync_hero_fields(
     }
     if not changes:
         return _hero_card(db, species.id)
-
-    hero = _hero_card(db, species.id)
-    if hero is None:
-        hero = FishCard(
-            species_id=species.id,
-            card_type="HERO",
-            title=f"{species.name_cn}英雄卡",
-            image_url="",
-            description=card_description({"type": "HERO"}),
-            sort_order=card_type_sort_order("HERO"),
-            status="DRAFT",
-        )
-        db.add(hero)
-        db.flush()
-    content = parse_card_content(hero.description)
-    content["type"] = "HERO"
-    for field, value in changes.items():
-        if value is None:
-            key = "tag" if field == "display_tag" else field
-            content.pop(key, None)
-        else:
-            key = "tag" if field == "display_tag" else field
-            content[key] = value
-    hero.description = card_description(content)
-    return hero
+    _legacy_asset_editor_closed()
 
 
 def _publication_missing(db: Session, species: FishSpecies) -> list[str]:
@@ -698,27 +684,6 @@ def _card_dict(row: FishCard, db: Session | None = None) -> dict:
         "sort_order": row.sort_order,
         "status": row.status,
     }
-
-
-def _ensure_active_card_type(
-    db: Session,
-    species_id: str,
-    card_type: str,
-    *,
-    exclude_id: int | None = None,
-) -> None:
-    normalized = normalize_card_type(card_type)
-    rows = db.scalars(
-        select(FishCard).where(
-            FishCard.species_id == species_id,
-            FishCard.status == "ACTIVE",
-        )
-    ).all()
-    if any(
-        row.id != exclude_id and normalize_card_type(row.card_type) == normalized
-        for row in rows
-    ):
-        raise HTTPException(status_code=409, detail=f"同一鱼种不能有两个 ACTIVE {normalized} 卡片")
 
 
 def _ensure_gallery_slot(
@@ -804,6 +769,8 @@ def get_admin_species(species_id: str, db: Session = Depends(get_db)):
 
 @router.post("/species", status_code=201)
 def create_admin_species(payload: SpeciesCreate, db: Session = Depends(get_db)) -> dict:
+    if {"display_tag", "rarity", "power", "challenge", "recommendation"} & payload.model_fields_set:
+        _legacy_asset_editor_closed()
     if db.get(FishSpecies, payload.id) is not None:
         raise HTTPException(status_code=409, detail="fish species already exists")
     catalog = db.get(SpeciesCatalog, payload.id)
@@ -834,6 +801,8 @@ def create_admin_species(payload: SpeciesCreate, db: Session = Depends(get_db)) 
 
 @router.patch("/species/{species_id}")
 def update_admin_species(species_id: str, payload: SpeciesPatch, db: Session = Depends(get_db)) -> dict:
+    if {"display_tag", "rarity", "power", "challenge", "recommendation"} & payload.model_fields_set:
+        _legacy_asset_editor_closed()
     row = _require_species(db, species_id)
     species_fields = {
         "name_cn",
@@ -871,31 +840,23 @@ def delete_admin_species(species_id: str, db: Session = Depends(get_db)) -> dict
 
 def _publish_species(species_id: str, db: Session) -> dict:
     row = _require_species(db, species_id)
-    missing = _publication_missing(db, row)
+    missing = [] if row.name_cn.strip() and row.category.strip() and row.summary.strip() else ["species"]
     if missing:
         raise HTTPException(status_code=409, detail={"success": False, "missing": missing})
 
-    # Publishing is the DRAFT -> ACTIVE transition for the complete asset
-    # package. Operators can upload/save content in DRAFT first and use this
-    # single action to publish the Cover and one image-backed card per type.
-    cover = _get_species_cover(db, row.id)
-    if cover is not None:
-        cover.status = "ACTIVE"
-    cards = db.scalars(
-        select(FishCard).where(FishCard.species_id == row.id).order_by(FishCard.sort_order, FishCard.id)
-    ).all()
-    for card_type in CARD_TYPE_ORDER:
-        candidates = [
-            card
-            for card in cards
-            if normalize_card_type(card.card_type) == card_type and (card.image_url or "").strip()
-        ]
-        active = next((card for card in candidates if card.status == "ACTIVE"), None)
-        if active is None and candidates:
-            candidates[0].status = "ACTIVE"
+    # Species publication controls only species visibility. Asset versions and
+    # bound FishCards require an explicit version publication request.
     row.status = "ACTIVE"
     _commit(db)
-    return {"success": True, "id": row.id, "species_id": row.id, "status": row.status, "missing": []}
+    return {
+        "success": True,
+        "id": row.id,
+        "species_id": row.id,
+        "status": row.status,
+        "published_modules": ["SPECIES"],
+        "assets_changed": False,
+        "missing": [],
+    }
 
 
 @router.post("/species/{species_id}/publish")
@@ -914,42 +875,20 @@ def get_species_cover(species_id: str, db: Session = Depends(get_db)) -> dict:
 
 @router.post("/species/{species_id}/cover", status_code=201)
 def create_species_cover(species_id: str, payload: CoverCreate, db: Session = Depends(get_db)) -> dict:
-    species = _require_species(db, species_id)
-    if _get_species_cover(db, species.id) is not None:
-        raise HTTPException(status_code=409, detail="fish species cover already exists")
-    row = FishSpeciesCover(species_id=species.id, **payload.model_dump())
-    db.add(row)
-    _commit(db)
-    db.refresh(row)
-    return _cover_dict(row, db)
+    _require_species(db, species_id)
+    _legacy_asset_editor_closed()
 
 
 @router.patch("/species/{species_id}/cover")
 def update_species_cover(species_id: str, payload: CoverPatch, db: Session = Depends(get_db)) -> dict:
-    species = _require_species(db, species_id)
-    row = _get_species_cover(db, species.id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="fish species cover not found")
-    for field in payload.model_fields_set:
-        value = getattr(payload, field)
-        if field == "image_url" and value is None:
-            value = ""
-        if field == "style" and value is None:
-            raise HTTPException(status_code=400, detail="style 不能为空")
-        setattr(row, field, value)
-    _commit(db)
-    return _cover_dict(row, db)
+    _require_species(db, species_id)
+    _legacy_asset_editor_closed()
 
 
 @router.delete("/species/{species_id}/cover")
 def delete_species_cover(species_id: str, db: Session = Depends(get_db)) -> dict:
-    species = _require_species(db, species_id)
-    row = _get_species_cover(db, species.id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="fish species cover not found")
-    db.delete(row)
-    _commit(db)
-    return {"deleted": True, "species_id": species.id}
+    _require_species(db, species_id)
+    _legacy_asset_editor_closed()
 
 
 @router.get("/species/{species_id}/cards")
@@ -965,65 +904,23 @@ def list_species_cards(species_id: str, db: Session = Depends(get_db)) -> list[d
 
 @router.post("/species/{species_id}/cards", status_code=201)
 def create_species_card(species_id: str, payload: CardCreate, db: Session = Depends(get_db)) -> dict:
-    species = _require_species(db, species_id)
-    card_type = normalize_card_type(payload.card_type)
-    if payload.status == "ACTIVE":
-        _ensure_active_card_type(db, species.id, card_type)
-    values = payload.model_dump(exclude={"card_type", "sort_order", "content"})
-    if payload.content is not None:
-        values["description"] = card_description(payload.content)
-    row = FishCard(
-        species_id=species.id,
-        card_type=card_type,
-        sort_order=payload.sort_order if payload.sort_order is not None else card_type_sort_order(card_type),
-        **values,
-    )
-    db.add(row)
-    _commit(db)
-    db.refresh(row)
-    return _card_dict(row, db)
+    _require_species(db, species_id)
+    _compat_card_type(payload.card_type)
+    _legacy_asset_editor_closed()
 
 
 @router.patch("/cards/{card_id}")
 def update_species_card(card_id: int, payload: CardPatch, db: Session = Depends(get_db)) -> dict:
-    row = db.get(FishCard, card_id)
-    if row is None:
+    if db.get(FishCard, card_id) is None:
         raise HTTPException(status_code=404, detail="fish card not found")
-
-    new_type = normalize_card_type(payload.card_type) if payload.card_type is not None else normalize_card_type(row.card_type)
-    new_status = payload.status if payload.status is not None else row.status
-    if new_status == "ACTIVE":
-        _ensure_active_card_type(db, row.species_id, new_type, exclude_id=row.id)
-
-    for field in payload.model_fields_set:
-        value = getattr(payload, field)
-        if field == "card_type":
-            value = new_type
-        elif field == "content":
-            row.description = card_description(value or {})
-            continue
-        elif field in {"title", "image_url", "description"} and value is None:
-            value = ""
-        setattr(row, field, value)
-    if "card_type" in payload.model_fields_set and "sort_order" not in payload.model_fields_set:
-        row.sort_order = card_type_sort_order(new_type)
-    # Structured content is the editor's source of truth. If an older client
-    # sends both fields, do not let its legacy description overwrite content.
-    if "content" in payload.model_fields_set:
-        row.description = card_description(payload.content or {})
-    _commit(db)
-    return _card_dict(row, db)
+    _legacy_asset_editor_closed()
 
 
 @router.delete("/cards/{card_id}")
 def delete_species_card(card_id: int, db: Session = Depends(get_db)) -> dict:
-    row = db.get(FishCard, card_id)
-    if row is None:
+    if db.get(FishCard, card_id) is None:
         raise HTTPException(status_code=404, detail="fish card not found")
-    species_id = row.species_id
-    db.delete(row)
-    _commit(db)
-    return {"deleted": True, "id": card_id, "species_id": species_id}
+    _legacy_asset_editor_closed()
 
 
 @router.get("/species/{species_id}/completion")
@@ -1194,6 +1091,12 @@ async def upload_fish_asset(
 ) -> dict:
     """Upload a real cover/card asset and bind it to the existing row."""
 
+    await file.close()
+    raise HTTPException(
+        status_code=409,
+        detail={"code": "UNIFIED_VERSION_UPLOAD_REQUIRED", "message": "请使用 /api/v1/admin/fish/assets/single-upload 创建不可变素材版本"},
+    )
+
     species = _require_species(db, species_id)
     normalized_type = "cover" if asset_type.strip().lower() == "cover" else normalize_card_type(asset_type)
     if normalized_type != "cover" and normalized_type not in CARD_TYPE_ORDER:
@@ -1298,6 +1201,13 @@ async def upload_cms_fish_asset(
     db: Session,
 ) -> dict[str, Any] | JSONResponse:
     """Upload and bind one Cover/Card image for the short CMS contract."""
+
+    await file.close()
+    return _cms_asset_error(
+        "versioned_upload_required",
+        "图片必须通过 /api/v1/admin/fish/assets/single-upload 创建素材版本",
+        status_code=409,
+    )
 
     normalized_type = str(asset_type or "").strip().upper()
     if normalized_type not in KNOWLEDGE_ASSET_TYPES:
@@ -1647,29 +1557,8 @@ def compat_get_species_cover(species_id: str, db: Session = Depends(get_db)) -> 
 
 @compat_router.put("/species/{species_id}/cover")
 def compat_put_species_cover(species_id: str, payload: CoverPut, db: Session = Depends(get_db)) -> dict:
-    existing = _get_species_cover(db, _require_species(db, species_id).id)
-    if existing is None:
-        return create_species_cover(
-            species_id,
-            CoverCreate(
-                image_url=payload.url or "",
-                style=payload.style or "ANIME_CARD",
-                title=payload.title or "",
-                status=payload.status or "DRAFT",
-            ),
-            db,
-        )
-
-    values = {}
-    if "url" in payload.model_fields_set:
-        values["image_url"] = payload.url
-    if "style" in payload.model_fields_set:
-        values["style"] = payload.style
-    if "title" in payload.model_fields_set:
-        values["title"] = payload.title
-    if "status" in payload.model_fields_set:
-        values["status"] = payload.status
-    return update_species_cover(species_id, CoverPatch(**values), db)
+    _require_species(db, species_id)
+    _legacy_asset_editor_closed()
 
 
 @compat_router.delete("/species/{species_id}/cover")
@@ -1692,29 +1581,8 @@ def compat_put_species_card(
     db: Session = Depends(get_db),
 ) -> dict:
     normalized = _compat_card_type(card_type)
-    species = _require_species(db, species_id)
-    existing = next(
-        (
-            card
-            for card in db.scalars(
-                select(FishCard)
-                .where(FishCard.species_id == species.id)
-                .order_by(FishCard.id)
-            ).all()
-            if normalize_card_type(card.card_type) == normalized
-        ),
-        None,
-    )
-    values = payload.model_dump(exclude_unset=True)
-    values.pop("card_type", None)
-    if existing is not None:
-        values["card_type"] = normalized
-        return update_species_card(existing.id, CardPatch(**values), db)
-    return create_species_card(
-        species.id,
-        CardCreate(card_type=normalized, **values),
-        db,
-    )
+    _require_species(db, species_id)
+    _legacy_asset_editor_closed()
 
 
 @compat_router.get("/species/{species_id}/cards")

@@ -1,8 +1,9 @@
 import shutil
 import subprocess
+from pathlib import Path
 
 from app.entry import app
-from app.main import templates
+from app.main import templates, fish_knowledge_batch_import_page, fish_knowledge_page
 
 
 def test_fish_knowledge_workspace_route_and_template_are_registered():
@@ -48,6 +49,68 @@ def test_fish_knowledge_workspace_javascript_parses():
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_v14_fish_workspace_is_the_rendered_route_and_has_independent_sections():
+    assert "fish_knowledge_v14.html" in fish_knowledge_page.__code__.co_consts
+    source, _filename, _uptodate = templates.env.loader.get_source(templates.env, "fish_knowledge_v14.html")
+    for label in ("鱼种概览", "基本信息", "图片资产", "五张知识卡", "发布审核", "历史与审计"):
+        assert label in source
+    nav = source.split("<nav>", 1)[1].split("</nav>", 1)[0]
+    assert "批量导入" not in nav
+    assert "扩展内容" not in nav
+    assets_template, _filename, _uptodate = templates.env.loader.get_source(templates.env, "fish_knowledge_v14/assets.html")
+    assert 'id="batchImportLink"' in assets_template
+    assert 'id="extensionsLink"' in assets_template
+    assert "fish_knowledge_v14/" in source
+
+    for section in ("basic", "batch-import"):
+        partial, _filename, _uptodate = templates.env.loader.get_source(
+            templates.env,
+            f"fish_knowledge_v14/{section}.html",
+        )
+        templates.env.from_string(partial)
+        assert Path(f"app/static/fish_knowledge_v14/{section}.js").is_file()
+        assert partial.strip()
+    assert fish_knowledge_batch_import_page.__code__.co_consts
+
+
+def test_v14_workspace_hides_unused_legacy_rows_but_keeps_versioned_history():
+    assets = Path("app/static/fish_knowledge_v14/assets.js").read_text(encoding="utf-8")
+    cards = Path("app/static/fish_knowledge_v14/cards.js").read_text(encoding="utf-8")
+    history = Path("app/static/fish_knowledge_v14/history.js").read_text(encoding="utf-8")
+    history_template, _filename, _uptodate = templates.env.loader.get_source(
+        templates.env,
+        "fish_knowledge_v14/history.html",
+    )
+
+    assert "legacy_active" in assets  # read-only preview for the existing online FishCard
+    assert "legacy_active" in cards
+    assert "target.status !== \"DRAFT\"" in cards  # compatibility cards never become edit targets
+    assert "history.legacy_cards" not in history
+    assert "旧版 FishCard" not in history
+    assert "history.versions" in history
+    assert "history.publication_audits" in history
+    assert "history.content_revisions" in history
+    assert "历史版本、内容修订与发布校验记录均为只读" in history_template
+
+
+def test_v14_operator_upload_and_publication_are_explicit_and_stage_safe():
+    assets = Path("app/static/fish_knowledge_v14/assets.js").read_text(encoding="utf-8")
+    cards = Path("app/static/fish_knowledge_v14/cards.js").read_text(encoding="utf-8")
+    publication = Path("app/static/fish_knowledge_v14/publication.js").read_text(encoding="utf-8")
+    assert 'data.append("preflight_only", "true")' in assets
+    assert "确认警告并继续" in assets
+    assert 'result.validation_status === "INVALID"' in assets
+    assert "DRAFT_CREATED" in assets and "ALREADY_EXISTS" in assets and "UPLOAD_FAILED" in assets
+    assert "当前线上图片" in assets and "正在编辑的 DRAFT 图片" in cards
+    assert "高级模式：原始结构化 JSON" in cards
+    assert "标记 QA PASS" not in publication
+    assert "save-qa" in publication and "visual_qa_result:result" in publication and "content_qa_result:result" in publication
+    assert "window.confirm(confirmation)" in publication
+    assert "检查公共 API 与图片" in publication
+    assert "等待 Android 客户端确认" in publication
+    assert "client-check" in publication and "CLIENT_PASSED" in publication and "CLIENT_FAILED" in publication
 
 
 def test_fish_knowledge_upload_ui_binds_url_and_reports_persistence_state():

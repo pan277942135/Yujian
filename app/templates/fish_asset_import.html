@@ -12,7 +12,7 @@ input,button{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:10p
 </style>
 </head>
 <body>
-<header><a href="/">总览</a><a href="/fish-knowledge">鱼鉴内容</a><a href="/fish-knowledge/assets/import">批量资产导入</a><a href="/logout">退出</a></header>
+<header><a href="/">总览</a><a href="/fish-knowledge">鱼鉴内容</a><a href="/fish-knowledge/assets">返回图片资产</a><a href="/fish-knowledge/publication">发布审核</a><a href="/fish-knowledge/assets/import">批量资产导入</a><a href="/logout">退出</a></header>
 <main>
 <div class="top"><div><h1>Fish Knowledge Asset Batch Import V1.3</h1><div class="muted">本地文件夹 → 上传 → 扫描并预检 → Preview → Execute → 独立 DRAFT 版本 → QA → Freeze Manifest</div></div></div>
 <div id="banner" class="banner"></div>
@@ -61,10 +61,10 @@ input,button{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:10p
 <div class="summary" id="summary"></div>
 <div class="confirm"><input type="checkbox" id="allowWarnings"><label for="allowWarnings">我确认继续导入 WARNING 图片（INVALID 仍会阻止执行）</label></div>
 <div class="table-wrap"><table><thead><tr><th>鱼种</th><th>COVER_LIST</th><th>COVER_HERO</th><th>TRANSPARENT_MAIN</th><th>TRANSPARENT_ALT</th><th>HERO</th><th>IDENTIFICATION</th><th>ECO</th><th>GEAR</th><th>SKILL</th><th>完成度</th></tr></thead><tbody id="matrix"></tbody></table></div>
-<div class="help">点击每个槽位的 Preview 可查看真实源图、尺寸、SHA-256、校验信息和目标 GCS 路径。执行后所有新版本保持 DRAFT。</div>
+<div class="help">点击 Preview 查看图片与预检信息。SHA-256、GCS 路径等来源证明默认收起。执行后所有新版本保持 DRAFT；QA 后请到“发布审核”确认指定版本。</div>
 </section>
 <section class="section history"><h2>导入历史</h2><div class="table-wrap"><table><thead><tr><th>Batch</th><th>状态</th><th>鱼种</th><th>图片</th><th>Valid</th><th>Warning</th><th>Invalid</th><th>时间</th></tr></thead><tbody id="historyRows"></tbody></table></div></section>
-<div id="modal" class="modal" hidden><div><h3 id="modalTitle">素材详情</h3><div id="modalBody"></div><div class="actions"><button id="saveReviewBtn" class="primary" type="button" hidden>保存 QA</button><button id="activateBtn" class="primary" hidden>将此版本设为 ACTIVE</button><button id="closeBtn" type="button">关闭</button></div></div></div>
+<div id="modal" class="modal" hidden><div><h3 id="modalTitle">素材详情</h3><div id="modalBody"></div><div class="actions"><button id="saveReviewBtn" class="primary" type="button" hidden>保存 QA</button><button id="closeBtn" type="button">关闭</button></div></div></div>
 </main>
 <script>
 const TYPES=['COVER_LIST','COVER_HERO','TRANSPARENT_MAIN','TRANSPARENT_ALT','HERO','IDENTIFICATION','ECO','GEAR','SKILL'];
@@ -93,9 +93,42 @@ async function rescan(){if(!currentBatch)return;try{await api('/api/v1/admin/fis
 async function execute(){if(!currentBatch)return;const s=currentBatch.summary;if(s.invalid>0)return show('存在 INVALID 图片，不能执行。请修复 GCS 源目录后重新扫描。',true);if(s.warning>0&&!$('allowWarnings').checked)return show('存在 WARNING 图片，请勾选确认后执行。',true);if(!confirm('即将导入 '+s.species_count+' 个鱼种、'+s.total_files+' 张图片。所有图片将进入 DRAFT，不会自动发布到公共 Detail API。确认导入？'))return;try{const data=await api('/api/v1/admin/fish/assets/import-batches/'+encodeURIComponent(currentBatch.batch_id)+'/execute',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({allow_warnings:$('allowWarnings').checked})});renderCurrent(data);show('导入完成：'+JSON.stringify(data.result))}catch(e){show((e.code?e.code+'：':'')+e.message,true)}}
 async function retry(){if(!currentBatch)return;try{const data=await api('/api/v1/admin/fish/assets/import-batches/'+encodeURIComponent(currentBatch.batch_id)+'/retry',{method:'POST'});renderCurrent(data);show('失败项重试完成')}catch(e){show(e.message,true)}}
 async function syncContent(){if(!currentBatch)return;if(!confirm('将已导入的 DRAFT 图片绑定到鱼鉴内容页面，不会自动发布 ACTIVE。确认同步？'))return;try{const data=await api('/api/v1/admin/fish/assets/import-batches/'+encodeURIComponent(currentBatch.batch_id)+'/sync-content',{method:'POST'});renderCurrent(data);show('已同步到鱼鉴内容：'+JSON.stringify(data.result))}catch(e){show((e.code?e.code+'：':'')+e.message,true)}}
-async function openItem(id){if(!currentBatch)return;try{const data=currentBatch.items.find(x=>x.id===id);if(!data)return;currentItem=data;$('modalTitle').textContent=(data.species_id||'未解析')+' · '+(data.asset_role||data.asset_type||'未知');const source='<div><b>源图片</b><img src="'+esc(data.source_preview_url)+'" alt="源素材预览"><p><b>源文件：</b>'+esc(data.source_filename||data.source_object)+'</p><p><b>尺寸：</b>'+esc(data.width||'-')+' × '+esc(data.height||'-')+' · '+esc(data.file_size||'-')+' bytes</p><p><b>SHA-256：</b><code>'+esc(data.sha256||'-')+'</code></p></div>';const derived=data.version_id?'<div><b>后端 DRAFT / 已存在版本预览</b><img src="'+esc(data.derived_preview_url)+'" alt="后端版本预览"><p><b>版本：</b>'+esc(data.version_status||'-')+' · #'+esc(data.version_id)+'</p><p><b>WebP SHA-256：</b><code>'+esc(data.derived_media_sha256||'-')+'</code></p><p><b>校验：</b>'+esc(JSON.stringify(data.validation_errors||[]))+'<br><b>警告：</b>'+esc(JSON.stringify(data.validation_warnings||[]))+'</p><p><b>GCS：</b><code>'+esc(data.target_object||'-')+'</code></p></div>':'<div>尚未导入，当前没有后端预览。</div>';const review=data.review||{},frozen=!!review.frozen;const structuredPanel=data.structured_content?'<section class="qa-structured"><b>CMS 结构化知识（内容 QA 对照）</b><pre>'+esc(JSON.stringify(data.structured_content,null,2))+'</pre></section>':'<section class="qa-structured"><b>CMS 结构化知识</b><p>当前槽位没有可显示的结构化卡片内容；冻结校验会阻止缺少对照内容的素材。</p></section>';$('modalBody').innerHTML='<div class="qa-previews">'+source+derived+'</div>'+structuredPanel+(data.version_id?'<div class="qa-controls"><select id="itemVisualQA" '+(frozen?'disabled':'')+'><option value="">视觉 QA 结果</option><option value="PASS" '+(review.visual_qa_result==='PASS'?'selected':'')+'>PASS</option><option value="BLOCKED_VISUAL_QA" '+(review.visual_qa_result==='BLOCKED_VISUAL_QA'?'selected':'')+'>BLOCKED_VISUAL_QA</option></select><select id="itemContentQA" '+(frozen?'disabled':'')+'><option value="">内容 QA 结果</option><option value="PASS" '+(review.content_qa_result==='PASS'?'selected':'')+'>PASS</option><option value="BLOCKED_CONTENT_MISMATCH" '+(review.content_qa_result==='BLOCKED_CONTENT_MISMATCH'?'selected':'')+'>BLOCKED_CONTENT_MISMATCH</option></select><input id="itemReviewNote" placeholder="审核说明；不一致或警告请写明" value="'+esc(review.review_note||'')+'" '+(frozen?'disabled':'')+'><span>'+(frozen?'FROZEN_DRAFT · 只读':esc(review.visual_qa_result||'视觉待审')+' · '+esc(review.content_qa_result||'内容待审'))+'</span></div>':'');const save=$('saveReviewBtn');save.hidden=!data.version_id||frozen;save.onclick=()=>saveItemReview(data);const activate=$('activateBtn');activate.hidden=!(data.version_id&&data.version_status==='DRAFT');activate.onclick=()=>activateVersion(data.version_id);$('modalBody').classList.toggle('alpha-checkerboard',['TRANSPARENT_MAIN','TRANSPARENT_ALT'].includes(data.asset_role));$('modal').hidden=false}catch(e){show(e.message,true)}}
-async function saveItemReview(item){const visual=$('itemVisualQA').value,content=$('itemContentQA').value;if(!visual||!content)return show('请分别选择视觉 QA 与内容 QA 结果',true);try{await api('/api/v1/admin/fish/assets/versions/'+item.version_id+'/review',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({batch_id:currentBatch.batch_id,visual_qa_result:visual,content_qa_result:content,review_note:$('itemReviewNote').value.trim()})});closeModal();await loadBatch(currentBatch.batch_id);show('审核结果已记录')}catch(e){show(e.message,true)}}
-async function activateVersion(versionId){if(!currentBatch||!confirm('确认将此 DRAFT 图片版本设为 ACTIVE？冻结状态不会自动发布。'))return;try{await api('/api/v1/admin/fish/assets/versions/'+versionId+'/activate',{method:'POST'});closeModal();await loadBatch(currentBatch.batch_id);show('已显式发布该版本到 ACTIVE')}catch(e){show(e.message,true)}}
+async function openItem(id){
+  if(!currentBatch)return;
+  try{
+    const data=currentBatch.items.find(x=>x.id===id);
+    if(!data)return;
+    currentItem=data;
+    $('modalTitle').textContent=(data.species_id||'未解析')+' · '+(data.asset_role||data.asset_type||'未知');
+    const source='<div><b>源图片</b><img src="'+esc(data.source_preview_url)+'" alt="源素材预览"><p><b>源文件：</b>'+esc(data.source_filename||data.source_object)+'</p><p><b>尺寸：</b>'+esc(data.width||'-')+' × '+esc(data.height||'-')+' · '+esc(data.file_size||'-')+' bytes</p><details><summary>来源 SHA-256</summary><code>'+esc(data.sha256||'-')+'</code></details></div>';
+    const derived=data.version_id?'<div><b>后端 DRAFT / 已存在版本预览</b><img src="'+esc(data.derived_preview_url)+'" alt="后端版本预览"><p><b>版本：</b>'+esc(data.version_status||'-')+' · #'+esc(data.version_id)+'</p><p><b>校验：</b>'+esc(JSON.stringify(data.validation_errors||[]))+'<br><b>警告：</b>'+esc(JSON.stringify(data.validation_warnings||[]))+'</p><details><summary>派生 SHA-256 与 GCS 对象</summary><p>WebP SHA-256：<code>'+esc(data.derived_media_sha256||'-')+'</code></p><p>GCS：<code>'+esc(data.target_object||'-')+'</code></p></details></div>':'<div>尚未导入，当前没有后端预览。</div>';
+    const review=data.review||{},frozen=!!review.frozen;
+    const structuredPanel=data.structured_content?'<section class="qa-structured"><b>CMS 结构化知识（内容 QA 对照）</b><pre>'+esc(JSON.stringify(data.structured_content,null,2))+'</pre></section>':'<section class="qa-structured"><b>CMS 结构化知识</b><p>当前槽位没有可显示的结构化卡片内容；冻结校验会阻止缺少对照内容的素材。</p></section>';
+    const stage=(key,label,result,blocked)=>'<section class="qa-controls"><h4>'+label+' · '+esc(result||'PENDING')+'</h4><label>审核结果<select id="item'+key+'QA" '+(frozen?'disabled':'')+'><option value="">选择结果…</option><option value="PASS" '+(result==='PASS'?'selected':'')+'>PASS</option><option value="'+blocked+'" '+(result===blocked?'selected':'')+'>BLOCKED</option></select></label><label>审核人<input id="item'+key+'Reviewer" value="'+esc(review[key.toLowerCase()+'_qa_reviewer']||review.reviewer||'')+'" placeholder="必填" '+(frozen?'disabled':'')+'></label><label>备注与证据<textarea id="item'+key+'Note" placeholder="记录本阶段判断依据" '+(frozen?'disabled':'')+'>'+esc(review[key.toLowerCase()+'_qa_note']||'')+'</textarea></label><button type="button" class="save-stage-qa" data-stage="'+key+'" '+(frozen?'disabled':'')+'>单独保存'+label+'</button></section>';
+    $('modalBody').innerHTML='<div class="qa-previews">'+source+derived+'</div>'+structuredPanel+'<div class="qa-controls">'+stage('Visual','视觉 QA',review.visual_qa_result,'BLOCKED_VISUAL_QA')+stage('Content','内容 QA',review.content_qa_result,'BLOCKED_CONTENT_MISMATCH')+'</div>'+(frozen?'<p class="status">FROZEN_DRAFT · QA 只读</p>':'<p class="help">视觉 QA 与内容 QA 分开保存；每次只记录一个阶段。</p>');
+    $('saveReviewBtn').hidden=true;
+    $('modalBody').classList.toggle('alpha-checkerboard',['TRANSPARENT_MAIN','TRANSPARENT_ALT'].includes(data.asset_role));
+    $('modalBody').querySelectorAll('.save-stage-qa').forEach(button=>button.onclick=()=>saveItemReview(data,button.dataset.stage));
+    $('modal').hidden=false;
+  }catch(e){show(e.message,true)}
+}
+async function saveItemReview(item,stage){
+  const key=stage==='Visual'?'visual':'content';
+  const result=$('item'+stage+'QA').value;
+  const reviewer=$('item'+stage+'Reviewer').value.trim();
+  const note=$('item'+stage+'Note').value.trim();
+  if(!result||!reviewer||!note)return show('请填写本阶段结果、审核人及备注/证据',true);
+  const payload={batch_id:currentBatch.batch_id};
+  payload[key+'_qa_result']=result;
+  payload[key+'_qa_reviewer']=reviewer;
+  payload[key+'_qa_note']=note;
+  try{
+    await api('/api/v1/admin/fish/assets/versions/'+item.version_id+'/review',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    closeModal();
+    await loadBatch(currentBatch.batch_id);
+    show((stage==='Visual'?'视觉':'内容')+' QA 已单独记录');
+  }catch(e){show(e.message,true)}
+}
 function closeModal(){$('modal').hidden=true}
 function closeModalOnBackdrop(event){if(event.target===$('modal'))closeModal()}
 async function history(){try{const rows=await api('/api/v1/admin/fish/assets/import-batches');$('historyRows').innerHTML=rows.map(x=>'<tr><td><button class="history-batch" data-batch-id="'+esc(x.batch_id)+'">'+esc(x.batch_id)+'</button></td><td>'+statusBadge(x.status)+'</td><td>'+x.summary.species_count+'</td><td>'+x.summary.total_files+'</td><td class="good">'+x.summary.valid+'</td><td class="warn">'+x.summary.warning+'</td><td class="bad">'+x.summary.invalid+'</td><td>'+esc(x.created_at||'')+'</td></tr>').join('')||'<tr><td colspan="8" class="muted">暂无历史</td></tr>'}catch(e){show(e.message,true)}}

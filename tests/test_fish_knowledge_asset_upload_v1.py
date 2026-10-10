@@ -91,156 +91,97 @@ def _call(db, asset_type: str, data: bytes):
     return asyncio.run(upload_cms_fish_asset("grass_carp", asset_type, _upload(data), db))
 
 
-def test_short_cms_upload_binds_cover_and_cards_to_fixed_gcs_objects(monkeypatch, tmp_path):
+def test_legacy_upload_rejects_all_managed_roles_without_gcs_writes(monkeypatch, tmp_path):
     db = _session(tmp_path)
     bucket = FakeBucket()
-    client = FakeStorageClient(bucket)
-    monkeypatch.setattr("app.fish_knowledge.admin.storage.Client", lambda: client)
+    monkeypatch.setattr("app.fish_knowledge.admin.storage.Client", lambda: FakeStorageClient(bucket))
     monkeypatch.setattr("app.fish_knowledge.admin.get_bucket_name", lambda: "test-bucket")
     try:
         _create_species(db)
-
-        for asset_type, object_name in (
-            ("COVER", "fish-assets/grass_carp/cover/cover.webp"),
-            ("HERO", "fish-assets/grass_carp/cards/hero.webp"),
-            ("SKILL", "fish-assets/grass_carp/cards/skill.webp"),
-        ):
-            result = _call(db, asset_type, _png_bytes())
-            storage_type = "cover" if asset_type == "COVER" else asset_type.lower()
-            asset_key = object_name.rsplit("/", 1)[-1]
-            expected_url = f"/api/v1/fish/knowledge-media/grass_carp/{storage_type}/{asset_key}"
-            assert result["success"] is True
-            assert result["url"] == expected_url
-            assert result["asset_type"] == asset_type
-            assert result["species_id"] == "grass_carp"
-            assert result["width"] == 32
-            assert result["height"] == 20
-            assert result["storage"]["object_name"] == object_name
-            assert result["storage"]["content_type"] == "image/webp"
-            blob = bucket.blobs[object_name]
-            assert blob.data is not None
-            assert blob.content_type == "image/webp"
-            assert blob.metadata == {
-                "width": "32",
-                "height": "20",
-                "original_content_type": "image/png",
-            }
-            with Image.open(io.BytesIO(blob.data)) as stored:
-                assert stored.format == "WEBP"
-                assert stored.size == (32, 20)
-
-        cover = db.scalar(select(FishSpeciesCover).where(FishSpeciesCover.species_id == "grass_carp"))
-        hero = db.scalar(
-            select(FishCard).where(FishCard.species_id == "grass_carp", FishCard.card_type == "HERO")
-        )
-        skill = db.scalar(
-            select(FishCard).where(FishCard.species_id == "grass_carp", FishCard.card_type == "SKILL")
-        )
-        assert cover is not None and cover.image_url == "/api/v1/fish/knowledge-media/grass_carp/cover/cover.webp"
-        assert hero is not None and hero.image_url == "/api/v1/fish/knowledge-media/grass_carp/hero/hero.webp"
-        assert skill is not None and skill.image_url == "/api/v1/fish/knowledge-media/grass_carp/skill/skill.webp"
-        assert cover.status == "DRAFT"
-        assert hero.status == "DRAFT"
-        assert skill.status == "DRAFT"
-    finally:
-        db.close()
-
-
-def test_short_cms_upload_url_is_readable_through_managed_media_route(monkeypatch, tmp_path):
-    db = _session(tmp_path)
-    bucket = FakeBucket()
-    client = FakeStorageClient(bucket)
-    monkeypatch.setattr("app.fish_knowledge.admin.storage.Client", lambda: client)
-    monkeypatch.setattr("app.fish_knowledge.admin.get_bucket_name", lambda: "test-bucket")
-    monkeypatch.setattr("app.fish_knowledge.api.storage.Client", lambda: client)
-    monkeypatch.setattr("app.fish_knowledge.api.get_bucket_name", lambda: "test-bucket")
-    try:
-        _create_species(db)
-        result = _call(db, "COVER", _png_bytes())
-        assert result["url"] == "/api/v1/fish/knowledge-media/grass_carp/cover/cover.webp"
-        from app.fish_knowledge.api import get_knowledge_media
-
-        response = get_knowledge_media("grass_carp", "cover", "cover.webp", db)
-        assert response.media_type == "image/webp"
-        with Image.open(io.BytesIO(response.body)) as rendered:
-            assert rendered.size == (32, 20)
-
-        card_result = _call(db, "HERO", _png_bytes((20, 60, 120)))
-        card_response = get_knowledge_media("grass_carp", "hero", "hero.webp", db)
-        assert card_result["url"] == "/api/v1/fish/knowledge-media/grass_carp/hero/hero.webp"
-        assert card_response.media_type == "image/webp"
-        with Image.open(io.BytesIO(card_response.body)) as rendered:
-            assert rendered.size == (32, 20)
-    finally:
-        db.close()
-
-
-def test_short_cms_upload_replaces_existing_slot_without_creating_duplicate_card(monkeypatch, tmp_path):
-    db = _session(tmp_path)
-    bucket = FakeBucket()
-    client = FakeStorageClient(bucket)
-    monkeypatch.setattr("app.fish_knowledge.admin.storage.Client", lambda: client)
-    monkeypatch.setattr("app.fish_knowledge.admin.get_bucket_name", lambda: "test-bucket")
-    try:
-        _create_species(db)
-        first = _call(db, "HERO", _png_bytes((10, 20, 30)))
-        card_id = first["id"]
-        second = _call(db, "HERO", _png_bytes((200, 210, 220)))
-        assert second["id"] == card_id
-        assert second["url"] == first["url"]
-        assert second["storage"]["status"] == "UPDATED"
-        assert bucket.blobs["fish-assets/grass_carp/cards/hero.webp"].uploads == 2
-        assert db.query(FishCard).filter(FishCard.species_id == "grass_carp").count() == 1
-    finally:
-        db.close()
-
-
-def test_short_cms_upload_reports_binding_failure_after_storage(monkeypatch, tmp_path):
-    db = _session(tmp_path)
-    bucket = FakeBucket()
-    client = FakeStorageClient(bucket)
-    monkeypatch.setattr("app.fish_knowledge.admin.storage.Client", lambda: client)
-    monkeypatch.setattr("app.fish_knowledge.admin.get_bucket_name", lambda: "test-bucket")
-    try:
-        _create_species(db)
-        monkeypatch.setattr(
-            "app.fish_knowledge.admin._commit",
-            lambda _db: (_ for _ in ()).throw(RuntimeError("db down")),
-        )
-        response = _call(db, "COVER", _png_bytes())
-        assert response.status_code == 503
-        payload = json.loads(response.body)
-        assert payload["error"] == "binding_error"
-        assert payload["message"] == "图片已上传，但绑定保存失败"
-        assert payload["url"] == "/api/v1/fish/knowledge-media/grass_carp/cover/cover.webp"
-        assert payload["storage"]["object_name"] == "fish-assets/grass_carp/cover/cover.webp"
-    finally:
-        db.close()
-
-
-def test_short_cms_upload_rejects_empty_non_image_and_oversized_files(monkeypatch, tmp_path):
-    db = _session(tmp_path)
-    bucket = FakeBucket()
-    client = FakeStorageClient(bucket)
-    monkeypatch.setattr("app.fish_knowledge.admin.storage.Client", lambda: client)
-    monkeypatch.setattr("app.fish_knowledge.admin.get_bucket_name", lambda: "test-bucket")
-    try:
-        _create_species(db)
-        for data, reason in (
-            (b"", "empty_file"),
-            (b"not an image", "unsupported_format"),
-            (b"x" * (KNOWLEDGE_ASSET_MAX_BYTES + 1), "file_too_large"),
-        ):
-            response = _call(db, "COVER", data)
-            assert response.status_code == 400
+        for role in ("COVER", "HERO", "IDENTIFICATION", "ECO", "GEAR", "SKILL"):
+            response = _call(db, role, _png_bytes())
+            assert response.status_code == 409
             payload = json.loads(response.body)
             assert payload["success"] is False
-            assert payload["error"] == "invalid_file"
-            assert payload["reason"] == reason
+            assert payload["error"] == "versioned_upload_required"
+            assert "/api/v1/admin/fish/assets/single-upload" in payload["message"]
+        assert bucket.blobs == {}
+        assert db.query(FishCard).filter(FishCard.species_id == "grass_carp").count() == 0
+        assert db.query(FishSpeciesCover).filter(FishSpeciesCover.species_id == "grass_carp").count() == 0
+    finally:
+        db.close()
+
+def test_legacy_upload_cannot_create_unversioned_media_url(monkeypatch, tmp_path):
+    db = _session(tmp_path)
+    bucket = FakeBucket()
+    monkeypatch.setattr("app.fish_knowledge.admin.storage.Client", lambda: FakeStorageClient(bucket))
+    try:
+        _create_species(db)
+        for role in ("COVER", "HERO"):
+            response = _call(db, role, _png_bytes())
+            assert response.status_code == 409
+            assert "url" not in json.loads(response.body)
         assert bucket.blobs == {}
     finally:
         db.close()
 
+def test_legacy_upload_does_not_mutate_existing_card(monkeypatch, tmp_path):
+    db = _session(tmp_path)
+    bucket = FakeBucket()
+    monkeypatch.setattr("app.fish_knowledge.admin.storage.Client", lambda: FakeStorageClient(bucket))
+    try:
+        _create_species(db)
+        card = FishCard(
+            species_id="grass_carp", card_type="HERO", title="Existing",
+            image_url="/api/v1/fish/knowledge-media/grass_carp/hero/v1.webp",
+            description='{"type":"HERO","tag":"preserve"}', sort_order=0, status="ACTIVE",
+        )
+        db.add(card)
+        db.commit()
+        response = _call(db, "HERO", _png_bytes((200, 210, 220)))
+        assert response.status_code == 409
+        db.refresh(card)
+        assert card.status == "ACTIVE"
+        assert card.title == "Existing"
+        assert card.image_url.endswith("/hero/v1.webp")
+        assert card.description == '{"type":"HERO","tag":"preserve"}'
+        assert db.query(FishCard).filter(FishCard.species_id == "grass_carp").count() == 1
+        assert bucket.blobs == {}
+    finally:
+        db.close()
+
+def test_legacy_upload_does_not_reach_storage_or_database_commit(monkeypatch, tmp_path):
+    db = _session(tmp_path)
+    bucket = FakeBucket()
+    monkeypatch.setattr("app.fish_knowledge.admin.storage.Client", lambda: FakeStorageClient(bucket))
+    try:
+        _create_species(db)
+        monkeypatch.setattr(
+            "app.fish_knowledge.admin._commit",
+            lambda _db: (_ for _ in ()).throw(RuntimeError("legacy write attempted")),
+        )
+        response = _call(db, "COVER", _png_bytes())
+        assert response.status_code == 409
+        assert json.loads(response.body)["error"] == "versioned_upload_required"
+        assert bucket.blobs == {}
+    finally:
+        db.close()
+
+def test_legacy_upload_rejects_invalid_media_before_any_write(monkeypatch, tmp_path):
+    db = _session(tmp_path)
+    bucket = FakeBucket()
+    monkeypatch.setattr("app.fish_knowledge.admin.storage.Client", lambda: FakeStorageClient(bucket))
+    try:
+        _create_species(db)
+        for data in (b"", b"not an image", b"x" * (KNOWLEDGE_ASSET_MAX_BYTES + 1)):
+            response = _call(db, "COVER", data)
+            assert response.status_code == 409
+            payload = json.loads(response.body)
+            assert payload["success"] is False
+            assert payload["error"] == "versioned_upload_required"
+        assert bucket.blobs == {}
+    finally:
+        db.close()
 
 def test_short_cms_upload_route_contract_is_registered():
     route = app.openapi()["paths"]["/api/admin/fish/assets/upload"]["post"]

@@ -25,6 +25,7 @@ jobs:
           bash -n scripts/deploy_training_gcp.sh
           bash -n scripts/bootstrap_github_wif.sh
           bash -n scripts/deploy_console_runtime.sh
+          bash -n scripts/deploy_backend_integration.sh
       - name: Import Model Factory Console
         env:
           REGISTRY_DB_URL: 'sqlite:///:memory:'

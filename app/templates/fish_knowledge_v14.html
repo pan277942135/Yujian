@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>鱼种知识工作区 v1.4 · 渔见 AI</title>
+  <style>
+    :root{font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;color:#17212b;background:#f4f7fa}
+    *{box-sizing:border-box}body{margin:0}header{background:#fff;border-bottom:1px solid #dbe4ec;padding:15px max(20px,calc((100vw - 1280px)/2));position:sticky;top:0;z-index:4}
+    .brand{display:flex;justify-content:space-between;align-items:center;gap:18px}.brand strong{font-size:18px}.brand small{color:#64748b;display:block;margin-top:3px}
+    nav{display:flex;gap:8px;overflow:auto;margin-top:14px}nav a{white-space:nowrap;text-decoration:none;color:#425466;padding:8px 12px;border-radius:8px;font-size:14px}nav a.active{background:#e0f2fe;color:#075985;font-weight:700}
+    main{max-width:1280px;margin:0 auto;padding:24px 20px}.toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:18px}.toolbar label{font-size:13px;color:#526171}.toolbar select{min-width:230px}
+    input,button,select,textarea{font:inherit;border:1px solid #cbd5df;border-radius:8px;padding:9px 11px;background:#fff;color:#17212b}button{cursor:pointer;font-weight:650}button.primary{background:#087e8b;border-color:#087e8b;color:#fff}button:disabled{opacity:.55;cursor:not-allowed}
+    .panel{background:#fff;border:1px solid #dbe4ec;border-radius:13px;padding:20px;margin:0 0 16px}.panel h1{margin:0 0 8px;font-size:23px}.panel h2{font-size:17px;margin:0 0 12px}.muted{color:#64748b}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:13px}.tile{border:1px solid #dbe4ec;border-radius:10px;padding:14px;min-width:0}.tile h3{font-size:14px;margin:0 0 8px}.row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.stack{display:grid;gap:10px}.status{display:inline-block;border-radius:999px;padding:4px 8px;font-size:12px;background:#eef2f6;color:#475569}.status.active{background:#dcfce7;color:#166534}.status.draft{background:#e0f2fe;color:#075985}.status.error{background:#fee2e2;color:#991b1b}.preview{width:100%;height:180px;object-fit:contain;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc}.wide{width:100%}textarea{width:100%;min-height:140px;font-family:ui-monospace,monospace;font-size:12px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f8fafc;border:1px solid #e2e8f0;padding:12px;border-radius:8px;font-size:12px}.notice{display:none;margin:0 0 14px;padding:11px;border-radius:9px;background:#e0f2fe;color:#075985;white-space:pre-wrap}.notice.error{background:#fee2e2;color:#991b1b}.empty{padding:16px;color:#64748b;text-align:center}.table{width:100%;border-collapse:collapse}.table th,.table td{text-align:left;padding:9px;border-bottom:1px solid #e8edf2;font-size:13px;vertical-align:top}.table th{color:#64748b}
+    @media(max-width:700px){main{padding:16px 12px}.panel{padding:15px}.brand{align-items:flex-start}.toolbar select{width:100%}}
+  </style>
+</head>
+<body data-section="{{ section }}" data-species-id="{{ species_id }}">
+  <header>
+    <div class="brand"><div><strong>鱼种知识工作区</strong><small>v1.4 · 资产版本与内容绑定统一管理</small></div><a href="/">模型工厂</a></div>
+    <nav>
+      {% for key, label in [('overview','鱼种概览'),('basic','基本信息'),('assets','图片资产'),('cards','五张知识卡'),('publication','发布审核'),('history','历史与审计')] %}
+      <a data-section-link="{{ key }}" class="{% if section == key %}active{% endif %}" href="/fish-knowledge/{{ key }}">{{ label }}</a>
+      {% endfor %}
+    </nav>
+  </header>
+  <main>
+    <div class="toolbar"><label for="speciesSelect">当前鱼种</label><select id="speciesSelect"><option value="">加载鱼种…</option></select><span id="speciesStatus" class="muted"></span></div>
+    <div id="notice" class="notice"></div>
+    {% include 'fish_knowledge_v14/' ~ section ~ '.html' %}
+  </main>
+  <script type="module">
+    const section = document.body.dataset.section;
+    import(`/static/fish_knowledge_v14/${section}.js`).then(module => module.start({{ species_id|tojson }}));
+  </script>
+</body>
+</html>

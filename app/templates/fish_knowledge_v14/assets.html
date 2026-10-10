@@ -1,0 +1,24 @@
+<section class="panel">
+  <h1>图片资产</h1>
+  <p class="muted">上传过程：确认鱼种与图片角色 → 选择文件 → 预检 → 查看原图预览 → 明确确认后创建 DRAFT。上传不会更改当前 ACTIVE 图片。</p>
+  <div class="row">
+    <a id="batchImportLink" href="/fish-knowledge/batch-import"><button type="button">批量导入</button></a>
+    <a id="extensionsLink" href="/fish-knowledge/extensions"><button type="button">扩展资料</button></a>
+  </div>
+</section>
+<section class="panel">
+  <h2>上传新版本</h2>
+  <form id="uploadForm" class="stack">
+    <label>鱼种 <input id="uploadSpecies" class="wide" readonly></label>
+    <label>图片角色 <select id="assetRole" class="wide" required></select></label>
+    <label>图片文件 <input id="assetFile" type="file" accept="image/png,image/jpeg,image/webp" required></label>
+    <div class="row"><button id="preflightButton" class="primary" type="submit">预检并预览</button></div>
+  </form>
+  <section id="uploadReview" class="tile" hidden aria-live="polite"></section>
+</section>
+<section class="panel"><h2>主视觉与五张知识卡</h2><div id="assetSlots" class="grid"></div></section>
+<details class="panel">
+  <summary>其他历史角色（列表封面、透明主体）</summary>
+  <p class="muted">保留既有角色与历史。普通 120 槽位发布工作流以 COVER_HERO 和五张知识卡为主。</p>
+  <div id="otherAssetSlots" class="grid"></div>
+</details>
