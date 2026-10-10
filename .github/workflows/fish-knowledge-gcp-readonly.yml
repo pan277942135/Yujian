@@ -37,7 +37,7 @@ jobs:
             --project gemini-api-project-503706 --region asia-east1 \
             --format=json > audit-output/cloudrun.json 2>audit-output/cloudrun-error.txt
           RUN_CODE=$?
-          gcloud storage ls --recursive gs://yujian-model-factory-571785698442/fish-knowledge/ \
+          gcloud storage ls --recursive gs://yujian-model-factory-571785698442/fish-assets/fish-knowledge/ \
             >audit-output/gcs-objects.txt 2>audit-output/gcs-error.txt
           GCS_CODE=$?
           gcloud sql instances list --project gemini-api-project-503706 \
