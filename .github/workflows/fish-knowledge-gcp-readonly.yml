@@ -31,6 +31,8 @@ jobs:
         id: inventory
         shell: bash
         run: |
+          # Keep probing when a single read-only API is denied; report exact blockers.
+          set +e
           set -u
           mkdir -p audit-output
           gcloud run services describe yujian-model-factory-console \
@@ -55,7 +57,7 @@ jobs:
               result['cloud_sql_binding']=((d.get('spec') or {}).get('template') or {}).get('metadata',{}).get('annotations',{}).get('run.googleapis.com/cloudsql-instances','')
           if result['gcs_rc']==0:
               lines=(root/'gcs-objects.txt').read_text().splitlines()
-              obj=[s for s in lines if s.startswith('gs://')]
+              obj=[s for s in lines if s.startswith('gs://') and not s.endswith(':')]
               result['gcs_object_count']=len(obj)
               result['gcs_cover_hero_count']=sum('/cover_hero/' in s.lower() for s in obj)
               result['gcs_knowledge_role_count']={role:sum('/'+role+'/' in s.lower() for s in obj) for role in ('hero','identification','eco','gear','skill')}
