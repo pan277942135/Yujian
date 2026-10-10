@@ -1,0 +1,82 @@
+name: Fish Knowledge GCP Readonly Inventory
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fish-knowledge-gcp-readonly.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: fish-knowledge-gcp-readonly-inventory
+  cancel-in-progress: false
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - name: Existing main-only Workload Identity login
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: gemini-api-project-503706
+          workload_identity_provider: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+          service_account: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: gemini-api-project-503706
+          version: '>= 416.0.0'
+      - name: Read Cloud Run revision, Cloud SQL binding, and GCS object listing
+        id: inventory
+        shell: bash
+        run: |
+          set -u
+          mkdir -p audit-output
+          gcloud run services describe yujian-model-factory-console \
+            --project gemini-api-project-503706 --region asia-east1 \
+            --format=json > audit-output/cloudrun.json 2>audit-output/cloudrun-error.txt
+          RUN_CODE=$?
+          gcloud storage ls --recursive gs://yujian-model-factory-571785698442/fish-knowledge/ \
+            >audit-output/gcs-objects.txt 2>audit-output/gcs-error.txt
+          GCS_CODE=$?
+          gcloud sql instances list --project gemini-api-project-503706 \
+            --format="value(name,state)" > audit-output/cloudsql.txt 2>audit-output/cloudsql-error.txt
+          SQL_CODE=$?
+          export RUN_CODE GCS_CODE SQL_CODE
+          python3 - <<'PY'
+          import json, os, pathlib
+          root=pathlib.Path('audit-output')
+          result={'audit':'READ_ONLY','cloudrun_rc':int(os.environ['RUN_CODE']), 'gcs_rc':int(os.environ['GCS_CODE']), 'sql_rc':int(os.environ['SQL_CODE'])}
+          if result['cloudrun_rc']==0:
+              d=json.loads((root/'cloudrun.json').read_text())
+              result['cloudrun_revision']=(d.get('status') or {}).get('latestReadyRevisionName')
+              result['cloudrun_url']=(d.get('status') or {}).get('url')
+              result['cloud_sql_binding']=((d.get('spec') or {}).get('template') or {}).get('metadata',{}).get('annotations',{}).get('run.googleapis.com/cloudsql-instances','')
+          if result['gcs_rc']==0:
+              lines=(root/'gcs-objects.txt').read_text().splitlines()
+              obj=[s for s in lines if s.startswith('gs://')]
+              result['gcs_object_count']=len(obj)
+              result['gcs_cover_hero_count']=sum('/cover_hero/' in s.lower() for s in obj)
+              result['gcs_knowledge_role_count']={role:sum('/'+role+'/' in s.lower() for s in obj) for role in ('hero','identification','eco','gear','skill')}
+              result['gcs_unique_species_dirs']=len({s.split('/fish-knowledge/')[-1].split('/')[0] for s in obj if '/fish-knowledge/' in s})
+          for source,code in [('gcs',result['gcs_rc']),('cloudrun',result['cloudrun_rc']),('cloudsql',result['sql_rc'])]:
+              if code:
+                  result[source+'_error']=(root/(source+'-error.txt')).read_text()[:400]
+          (root/'summary.json').write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n')
+          print(json.dumps(result,ensure_ascii=False))
+          PY
+          if [ "$RUN_CODE" -ne 0 ] || [ "$GCS_CODE" -ne 0 ] || [ "$SQL_CODE" -ne 0 ]; then
+            exit 1
+          fi
+      - name: Upload readonly metadata evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fish-knowledge-gcp-readonly-inventory
+          path: |
+            audit-output/summary.json
+            audit-output/gcs-objects.txt
+            audit-output/cloudsql.txt
+          retention-days: 14
+          if-no-files-found: warn
