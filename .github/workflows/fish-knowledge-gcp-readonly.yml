@@ -42,7 +42,7 @@ jobs:
           gcloud storage ls --recursive gs://yujian-model-factory-571785698442/fish-assets/fish-knowledge/ \
             >audit-output/gcs-objects.txt 2>audit-output/gcs-error.txt
           GCS_CODE=$?
-          gcloud sql instances list --project gemini-api-project-503706 \
+          gcloud sql instances describe yujian-registry --project gemini-api-project-503706 \
             --format="value(name,state)" > audit-output/cloudsql.txt 2>audit-output/cloudsql-error.txt
           SQL_CODE=$?
           export RUN_CODE GCS_CODE SQL_CODE
@@ -54,6 +54,8 @@ jobs:
               d=json.loads((root/'cloudrun.json').read_text())
               result['cloudrun_revision']=(d.get('status') or {}).get('latestReadyRevisionName')
               result['cloudrun_url']=(d.get('status') or {}).get('url')
+              envs=(((d.get('spec') or {}).get('template') or {}).get('spec') or {}).get('containers', [{}])[0].get('env',[])
+              result['deployed_app_git_commit']=next((v.get('value') for v in envs if v.get('name') == 'APP_GIT_COMMIT'),None)
               result['cloud_sql_binding']=((d.get('spec') or {}).get('template') or {}).get('metadata',{}).get('annotations',{}).get('run.googleapis.com/cloudsql-instances','')
           if result['gcs_rc']==0:
               lines=(root/'gcs-objects.txt').read_text().splitlines()
