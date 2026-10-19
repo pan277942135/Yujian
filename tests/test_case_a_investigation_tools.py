@@ -49,6 +49,31 @@ class CaseAInvestigationToolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "source SHA mismatch"):
             inspect_case_a_source(source)
 
+    def test_source_audit_checks_dimensions_and_exif_after_sha(self):
+        from PIL import Image
+
+        source = self.root / "synthetic_1440x1920.jpg"
+        Image.new("RGB", (1440, 1920), (22, 99, 150)).save(source, format="JPEG", quality=95)
+        source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+
+        result = inspect_case_a_source(source, expected_sha256=source_sha)
+
+        self.assertEqual(result["dimensions"], [1440, 1920])
+        self.assertEqual(result["exif_orientation"], 1)
+
+    def test_source_audit_rejects_nonidentity_exif_orientation(self):
+        from PIL import Image
+
+        source = self.root / "synthetic_exif_rotated.jpg"
+        exif = Image.Exif()
+        exif[274] = 6
+        Image.new("RGB", (1440, 1920), (22, 99, 150)).save(
+            source, format="JPEG", quality=95, exif=exif
+        )
+        source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(ValueError, "EXIF orientation mismatch"):
+            inspect_case_a_source(source, expected_sha256=source_sha)
+
     def test_dataset_manifest_audit_reports_cross_split_batch_and_missing_provenance(self):
         entries = [
             {

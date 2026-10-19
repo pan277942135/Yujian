@@ -8,7 +8,7 @@
 
 ## 1. Conclusion
 
-**The underlying reason the correct Case A boxes received very low objectness is not yet established.** The only Case A scores available are from the historical P0 report, not a new replay. That report's highest-IoU correct candidates had moderate fish-class probabilities (0.584–0.670) but objectness of only 0.001889–0.006338. The declared decoder multiplies those fields, so objectness is the immediate numerical factor suppressing confidence below the unchanged 0.20 weak threshold.
+**The underlying reason the correct Case A boxes received very low objectness is not yet established.** The only Case A scores available are from the historical P0 report, not a new replay. For each view, that report selected the highest-confidence candidate among boxes with GT IoU ≥ 0.50; those candidates had moderate fish-class probabilities (0.584–0.670) but objectness of only 0.001889–0.006338. The declared decoder multiplies those fields, so objectness is the immediate numerical factor suppressing confidence below the unchanged 0.20 weak threshold.
 
 The artifact chain now has a confirmed identity problem: the historical Case A ONNX and released Android bundle are `12b97f7c…`, while the last observed production GCS ONNX was `2338f44c…`; an October 7 production smoke failed because the GCS ONNX did not match the Golden Manifest. Current GCS generation and bytes cannot be reread because GCS returns 403 while the owning project's billing account is in state `absent`. The Case A original bytes also could not be recovered by SHA from the authorized repository/workspace sources. Consequently, the old low-objectness rows cannot be attributed to the currently deployed production model, and no Case A orientation replay was run in this investigation.
 
@@ -151,7 +151,7 @@ Added read-only tooling:
 - `tests/test_case_a_investigation_tools.py`: deterministic ZIP identity, strict source hash guard, and manifest audit tests.
 - [`validation_evidence.json`](validation_evidence.json): reproducible local command outcomes and SHA-256 values for the delivered scripts, tests, and evidence files.
 
-Run records: backend main CI #1204 (`38034915879`, success); Android main run #2316 (`39016335427`, queued when checked); detector training/bootstrap run #26 (`37603789137`, success); production smoke #23 (`37603789067`, failed on artifact SHA mismatch in the original attempt and GCS billing 403 in the read-only rerun). The Case A diagnostic replay was deliberately **not run**. No CI run is represented as a Case A inference pass.
+Run records: backend main CI #1204 (`38034915879`, success); Android main run #2316 (`39016335427`, build success while runtime-matrix jobs remained queued/cancelled); detector training/bootstrap run #26 (`37603789137`, success); production smoke #23 (`37603789067`, failed on artifact SHA mismatch in the original attempt and GCS billing 403 in the read-only rerun). Investigation Draft PR [#164](https://github.com/pan277942135/Yujian/pull/164) was opened at head `2a2534e081ec6374f68ae871fc6a6fcb6879e37a`; initial PR CI run #1206 (`39221924389`) completed successfully, including `Run production recognition pipeline tests`. A follow-up commit adds two temporary synthetic-source guard tests; its CI is pending. The Case A diagnostic replay was deliberately **not run**. No CI run is represented as a Case A inference pass.
 
 Local validation commands for this branch:
 
@@ -160,7 +160,7 @@ python3 -m py_compile scripts/diagnose_detector_orientation.py scripts/audit_cas
 python3 -m unittest discover -s tests -p 'test_case_a_investigation_tools.py' -v
 ```
 
-Both commands exited 0 locally; all 3 investigation-tool unit tests passed. The Android Release bundle preflight also exited 0 and independently re-confirmed ZIP SHA `246ddac…`, extracted ONNX SHA `12b97f7c…`, metadata and Golden Manifest identity. All five machine-readable audit JSON files parse successfully, and `git diff --check` exited 0. This local validation does not substitute for PR CI or runtime inference.
+Both commands exited 0 locally; all 5 investigation-tool unit tests passed, including synthetic 1440×1920 source dimension/EXIF guard checks. The Android Release bundle preflight also exited 0 and independently re-confirmed ZIP SHA `246ddac…`, extracted ONNX SHA `12b97f7c…`, metadata and Golden Manifest identity. All six machine-readable JSON files parse successfully, and `git diff --check` exited 0. This local validation does not substitute for PR CI or runtime inference.
 
 ## 9. Gate status
 
@@ -170,7 +170,7 @@ Both commands exited 0 locally; all 3 investigation-tool unit tests passed. The 
 | B — detection replay | **BLOCKED** | Case A SHA-matched source not available; current production artifact identity unresolved. Case B source hash verified, but this investigation did not rerun it. Historical rows are explicitly not replay evidence. |
 | C — inference consistency | **STATIC PARTIAL / RUNTIME BLOCKED** | Static preprocessor/decode source inspection found no mismatch; tensor and Android instrumentation comparison not performed. |
 | D — data audit | **STATIC PARTIAL / MANIFEST BLOCKED** | Training code and release/run summaries inspected; actual manifest, archive, image labels and scene coverage unavailable. |
-| E — engineering closeout | **LOCAL VALIDATION PASS; PR/CI PENDING** | Local scripts compile, 3 focused tests pass, artifact preflight and JSON validation pass. Independent Draft PR and remote CI remain to be recorded after push. |
+| E — engineering closeout | **LOCAL VALIDATION PASS; INITIAL PR CI PASS; FOLLOW-UP CI PENDING** | Independent Draft PR #164 is Open / Draft / Unmerged. Initial PR CI #1206 (`39221924389`) passed. The follow-up commit adds two source dimension/EXIF guard tests and will be revalidated by its own CI run. |
 
 ## 10. Next evidence required before model work
 
