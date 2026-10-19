@@ -9,7 +9,10 @@
   },
   "case_a_source": {
     "sha256": "2dd703a46b378093604e10f0add454606393138f7501774bd3bbcca75352c9fe",
-    "expected_dimensions": [1440, 1920],
+    "expected_dimensions": [
+      1440,
+      1920
+    ],
     "historical_exif_orientation": 1,
     "source_bytes_available": false,
     "input_tensor_hash_available": false
@@ -32,16 +35,16 @@
     {
       "id": "source_downsample",
       "backend": {
-        "implementation": "Power-of-two sample factor until longest side <= 2048; floor-divided output dimensions; Pillow bilinear if sample > 1",
-        "source": "pan277942135/Yujian@05554ce1b7104c7bce05610979dfc3478b6d24a5:app/detector_runtime.py:204-217"
+        "implementation": "Primary recognition API _predict_bytes EXIF-transposes and converts to RGB, then calls detect(full raster) without the 2048 source downsample. The normalize_android_source helper applies a power-of-two sample cap, but this primary API path does not call it.",
+        "source": "pan277942135/Yujian@05554ce1b7104c7bce05610979dfc3478b6d24a5:app/inference_api.py:407-422; helper only: app/detector_runtime.py:195-217"
       },
       "android": {
         "implementation": "BitmapFactory.Options.inSampleSize, doubling integer sample until longest side/sample <= 2048",
         "source": "pan277942135/Yujian_App@0d3238e8a41b87363e9a17b04c9cc45fca4c426d:app/src/main/java/com/yujian/ai/media/RecognitionImageStore.kt:61-101"
       },
-      "static_conclusion": "Sampling policy is intended to match. Case A 1440x1920 is below the limit and would use sample=1.",
-      "runtime_parity": "UNVERIFIED",
-      "notes": "The exact decoded pixel raster is not available because the authorized Case A bytes could not be retrieved."
+      "static_conclusion": "Case A maximum dimension is 1920, so Android uses inSampleSize=1 and the backend primary API also keeps the full raster. For larger images, the primary backend API and Android source sampling behavior differ; this generic difference is not applicable to the stated Case A dimensions.",
+      "runtime_parity": "CASE_A_SIZE_CONTRACT_MATCH_STATICALLY; PIXEL_PARITY_UNVERIFIED",
+      "notes": "The exact decoded pixel raster is not available because the authorized Case A bytes could not be retrieved. Backend source sampling helper behavior must not be mistaken for the primary _predict_bytes path."
     },
     {
       "id": "resize_letterbox_channels_tensor",
@@ -69,7 +72,8 @@
       },
       "static_conclusion": "Decode formulas and production gate constants match by source inspection. Metadata declares decoded probabilities; neither consumer applies an additional sigmoid.",
       "runtime_parity": "PARTIAL_STATIC_ONLY",
-      "notes": "The Android output shape is materialized and row width checked at decode, but no current device trace proves actual runtime output. The 2026-10-07 production smoke observed a GCS model / Golden Manifest hash mismatch and did not prove current production decode behavior."
+      "notes": "The Android output shape is materialized and row width checked at decode, but no current device trace proves actual runtime output. The 2026-10-07 production smoke observed a GCS model / Golden Manifest hash mismatch and did not prove current production decode behavior. The ONNX graph's actual sigmoid/logit boundary remains unverified; only its metadata contract and consumer interpretation are known.",
+      "onnx_graph_semantics": "NOT_INDEPENDENTLY_VERIFIED; metadata declares decoded_xywh_objectness_class_probability and the consumers treat columns 4-5 as probabilities; no ONNX graph parser or runtime output inspection was available in this investigation."
     },
     {
       "id": "orientation_coordinate_mapping_and_gate",
@@ -87,9 +91,9 @@
     }
   ],
   "overall": {
-    "source_code_contract_comparison": "NO_STATIC_PREPROCESSING_OR_DECODE_MISMATCH_FOUND",
+    "source_code_contract_comparison": "NO_CASE_A_SIZE_INPUT_CONTRACT_MISMATCH_FOUND; GENERIC_LARGE_SOURCE_DOWNSAMPLE_DIFFERENCE_EXISTS",
     "end_to_end_android_backend_parity": "NOT_ESTABLISHED",
-    "root_cause_implication": "PREPROCESSING_PARITY_BUG_NOT_CONFIRMED; do not eliminate it until same-source tensor and runtime comparisons exist.",
+    "root_cause_implication": "PREPROCESSING_PARITY_BUG_NOT_CONFIRMED_FOR_CASE_A; generic >2048 source-sampling behavior differs in the primary API path and must be reviewed separately. Do not eliminate Case A pixel/runtime parity until same-source tensor and runtime comparisons exist.",
     "case_b_positive_control": {
       "expected_sha256": "a7ed3bb0410c191364f6d853b4078aebdc2f3b9baa4da34b7b3f6e8e0e93a56",
       "asset_present": true,

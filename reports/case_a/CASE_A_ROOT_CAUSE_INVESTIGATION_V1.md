@@ -94,18 +94,18 @@ Static inspection found no obvious mismatch in the declared 416 input contract:
 | Contract item | Backend | Android | Static finding |
 |---|---|---|---|
 | EXIF orientation | Pillow `exif_transpose`, then RGB | `ExifInterface.rotationDegrees`, rotate decoded bitmap | Same intent; decoders differ |
-| Source downsample | power-of-two sample to ≤2048 | `BitmapFactory.inSampleSize` power-of-two to ≤2048 | Same policy; exact raster untested |
+| Source downsample | Primary `_predict_bytes` path sends its EXIF-normalized raster directly to `detect`; it does not call the 2048px helper | `BitmapFactory.inSampleSize` power-of-two to ≤2048 | For Case A at 1920px max, Android sample is 1, so both retain full source dimensions; generic inputs above 2048px differ |
 | Model resize | scale to fit, integer-truncated dimensions, bilinear | same dimensions; custom Pillow-compatible separable bilinear | Intended parity; pixels not compared |
 | Letterbox | top-left, fill 114 | top-left, fill 114 | Match by code |
 | Tensor | RGB→BGR, float32 NCHW, raw 0–255 | BGR planes, float32 NCHW, raw 0–255 | Match by code |
 | Output | decoded xywh/objectness/class probability; confidence product | same confidence product and normalized xywh inverse mapping | Match by code/metadata contract |
 | Gate and NMS | weak .20, strong .35, IoU .45, area .08 | same constants | Match by code |
 
-Android source decode is `BitmapFactory`; backend uses Pillow. Android's resize implementation deliberately mirrors Pillow's two-pass bilinear filter with fixed-point coefficients; backend directly uses Pillow bilinear. The intended resize policy matches, but there is no same-byte, same-pixel comparison. Android's normalized JPEG92 file is not the actual `detect()` tensor source; the detector receives the oriented in-memory bitmap. Case A's historical EXIF is 1 and its dimensions are below the 2048 sampling bound, but those facts do not establish byte-identical RGB decoding.
+Android source decode is `BitmapFactory`; backend `_predict_bytes` uses Pillow's `ImageOps.exif_transpose(...).convert("RGB")`. Android's resize implementation deliberately mirrors Pillow's two-pass bilinear filter with fixed-point coefficients; backend directly uses Pillow bilinear. The intended model-input resize policy matches, but there is no same-byte, same-pixel comparison. Android's normalized JPEG92 file is not the actual `detect()` tensor source; the detector receives the oriented in-memory bitmap. Case A's historical EXIF is 1 and its dimensions are below the 2048 sampling bound, so Android uses `inSampleSize=1` and the primary backend path also keeps the full raster. The separate backend `normalize_android_source` helper is used by other routes but is not called by `_predict_bytes`; it should not be treated as the primary API's behavior. These facts still do not establish byte-identical RGB decoding.
 
-Backend and Android both decode output field 4 × field 5 for confidence and use the same scale/source-dimension inverse map. Metadata labels output as decoded probabilities; source inspection shows no additional sigmoid in either consumer. Orientation coordinate transforms, bounded retry trigger, NMS, and threshold constants are aligned by code.
+Backend and Android both decode output field 4 × field 5 for confidence and use the same scale/source-dimension inverse map. Metadata declares `decoded_xywh_objectness_class_probability`; source inspection shows no additional sigmoid in either consumer. The actual ONNX graph's sigmoid/logit boundary was **not independently inspected** because this run did not parse or execute the ONNX graph; only its metadata contract and consumer interpretation are verified. Orientation coordinate transforms, bounded retry trigger, NMS, and threshold constants are aligned by code.
 
-**Parity conclusion:** static source-contract comparison found no confirmed `PREPROCESSING_PARITY_BUG` or `OUTPUT_DECODE_BUG`; end-to-end parity is **not established**. No 416×416 input tensor SHA/statistics, Android output tensor, Case A runtime trace, or Case B runtime replay was captured. Do not call this a PASS. Machine-readable detail: [`preprocessing_parity.json`](preprocessing_parity.json).
+**Parity conclusion:** static source-contract comparison found no confirmed Case A-sized `PREPROCESSING_PARITY_BUG` or `OUTPUT_DECODE_BUG`; the primary backend API does have a different source-downsampling policy for images larger than 2048px, which does not apply to the stated Case A dimensions. End-to-end parity is **not established**. The ONNX graph's logit/probability boundary was not independently inspected. No 416×416 input tensor SHA/statistics, Android output tensor, Case A runtime trace, or Case B runtime replay was captured. Do not call this a PASS. Machine-readable detail: [`preprocessing_parity.json`](preprocessing_parity.json).
 
 ## 6. Gate D — data and label audit
 
@@ -151,7 +151,19 @@ Added read-only tooling:
 - `tests/test_case_a_investigation_tools.py`: deterministic ZIP identity, strict source hash guard, and manifest audit tests.
 - [`validation_evidence.json`](validation_evidence.json): reproducible local command outcomes and SHA-256 values for the delivered scripts, tests, and evidence files.
 
-Run records: backend main CI #1204 (`38034915879`, success); Android main run #2316 (`39016335427`, build success while runtime-matrix jobs remained queued/cancelled); detector training/bootstrap run #26 (`37603789137`, success); production smoke #23 (`37603789067`, failed on artifact SHA mismatch in the original attempt and GCS billing 403 in the read-only rerun). Investigation Draft PR [#164](https://github.com/pan277942135/Yujian/pull/164) was opened at head `2a2534e081ec6374f68ae871fc6a6fcb6879e37a`; initial PR CI run #1206 (`39221924389`) completed successfully, including `Run production recognition pipeline tests`. A follow-up commit adds two temporary synthetic-source guard tests; its CI is pending. The Case A diagnostic replay was deliberately **not run**. No CI run is represented as a Case A inference pass.
+After the artifact and source gates are restored, a Case A replay can be invoked from the authorized original path with the exact source guard (the script evaluates ORIGINAL/CW90/CCW90 from that one byte source):
+
+```bash
+python3 scripts/diagnose_detector_orientation.py \
+  --onnx <verified-production-detector.onnx> \
+  --metadata <matching-detector-metadata.json> \
+  --ground-truth-json <reviewed-case-a-ground-truth.json> \
+  --expected-image-sha256 2dd703a46b378093604e10f0add454606393138f7501774bd3bbcca75352c9fe \
+  --json-out /tmp/case_a_orientation_replay.json \
+  <authorized-original-case-a.jpg>
+```
+
+Run records: backend main CI #1204 (`38034915879`, success); Android main run #2316 (`39016335427`, build success while runtime-matrix jobs remained queued/cancelled); detector training/bootstrap run #26 (`37603789137`, success); production smoke #23 (`37603789067`, failed on artifact SHA mismatch in the original attempt and GCS billing 403 in the read-only rerun). Investigation Draft PR [#164](https://github.com/pan277942135/Yujian/pull/164) is Open / Draft / Unmerged. Initial PR CI #1206 (`39221924389`) passed at head `2a2534e081ec6374f68ae871fc6a6fcb6879e37a`; follow-up PR CI #1207 (`39222540425`) passed at head `8582922348ad06ea56a9276f693820fe60dfb3bc`, including the five investigation-tool tests and `Run production recognition pipeline tests`. The Case A diagnostic replay was deliberately **not run**. No CI run is represented as a Case A inference pass.
 
 Local validation commands for this branch:
 
@@ -170,7 +182,7 @@ Both commands exited 0 locally; all 5 investigation-tool unit tests passed, incl
 | B — detection replay | **BLOCKED** | Case A SHA-matched source not available; current production artifact identity unresolved. Case B source hash verified, but this investigation did not rerun it. Historical rows are explicitly not replay evidence. |
 | C — inference consistency | **STATIC PARTIAL / RUNTIME BLOCKED** | Static preprocessor/decode source inspection found no mismatch; tensor and Android instrumentation comparison not performed. |
 | D — data audit | **STATIC PARTIAL / MANIFEST BLOCKED** | Training code and release/run summaries inspected; actual manifest, archive, image labels and scene coverage unavailable. |
-| E — engineering closeout | **LOCAL VALIDATION PASS; INITIAL PR CI PASS; FOLLOW-UP CI PENDING** | Independent Draft PR #164 is Open / Draft / Unmerged. Initial PR CI #1206 (`39221924389`) passed. The follow-up commit adds two source dimension/EXIF guard tests and will be revalidated by its own CI run. |
+| E — engineering closeout | **PASS FOR ENGINEERING ARTIFACTS** | Independent Draft PR #164 is Open / Draft / Unmerged. CI #1207 (`39222540425`) passed on implementation head `8582922348ad06ea56a9276f693820fe60dfb3bc`; source guard tests and production recognition pipeline tests succeeded. This does not pass Gates A–D or infer Case A. |
 
 ## 10. Next evidence required before model work
 

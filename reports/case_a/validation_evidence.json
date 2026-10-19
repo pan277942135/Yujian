@@ -1,12 +1,12 @@
 {
   "schema_version": "CASE_A_INVESTIGATION_VALIDATION_EVIDENCE_V1",
-  "status": "LOCAL_VALIDATION_PASS_INITIAL_PR_CI_PASS_FOLLOWUP_CI_PENDING",
+  "status": "ENGINEERING_HANDOFF_READY_ROOT_CAUSE_BLOCKED_INSUFFICIENT_EVIDENCE",
   "environment": {
     "python": "3.12.14",
     "backend_main_sha": "05554ce1b7104c7bce05610979dfc3478b6d24a5",
     "published_branch": "investigate/case-a-low-objectness-root-cause-v1",
     "published_pr_number": 164,
-    "published_pr_head_before_followup": "2a2534e081ec6374f68ae871fc6a6fcb6879e37a"
+    "tested_pr_head": "8582922348ad06ea56a9276f693820fe60dfb3bc"
   },
   "commands": [
     {
@@ -57,18 +57,29 @@
       "production_recognition_pipeline_tests": "SUCCESS"
     },
     "followup": {
-      "status": "PENDING",
-      "head_sha": null,
-      "run_id": null
+      "status": "SUCCESS",
+      "run_id": 39222540425,
+      "run_number": 1207,
+      "head_sha": "8582922348ad06ea56a9276f693820fe60dfb3bc",
+      "job_id": 117960996808,
+      "job": "validate",
+      "production_recognition_pipeline_tests": "SUCCESS"
     }
+  },
+  "gate_status": {
+    "A": "FAIL_LAST_OBSERVED_ARTIFACT_MISMATCH_CURRENT_GCS_BLOCKED",
+    "B": "BLOCKED_SOURCE_AND_ARTIFACT",
+    "C": "STATIC_PARTIAL_RUNTIME_PARITY_BLOCKED",
+    "D": "STATIC_PARTIAL_MANIFEST_BLOCKED",
+    "E": "PASS_ENGINEERING_HANDOFF_READY"
   },
   "case_a_inference": {
     "status": "NOT_RUN_GATE_A_AND_SOURCE_BLOCKED"
   },
   "files": {
     "reports/case_a/CASE_A_ROOT_CAUSE_INVESTIGATION_V1.md": {
-      "sha256": "ca2e591bbdf21c525894eb480306c89a82edac8ab3f8a5f1519edcf1a054b1df",
-      "bytes": 24690
+      "sha256": "a582833aca2ba4532ab72fffaf7eee767463ad7eb44f9e9adddeb01cb045a1dc",
+      "bytes": 26372
     },
     "reports/case_a/artifact_bundle_preflight.json": {
       "sha256": "e0803d33123294948b97cd07f66f61aa333d90e3a5cf9e0f2eae822499d7b13f",
@@ -87,8 +98,8 @@
       "bytes": 34920
     },
     "reports/case_a/preprocessing_parity.json": {
-      "sha256": "35c165ecf2150fc046f5cc1a94763865f42411c8e11e6e923c144f13cbe9cc23",
-      "bytes": 7699
+      "sha256": "b68ddfebe63e8cf5ea6ec2dd5d58f59dec28f9543ce477fa5234ac05297d03b4",
+      "bytes": 8818
     },
     "scripts/audit_case_a_artifacts.py": {
       "sha256": "e3b77a185b24bfbbe80ae965383a2c11aa925283f6fa0601521ad0a86f949133",
