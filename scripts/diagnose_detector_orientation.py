@@ -79,6 +79,7 @@ def _source_identity(path: Path, expected_sha256: str | None) -> dict:
     actual_sha = hashlib.sha256(raw).hexdigest()
     with Image.open(path) as image:
         width, height = image.size
+        image_format = image.format
         exif_orientation = int(image.getexif().get(274, 1))
     if expected_sha256 and actual_sha != expected_sha256:
         raise SystemExit(f"{path.name}: source SHA mismatch: expected={expected_sha256} actual={actual_sha}")
@@ -91,9 +92,14 @@ def _source_identity(path: Path, expected_sha256: str | None) -> dict:
     return {
         "sha256": actual_sha,
         "bytes": len(raw),
+        "format": image_format,
         "width": width,
         "height": height,
         "exif_orientation": exif_orientation,
+        "orientation_normalization": {
+            "applied": False,
+            "status": "identity_exif_orientation_1",
+        },
         "local_path_disclosed": False,
     }
 
@@ -116,6 +122,8 @@ def _array_summary(value: np.ndarray) -> dict:
     return {
         "shape": list(array.shape),
         "dtype": str(array.dtype),
+        "raw_output_sha256": hashlib.sha256(array.tobytes(order="C")).hexdigest(),
+        "raw_output_bytes": int(array.nbytes),
         "finite_value_count": int(finite.size),
         "non_finite_value_count": int(rows.size - finite.size),
         "min": float(finite.min()) if finite.size else None,
@@ -131,17 +139,28 @@ def _array_summary(value: np.ndarray) -> dict:
 
 def _tensor_summary(tensor: np.ndarray) -> dict:
     value = np.asarray(tensor)
+    channel_statistics = []
+    for channel in range(value.shape[1]):
+        plane = value[0, channel]
+        channel_statistics.append({
+            "channel": channel,
+            "mean": float(plane.mean()),
+            "std": float(plane.std()),
+            "min": float(plane.min()),
+            "max": float(plane.max()),
+        })
     return {
         "shape": list(value.shape),
         "dtype": str(value.dtype),
         "sha256": hashlib.sha256(value.tobytes(order="C")).hexdigest(),
         "channel_means": [float(value[0, channel].mean()) for channel in range(value.shape[1])],
+        "channel_statistics": channel_statistics,
         "min": float(value.min()),
         "max": float(value.max()),
     }
 
 
-def _candidate_record(candidate, box: BBox, overlap: float) -> dict:
+def _candidate_record(candidate, box: BBox, overlap: float | None) -> dict:
     return {
         "rank": candidate.rank,
         "objectness": candidate.objectness,
@@ -150,6 +169,21 @@ def _candidate_record(candidate, box: BBox, overlap: float) -> dict:
         "bbox_original_xyxy": [box.x1, box.y1, box.x2, box.y2],
         "area_ratio": box.area_ratio,
         "gt_iou": overlap,
+    }
+
+
+def _write_raw_output_artifact(output: np.ndarray, path: Path) -> dict:
+    raw_output = np.ascontiguousarray(output)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.save(path, raw_output, allow_pickle=False)
+    artifact_bytes = path.read_bytes()
+    return {
+        "filename": path.name,
+        "file_sha256": hashlib.sha256(artifact_bytes).hexdigest(),
+        "file_bytes": len(artifact_bytes),
+        "raw_output_sha256": hashlib.sha256(raw_output.tobytes(order="C")).hexdigest(),
+        "shape": list(raw_output.shape),
+        "dtype": str(raw_output.dtype),
     }
 
 
@@ -169,6 +203,11 @@ def main() -> None:
     parser.add_argument("--ground-truth-json", type=Path)
     parser.add_argument("--expected-image-sha256")
     parser.add_argument("--json-out", type=Path)
+    parser.add_argument(
+        "--raw-output-dir",
+        type=Path,
+        help="optionally save exact per-orientation ONNX outputs as lossless .npy files",
+    )
     parser.add_argument("--top-k", type=int, default=20)
     parser.add_argument("images", nargs="+", type=Path)
     args = parser.parse_args()
@@ -281,6 +320,13 @@ def main() -> None:
             try:
                 tensor, scale, draw_width, draw_height = _prepare_yolox_input(view, input_size)
                 output = session.run([output_name], {input_name: tensor})[0]
+                raw_output_artifact = None
+                if args.raw_output_dir:
+                    source_sha_prefix = source_records[image_path]["sha256"][:12]
+                    raw_output_path = args.raw_output_dir / (
+                        f"{source_sha_prefix}.{orientation.lower()}.npy"
+                    )
+                    raw_output_artifact = _write_raw_output_artifact(output, raw_output_path)
                 all_candidates = decode_yolox_candidates(
                     output,
                     scale=scale,
@@ -310,16 +356,20 @@ def main() -> None:
                 all_scored = []
                 for candidate in all_candidates:
                     box = map_box_to_original(candidate.box, orientation)
-                    overlap = _iou(box, gt) if gt else 0.0
+                    overlap = _iou(box, gt) if gt else None
                     all_scored.append((overlap, candidate, box))
                 for overlap, candidate, box in all_scored[:args.top_k]:
+                    overlap_display = f"{overlap:.3f}" if overlap is not None else "n/a"
                     print(
                         f"| {orientation} | {candidate.rank} | {candidate.objectness:.6f} | "
                         f"{candidate.fish_probability:.6f} | {candidate.confidence:.6f} | "
                         f"[{box.x1:.6f},{box.y1:.6f},{box.x2:.6f},{box.y2:.6f}] | "
-                        f"{box.area_ratio:.6f} | {overlap:.3f} |"
+                        f"{box.area_ratio:.6f} | {overlap_display} |"
                     )
-                matched = [item for item in all_scored if gt and item[0] >= CORRECT_CANDIDATE_IOU]
+                matched = [
+                    item for item in all_scored
+                    if gt and item[0] is not None and item[0] >= CORRECT_CANDIDATE_IOU
+                ]
                 best_correct = max(matched, key=lambda item: item[1].confidence) if matched else None
                 matches[orientation] = (
                     (best_correct[1].confidence, best_correct[0]) if best_correct else None
@@ -339,6 +389,7 @@ def main() -> None:
                     "input_draw_dimensions": [draw_width, draw_height],
                     "input_tensor": _tensor_summary(tensor),
                     "raw_output_summary": _array_summary(output),
+                    "raw_output_artifact": raw_output_artifact,
                     "production_gate": {
                         "status": assessment.status.value,
                         "detection_count_after_threshold_and_nms": len(mapped_production),
