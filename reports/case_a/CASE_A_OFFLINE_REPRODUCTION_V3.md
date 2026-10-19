@@ -141,7 +141,7 @@ Case A and Case B were not added to training. The attached images were used only
 | B — replay | **PASS for Case B; both provided attachments replayed twice; BLOCKED for historical Case A** | Candidate and screenshot outputs are repeatable. The first photo SHA does not match the historical Case A SHA; the second file is a screenshot. |
 | C — output/preprocessing | **PARTIAL** | Archived ONNX graph and backend tensors audited; Android-vs-backend runtime parity not run. |
 | D — dataset audit | **BLOCKED** | Manifest, archive and checkpoint bytes absent. |
-| E — engineering | **Prior V3 baseline passed CI #1212 (run 39235005104) on head 53f2d35…; this attachment retest commit requires its own CI result** | CI #1210 initially failed at test collection because onnx was missing from CI dependencies. The workflow now installs onnx>=1.17.0,<2 for validation only; CI #1212 passed, including the production recognition pipeline tests. |
+| E — engineering | **PASS — CI #1212 passed the V3 baseline; CI #1213 (run 39245634543) passed on attachment retest head 88faef39…** | CI #1213 completed the workflow, including production recognition pipeline tests. The current Work runtime lacked pytest for a local re-run; the two-image ONNX replay and JSON/raw-output integrity checks passed locally. |
 
 ## 9. Reproduction commands
 
