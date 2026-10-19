@@ -20,7 +20,7 @@ The ONNX graph check supports the declared decoded-probability output contract f
 
 At V3 start, GitHub reported backend `main@05554ce1b7104c7bce05610979dfc3478b6d24a5`, Android `main@0d3238e8a41b87363e9a17b04c9cc45fca4c426d`, and PR #164 at `c526d2e6a2618d6b81d6d301318e5eb0e1581ef1` over that backend `main`. The PR was Open / Draft / Unmerged. Baseline CI run `39223185096` (run #1208) was successful on that head; its `validate` job completed production recognition pipeline tests.
 
-V3 adds offline evidence files and diagnostic-only inspection/reporting. It does not alter ONNX weights, training, thresholds, NMS, quality gates, retry behavior, frozen datasets, or production model loading. The identifiable source photo and screenshot remain outside the repository.
+V3 adds offline evidence files and diagnostic-only inspection/reporting. The CI workflow now installs the optional ONNX parser for tests; this does not add it to production runtime dependencies. V3 does not alter ONNX weights, training, thresholds, NMS, quality gates, retry behavior, frozen datasets, or production model loading. The identifiable source photo and screenshot remain outside the repository.
 
 ## 3. Artifact identity recovered offline
 
@@ -122,7 +122,7 @@ Case A and Case B were not added to training. The attached images were used only
 | B — replay | **PASS for Case B; candidate replay repeatable; BLOCKED for historical Case A** | Case B reproduces; neither attachment matches the Case A SHA. |
 | C — output/preprocessing | **PARTIAL** | Archived ONNX graph and backend tensors audited; Android-vs-backend runtime parity not run. |
 | D — dataset audit | **BLOCKED** | Manifest, archive and checkpoint bytes absent. |
-| E — engineering | **V3 code/report validation pending PR CI** | New diagnostic-only code, tests and reports are in this PR branch; final CI run will be recorded in the PR checks and follow-up validation evidence. |
+| E — engineering | **PASS on CI #1211 (run 39234564160) for head f85ef374…; evidence update will receive a follow-up check** | CI #1210 initially failed at test collection because onnx was missing from CI dependencies. The workflow now installs onnx>=1.17.0,<2 for validation only; #1211 passed, including the production recognition pipeline tests. |
 
 ## 9. Reproduction commands
 

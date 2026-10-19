@@ -25,11 +25,6 @@
       "softmax_nodes": 0
     },
     {
-      "command": "run candidate and Case B three-orientation replay twice each",
-      "result": "PASS",
-      "pairwise_tensor_output_top20_gate_equal": true
-    },
-    {
       "command": "replay uploaded candidate and Case B twice, ORIGINAL/CW90/CCW90, CPUExecutionProvider",
       "result": "PASS",
       "diagnostic_git_sha": "f81cb21abe520dae11ad9f4a677567b1a2103b26",
@@ -47,9 +42,33 @@
     "source_images_or_input_pixel_tensors_committed": false
   },
   "ci": {
-    "pre_v3_baseline_run_id": 39223185096,
-    "pre_v3_baseline_conclusion": "success",
-    "v3_head_run_status": "PENDING_PUSH"
+    "pre_v3_baseline": {
+      "run_number": 1208,
+      "run_id": 39223185096,
+      "head_sha": "c526d2e6a2618d6b81d6d301318e5eb0e1581ef1",
+      "conclusion": "success"
+    },
+    "v3_initial_failure": {
+      "run_number": 1210,
+      "run_id": 39234297901,
+      "head_sha": "849e34b56d62c337c52ed7376914148273fa4420",
+      "conclusion": "failure",
+      "failed_step": "Run production recognition pipeline tests",
+      "cause": "CI dependency installation omitted onnx; collection failed with ModuleNotFoundError before the ONNX contract test could run."
+    },
+    "ci_dependency_fix": {
+      "commit_sha": "f85ef37415f2f9e45b87b43ce63e1bbebe009a73",
+      "file": ".github/workflows/ci.yml",
+      "test_only_dependency": "onnx>=1.17.0,<2"
+    },
+    "v3_validation_after_fix": {
+      "run_number": 1211,
+      "run_id": 39234564160,
+      "head_sha": "f85ef37415f2f9e45b87b43ce63e1bbebe009a73",
+      "conclusion": "success",
+      "production_recognition_pipeline_tests": "success",
+      "note": "Successful validation after the CI dependency fix. The follow-up evidence-only update records this run."
+    }
   },
   "changed_evidence_files": [
     "CASE_A_OFFLINE_REPRODUCTION_V3.md",
