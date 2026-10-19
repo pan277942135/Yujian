@@ -1,0 +1,69 @@
+{
+  "schema_version": "CASE_A_OFFLINE_VALIDATION_EVIDENCE_V3",
+  "local_validation": [
+    {
+      "command": "python -m unittest tests.test_case_a_onnx_contract tests.test_case_a_investigation_tools tests.test_case_a_replay_evidence",
+      "result": "PASS",
+      "tests_passed": 9
+    },
+    {
+      "command": "python -m py_compile scripts/diagnose_detector_orientation.py scripts/inspect_detector_onnx_contract.py tests/test_case_a_onnx_contract.py tests/test_case_a_replay_evidence.py",
+      "result": "PASS"
+    },
+    {
+      "command": "python scripts/audit_case_a_artifacts.py --bundle <verified GitHub Release ZIP>",
+      "result": "PASS",
+      "bundle_sha256": "246ddacaf89ca7ecc9c64a47d3e12c5ee9088d92c763a38626778505ae8c15ee",
+      "onnx_sha256": "12b97f7c081987f33f99d255cdd2e935fb9cf93b893146f54ff98b9c4e3a8e4f"
+    },
+    {
+      "command": "python scripts/inspect_detector_onnx_contract.py --onnx <extracted ONNX> --metadata <bundle metadata>",
+      "result": "PASS",
+      "onnx_checker": "PASS",
+      "objectness_head_sigmoids": 3,
+      "class_head_sigmoids": 3,
+      "softmax_nodes": 0
+    },
+    {
+      "command": "run candidate and Case B three-orientation replay twice each",
+      "result": "PASS",
+      "pairwise_tensor_output_top20_gate_equal": true
+    },
+    {
+      "command": "replay uploaded candidate and Case B twice, ORIGINAL/CW90/CCW90, CPUExecutionProvider",
+      "result": "PASS",
+      "diagnostic_git_sha": "f81cb21abe520dae11ad9f4a677567b1a2103b26",
+      "model_sha256": "12b97f7c081987f33f99d255cdd2e935fb9cf93b893146f54ff98b9c4e3a8e4f",
+      "repeatability": "all tensors, raw model outputs, Top-20 candidate rows, and production gate rows match pairwise",
+      "raw_output_files": 6
+    }
+  ],
+  "privacy_and_scope": {
+    "user_photo_or_screenshot_committed": false,
+    "onnx_or_dataset_or_checkpoint_committed": false,
+    "model_or_threshold_or_production_inference_changed": false,
+    "gcp_billing_or_resources_touched": false,
+    "exact_per_orientation_model_output_arrays_committed": true,
+    "source_images_or_input_pixel_tensors_committed": false
+  },
+  "ci": {
+    "pre_v3_baseline_run_id": 39223185096,
+    "pre_v3_baseline_conclusion": "success",
+    "v3_head_run_status": "PENDING_PUSH"
+  },
+  "changed_evidence_files": [
+    "CASE_A_OFFLINE_REPRODUCTION_V3.md",
+    "case_b_positive_control_replay_v3.json",
+    "offline_artifact_preflight_v3.json",
+    "offline_recovery_inventory_v3.json",
+    "onnx_output_contract_v3.json",
+    "raw_outputs_v3/*.npy",
+    "raw_outputs_v3/0fc341627e43.ccw90.npy",
+    "raw_outputs_v3/0fc341627e43.cw90.npy",
+    "raw_outputs_v3/0fc341627e43.original.npy",
+    "raw_outputs_v3/a7ed3bb0410c.ccw90.npy",
+    "raw_outputs_v3/a7ed3bb0410c.cw90.npy",
+    "raw_outputs_v3/a7ed3bb0410c.original.npy",
+    "user_provided_candidate_replay_v3.json"
+  ]
+}

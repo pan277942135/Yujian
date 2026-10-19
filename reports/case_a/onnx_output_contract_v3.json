@@ -1,0 +1,328 @@
+{
+  "schema_version": "DETECTOR_ONNX_OUTPUT_CONTRACT_AUDIT_V1",
+  "artifact": {
+    "sha256": "12b97f7c081987f33f99d255cdd2e935fb9cf93b893146f54ff98b9c4e3a8e4f",
+    "bytes": 3753998,
+    "metadata_sha256": "12b97f7c081987f33f99d255cdd2e935fb9cf93b893146f54ff98b9c4e3a8e4f",
+    "metadata_bytes": 3753998,
+    "matches_metadata_sha256": true,
+    "matches_metadata_bytes": true
+  },
+  "onnx": {
+    "ir_version": 8,
+    "opsets": [
+      {
+        "domain": "",
+        "version": 17
+      }
+    ],
+    "graph_input_count": 1,
+    "graph_output_count": 1,
+    "input": {
+      "name": "images",
+      "dtype": "FLOAT",
+      "shape": [
+        1,
+        3,
+        416,
+        416
+      ]
+    },
+    "output": {
+      "name": "output",
+      "dtype": "FLOAT",
+      "shape": [
+        1,
+        3549,
+        6
+      ]
+    },
+    "node_count": 562,
+    "op_counts": {
+      "Add": 8,
+      "Cast": 1,
+      "Concat": 29,
+      "Constant": 106,
+      "ConstantOfShape": 6,
+      "Conv": 113,
+      "Equal": 6,
+      "Exp": 1,
+      "Expand": 14,
+      "MaxPool": 3,
+      "Mul": 112,
+      "Reshape": 8,
+      "Resize": 2,
+      "ScatterND": 2,
+      "Shape": 7,
+      "Sigmoid": 110,
+      "Slice": 15,
+      "Transpose": 1,
+      "Unsqueeze": 12,
+      "Where": 6
+    },
+    "sigmoid_node_count": 110,
+    "softmax_node_count": 0,
+    "exp_node_count": 1,
+    "detector_head_sigmoids": [
+      {
+        "node_index": 290,
+        "name": "/head/stems.0/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/stems.0/conv/Conv_output_0",
+        "output": "/head/stems.0/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 293,
+        "name": "/head/cls_convs.0/cls_convs.0.0/dconv/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/cls_convs.0/cls_convs.0.0/dconv/conv/Conv_output_0",
+        "output": "/head/cls_convs.0/cls_convs.0.0/dconv/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 296,
+        "name": "/head/cls_convs.0/cls_convs.0.0/pconv/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/cls_convs.0/cls_convs.0.0/pconv/conv/Conv_output_0",
+        "output": "/head/cls_convs.0/cls_convs.0.0/pconv/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 299,
+        "name": "/head/cls_convs.0/cls_convs.0.1/dconv/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/cls_convs.0/cls_convs.0.1/dconv/conv/Conv_output_0",
+        "output": "/head/cls_convs.0/cls_convs.0.1/dconv/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 302,
+        "name": "/head/cls_convs.0/cls_convs.0.1/pconv/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/cls_convs.0/cls_convs.0.1/pconv/conv/Conv_output_0",
+        "output": "/head/cls_convs.0/cls_convs.0.1/pconv/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 306,
+        "name": "/head/reg_convs.0/reg_convs.0.0/dconv/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/reg_convs.0/reg_convs.0.0/dconv/conv/Conv_output_0",
+        "output": "/head/reg_convs.0/reg_convs.0.0/dconv/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 309,
+        "name": "/head/reg_convs.0/reg_convs.0.0/pconv/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/reg_convs.0/reg_convs.0.0/pconv/conv/Conv_output_0",
+        "output": "/head/reg_convs.0/reg_convs.0.0/pconv/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 312,
+        "name": "/head/reg_convs.0/reg_convs.0.1/dconv/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/reg_convs.0/reg_convs.0.1/dconv/conv/Conv_output_0",
+        "output": "/head/reg_convs.0/reg_convs.0.1/dconv/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 315,
+        "name": "/head/reg_convs.0/reg_convs.0.1/pconv/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/reg_convs.0/reg_convs.0.1/pconv/conv/Conv_output_0",
+        "output": "/head/reg_convs.0/reg_convs.0.1/pconv/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 319,
+        "name": "/head/Sigmoid",
+        "semantic_from_source_name": "objectness_probability",
+        "input": "/head/obj_preds.0/Conv_output_0",
+        "output": "/head/Sigmoid_output_0"
+      },
+      {
+        "node_index": 320,
+        "name": "/head/Sigmoid_1",
+        "semantic_from_source_name": "class_probability",
+        "input": "/head/cls_preds.0/Conv_output_0",
+        "output": "/head/Sigmoid_1_output_0"
+      },
+      {
+        "node_index": 323,
+        "name": "/head/stems.1/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/stems.1/conv/Conv_output_0",
+        "output": "/head/stems.1/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 326,
+        "name": "/head/cls_convs.1/cls_convs.1.0/dconv/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/cls_convs.1/cls_convs.1.0/dconv/conv/Conv_output_0",
+        "output": "/head/cls_convs.1/cls_convs.1.0/dconv/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 329,
+        "name": "/head/cls_convs.1/cls_convs.1.0/pconv/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/cls_convs.1/cls_convs.1.0/pconv/conv/Conv_output_0",
+        "output": "/head/cls_convs.1/cls_convs.1.0/pconv/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 332,
+        "name": "/head/cls_convs.1/cls_convs.1.1/dconv/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/cls_convs.1/cls_convs.1.1/dconv/conv/Conv_output_0",
+        "output": "/head/cls_convs.1/cls_convs.1.1/dconv/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 335,
+        "name": "/head/cls_convs.1/cls_convs.1.1/pconv/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/cls_convs.1/cls_convs.1.1/pconv/conv/Conv_output_0",
+        "output": "/head/cls_convs.1/cls_convs.1.1/pconv/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 339,
+        "name": "/head/reg_convs.1/reg_convs.1.0/dconv/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/reg_convs.1/reg_convs.1.0/dconv/conv/Conv_output_0",
+        "output": "/head/reg_convs.1/reg_convs.1.0/dconv/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 342,
+        "name": "/head/reg_convs.1/reg_convs.1.0/pconv/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/reg_convs.1/reg_convs.1.0/pconv/conv/Conv_output_0",
+        "output": "/head/reg_convs.1/reg_convs.1.0/pconv/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 345,
+        "name": "/head/reg_convs.1/reg_convs.1.1/dconv/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/reg_convs.1/reg_convs.1.1/dconv/conv/Conv_output_0",
+        "output": "/head/reg_convs.1/reg_convs.1.1/dconv/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 348,
+        "name": "/head/reg_convs.1/reg_convs.1.1/pconv/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/reg_convs.1/reg_convs.1.1/pconv/conv/Conv_output_0",
+        "output": "/head/reg_convs.1/reg_convs.1.1/pconv/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 352,
+        "name": "/head/Sigmoid_2",
+        "semantic_from_source_name": "objectness_probability",
+        "input": "/head/obj_preds.1/Conv_output_0",
+        "output": "/head/Sigmoid_2_output_0"
+      },
+      {
+        "node_index": 353,
+        "name": "/head/Sigmoid_3",
+        "semantic_from_source_name": "class_probability",
+        "input": "/head/cls_preds.1/Conv_output_0",
+        "output": "/head/Sigmoid_3_output_0"
+      },
+      {
+        "node_index": 356,
+        "name": "/head/stems.2/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/stems.2/conv/Conv_output_0",
+        "output": "/head/stems.2/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 359,
+        "name": "/head/cls_convs.2/cls_convs.2.0/dconv/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/cls_convs.2/cls_convs.2.0/dconv/conv/Conv_output_0",
+        "output": "/head/cls_convs.2/cls_convs.2.0/dconv/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 362,
+        "name": "/head/cls_convs.2/cls_convs.2.0/pconv/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/cls_convs.2/cls_convs.2.0/pconv/conv/Conv_output_0",
+        "output": "/head/cls_convs.2/cls_convs.2.0/pconv/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 365,
+        "name": "/head/cls_convs.2/cls_convs.2.1/dconv/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/cls_convs.2/cls_convs.2.1/dconv/conv/Conv_output_0",
+        "output": "/head/cls_convs.2/cls_convs.2.1/dconv/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 368,
+        "name": "/head/cls_convs.2/cls_convs.2.1/pconv/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/cls_convs.2/cls_convs.2.1/pconv/conv/Conv_output_0",
+        "output": "/head/cls_convs.2/cls_convs.2.1/pconv/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 372,
+        "name": "/head/reg_convs.2/reg_convs.2.0/dconv/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/reg_convs.2/reg_convs.2.0/dconv/conv/Conv_output_0",
+        "output": "/head/reg_convs.2/reg_convs.2.0/dconv/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 375,
+        "name": "/head/reg_convs.2/reg_convs.2.0/pconv/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/reg_convs.2/reg_convs.2.0/pconv/conv/Conv_output_0",
+        "output": "/head/reg_convs.2/reg_convs.2.0/pconv/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 378,
+        "name": "/head/reg_convs.2/reg_convs.2.1/dconv/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/reg_convs.2/reg_convs.2.1/dconv/conv/Conv_output_0",
+        "output": "/head/reg_convs.2/reg_convs.2.1/dconv/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 381,
+        "name": "/head/reg_convs.2/reg_convs.2.1/pconv/act/Sigmoid",
+        "semantic_from_source_name": "other_head_activation",
+        "input": "/head/reg_convs.2/reg_convs.2.1/pconv/conv/Conv_output_0",
+        "output": "/head/reg_convs.2/reg_convs.2.1/pconv/act/Sigmoid_output_0"
+      },
+      {
+        "node_index": 385,
+        "name": "/head/Sigmoid_4",
+        "semantic_from_source_name": "objectness_probability",
+        "input": "/head/obj_preds.2/Conv_output_0",
+        "output": "/head/Sigmoid_4_output_0"
+      },
+      {
+        "node_index": 386,
+        "name": "/head/Sigmoid_5",
+        "semantic_from_source_name": "class_probability",
+        "input": "/head/cls_preds.2/Conv_output_0",
+        "output": "/head/Sigmoid_5_output_0"
+      }
+    ],
+    "objectness_head_sigmoid_count": 3,
+    "class_head_sigmoid_count": 3,
+    "onnx_checker": "PASS"
+  },
+  "declared_contract": {
+    "output_contract": "decoded_xywh_objectness_class_probability",
+    "input_name": "images",
+    "input_shape": [
+      1,
+      3,
+      416,
+      416
+    ],
+    "output_shape": [
+      1,
+      3549,
+      6
+    ]
+  },
+  "interpretation": {
+    "head_probability_activations_observed": true,
+    "head_probability_activation_evidence": "Sigmoid nodes consume objectness and class prediction head tensors before the multi-scale head output is assembled.",
+    "softmax_observed": false,
+    "scope_limit": "This graph is the supplied artifact only. It does not establish the identity or graph of an unavailable current production GCS object."
+  },
+  "executed_at_utc": "2026-10-19T09:47:54.345077+00:00",
+  "toolchain": {
+    "onnx": "1.19.0"
+  }
+}
