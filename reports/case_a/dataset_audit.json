@@ -1,0 +1,86 @@
+{
+  "schema_version": "CASE_A_DATASET_AUDIT_V1",
+  "status": "BLOCKED_ACTUAL_MANIFEST_UNREADABLE",
+  "dataset_version": "DET_DS_v0.1",
+  "current_source": {
+    "manifest_uri": "gs://yujian-model-factory-571785698442/detector-datasets/DET_DS_v0.1/bootstrap_manifest.json",
+    "report_uri": "gs://yujian-model-factory-571785698442/detector-datasets/DET_DS_v0.1/bootstrap_report.json",
+    "archive_uri": "gs://yujian-model-factory-571785698442/detector-datasets/DET_DS_v0.1/DET_DS_v0.1.tar.gz",
+    "manifest_sha256": "UNKNOWN",
+    "generation": "UNKNOWN",
+    "updated": "UNKNOWN",
+    "read_status": "BLOCKED_BY_BILLING_ACCOUNT_ABSENT",
+    "attempt": "Production Detector Runtime smoke attempt 2, run 37603789067, 2026-10-19; GCS returned 403 before model data access."
+  },
+  "verified_published_summary_from_release_metadata": {
+    "source": "FishPresenceResult/google-vision-presence-v0.4",
+    "selected": 594,
+    "positives": 440,
+    "negatives": 154,
+    "incomplete_candidates": 222,
+    "splits": {
+      "train": {
+        "images": 477,
+        "annotations": 481
+      },
+      "val": {
+        "images": 50,
+        "annotations": 50
+      },
+      "test": {
+        "images": 67,
+        "annotations": 54
+      }
+    },
+    "provenance": "detector_metadata.json embedded in verified Android Release bundle; summary is dataset report metadata, not a fresh read of bootstrap_manifest.json."
+  },
+  "last_training_run_dataset_gate": {
+    "run_id": 37603789137,
+    "run_number": 26,
+    "sha": "590c0cfc70b598b27d9118f33f6074aacf4f4623",
+    "date": "2026-10-07",
+    "rebuild_requested": false,
+    "reuse_frozen_dataset": true,
+    "gate_result": "DETECTOR_DATASET_GATE_PASS train_images=477 train_boxes=481 val_boxes=50 test_images=67 no_fish_negatives=154",
+    "source": "GitHub Actions prepare-dataset job 112734253323; downloaded bootstrap_report.json from GCS."
+  },
+  "source_code_audit": {
+    "backend_main_sha": "05554ce1b7104c7bce05610979dfc3478b6d24a5",
+    "builder": "trainer/build_detector_dataset.py",
+    "presence_logic": "app/presence.py",
+    "verified_rules": [
+      "positive boxes are taken from Google Vision localized object annotations whose names pass _is_fish_term and whose scores are >= recognition_pipeline_v1.json strong_confidence (0.35).",
+      "effective_status is taken from FishPresenceResult.status; app/presence.py stores a valid human_override in row.status, while its box geometry still comes from evidence.objects.",
+      "if effective_status == no_fish, the builder emits a negative candidate with an empty box list without checking the collected high-score fish boxes.",
+      "if effective_status is single_fish or multi_fish but no object box passes the fish-name, 0.35 score and geometry filters, no positive candidate is emitted.",
+      "split assignment hashes batch_id:image_id per image; there is no source_group_id based grouped split in this builder.",
+      "bootstrap_manifest rows contain asset IDs, batch/image IDs, GCS URI, split, presence status, negative flag, boxes and dimensions; they do not contain source SHA, reviewer, license/permission, hard-scene tags or manual bbox provenance."
+    ],
+    "case_specific_instance_proven": false
+  },
+  "difficult_scene_coverage": {
+    "vertical_fish": "UNKNOWN",
+    "horizontal_fish": "UNKNOWN",
+    "person_holding_fish": "UNKNOWN",
+    "hand_occlusion": "UNKNOWN",
+    "night_flash": "UNKNOWN",
+    "black_background": "UNKNOWN",
+    "complex_background": "UNKNOWN",
+    "small_or_thin_fish": "UNKNOWN",
+    "annotation_quality_by_scene": "UNKNOWN",
+    "recall_by_scene": "UNKNOWN",
+    "reason": "Actual dataset manifest/archive and auditable source images are unavailable; no orientation or scene class is inferred from image dimensions."
+  },
+  "case_a_case_b_exclusion": {
+    "historical_report_claims_held_out": true,
+    "DET_DS_v0_2_intake_contract_requires_exclusion": true,
+    "actual_DET_DS_v0_1_manifest_verified": false,
+    "case_a_sha256": "2dd703a46b378093604e10f0add454606393138f7501774bd3bbcca75352c9fe",
+    "case_b_sha256": "a7ed3bb0410c191364f6d853b4078aebdc2f3b9baa4da34b7b3f6e8e0e93a56b"
+  },
+  "root_cause_assessment": {
+    "TRAINING_LABEL_NOISE": "HIGH_PRIORITY_HYPOTHESIS_NOT_CASE_SPECIFICALLY_CONFIRMED",
+    "DOMAIN_RECALL_GAP": "NOT_ESTABLISHED_FOR_LAST_OBSERVED_GCS_MODEL; historical report used a different ONNX SHA",
+    "next_evidence_needed": "bootstrap_manifest.json, dataset archive, provenance/evidence rows and authorized source images for audit; do not add Case A/B to training."
+  }
+}

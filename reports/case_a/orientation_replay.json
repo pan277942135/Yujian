@@ -1,0 +1,1145 @@
+{
+  "schema_version": "CASE_A_ORIENTATION_REPLAY_V1",
+  "status": "BLOCKED_NOT_REPRODUCED",
+  "blockers": [
+    "BLOCKED_SOURCE_UNAVAILABLE",
+    "BLOCKED_ARTIFACT_IDENTITY_MISMATCH"
+  ],
+  "case_a_source": {
+    "sha256": "2dd703a46b378093604e10f0add454606393138f7501774bd3bbcca75352c9fe",
+    "dimensions": [
+      1440,
+      1920
+    ],
+    "status": "BLOCKED_SOURCE_UNAVAILABLE",
+    "search_scope": [
+      "Yujian main checkout",
+      "Yujian_App workspace checkout",
+      "verified local image assets"
+    ],
+    "historical_report_source_name": "92f98cf35ad9659ab79e7b930062ec17.jpg"
+  },
+  "model_identity": {
+    "historical_report_onnx_sha256": "12b97f7c081987f33f99d255cdd2e935fb9cf93b893146f54ff98b9c4e3a8e4f",
+    "last_observed_gcs_onnx_sha256": "2338f44c3c4913764af401dc3a3585287f36659be7560b3b7b41efc9931634b1",
+    "current_gcs_sha256": "UNKNOWN_GCS_BILLING_BLOCKED",
+    "release_bundle_onnx_sha256": "12b97f7c081987f33f99d255cdd2e935fb9cf93b893146f54ff98b9c4e3a8e4f"
+  },
+  "execution": {
+    "status": "NOT_RUN",
+    "reason": "Gate A is not fully passed and SHA-matched Case A source bytes were not available. No inference output was generated for this investigation run.",
+    "historical_report_commit": "05554ce1b7104c7bce05610979dfc3478b6d24a5",
+    "historical_report_sha256": "dd87155a646769b33d5ffac4efcc72ea655dc1e9a3a1f17af3c24370f6227e79",
+    "historical_report_path": "reports/recognition_detector_vertical_hardcase_p0_v1.md"
+  },
+  "production_gate": {
+    "weak_confidence": 0.2,
+    "strong_confidence": 0.35,
+    "nms_iou": 0.45,
+    "minimum_primary_area_ratio": 0.08,
+    "historical_per_view_status": "NO_FISH",
+    "historical_bounded_retry_selected": "NONE",
+    "candidate_probe_threshold": 0.0,
+    "candidate_probe_nms": false,
+    "candidate_probe_top_k": 20
+  },
+  "historical_candidate_source": {
+    "provenance": "Decoded table imported from the historical P0 report; not current-run evidence. Confidence products were recomputed from six-decimal objectness and fish-probability columns; remaining deltas reflect printed component rounding.",
+    "raw_onnx_tensor_summary": "NOT_RETAINED_IN_HISTORICAL_REPORT",
+    "output_contract_declared": "decoded_xywh_objectness_class_probability",
+    "correct_candidate_rule": "IoU_GT >= 0.50 then highest confidence"
+  },
+  "historical_best_correct_candidate_by_orientation": {
+    "ORIGINAL": {
+      "orientation": "ORIGINAL",
+      "rank": 5,
+      "objectness": 0.001889,
+      "fish_probability": 0.584072,
+      "reported_confidence": 0.001103,
+      "recomputed_confidence_from_six_decimal_inputs": 0.0011033120080000001,
+      "confidence_delta_from_reported_table": 3.1200800000011006e-07,
+      "bbox_original_xyxy": [
+        0.064756,
+        0.171667,
+        0.550681,
+        1.0
+      ],
+      "area_ratio": 0.402507,
+      "gt_iou": 0.533,
+      "historical_full_precision_confidence": 0.0011032886460728974,
+      "historical_full_precision_iou": 0.532909387899372,
+      "full_precision_vs_rounded_component_product_delta": 2.3361927102691013e-08,
+      "selected_rule": "highest confidence among historical candidates with GT IoU >= 0.50"
+    },
+    "CW90": {
+      "orientation": "CW90",
+      "rank": 6,
+      "objectness": 0.003726,
+      "fish_probability": 0.595116,
+      "reported_confidence": 0.002218,
+      "recomputed_confidence_from_six_decimal_inputs": 0.002217402216,
+      "confidence_delta_from_reported_table": -5.977840000000872e-07,
+      "bbox_original_xyxy": [
+        0.091187,
+        0.166099,
+        0.350108,
+        0.965291
+      ],
+      "area_ratio": 0.206927,
+      "gt_iou": 0.765,
+      "historical_full_precision_confidence": 0.0022175997989215546,
+      "historical_full_precision_iou": 0.7651359841210706,
+      "full_precision_vs_rounded_component_product_delta": -1.9758292155473353e-07,
+      "selected_rule": "highest confidence among historical candidates with GT IoU >= 0.50"
+    },
+    "CCW90": {
+      "orientation": "CCW90",
+      "rank": 1,
+      "objectness": 0.006338,
+      "fish_probability": 0.670392,
+      "reported_confidence": 0.004249,
+      "recomputed_confidence_from_six_decimal_inputs": 0.004248944496,
+      "confidence_delta_from_reported_table": -5.5504000000261566e-08,
+      "bbox_original_xyxy": [
+        0.145772,
+        0.209198,
+        0.464641,
+        1.0
+      ],
+      "area_ratio": 0.252162,
+      "gt_iou": 0.643,
+      "historical_full_precision_confidence": 0.004248765491018602,
+      "historical_full_precision_iou": 0.6433822044798577,
+      "full_precision_vs_rounded_component_product_delta": 1.7900498139756388e-07,
+      "selected_rule": "highest confidence among historical candidates with GT IoU >= 0.50"
+    }
+  },
+  "historical_top20_by_orientation": {
+    "ORIGINAL": [
+      {
+        "orientation": "ORIGINAL",
+        "rank": 1,
+        "objectness": 0.002482,
+        "fish_probability": 0.599483,
+        "reported_confidence": 0.001488,
+        "recomputed_confidence_from_six_decimal_inputs": 0.001487916806,
+        "confidence_delta_from_reported_table": -8.319399999998957e-08,
+        "bbox_original_xyxy": [
+          0.665196,
+          0.945632,
+          1.0,
+          1.0
+        ],
+        "area_ratio": 0.018203,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "ORIGINAL",
+        "rank": 2,
+        "objectness": 0.002385,
+        "fish_probability": 0.614429,
+        "reported_confidence": 0.001465,
+        "recomputed_confidence_from_six_decimal_inputs": 0.001465413165,
+        "confidence_delta_from_reported_table": 4.131650000000972e-07,
+        "bbox_original_xyxy": [
+          0.607136,
+          0.944308,
+          1.0,
+          1.0
+        ],
+        "area_ratio": 0.021879,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "ORIGINAL",
+        "rank": 3,
+        "objectness": 0.001445,
+        "fish_probability": 0.772643,
+        "reported_confidence": 0.001116,
+        "recomputed_confidence_from_six_decimal_inputs": 0.001116469135,
+        "confidence_delta_from_reported_table": 4.691350000000146e-07,
+        "bbox_original_xyxy": [
+          0.521673,
+          0.224455,
+          0.779777,
+          0.436705
+        ],
+        "area_ratio": 0.054783,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "ORIGINAL",
+        "rank": 4,
+        "objectness": 0.001509,
+        "fish_probability": 0.734013,
+        "reported_confidence": 0.001108,
+        "recomputed_confidence_from_six_decimal_inputs": 0.001107625617,
+        "confidence_delta_from_reported_table": -3.743830000000215e-07,
+        "bbox_original_xyxy": [
+          0.126708,
+          0.141893,
+          0.278862,
+          0.621092
+        ],
+        "area_ratio": 0.072912,
+        "gt_iou": 0.27
+      },
+      {
+        "orientation": "ORIGINAL",
+        "rank": 5,
+        "objectness": 0.001889,
+        "fish_probability": 0.584072,
+        "reported_confidence": 0.001103,
+        "recomputed_confidence_from_six_decimal_inputs": 0.0011033120080000001,
+        "confidence_delta_from_reported_table": 3.1200800000011006e-07,
+        "bbox_original_xyxy": [
+          0.064756,
+          0.171667,
+          0.550681,
+          1.0
+        ],
+        "area_ratio": 0.402507,
+        "gt_iou": 0.533
+      },
+      {
+        "orientation": "ORIGINAL",
+        "rank": 6,
+        "objectness": 0.002565,
+        "fish_probability": 0.422007,
+        "reported_confidence": 0.001082,
+        "recomputed_confidence_from_six_decimal_inputs": 0.0010824479550000001,
+        "confidence_delta_from_reported_table": 4.4795500000007794e-07,
+        "bbox_original_xyxy": [
+          0.002721,
+          0.182064,
+          0.417147,
+          1.0
+        ],
+        "area_ratio": 0.338974,
+        "gt_iou": 0.633
+      },
+      {
+        "orientation": "ORIGINAL",
+        "rank": 7,
+        "objectness": 0.001979,
+        "fish_probability": 0.535857,
+        "reported_confidence": 0.001061,
+        "recomputed_confidence_from_six_decimal_inputs": 0.001060461003,
+        "confidence_delta_from_reported_table": -5.389970000001503e-07,
+        "bbox_original_xyxy": [
+          0.031973,
+          0.172391,
+          0.664288,
+          1.0
+        ],
+        "area_ratio": 0.523309,
+        "gt_iou": 0.41
+      },
+      {
+        "orientation": "ORIGINAL",
+        "rank": 8,
+        "objectness": 0.001481,
+        "fish_probability": 0.647179,
+        "reported_confidence": 0.000958,
+        "recomputed_confidence_from_six_decimal_inputs": 0.0009584720989999999,
+        "confidence_delta_from_reported_table": 4.7209899999988043e-07,
+        "bbox_original_xyxy": [
+          0.495766,
+          0.218587,
+          0.875099,
+          0.778683
+        ],
+        "area_ratio": 0.212463,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "ORIGINAL",
+        "rank": 9,
+        "objectness": 0.001316,
+        "fish_probability": 0.690691,
+        "reported_confidence": 0.000909,
+        "recomputed_confidence_from_six_decimal_inputs": 0.000908949356,
+        "confidence_delta_from_reported_table": -5.064399999994869e-08,
+        "bbox_original_xyxy": [
+          0.520554,
+          0.227094,
+          0.78004,
+          0.423898
+        ],
+        "area_ratio": 0.051068,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "ORIGINAL",
+        "rank": 10,
+        "objectness": 0.001617,
+        "fish_probability": 0.549852,
+        "reported_confidence": 0.000889,
+        "recomputed_confidence_from_six_decimal_inputs": 0.000889110684,
+        "confidence_delta_from_reported_table": 1.1068399999997463e-07,
+        "bbox_original_xyxy": [
+          0.630062,
+          0.949634,
+          1.0,
+          1.0
+        ],
+        "area_ratio": 0.018632,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "ORIGINAL",
+        "rank": 11,
+        "objectness": 0.001527,
+        "fish_probability": 0.57832,
+        "reported_confidence": 0.000883,
+        "recomputed_confidence_from_six_decimal_inputs": 0.0008830946399999999,
+        "confidence_delta_from_reported_table": 9.463999999989852e-08,
+        "bbox_original_xyxy": [
+          0.683421,
+          0.947681,
+          1.0,
+          1.0
+        ],
+        "area_ratio": 0.016563,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "ORIGINAL",
+        "rank": 12,
+        "objectness": 0.001236,
+        "fish_probability": 0.687533,
+        "reported_confidence": 0.00085,
+        "recomputed_confidence_from_six_decimal_inputs": 0.0008497907879999999,
+        "confidence_delta_from_reported_table": -2.092120000000584e-07,
+        "bbox_original_xyxy": [
+          0.524782,
+          0.229306,
+          0.768168,
+          0.419643
+        ],
+        "area_ratio": 0.046325,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "ORIGINAL",
+        "rank": 13,
+        "objectness": 0.00103,
+        "fish_probability": 0.790047,
+        "reported_confidence": 0.000814,
+        "recomputed_confidence_from_six_decimal_inputs": 0.0008137484100000001,
+        "confidence_delta_from_reported_table": -2.5158999999996823e-07,
+        "bbox_original_xyxy": [
+          0.528876,
+          0.227966,
+          0.761717,
+          0.430756
+        ],
+        "area_ratio": 0.047218,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "ORIGINAL",
+        "rank": 14,
+        "objectness": 0.001077,
+        "fish_probability": 0.731478,
+        "reported_confidence": 0.000788,
+        "recomputed_confidence_from_six_decimal_inputs": 0.000787801806,
+        "confidence_delta_from_reported_table": -1.9819399999995713e-07,
+        "bbox_original_xyxy": [
+          0.114593,
+          0.155619,
+          0.308016,
+          0.65064
+        ],
+        "area_ratio": 0.095748,
+        "gt_iou": 0.367
+      },
+      {
+        "orientation": "ORIGINAL",
+        "rank": 15,
+        "objectness": 0.001353,
+        "fish_probability": 0.529264,
+        "reported_confidence": 0.000716,
+        "recomputed_confidence_from_six_decimal_inputs": 0.000716094192,
+        "confidence_delta_from_reported_table": 9.419200000006234e-08,
+        "bbox_original_xyxy": [
+          0.38711,
+          0.217884,
+          0.918007,
+          0.866598
+        ],
+        "area_ratio": 0.3444,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "ORIGINAL",
+        "rank": 16,
+        "objectness": 0.001595,
+        "fish_probability": 0.441303,
+        "reported_confidence": 0.000704,
+        "recomputed_confidence_from_six_decimal_inputs": 0.0007038782850000001,
+        "confidence_delta_from_reported_table": -1.2171499999991554e-07,
+        "bbox_original_xyxy": [
+          0.040848,
+          0.170229,
+          0.39923,
+          1.0
+        ],
+        "area_ratio": 0.297375,
+        "gt_iou": 0.721
+      },
+      {
+        "orientation": "ORIGINAL",
+        "rank": 17,
+        "objectness": 0.00128,
+        "fish_probability": 0.537276,
+        "reported_confidence": 0.000688,
+        "recomputed_confidence_from_six_decimal_inputs": 0.00068771328,
+        "confidence_delta_from_reported_table": -2.8671999999999986e-07,
+        "bbox_original_xyxy": [
+          0.633881,
+          0.950827,
+          1.0,
+          1.0
+        ],
+        "area_ratio": 0.018003,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "ORIGINAL",
+        "rank": 18,
+        "objectness": 0.000964,
+        "fish_probability": 0.675291,
+        "reported_confidence": 0.000651,
+        "recomputed_confidence_from_six_decimal_inputs": 0.000650980524,
+        "confidence_delta_from_reported_table": -1.947600000002346e-08,
+        "bbox_original_xyxy": [
+          0.52731,
+          0.222027,
+          0.756708,
+          0.345411
+        ],
+        "area_ratio": 0.028304,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "ORIGINAL",
+        "rank": 19,
+        "objectness": 0.000873,
+        "fish_probability": 0.678253,
+        "reported_confidence": 0.000592,
+        "recomputed_confidence_from_six_decimal_inputs": 0.000592114869,
+        "confidence_delta_from_reported_table": 1.1486900000005733e-07,
+        "bbox_original_xyxy": [
+          0.525521,
+          0.22144,
+          0.745531,
+          0.314447
+        ],
+        "area_ratio": 0.020462,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "ORIGINAL",
+        "rank": 20,
+        "objectness": 0.000742,
+        "fish_probability": 0.747242,
+        "reported_confidence": 0.000554,
+        "recomputed_confidence_from_six_decimal_inputs": 0.000554453564,
+        "confidence_delta_from_reported_table": 4.5356400000000005e-07,
+        "bbox_original_xyxy": [
+          0.00372,
+          0.642471,
+          0.195605,
+          1.0
+        ],
+        "area_ratio": 0.068604,
+        "gt_iou": 0.129
+      }
+    ],
+    "CW90": [
+      {
+        "orientation": "CW90",
+        "rank": 1,
+        "objectness": 0.016292,
+        "fish_probability": 0.537799,
+        "reported_confidence": 0.008762,
+        "recomputed_confidence_from_six_decimal_inputs": 0.008761821308000002,
+        "confidence_delta_from_reported_table": -1.7869199999895335e-07,
+        "bbox_original_xyxy": [
+          0.67947,
+          0.170959,
+          1.0,
+          0.678125
+        ],
+        "area_ratio": 0.162562,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "CW90",
+        "rank": 2,
+        "objectness": 0.007222,
+        "fish_probability": 0.682233,
+        "reported_confidence": 0.004927,
+        "recomputed_confidence_from_six_decimal_inputs": 0.0049270867259999995,
+        "confidence_delta_from_reported_table": 8.672599999953734e-08,
+        "bbox_original_xyxy": [
+          0.578058,
+          0.190631,
+          0.969717,
+          0.779932
+        ],
+        "area_ratio": 0.230805,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "CW90",
+        "rank": 3,
+        "objectness": 0.006821,
+        "fish_probability": 0.668591,
+        "reported_confidence": 0.00456,
+        "recomputed_confidence_from_six_decimal_inputs": 0.004560459211,
+        "confidence_delta_from_reported_table": 4.5921099999998716e-07,
+        "bbox_original_xyxy": [
+          0.592056,
+          0.215677,
+          0.957502,
+          0.887898
+        ],
+        "area_ratio": 0.245661,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "CW90",
+        "rank": 4,
+        "objectness": 0.007167,
+        "fish_probability": 0.634713,
+        "reported_confidence": 0.004549,
+        "recomputed_confidence_from_six_decimal_inputs": 0.004548988071,
+        "confidence_delta_from_reported_table": -1.1929000000472645e-08,
+        "bbox_original_xyxy": [
+          0.695006,
+          0.176619,
+          0.999343,
+          0.713614
+        ],
+        "area_ratio": 0.163428,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "CW90",
+        "rank": 5,
+        "objectness": 0.005077,
+        "fish_probability": 0.607636,
+        "reported_confidence": 0.003085,
+        "recomputed_confidence_from_six_decimal_inputs": 0.0030849679719999997,
+        "confidence_delta_from_reported_table": -3.2028000000391965e-08,
+        "bbox_original_xyxy": [
+          0.566303,
+          0.197428,
+          0.985137,
+          0.743438
+        ],
+        "area_ratio": 0.228687,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "CW90",
+        "rank": 6,
+        "objectness": 0.003726,
+        "fish_probability": 0.595116,
+        "reported_confidence": 0.002218,
+        "recomputed_confidence_from_six_decimal_inputs": 0.002217402216,
+        "confidence_delta_from_reported_table": -5.977840000000872e-07,
+        "bbox_original_xyxy": [
+          0.091187,
+          0.166099,
+          0.350108,
+          0.965291
+        ],
+        "area_ratio": 0.206927,
+        "gt_iou": 0.765
+      },
+      {
+        "orientation": "CW90",
+        "rank": 7,
+        "objectness": 0.003138,
+        "fish_probability": 0.56455,
+        "reported_confidence": 0.001772,
+        "recomputed_confidence_from_six_decimal_inputs": 0.0017715579,
+        "confidence_delta_from_reported_table": -4.4209999999983776e-07,
+        "bbox_original_xyxy": [
+          0.694793,
+          0.178678,
+          0.996712,
+          0.664538
+        ],
+        "area_ratio": 0.14669,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "CW90",
+        "rank": 8,
+        "objectness": 0.002304,
+        "fish_probability": 0.720904,
+        "reported_confidence": 0.001661,
+        "recomputed_confidence_from_six_decimal_inputs": 0.001660962816,
+        "confidence_delta_from_reported_table": -3.7183999999955766e-08,
+        "bbox_original_xyxy": [
+          0.102486,
+          0.243741,
+          0.346566,
+          0.84413
+        ],
+        "area_ratio": 0.146543,
+        "gt_iou": 0.671
+      },
+      {
+        "orientation": "CW90",
+        "rank": 9,
+        "objectness": 0.002453,
+        "fish_probability": 0.675186,
+        "reported_confidence": 0.001656,
+        "recomputed_confidence_from_six_decimal_inputs": 0.0016562312579999998,
+        "confidence_delta_from_reported_table": 2.3125799999989573e-07,
+        "bbox_original_xyxy": [
+          0.56098,
+          0.220945,
+          0.969098,
+          0.943389
+        ],
+        "area_ratio": 0.294842,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "CW90",
+        "rank": 10,
+        "objectness": 0.002326,
+        "fish_probability": 0.679627,
+        "reported_confidence": 0.001581,
+        "recomputed_confidence_from_six_decimal_inputs": 0.001580812402,
+        "confidence_delta_from_reported_table": -1.8759800000001277e-07,
+        "bbox_original_xyxy": [
+          0.55304,
+          0.201735,
+          0.978111,
+          0.808873
+        ],
+        "area_ratio": 0.258077,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "CW90",
+        "rank": 11,
+        "objectness": 0.002175,
+        "fish_probability": 0.672746,
+        "reported_confidence": 0.001463,
+        "recomputed_confidence_from_six_decimal_inputs": 0.0014632225499999999,
+        "confidence_delta_from_reported_table": 2.2254999999977987e-07,
+        "bbox_original_xyxy": [
+          0.139451,
+          0.198337,
+          0.280203,
+          0.541317
+        ],
+        "area_ratio": 0.048275,
+        "gt_iou": 0.208
+      },
+      {
+        "orientation": "CW90",
+        "rank": 12,
+        "objectness": 0.002122,
+        "fish_probability": 0.663508,
+        "reported_confidence": 0.001408,
+        "recomputed_confidence_from_six_decimal_inputs": 0.0014079639760000001,
+        "confidence_delta_from_reported_table": -3.602399999982041e-08,
+        "bbox_original_xyxy": [
+          0.093878,
+          0.188438,
+          0.360343,
+          0.842566
+        ],
+        "area_ratio": 0.174302,
+        "gt_iou": 0.692
+      },
+      {
+        "orientation": "CW90",
+        "rank": 13,
+        "objectness": 0.002324,
+        "fish_probability": 0.602528,
+        "reported_confidence": 0.0014,
+        "recomputed_confidence_from_six_decimal_inputs": 0.001400275072,
+        "confidence_delta_from_reported_table": 2.750720000000307e-07,
+        "bbox_original_xyxy": [
+          0.101309,
+          0.148121,
+          0.362241,
+          0.982957
+        ],
+        "area_ratio": 0.217836,
+        "gt_iou": 0.831
+      },
+      {
+        "orientation": "CW90",
+        "rank": 14,
+        "objectness": 0.001963,
+        "fish_probability": 0.609749,
+        "reported_confidence": 0.001197,
+        "recomputed_confidence_from_six_decimal_inputs": 0.0011969372869999999,
+        "confidence_delta_from_reported_table": -6.271300000007876e-08,
+        "bbox_original_xyxy": [
+          0.082888,
+          0.149306,
+          0.419557,
+          0.99505
+        ],
+        "area_ratio": 0.284736,
+        "gt_iou": 0.745
+      },
+      {
+        "orientation": "CW90",
+        "rank": 15,
+        "objectness": 0.001679,
+        "fish_probability": 0.666389,
+        "reported_confidence": 0.001119,
+        "recomputed_confidence_from_six_decimal_inputs": 0.001118867131,
+        "confidence_delta_from_reported_table": -1.3286899999990706e-07,
+        "bbox_original_xyxy": [
+          0.146602,
+          0.187825,
+          0.272741,
+          0.508783
+        ],
+        "area_ratio": 0.040486,
+        "gt_iou": 0.167
+      },
+      {
+        "orientation": "CW90",
+        "rank": 16,
+        "objectness": 0.00139,
+        "fish_probability": 0.739308,
+        "reported_confidence": 0.001028,
+        "recomputed_confidence_from_six_decimal_inputs": 0.00102763812,
+        "confidence_delta_from_reported_table": -3.6188000000010774e-07,
+        "bbox_original_xyxy": [
+          0.13983,
+          0.1976,
+          0.277123,
+          0.541347
+        ],
+        "area_ratio": 0.047194,
+        "gt_iou": 0.203
+      },
+      {
+        "orientation": "CW90",
+        "rank": 17,
+        "objectness": 0.001377,
+        "fish_probability": 0.73827,
+        "reported_confidence": 0.001017,
+        "recomputed_confidence_from_six_decimal_inputs": 0.00101659779,
+        "confidence_delta_from_reported_table": -4.022099999998526e-07,
+        "bbox_original_xyxy": [
+          0.143331,
+          0.189419,
+          0.275902,
+          0.511299
+        ],
+        "area_ratio": 0.042672,
+        "gt_iou": 0.177
+      },
+      {
+        "orientation": "CW90",
+        "rank": 18,
+        "objectness": 0.002079,
+        "fish_probability": 0.485032,
+        "reported_confidence": 0.001008,
+        "recomputed_confidence_from_six_decimal_inputs": 0.001008381528,
+        "confidence_delta_from_reported_table": 3.8152800000009444e-07,
+        "bbox_original_xyxy": [
+          0.082469,
+          0.122291,
+          0.339488,
+          0.932426
+        ],
+        "area_ratio": 0.20822,
+        "gt_iou": 0.653
+      },
+      {
+        "orientation": "CW90",
+        "rank": 19,
+        "objectness": 0.001397,
+        "fish_probability": 0.712867,
+        "reported_confidence": 0.000996,
+        "recomputed_confidence_from_six_decimal_inputs": 0.000995875199,
+        "confidence_delta_from_reported_table": -1.2480099999983597e-07,
+        "bbox_original_xyxy": [
+          0.126611,
+          0.206516,
+          0.28589,
+          0.685978
+        ],
+        "area_ratio": 0.076368,
+        "gt_iou": 0.343
+      },
+      {
+        "orientation": "CW90",
+        "rank": 20,
+        "objectness": 0.001631,
+        "fish_probability": 0.607231,
+        "reported_confidence": 0.00099,
+        "recomputed_confidence_from_six_decimal_inputs": 0.000990393761,
+        "confidence_delta_from_reported_table": 3.937610000000029e-07,
+        "bbox_original_xyxy": [
+          0.710678,
+          0.195572,
+          0.997218,
+          0.7007
+        ],
+        "area_ratio": 0.144739,
+        "gt_iou": 0.0
+      }
+    ],
+    "CCW90": [
+      {
+        "orientation": "CCW90",
+        "rank": 1,
+        "objectness": 0.006338,
+        "fish_probability": 0.670392,
+        "reported_confidence": 0.004249,
+        "recomputed_confidence_from_six_decimal_inputs": 0.004248944496,
+        "confidence_delta_from_reported_table": -5.5504000000261566e-08,
+        "bbox_original_xyxy": [
+          0.145772,
+          0.209198,
+          0.464641,
+          1.0
+        ],
+        "area_ratio": 0.252162,
+        "gt_iou": 0.643
+      },
+      {
+        "orientation": "CCW90",
+        "rank": 2,
+        "objectness": 0.007035,
+        "fish_probability": 0.527956,
+        "reported_confidence": 0.003714,
+        "recomputed_confidence_from_six_decimal_inputs": 0.0037141704599999996,
+        "confidence_delta_from_reported_table": 1.7045999999975442e-07,
+        "bbox_original_xyxy": [
+          0.131939,
+          0.200027,
+          0.393063,
+          1.0
+        ],
+        "area_ratio": 0.208892,
+        "gt_iou": 0.842
+      },
+      {
+        "orientation": "CCW90",
+        "rank": 3,
+        "objectness": 0.004032,
+        "fish_probability": 0.591727,
+        "reported_confidence": 0.002386,
+        "recomputed_confidence_from_six_decimal_inputs": 0.002385843264,
+        "confidence_delta_from_reported_table": -1.5673599999994903e-07,
+        "bbox_original_xyxy": [
+          0.121279,
+          0.175211,
+          0.514033,
+          0.984313
+        ],
+        "area_ratio": 0.317778,
+        "gt_iou": 0.591
+      },
+      {
+        "orientation": "CCW90",
+        "rank": 4,
+        "objectness": 0.004328,
+        "fish_probability": 0.353311,
+        "reported_confidence": 0.001529,
+        "recomputed_confidence_from_six_decimal_inputs": 0.001529130008,
+        "confidence_delta_from_reported_table": 1.3000800000006335e-07,
+        "bbox_original_xyxy": [
+          0.114771,
+          0.175008,
+          0.445714,
+          0.991589
+        ],
+        "area_ratio": 0.270242,
+        "gt_iou": 0.731
+      },
+      {
+        "orientation": "CCW90",
+        "rank": 5,
+        "objectness": 0.002968,
+        "fish_probability": 0.458639,
+        "reported_confidence": 0.001361,
+        "recomputed_confidence_from_six_decimal_inputs": 0.001361240552,
+        "confidence_delta_from_reported_table": 2.405520000000553e-07,
+        "bbox_original_xyxy": [
+          0.09381,
+          0.179507,
+          0.574521,
+          0.995789
+        ],
+        "area_ratio": 0.392396,
+        "gt_iou": 0.542
+      },
+      {
+        "orientation": "CCW90",
+        "rank": 6,
+        "objectness": 0.001072,
+        "fish_probability": 0.675809,
+        "reported_confidence": 0.000725,
+        "recomputed_confidence_from_six_decimal_inputs": 0.000724467248,
+        "confidence_delta_from_reported_table": -5.327519999999506e-07,
+        "bbox_original_xyxy": [
+          0.122373,
+          0.216967,
+          0.637302,
+          0.995606
+        ],
+        "area_ratio": 0.400943,
+        "gt_iou": 0.481
+      },
+      {
+        "orientation": "CCW90",
+        "rank": 7,
+        "objectness": 0.002971,
+        "fish_probability": 0.212295,
+        "reported_confidence": 0.000631,
+        "recomputed_confidence_from_six_decimal_inputs": 0.0006307284450000001,
+        "confidence_delta_from_reported_table": -2.715549999999893e-07,
+        "bbox_original_xyxy": [
+          0.05745,
+          0.191955,
+          0.519573,
+          0.997871
+        ],
+        "area_ratio": 0.372433,
+        "gt_iou": 0.573
+      },
+      {
+        "orientation": "CCW90",
+        "rank": 8,
+        "objectness": 0.000958,
+        "fish_probability": 0.649895,
+        "reported_confidence": 0.000622,
+        "recomputed_confidence_from_six_decimal_inputs": 0.00062259941,
+        "confidence_delta_from_reported_table": 5.994099999999869e-07,
+        "bbox_original_xyxy": [
+          0.124645,
+          0.175763,
+          0.591583,
+          0.990485
+        ],
+        "area_ratio": 0.380424,
+        "gt_iou": 0.494
+      },
+      {
+        "orientation": "CCW90",
+        "rank": 9,
+        "objectness": 0.000916,
+        "fish_probability": 0.655343,
+        "reported_confidence": 0.0006,
+        "recomputed_confidence_from_six_decimal_inputs": 0.000600294188,
+        "confidence_delta_from_reported_table": 2.941880000000832e-07,
+        "bbox_original_xyxy": [
+          0.601831,
+          0.036995,
+          1.0,
+          1.0
+        ],
+        "area_ratio": 0.383438,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "CCW90",
+        "rank": 10,
+        "objectness": 0.000918,
+        "fish_probability": 0.570198,
+        "reported_confidence": 0.000524,
+        "recomputed_confidence_from_six_decimal_inputs": 0.000523441764,
+        "confidence_delta_from_reported_table": -5.582360000000366e-07,
+        "bbox_original_xyxy": [
+          0.137116,
+          0.167692,
+          0.631005,
+          1.0
+        ],
+        "area_ratio": 0.411068,
+        "gt_iou": 0.434
+      },
+      {
+        "orientation": "CCW90",
+        "rank": 11,
+        "objectness": 0.000751,
+        "fish_probability": 0.649833,
+        "reported_confidence": 0.000488,
+        "recomputed_confidence_from_six_decimal_inputs": 0.00048802458300000004,
+        "confidence_delta_from_reported_table": 2.4583000000054107e-08,
+        "bbox_original_xyxy": [
+          0.606405,
+          0.133707,
+          1.0,
+          0.942364
+        ],
+        "area_ratio": 0.318283,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "CCW90",
+        "rank": 12,
+        "objectness": 0.000654,
+        "fish_probability": 0.635254,
+        "reported_confidence": 0.000415,
+        "recomputed_confidence_from_six_decimal_inputs": 0.00041545611599999994,
+        "confidence_delta_from_reported_table": 4.5611599999994005e-07,
+        "bbox_original_xyxy": [
+          0.623798,
+          0.084421,
+          1.0,
+          0.985448
+        ],
+        "area_ratio": 0.338968,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "CCW90",
+        "rank": 13,
+        "objectness": 0.000559,
+        "fish_probability": 0.716727,
+        "reported_confidence": 0.000401,
+        "recomputed_confidence_from_six_decimal_inputs": 0.000400650393,
+        "confidence_delta_from_reported_table": -3.4960699999997966e-07,
+        "bbox_original_xyxy": [
+          0.525657,
+          0.2566,
+          0.769935,
+          0.513822
+        ],
+        "area_ratio": 0.062834,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "CCW90",
+        "rank": 14,
+        "objectness": 0.000592,
+        "fish_probability": 0.619899,
+        "reported_confidence": 0.000367,
+        "recomputed_confidence_from_six_decimal_inputs": 0.00036698020799999997,
+        "confidence_delta_from_reported_table": -1.979200000000762e-08,
+        "bbox_original_xyxy": [
+          0.632597,
+          0.169428,
+          1.0,
+          0.948965
+        ],
+        "area_ratio": 0.286404,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "CCW90",
+        "rank": 15,
+        "objectness": 0.000391,
+        "fish_probability": 0.726804,
+        "reported_confidence": 0.000284,
+        "recomputed_confidence_from_six_decimal_inputs": 0.000284180364,
+        "confidence_delta_from_reported_table": 1.803639999999702e-07,
+        "bbox_original_xyxy": [
+          0.523613,
+          0.259941,
+          0.766114,
+          0.536751
+        ],
+        "area_ratio": 0.067127,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "CCW90",
+        "rank": 16,
+        "objectness": 0.00039,
+        "fish_probability": 0.70816,
+        "reported_confidence": 0.000276,
+        "recomputed_confidence_from_six_decimal_inputs": 0.0002761824,
+        "confidence_delta_from_reported_table": 1.8240000000002048e-07,
+        "bbox_original_xyxy": [
+          0.703672,
+          0.947517,
+          1.0,
+          0.996858
+        ],
+        "area_ratio": 0.014621,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "CCW90",
+        "rank": 17,
+        "objectness": 0.00034,
+        "fish_probability": 0.763369,
+        "reported_confidence": 0.000259,
+        "recomputed_confidence_from_six_decimal_inputs": 0.00025954546000000003,
+        "confidence_delta_from_reported_table": 5.45460000000021e-07,
+        "bbox_original_xyxy": [
+          0.528928,
+          0.253193,
+          0.771563,
+          0.479281
+        ],
+        "area_ratio": 0.054857,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "CCW90",
+        "rank": 18,
+        "objectness": 0.0004,
+        "fish_probability": 0.628405,
+        "reported_confidence": 0.000251,
+        "recomputed_confidence_from_six_decimal_inputs": 0.000251362,
+        "confidence_delta_from_reported_table": 3.620000000000077e-07,
+        "bbox_original_xyxy": [
+          0.574983,
+          0.043063,
+          1.0,
+          0.938322
+        ],
+        "area_ratio": 0.380501,
+        "gt_iou": 0.0
+      },
+      {
+        "orientation": "CCW90",
+        "rank": 19,
+        "objectness": 0.000384,
+        "fish_probability": 0.641192,
+        "reported_confidence": 0.000246,
+        "recomputed_confidence_from_six_decimal_inputs": 0.000246217728,
+        "confidence_delta_from_reported_table": 2.1772799999996567e-07,
+        "bbox_original_xyxy": [
+          0.184535,
+          0.153276,
+          0.867235,
+          0.999834
+        ],
+        "area_ratio": 0.577945,
+        "gt_iou": 0.238
+      },
+      {
+        "orientation": "CCW90",
+        "rank": 20,
+        "objectness": 0.000375,
+        "fish_probability": 0.629522,
+        "reported_confidence": 0.000236,
+        "recomputed_confidence_from_six_decimal_inputs": 0.00023607075000000002,
+        "confidence_delta_from_reported_table": 7.075000000002977e-08,
+        "bbox_original_xyxy": [
+          0.585064,
+          0.167017,
+          1.0,
+          0.999258
+        ],
+        "area_ratio": 0.345326,
+        "gt_iou": 0.0
+      }
+    ]
+  }
+}

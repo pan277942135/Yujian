@@ -1,0 +1,97 @@
+{
+  "schema_version": "CASE_A_INVESTIGATION_VALIDATION_EVIDENCE_V1",
+  "status": "LOCAL_VALIDATION_PASS_REMOTE_PR_CI_PENDING",
+  "environment": {
+    "python": "3.12.14",
+    "platform": "Linux-6.18.55-x86_64-with-glibc2.39",
+    "backend_git_head": "05554ce1b7104c7bce05610979dfc3478b6d24a5",
+    "branch": "investigate/case-a-low-objectness-root-cause-v1"
+  },
+  "commands": [
+    {
+      "command": "python3 -m py_compile scripts/diagnose_detector_orientation.py scripts/audit_case_a_artifacts.py scripts/audit_detector_dataset_manifest.py tests/test_case_a_investigation_tools.py",
+      "exit_code": 0,
+      "result": "PASS"
+    },
+    {
+      "command": "python3 -m unittest discover -s tests -p 'test_case_a_investigation_tools.py' -v",
+      "exit_code": 0,
+      "result": "PASS",
+      "tests_run": 3,
+      "tests_passed": 3
+    },
+    {
+      "command": "python3 scripts/audit_case_a_artifacts.py --bundle <verified-public-release-zip> --output <temporary-report>",
+      "exit_code": 0,
+      "result": "PASS_RELEASE_BUNDLE_IDENTITIES",
+      "bundle_sha256": "246ddacaf89ca7ecc9c64a47d3e12c5ee9088d92c763a38626778505ae8c15ee",
+      "extracted_onnx_sha256": "12b97f7c081987f33f99d255cdd2e935fb9cf93b893146f54ff98b9c4e3a8e4f",
+      "source_status": "BLOCKED_SOURCE_UNAVAILABLE"
+    },
+    {
+      "command": "python3 -m json.tool <each reports/case_a/*.json>",
+      "exit_code": 0,
+      "result": "PASS",
+      "files": 5
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "result": "PASS"
+    },
+    {
+      "command": "SHA-256 search over available workspace JPG/JPEG/PNG assets for exact Case A source hash",
+      "exit_code": 0,
+      "result": "NO_MATCH"
+    }
+  ],
+  "remote_ci": {
+    "status": "PENDING",
+    "run_id": null
+  },
+  "case_a_inference": {
+    "status": "NOT_RUN_GATE_A_AND_SOURCE_BLOCKED"
+  },
+  "files": {
+    "reports/case_a/CASE_A_ROOT_CAUSE_INVESTIGATION_V1.md": {
+      "sha256": "470d2d55b8e01046d082a76aca9acc9b24ddd3b2b55dab8de3ae6db791e26928",
+      "bytes": 24096
+    },
+    "reports/case_a/artifact_bundle_preflight.json": {
+      "sha256": "e0803d33123294948b97cd07f66f61aa333d90e3a5cf9e0f2eae822499d7b13f",
+      "bytes": 4780
+    },
+    "reports/case_a/artifact_identity_audit.json": {
+      "sha256": "8939f293a08ca9466ab0c80ff1db78c6b2eb94782a965a2df076b6697b3898d2",
+      "bytes": 12056
+    },
+    "reports/case_a/dataset_audit.json": {
+      "sha256": "388c02dc7e739aaa42fbc06c8f27bae5d707296fdbbf33d4c7e0b3427c461c66",
+      "bytes": 4561
+    },
+    "reports/case_a/orientation_replay.json": {
+      "sha256": "0907d5b127dd3bf8105a7ff67464d51b31d26b44bfa3b28e6112c3cfd05784a5",
+      "bytes": 34920
+    },
+    "reports/case_a/preprocessing_parity.json": {
+      "sha256": "35c165ecf2150fc046f5cc1a94763865f42411c8e11e6e923c144f13cbe9cc23",
+      "bytes": 7699
+    },
+    "scripts/audit_case_a_artifacts.py": {
+      "sha256": "e3b77a185b24bfbbe80ae965383a2c11aa925283f6fa0601521ad0a86f949133",
+      "bytes": 5914
+    },
+    "scripts/audit_detector_dataset_manifest.py": {
+      "sha256": "0eaf0c2e3c71f56dc4bcac360bf210aa48ae8b5ed41c4f14f0c6e1a309b9fed1",
+      "bytes": 4562
+    },
+    "scripts/diagnose_detector_orientation.py": {
+      "sha256": "c2418461b51aa2ed498b4b57aeb7a44530c8a32cc59cd8085174a656282adba2",
+      "bytes": 18695
+    },
+    "tests/test_case_a_investigation_tools.py": {
+      "sha256": "cf94fe7394e5f33a9b1a8845319c0ff562e61eb96a78ec8c9edcdea77aa5c975",
+      "bytes": 3462
+    }
+  }
+}
