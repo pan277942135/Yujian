@@ -10,7 +10,7 @@ import google.auth
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from google.auth.transport.requests import AuthorizedSession
 from google.cloud import storage
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -328,6 +328,9 @@ async def det_fish_test(
     try:
         with Image.open(io.BytesIO(data)) as uploaded:
             original_width, original_height = uploaded.size
+            oriented = ImageOps.exif_transpose(uploaded)
+            oriented_width, oriented_height = oriented.size
+            oriented.close()
             image_format = uploaded.format or "unknown"
             source = normalize_android_source(uploaded)
     except (UnidentifiedImageError, OSError) as exc:
@@ -342,7 +345,8 @@ async def det_fish_test(
             {
                 "rank": index + 1,
                 "confidence": round(float(item.confidence), 6),
-                "bbox_pixel": _pixel_box(item.box, source.width, source.height),
+                "bbox_pixel": _pixel_box(item.box, oriented_width, oriented_height),
+                "bbox_pixel_input": _pixel_box(item.box, source.width, source.height),
                 "bbox_normalized_xywh": _normalized_xywh(item.box),
                 "bbox_area_ratio": round(float(item.area_ratio), 6),
                 "class_name": item.class_name,
@@ -353,7 +357,8 @@ async def det_fish_test(
         if primary is not None:
             primary_payload = {
                 "confidence": round(float(primary.confidence), 6),
-                "bbox_pixel": _pixel_box(primary.box, source.width, source.height),
+                "bbox_pixel": _pixel_box(primary.box, oriented_width, oriented_height),
+                "bbox_pixel_input": _pixel_box(primary.box, source.width, source.height),
                 "bbox_normalized_xywh": _normalized_xywh(primary.box),
                 "bbox_area_ratio": round(float(primary.area_ratio), 6),
             }
@@ -365,6 +370,8 @@ async def det_fish_test(
                 "format": image_format,
                 "original_width": original_width,
                 "original_height": original_height,
+                "oriented_width": oriented_width,
+                "oriented_height": oriented_height,
                 "width": source.width,
                 "height": source.height,
             },
