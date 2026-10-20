@@ -16,7 +16,7 @@
   <div class="metric-card"><div class="metric-label">人工 accepted_bbox</div><div id="acceptedBboxCount" class="metric-value">—</div><div class="metric-detail">只统计人工确认标签</div></div>
   <div class="metric-card"><div class="metric-label">DET_DS_v0.2</div><div id="datasetStatus" class="metric-value" style="font-size:22px">—</div><div id="datasetArchive" class="metric-detail">冻结数据包状态</div></div>
   <div class="metric-card"><div class="metric-label">Train 图片</div><div id="trainImages" class="metric-value">—</div><div id="trainBoxes" class="metric-detail">鱼体框数量 —</div></div>
-  <div class="metric-card"><div class="metric-label">DET_FISH_v0.2</div><div id="modelStatus" class="metric-value" style="font-size:22px">—</div><div id="modelSha" class="metric-detail">模型 SHA-256</div></div>
+  <div class="metric-card"><div class="metric-label">DET_FISH_v0.2</div><div id="modelStatus" class="metric-value" style="font-size:22px">—</div><div id="modelSha" class="metric-detail">模型 SHA-256</div></div><div class="metric-card"><div class="metric-label">AP50</div><div id="modelAp50" class="metric-value">—</div><div class="metric-detail">mAP@0.5</div></div><div class="metric-card"><div class="metric-label">AP50:95</div><div id="modelAp50_95" class="metric-value">—</div><div class="metric-detail">COCO mAP</div></div>
 </div>
 <div class="form-grid" style="margin-top:16px">
   <section class="panel">
@@ -58,6 +58,7 @@
 {% block scripts %}
 <script>
 function fmtCount(value){return Number.isFinite(Number(value))?Number(value).toLocaleString('en-US'):'—'}
+function fmtAP(value){return value==null||!Number.isFinite(Number(value))?'—':(Number(value)*100).toFixed(1)+'%'}
 function fmtDate(value){if(!value)return '—';const date=new Date(value);return Number.isNaN(date.getTime())?String(value):date.toLocaleString()}
 function renderExecutionHistory(rows,error){
   const target=document.getElementById('detExecutionHistory');
@@ -81,6 +82,8 @@ function renderDetTrainingStatus(data){
   document.getElementById('trainBoxes').textContent='鱼体框 '+fmtCount(counts.train_boxes)+' · Val '+fmtCount(counts.val_boxes)+' · Test '+fmtCount(counts.test_images);
   document.getElementById('modelStatus').textContent=model.available?'已生成':'未生成';
   document.getElementById('modelSha').textContent=model.onnx_sha256?('SHA-256 '+model.onnx_sha256):'尚无模型 SHA-256';
+  document.getElementById('modelAp50').textContent=fmtAP(model.ap50);
+  document.getElementById('modelAp50_95').textContent=fmtAP(model.ap50_95);
   renderGate(gate);
   renderExecutionHistory(data.execution_history||[],data.execution_history_error);
 }
