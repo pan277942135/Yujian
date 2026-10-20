@@ -62,6 +62,16 @@ def test_gate_derives_verified_counts_from_manifest_and_hashes():
     assert result["counts"]["human_reviewed_negatives"] == 1
 
 
+def test_gate_does_not_mark_report_count_mismatch_as_verified():
+    report, manifest_bytes, archive_bytes, _rows = ready_dataset()
+    report["splits"]["train"]["images"] += 1
+
+    result = validate_v02_dataset(report, manifest_bytes, hashlib.sha256(archive_bytes).hexdigest())
+
+    assert result["counts_verified"] is False
+    assert any("train 图片数或 BBox 数" in item for item in result["blockers"])
+
+
 def test_gate_rejects_manifest_archive_mismatch_and_cross_split_leakage():
     report, manifest_bytes, archive_bytes, rows = ready_dataset()
     report["archive_sha256"] = "0" * 64

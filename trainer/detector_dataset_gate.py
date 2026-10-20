@@ -91,7 +91,12 @@ def validate_v02_dataset(
         "human_reviewed_bbox_images": 0,
     }
     if not isinstance(report, dict):
-        return {"ready": False, "blockers": ["尚未找到 DET_DS_v0.2/bootstrap_report.json"], "counts": counts}
+        return {
+            "ready": False,
+            "blockers": ["尚未找到 DET_DS_v0.2/bootstrap_report.json"],
+            "counts": counts,
+            "counts_verified": False,
+        }
 
     if report.get("dataset_version") != DATASET_VERSION:
         blockers.append("数据集版本不是 DET_DS_v0.2")
@@ -229,6 +234,7 @@ def validate_v02_dataset(
     reported_splits = report.get("splits") or {}
     if not isinstance(reported_splits, dict):
         reported_splits = {}
+    report_splits_match = True
     for split in ("train", "val", "test"):
         reported = reported_splits.get(split) or {}
         if not isinstance(reported, dict):
@@ -236,9 +242,11 @@ def validate_v02_dataset(
         reported_images = _count(reported.get("images"))
         reported_boxes = _count(reported.get("annotations", reported.get("boxes")))
         if reported_images != counts[f"{split}_images"] or reported_boxes != counts[f"{split}_boxes"]:
+            report_splits_match = False
             blockers.append(f"冻结报告中的 {split} 图片数或 BBox 数与逐图 Manifest 不一致")
 
-    if _count(report.get("negatives")) != counts["human_reviewed_negatives"]:
+    negatives_match = _count(report.get("negatives")) == counts["human_reviewed_negatives"]
+    if not negatives_match:
         blockers.append("冻结报告无鱼负样本数量与逐图人工审核记录不一致")
     if counts["train_images"] < 40:
         blockers.append("训练集完整场景图片不足 40 张")
@@ -257,7 +265,13 @@ def validate_v02_dataset(
         "ready": not blockers,
         "blockers": blockers,
         "counts": counts,
-        "counts_verified": bool(manifest is not None and manifest_counts_verified and row_blockers == 0),
+        "counts_verified": bool(
+            manifest is not None
+            and manifest_counts_verified
+            and row_blockers == 0
+            and report_splits_match
+            and negatives_match
+        ),
     }
 
 
