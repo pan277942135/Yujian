@@ -22,6 +22,13 @@ _HELD_OUT_SHA256 = {
     "2dd703a46b378093604e10f0add454606393138f7501774bd3bbcca75352c9fe",
     "a7ed3bb0410c191364f6d853b4078aebdc2f3b9baa4da34b7b3f6e8e0e93a56b",
     "57dd3d39f832dfa1cc56b8af74a00b274f321714228adf08097ed131e19ecab4",
+    # Seven separately reviewed hard-case regression images.
+    "a59fbac1d7d5b36207ccf1f0bf3930ba034124c448775e624e009b0dbb3918af",
+    "0fc341627e4345131a15fbf3514454f053dcb349db17bf1171c8f2f8756226cf",
+    "e74132cd01500b13515262c16a07e1be5d2db6a8401e5aed7222740b184cc649",
+    "ad31bb8c2c545005b445917de0e888bbceb5bcd77a034c63d5bddabfb13175d3",
+    "3ed483f0401201b76b52ca27e56091c21f712603922e7c04e75fec7ba98a1f41",
+    "77bf1fe6f368b6bcc3bd25a274ba8ed378f3a46519dedb0bdd19a098d4a30a98",
 }
 _HUMAN_BOX_SOURCES = {
     "accepted_review",
@@ -89,6 +96,7 @@ def validate_v02_dataset(
         "human_reviewed_negatives": 0,
         "human_reviewed_complete_scene_images": 0,
         "human_reviewed_bbox_images": 0,
+        "human_reviewed_bbox_records": 0,
     }
     if not isinstance(report, dict):
         return {
@@ -102,6 +110,24 @@ def validate_v02_dataset(
         blockers.append("数据集版本不是 DET_DS_v0.2")
     if report.get("status") != "FROZEN_READY_FOR_TRAINING":
         blockers.append("数据集尚未标记为 FROZEN_READY_FOR_TRAINING")
+    source_reconciliation = report.get("source_reconciliation")
+    if not isinstance(source_reconciliation, dict) or source_reconciliation.get("status") != "PASS":
+        blockers.append("Accepted Pool Manifest 与审核数据库的逐记录核对未通过")
+        source_reconciliation_verified = False
+    else:
+        source_reconciliation_verified = True
+        for field, label in (("manifest_sha256", "Accepted Pool Manifest"), ("metadata_sha256", "Accepted Pool metadata")):
+            if not _sha(source_reconciliation.get(field)):
+                source_reconciliation_verified = False
+                blockers.append(f"{label} 缺少有效 SHA-256 记录")
+        for field, label in (("manifest_uri", "Accepted Pool Manifest"), ("metadata_uri", "Accepted Pool metadata")):
+            if not str(source_reconciliation.get(field) or "").startswith("gs://"):
+                source_reconciliation_verified = False
+                blockers.append(f"{label} 缺少 GCS 来源 URI")
+    if report.get("source_record_errors"):
+        blockers.append("存在未解决的原图、权限、审核或标签来源错误")
+    if report.get("source_image_audit_verified") is not True:
+        blockers.append("Accepted Pool 原图 URI、实际字节 SHA、EXIF 方向或归一化尺寸审计未通过")
     if str(report.get("source") or "").strip().lower() not in _HUMAN_BOX_SOURCES:
         blockers.append("数据集来源没有声明为人工 accepted_bbox 审核")
     for field, message in (
@@ -146,6 +172,7 @@ def validate_v02_dataset(
     image_ids: set[str] = set()
     held_out: set[str] = set()
     row_blockers = 0
+    all_review_ids: set[str] = set()
 
     if manifest is not None:
         for row_number, row in enumerate(manifest, start=1):
@@ -159,7 +186,10 @@ def validate_v02_dataset(
             reviewer = str(row.get("reviewer_id") or "").strip()
             reviewed_at = str(row.get("reviewed_at") or "").strip()
             source_uri = str(row.get("source_uri") or "").strip()
-            permission_basis = str(row.get("permission_basis") or "").strip()
+            training_eligibility_basis = str(row.get("training_eligibility_basis") or "").strip()
+            materialized_sha = str(row.get("materialized_image_sha256") or "").strip()
+            review_record_ids = row.get("review_record_ids")
+            review_provenance = row.get("review_provenance")
             file_name = str(row.get("file_name") or "").strip()
             image_kind = str(row.get("image_kind") or "").strip().lower()
             review_status = str(row.get("review_status") or "").strip().upper()
@@ -176,6 +206,7 @@ def validate_v02_dataset(
                 bool(image_id)
                 and image_id not in image_ids
                 and _sha(image_sha)
+                and _sha(materialized_sha)
                 and bool(source_group)
                 and split in {"train", "val", "test"}
                 and bool(file_name)
@@ -186,7 +217,10 @@ def validate_v02_dataset(
                 and bool(reviewer)
                 and bool(reviewed_at)
                 and bool(source_uri)
-                and bool(permission_basis)
+                and bool(training_eligibility_basis)
+                and isinstance(review_record_ids, list)
+                and all(str(item or "").strip() for item in review_record_ids)
+                and isinstance(review_provenance, list)
                 and isinstance(fish_present, bool)
                 and boxes is not None
             )
@@ -206,12 +240,91 @@ def validate_v02_dataset(
                 if any(not _valid_box(box) for box in boxes):
                     row_blockers += 1
                     continue
+                row_review_ids = {str(item).strip() for item in review_record_ids}
+                if len(row_review_ids) != len(review_record_ids):
+                    row_blockers += 1
+                if row_review_ids & all_review_ids:
+                    row_blockers += 1
+                all_review_ids.update(row_review_ids)
+                provenance_by_id: dict[str, dict[str, Any]] = {}
+                for provenance in review_provenance:
+                    if not isinstance(provenance, dict):
+                        row_blockers += 1
+                        continue
+                    record_id = str(provenance.get("review_record_id") or "").strip()
+                    bbox_xywh = provenance.get("accepted_bbox_xywh")
+                    try:
+                        x, y, box_width, box_height = (float(value) for value in bbox_xywh)
+                    except (TypeError, ValueError):
+                        row_blockers += 1
+                        continue
+                    valid_provenance = (
+                        bool(record_id)
+                        and bool(str(provenance.get("reviewer_id") or "").strip())
+                        and bool(str(provenance.get("reviewed_at") or "").strip())
+                        and str(provenance.get("review_status") or "").upper() in {"ACCEPTED", "TRAINING_READY"}
+                        and len(bbox_xywh) == 4
+                        and all(0.0 <= value <= 1.0 for value in (x, y, box_width, box_height))
+                        and box_width > 0.0
+                        and box_height > 0.0
+                        and x + box_width <= 1.00001
+                        and y + box_height <= 1.00001
+                    )
+                    if not valid_provenance or record_id in provenance_by_id:
+                        row_blockers += 1
+                        continue
+                    provenance_by_id[record_id] = {
+                        "bbox_xyxy": [x, y, x + box_width, y + box_height],
+                    }
+                if set(provenance_by_id) != row_review_ids:
+                    row_blockers += 1
+                box_review_ids: set[str] = set()
+                for box in boxes:
+                    raw_box_review_ids = box.get("review_record_ids")
+                    if not isinstance(raw_box_review_ids, list) or not raw_box_review_ids:
+                        row_blockers += 1
+                        break
+                    current_ids = {str(item or "").strip() for item in raw_box_review_ids}
+                    if "" in current_ids or not current_ids.issubset(row_review_ids):
+                        row_blockers += 1
+                        break
+                    box_review_ids.update(current_ids)
+                    for record_id in current_ids:
+                        provenance_box = provenance_by_id.get(record_id, {}).get("bbox_xyxy")
+                        if provenance_box is None or any(
+                            not math.isclose(float(actual), float(expected), rel_tol=0.0, abs_tol=1e-6)
+                            for actual, expected in zip(box.get("bbox_xyxy") or [], provenance_box)
+                        ):
+                            row_blockers += 1
+                            break
+                if box_review_ids != row_review_ids:
+                    row_blockers += 1
+                    continue
+                counts["human_reviewed_bbox_records"] += len(row_review_ids)
                 counts["human_reviewed_bbox_images"] += 1
                 split_boxes[split] += len(boxes)
             else:
-                if boxes or review_status != "NO_FISH_CONFIRMED":
+                if boxes or review_status != "NO_FISH_CONFIRMED" or not review_provenance:
                     row_blockers += 1
                     continue
+                negative_ids = {str(item).strip() for item in review_record_ids}
+                valid_negative_ids = set()
+                for provenance in review_provenance:
+                    if not isinstance(provenance, dict):
+                        row_blockers += 1
+                        continue
+                    record_id = str(provenance.get("review_record_id") or "").strip()
+                    if (
+                        record_id
+                        and str(provenance.get("reviewer_id") or "").strip()
+                        and str(provenance.get("reviewed_at") or "").strip()
+                        and str(provenance.get("review_status") or "").upper() == "NO_FISH_CONFIRMED"
+                    ):
+                        valid_negative_ids.add(record_id)
+                    else:
+                        row_blockers += 1
+                if valid_negative_ids != negative_ids:
+                    row_blockers += 1
                 counts["human_reviewed_negatives"] += 1
 
             split_images[split] += 1
@@ -226,7 +339,82 @@ def validate_v02_dataset(
             f"Manifest 存在来源组或重复原图跨集合泄漏（source_groups={len(leaked_groups)}, image_hashes={len(leaked_hashes)}）"
         )
     if held_out:
-        blockers.append("Manifest 包含 Case A、Case B 或 04-181200 独立留出图片")
+        blockers.append("Manifest 包含已冻结的 Case A、Case B、04-181200 或七图困难样本独立留出图片")
+
+    manifest_review_ids: set[str] = set()
+    if manifest is not None:
+        for row in manifest:
+            if not isinstance(row, dict) or row.get("fish_present") is not True:
+                continue
+            for record_id in row.get("review_record_ids") or []:
+                record_id = str(record_id or "").strip()
+                if record_id in manifest_review_ids:
+                    blockers.append("人工 accepted_bbox review record 被重复计入多个 Manifest 图像")
+                manifest_review_ids.add(record_id)
+
+    source_record_count = _count(report.get("source_accepted_bbox_record_count"))
+    excluded_record_count = _count(report.get("excluded_held_out_accepted_bbox_record_count"))
+    source_negative_count = _count(report.get("source_human_negative_record_count"))
+    audit_rows = report.get("source_image_audit")
+    audit_by_review_id: dict[str, str] = {}
+    audit_rows_valid = isinstance(audit_rows, list) and bool(audit_rows)
+    if not audit_rows_valid:
+        blockers.append("缺少逐条 Accepted Pool 原图字节审计记录")
+    else:
+        for row in audit_rows:
+            if not isinstance(row, dict):
+                audit_rows_valid = False
+                continue
+            record_id = str(row.get("review_record_id") or "").strip()
+            source_sha = str(row.get("source_image_sha256") or "").strip()
+            try:
+                width, height = int(row.get("width") or 0), int(row.get("height") or 0)
+                orientation = int(row.get("exif_orientation") or 0)
+            except (TypeError, ValueError):
+                width = height = orientation = 0
+            valid_audit_row = (
+                bool(record_id)
+                and record_id not in audit_by_review_id
+                and row.get("status") == "READ_OK"
+                and _sha(source_sha)
+                and width > 0
+                and height > 0
+                and 1 <= orientation <= 8
+            )
+            if not valid_audit_row:
+                audit_rows_valid = False
+                continue
+            audit_by_review_id[record_id] = source_sha
+    if source_record_count is not None and source_negative_count is not None and isinstance(audit_rows, list):
+        expected_audit_rows = source_record_count + source_negative_count
+        if len(audit_rows) != expected_audit_rows:
+            audit_rows_valid = False
+            blockers.append("原图字节审计行数与 Accepted Pool 正样本和人工无鱼来源记录数不一致")
+    if manifest is not None:
+        for row in manifest:
+            if not isinstance(row, dict):
+                continue
+            image_sha = str(row.get("image_sha256") or row.get("source_image_sha256") or "")
+            for record_id in row.get("review_record_ids") or []:
+                record_id = str(record_id or "").strip()
+                if audit_by_review_id.get(record_id) != image_sha:
+                    audit_rows_valid = False
+                    blockers.append("Manifest 中的原图 SHA 与对应审核记录的实际字节审计不一致")
+                    break
+    if not audit_rows_valid:
+        blockers.append("逐条原图字节审计记录无效、重复或与 Manifest 不一致")
+    if source_record_count is None or excluded_record_count is None:
+        blockers.append("冻结报告缺少 Accepted Pool 原始记录数或留出记录排除数")
+        source_records_match = False
+    else:
+        source_records_match = source_record_count == len(manifest_review_ids) + excluded_record_count
+        if isinstance(source_reconciliation, dict):
+            source_records_match = source_records_match and _count(source_reconciliation.get("accepted_pool_rows")) == source_record_count
+        if not source_records_match:
+            blockers.append("Accepted Pool 原始记录数与 Manifest/明确留出排除记录数不一致")
+    excluded_negative_count = _count(report.get("excluded_held_out_negative_record_count"))
+    if source_negative_count is None or excluded_negative_count is None or source_negative_count != counts["human_reviewed_negatives"] + excluded_negative_count:
+        blockers.append("人工无鱼来源记录数与 Manifest/留出排除记录数不一致")
 
     for split in ("train", "val", "test"):
         counts[f"{split}_images"] = split_images[split]
@@ -271,6 +459,9 @@ def validate_v02_dataset(
             and row_blockers == 0
             and report_splits_match
             and negatives_match
+            and source_records_match
+            and audit_rows_valid
+            and source_reconciliation_verified
         ),
     }
 
@@ -365,6 +556,11 @@ def validate_v02_materialized_dataset(
                 image_ids[image_id] = {"name": name, "width": width, "height": height}
                 if not (root / f"{split}2017" / name).is_file():
                     blockers.append(f"COCO {split} 图像文件缺失：{name}")
+                else:
+                    image_path = root / f"{split}2017" / name
+                    expected_sha = str((expected_rows.get(name) or {}).get("materialized_image_sha256") or "")
+                    if not _sha(expected_sha) or hashlib.sha256(image_path.read_bytes()).hexdigest() != expected_sha:
+                        blockers.append(f"COCO {split} 图像文件 SHA-256 与 Manifest 不一致：{name}")
                 row = expected_rows.get(name)
                 if row and (int(row.get("width") or 0) != width or int(row.get("height") or 0) != height):
                     blockers.append(f"COCO {split} 图像尺寸与 Manifest 不一致：{name}")

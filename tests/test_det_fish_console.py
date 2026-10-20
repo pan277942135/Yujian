@@ -35,7 +35,12 @@ def test_cloud_run_detector_job_must_match_l4_worker_contract():
         "template": {
             "template": {
                 "containers": [{
-                    "image": "asia-southeast1-docker.pkg.dev/project/repo/detector-trainer:abc123",
+                    "image": "asia-southeast1-docker.pkg.dev/project/repo/detector-trainer@sha256:" + "a" * 64,
+                    "env": [
+                        {"name": "DETECTOR_DATASET_VERSION", "value": "DET_DS_v0.2"},
+                        {"name": "DETECTOR_MODEL_VERSION", "value": "DET_FISH_v0.2"},
+                        {"name": "APP_GIT_COMMIT", "value": "b" * 40},
+                    ],
                     "resources": {"limits": {"cpu": "4", "memory": "16Gi", "nvidia.com/gpu": "1"}},
                 }],
                 "serviceAccount": "detector@project.iam.gserviceaccount.com",
@@ -48,6 +53,32 @@ def test_cloud_run_detector_job_must_match_l4_worker_contract():
     assert _validate_detector_job(job) == []
     job["template"]["template"]["containers"][0]["resources"] = {"limits": {"cpu": "2", "memory": "4Gi"}}
     assert any("1 张 NVIDIA GPU" in item for item in _validate_detector_job(job))
+
+
+def test_cloud_run_detector_job_rejects_v01_dataset_or_mutable_image_tag():
+    job = {
+        "template": {
+            "template": {
+                "containers": [{
+                    "image": "asia-southeast1-docker.pkg.dev/project/repo/detector-trainer:deadbeef",
+                    "env": [
+                        {"name": "DETECTOR_DATASET_VERSION", "value": "DET_DS_v0.1"},
+                        {"name": "DETECTOR_MODEL_VERSION", "value": "DET_FISH_v0.1"},
+                        {"name": "APP_GIT_COMMIT", "value": "b" * 40},
+                    ],
+                    "resources": {"limits": {"cpu": "4", "memory": "16Gi", "nvidia.com/gpu": "1"}},
+                }],
+                "serviceAccount": "detector@project.iam.gserviceaccount.com",
+                "nodeSelector": {"run.googleapis.com/accelerator": "nvidia-l4"},
+                "maxRetries": 0,
+                "gpuZonalRedundancyDisabled": True,
+            }
+        }
+    }
+    blockers = _validate_detector_job(job)
+    assert any("DET_DS_v0.2" in item for item in blockers)
+    assert any("DET_FISH_v0.2" in item for item in blockers)
+    assert any("digest" in item for item in blockers)
 
 
 def _upload(data: bytes, content_type: str | None):

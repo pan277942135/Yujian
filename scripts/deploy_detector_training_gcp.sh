@@ -36,13 +36,20 @@ if ! gcloud artifacts docker images describe "$IMAGE_URI" --project "$PROJECT_ID
   gcloud builds submit . --project "$PROJECT_ID" --config infra/cloudbuild.detector.yaml --substitutions="_IMAGE_URI=${IMAGE_URI}"
 fi
 
+IMAGE_DIGEST="$(gcloud artifacts docker images describe "$IMAGE_URI" --project "$PROJECT_ID" --format='value(image_summary.digest)')"
+if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  echo "Unable to resolve an immutable detector trainer image digest for ${IMAGE_URI}; refusing Job deployment." >&2
+  exit 3
+fi
+PINNED_IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPOSITORY}/detector-trainer@${IMAGE_DIGEST}"
+
 log "Deploying L4 detector training job ${JOB_NAME} in ${REGION}"
 # Cloud Run Jobs caps GPU task timeout at one hour. The detector dataset is small enough
 # for the complete train → evaluate → ONNX export path to fit this platform limit.
 gcloud run jobs deploy "$JOB_NAME" \
   --project "$PROJECT_ID" \
   --region "$REGION" \
-  --image "$IMAGE_URI" \
+  --image "$PINNED_IMAGE_URI" \
   --service-account "$RUNTIME_SA" \
   --set-env-vars="GCS_BUCKET=${BUCKET},DETECTOR_DATASET_VERSION=${DATASET_VERSION},DETECTOR_DATASET_ROOT=${DATASET_ROOT},DETECTOR_MODEL_VERSION=${MODEL_VERSION},APP_GIT_COMMIT=${GIT_SHA},DETECTOR_EPOCHS=${DETECTOR_EPOCHS:-30},DETECTOR_BATCH_SIZE=${DETECTOR_BATCH_SIZE:-16}" \
   --cpu=4 \

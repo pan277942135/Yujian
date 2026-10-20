@@ -11,9 +11,19 @@ def ready_dataset():
     for split, image_count in split_image_counts.items():
         for index in range(image_count):
             negative = split == "train" and index == image_count - 1
+            review_id = f"review-{split}-{index}"
+            box = {"bbox_xyxy": [0.1, 0.1, 0.6, 0.8], "review_record_ids": [review_id]}
+            row_provenance = [{
+                "review_record_id": review_id,
+                "reviewer_id": "reviewer-1",
+                "reviewed_at": "2026-10-20T00:00:00Z",
+                "review_status": "NO_FISH_CONFIRMED" if negative else "ACCEPTED",
+                "accepted_bbox_xywh": [0.1, 0.1, 0.5, 0.7],
+            }]
             rows.append({
                 "image_id": f"{split}-{index}",
                 "image_sha256": hashlib.sha256(f"source-{split}-{index}".encode()).hexdigest(),
+                "materialized_image_sha256": hashlib.sha256(b"fixture image").hexdigest(),
                 "source_group_id": f"group-{split}-{index}",
                 "split": split,
                 "file_name": f"{split}-{index}.jpg",
@@ -23,14 +33,30 @@ def ready_dataset():
                 "reviewer_id": "reviewer-1",
                 "reviewed_at": "2026-10-20T00:00:00Z",
                 "source_uri": f"gs://source/{split}-{index}.jpg",
-                "permission_basis": "authorized_dataset_upload",
+                "training_eligibility_basis": "database eligibility fixture",
                 "review_status": "NO_FISH_CONFIRMED" if negative else "ACCEPTED",
                 "fish_present": not negative,
                 "label_source": "accepted_bbox_human_review" if not negative else "human_review",
-                "boxes": [] if negative else [{"bbox_xyxy": [0.1, 0.1, 0.6, 0.8]}],
+                "review_record_ids": [review_id],
+                "review_provenance": row_provenance,
+                "boxes": [] if negative else [box],
             })
     manifest_bytes = json.dumps(rows, separators=(",", ":"), sort_keys=True).encode()
     archive_bytes = b"immutable frozen COCO archive fixture"
+    source_image_audit = [
+        {
+            "review_record_id": review_id,
+            "kind": "negative" if not row["fish_present"] else "positive",
+            "source_uri": row["source_uri"],
+            "status": "READ_OK",
+            "source_image_sha256": row["image_sha256"],
+            "width": row["width"],
+            "height": row["height"],
+            "exif_orientation": 1,
+        }
+        for row in rows
+        for review_id in row["review_record_ids"]
+    ]
     counts = {
         "train": {"images": 41, "annotations": 40},
         "val": {"images": 3, "annotations": 3},
@@ -40,10 +66,24 @@ def ready_dataset():
         "dataset_version": "DET_DS_v0.2",
         "status": "FROZEN_READY_FOR_TRAINING",
         "source": "accepted_bbox_human_review",
+        "source_image_audit_verified": True,
+        "source_image_audit": source_image_audit,
         "human_review_verified": True,
         "held_out_exclusions_verified": True,
         "split_integrity": "PASS",
         "negative_coverage_verified": True,
+        "source_reconciliation": {
+            "status": "PASS",
+            "manifest_sha256": "1" * 64,
+            "metadata_sha256": "2" * 64,
+            "manifest_uri": "gs://test-bucket/datasets/accepted_pool/manifest.csv",
+            "metadata_uri": "gs://test-bucket/datasets/accepted_pool/metadata.json",
+            "accepted_pool_rows": 44,
+        },
+        "source_accepted_bbox_record_count": 44,
+        "source_human_negative_record_count": 1,
+        "excluded_held_out_accepted_bbox_record_count": 0,
+        "excluded_held_out_negative_record_count": 0,
         "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
         "archive_sha256": hashlib.sha256(archive_bytes).hexdigest(),
         "negatives": 1,

@@ -196,7 +196,26 @@ def _validate_detector_job(job: dict[str, Any]) -> list[str]:
     container = containers[0]
     image = str(container.get("image") or "")
     if "/detector-trainer:" not in image:
-        blockers.append("训练 Job 镜像不是仓库 detector-trainer 镜像")
+        if "/detector-trainer@sha256:" not in image:
+            blockers.append("训练 Job 镜像不是固定 digest 的仓库 detector-trainer 镜像")
+    env = {
+        str(item.get("name") or ""): str(item.get("value") or "")
+        for item in container.get("env") or []
+        if isinstance(item, dict)
+    }
+    if env.get("DETECTOR_DATASET_VERSION") != "DET_DS_v0.2":
+        blockers.append("训练 Job 未显式配置 DETECTOR_DATASET_VERSION=DET_DS_v0.2；禁止使用 v0.1 Job 配置启动")
+    if env.get("DETECTOR_MODEL_VERSION") != "DET_FISH_v0.2":
+        blockers.append("训练 Job 未显式配置 DETECTOR_MODEL_VERSION=DET_FISH_v0.2")
+    build_sha = env.get("APP_GIT_COMMIT", "").strip()
+    if not build_sha:
+        blockers.append("训练 Job 缺少构建代码提交 SHA，无法核对训练镜像来源")
+    elif not re.fullmatch(r"[0-9a-fA-F]{40}", build_sha):
+        blockers.append("训练 Job 的 APP_GIT_COMMIT 不是完整 Git SHA")
+    if "@sha256:" not in image:
+        blockers.append("训练 Job 镜像未固定为 Artifact Registry digest；禁止使用可变标签启动训练")
+    elif not re.search(r"@sha256:[0-9a-f]{64}$", image):
+        blockers.append("训练 Job 镜像 digest 格式无效")
     command = " ".join(str(item) for item in (container.get("command") or []) + (container.get("args") or []))
     if command and "trainer.train_detector" not in command:
         blockers.append("训练 Job 覆盖了非 DET_FISH 训练入口")
@@ -237,8 +256,33 @@ def _job_configuration() -> dict[str, Any]:
             return {"status": "BLOCKED", "verified": False, "blockers": ["Cloud Run DET_FISH 训练 Job 不存在"]}
         if response.status_code >= 400:
             return {"status": "NOT_VERIFIED", "verified": False, "blockers": [f"无法读取训练 Job 配置（HTTP {response.status_code}）"]}
-        blockers = _validate_detector_job(response.json())
-        return {"status": "READY" if not blockers else "BLOCKED", "verified": not blockers, "blockers": blockers}
+        payload = response.json()
+        blockers = _validate_detector_job(payload)
+        task = ((payload.get("template") or {}).get("template") or {})
+        container = next(iter(task.get("containers") or []), {})
+        env = {
+            str(item.get("name") or ""): str(item.get("value") or "")
+            for item in container.get("env") or []
+            if isinstance(item, dict)
+        }
+        return {
+            "status": "READY" if not blockers else "BLOCKED",
+            "verified": not blockers,
+            "blockers": blockers,
+            "project_id": GCP_PROJECT_ID,
+            "region": GPU_REGION,
+            "job_name": TRAINING_JOB_NAME,
+            "image": container.get("image"),
+            "image_digest": str(container.get("image") or "").rsplit("@", 1)[-1] if "@sha256:" in str(container.get("image") or "") else None,
+            "runtime_service_account": task.get("serviceAccount"),
+            "dataset_version": env.get("DETECTOR_DATASET_VERSION"),
+            "model_version": env.get("DETECTOR_MODEL_VERSION"),
+            "build_commit": env.get("APP_GIT_COMMIT"),
+            "cpu": (container.get("resources") or {}).get("limits", {}).get("cpu"),
+            "memory": (container.get("resources") or {}).get("limits", {}).get("memory"),
+            "gpu_count": (container.get("resources") or {}).get("limits", {}).get("nvidia.com/gpu"),
+            "gpu_type": (task.get("nodeSelector") or {}).get("run.googleapis.com/accelerator"),
+        }
     except Exception as exc:
         message = str(exc) if isinstance(exc, RuntimeError) else "当前运行身份无法核验 Cloud Run Job 配置"
         return {"status": "NOT_VERIFIED", "verified": False, "blockers": [message]}
@@ -327,6 +371,25 @@ def det_fish_training_status(db: Session = Depends(get_db)) -> dict[str, Any]:
         gate = _dataset_gate(report, manifest_bytes, archive_sha256)
         model = _model_summary(bucket, MODEL_VERSION)
         pool = accepted_pool_snapshot(db)
+        accepted_pool_reconciliation = {
+            "status": "NOT_VERIFIED",
+            "verified": False,
+            "blockers": ["冻结报告尚未声明与当前 Accepted Pool 的记录数对照"],
+        }
+        declared_source_records = (report or {}).get("source_accepted_bbox_record_count") if isinstance(report, dict) else None
+        if isinstance(declared_source_records, int):
+            live_source_records = int(pool.get("accepted_bbox_pool_count") or 0)
+            matches = declared_source_records == live_source_records
+            accepted_pool_reconciliation = {
+                "status": "PASS" if matches else "BLOCKED",
+                "verified": matches,
+                "manifest_source_records": declared_source_records,
+                "live_accepted_bbox_records": live_source_records,
+                "blockers": [] if matches else ["冻结构建源记录数与当前已审核 Accepted Pool 数不一致"],
+            }
+            if not matches:
+                gate["ready"] = False
+                gate["blockers"] = list(dict.fromkeys(gate["blockers"] + accepted_pool_reconciliation["blockers"]))
         try:
             executions = _list_job_executions()
             execution_history_error = None
@@ -335,6 +398,7 @@ def det_fish_training_status(db: Session = Depends(get_db)) -> dict[str, Any]:
             execution_history_error = "当前运行身份无法读取 Cloud Run 训练执行历史"
         job_configuration = _job_configuration()
         training_blockers = list(gate["blockers"])
+        training_blockers.extend(accepted_pool_reconciliation["blockers"] if not accepted_pool_reconciliation["verified"] else [])
         training_blockers.extend(job_configuration["blockers"])
         if model.get("artifact_objects_present"):
             training_blockers.append("DET_FISH_v0.2 目标产物路径已存在；为避免覆盖不可变模型工件，已阻止重复训练")
@@ -354,6 +418,7 @@ def det_fish_training_status(db: Session = Depends(get_db)) -> dict[str, Any]:
                 "source": pool.get("source"),
                 "note": "Accepted Pool 记录数不代表已进入 DET_DS_v0.2 冻结训练集",
             },
+            "accepted_pool_reconciliation": accepted_pool_reconciliation,
             "dataset": {
                 "version": DATASET_VERSION,
                 "status": (report or {}).get("status", "NOT_BUILT"),
@@ -371,6 +436,11 @@ def det_fish_training_status(db: Session = Depends(get_db)) -> dict[str, Any]:
             "model": model,
             "execution_history": executions,
             "execution_history_error": execution_history_error,
+            "execution_history_gate": {
+                "status": "PASS" if execution_history_error is None else "NOT_VERIFIED",
+                "verified": execution_history_error is None,
+                "blockers": [] if execution_history_error is None else [execution_history_error],
+            },
             "job_configuration": job_configuration,
             "training_gate": training_gate,
             "training_config": {
