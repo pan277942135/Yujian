@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT_ID="${PROJECT_ID:-gemini-api-project-503706}"
+PROJECT_ID="${PROJECT_ID:-${GOOGLE_CLOUD_PROJECT:-}}"
+if [[ -z "$PROJECT_ID" ]]; then
+  echo "Set PROJECT_ID or GOOGLE_CLOUD_PROJECT to the reviewed target project." >&2
+  exit 2
+fi
 REGION="${DETECTOR_GPU_REGION:-asia-southeast1}"
 BUCKET="${BUCKET:-yujian-model-factory-571785698442}"
 JOB_NAME="${DETECTOR_TRAINING_JOB_NAME:-yujian-detector-trainer}"
 AR_REPOSITORY="${DETECTOR_AR_REPOSITORY:-yujian-detector-training}"
 RUNTIME_SA="${RUNTIME_SA:-yujian-model-factory@${PROJECT_ID}.iam.gserviceaccount.com}"
-DATASET_VERSION="${DETECTOR_DATASET_VERSION:-DET_DS_v0.1}"
-MODEL_VERSION="${DETECTOR_MODEL_VERSION:-DET_FISH_v0.1}"
+DATASET_VERSION="${DETECTOR_DATASET_VERSION:-DET_DS_v0.2}"
+MODEL_VERSION="${DETECTOR_MODEL_VERSION:-DET_FISH_v0.2}"
 DATASET_ROOT="/tmp/yujian-detector/dataset/${DATASET_VERSION}"
 
 log() { printf '\n==> %s\n' "$*"; }

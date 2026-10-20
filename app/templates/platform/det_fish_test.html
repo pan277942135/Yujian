@@ -23,7 +23,7 @@
   </section>
 </div>
 <section class="panel" style="margin-top:16px">
-  <div class="panel-heading"><div><h2>全部 BBox</h2><p>像素坐标为 EXIF 校正后的原图坐标 [x1, y1, x2, y2]；推理栅格坐标对应最长边不超过 2048px 的检测输入；归一化坐标为 [x, y, width, height]，范围 0–1。</p></div></div>
+  <div class="panel-heading"><div><h2>全部 BBox</h2><p>原图坐标为 EXIF 校正后的坐标 [x1, y1, x2, y2]；检测源图最长边不超过 2048px，模型实际输入为 416×416 float32 NCHW；归一化坐标为 [x, y, width, height]，范围 0–1。</p></div></div>
   <div id="detTestBoxes" class="empty">暂无检测框</div>
 </section>
 <section class="panel" style="margin-top:16px">
@@ -48,7 +48,7 @@ async function loadModels(){
     if(chosen)select.value=chosen.model_version;
     const unavailable=detTestModels.filter(item=>!item.available).map(item=>item.model_version+'：'+item.reason).join('；');
     document.getElementById('detTestModelMeta').textContent=chosen?(chosen.dataset_version+' · '+(chosen.onnx_sha256?'SHA-256 '+chosen.onnx_sha256:'SHA 尚不可用')):(unavailable||'暂无模型产物');
-    if(unavailable&&!chosen){document.getElementById('detTestNotice').innerHTML='<div class="notice warning">'+esc(unavailable)+'</div>';}
+    if(unavailable){document.getElementById('detTestNotice').innerHTML='<div class="notice warning">不可用模型：'+esc(unavailable)+'</div>';}
   }catch(error){select.innerHTML='<option value="">模型列表读取失败</option>';document.getElementById('detTestNotice').innerHTML='<div class="error-state">'+esc(platformError(error))+'</div>';}
   updateDetTestButton();
 }
@@ -62,10 +62,10 @@ document.getElementById('detTestFile').addEventListener('change',function(){
 });
 function fmtDetNumber(value,digits){return value==null?'—':Number(value).toFixed(digits===undefined?4:digits);}
 function renderDetTestResult(data){
-  const detector=data.detector||{},input=data.input||{},detections=detector.detections||[];
+  const detector=data.detector||{},input=data.input||{},modelInput=data.model_input||{},detections=detector.detections||[];
   const overlay=document.getElementById('detTestOverlay');overlay.src=data.overlay_data_url;overlay.hidden=false;document.getElementById('detTestOverlayEmpty').hidden=true;
-  document.getElementById('detTestResultMeta').textContent=data.model_version+' · 原图 '+input.oriented_width+'×'+input.oriented_height+' · 推理 '+input.width+'×'+input.height+' · '+fmtDetNumber(detector.latency_ms,1)+' ms';
-  document.getElementById('detTestSummary').innerHTML='<div class="stat-grid" style="margin-top:14px"><div class="stat"><strong>'+esc(detector.assessment||'—')+'</strong><span>检测门禁</span></div><div class="stat"><strong>'+esc(detections.length)+'</strong><span>BBox 数量</span></div><div class="stat"><strong>'+esc(detector.confidence==null?'—':fmtDetNumber(detector.confidence,4))+'</strong><span>主框置信度</span></div></div><div class="muted" style="font-size:12px;margin-top:10px;word-break:break-all">ONNX SHA-256：'+esc(data.onnx_sha256||'—')+'</div><div class="muted" style="font-size:12px;margin-top:5px">主框像素坐标：'+esc(JSON.stringify(detector.bbox_pixel||null))+' · 归一化 XYWH：'+esc(JSON.stringify(detector.bbox_normalized_xywh||null))+'</div>';
+  document.getElementById('detTestResultMeta').textContent=data.model_version+' · 原图 '+input.oriented_width+'×'+input.oriented_height+' · 检测源图 '+input.width+'×'+input.height+' · 模型输入 '+(modelInput.width||'—')+'×'+(modelInput.height||'—')+' · '+fmtDetNumber(detector.latency_ms,1)+' ms';
+  document.getElementById('detTestSummary').innerHTML='<div class="stat-grid" style="margin-top:14px"><div class="stat"><strong>'+esc(detector.assessment||'—')+'</strong><span>检测门禁</span></div><div class="stat"><strong>'+esc(detections.length)+'</strong><span>BBox 数量</span></div><div class="stat"><strong>'+esc(detector.confidence==null?'—':fmtDetNumber(detector.confidence,4))+'</strong><span>主框置信度</span></div></div><div class="muted" style="font-size:12px;margin-top:10px">模型张量：'+esc(JSON.stringify(modelInput.shape||null))+' · '+esc(modelInput.dtype||'—')+' '+esc(modelInput.layout||'')+' · Letterbox 内容 '+esc(modelInput.resized_content_width||'—')+'×'+esc(modelInput.resized_content_height||'—')+' · 填充值 '+esc(modelInput.letterbox_fill==null?'—':modelInput.letterbox_fill)+'</div><div class="muted" style="font-size:12px;margin-top:6px;word-break:break-all">ONNX SHA-256：'+esc(data.onnx_sha256||'—')+'</div><div class="muted" style="font-size:12px;margin-top:5px">主框像素坐标：'+esc(JSON.stringify(detector.bbox_pixel||null))+' · 归一化 XYWH：'+esc(JSON.stringify(detector.bbox_normalized_xywh||null))+'</div>';
   if(!detections.length){document.getElementById('detTestBoxes').innerHTML='<div class="empty">没有检测到满足生产门槛的 BBox。该结果不代表图片中绝对没有鱼。</div>';}
   else{document.getElementById('detTestBoxes').innerHTML='<div class="table-wrap"><table class="data-table"><thead><tr><th>Rank</th><th>Confidence</th><th>原图像素 BBox [x1,y1,x2,y2]</th><th>推理栅格 BBox</th><th>归一化 BBox [x,y,w,h]</th><th>面积占比</th></tr></thead><tbody>'+detections.map(row=>'<tr><td>'+esc(row.rank)+'</td><td>'+esc(fmtDetNumber(row.confidence,6))+'</td><td><code>'+esc(JSON.stringify(row.bbox_pixel))+'</code></td><td><code>'+esc(JSON.stringify(row.bbox_pixel_input))+'</code></td><td><code>'+esc(JSON.stringify(row.bbox_normalized_xywh))+'</code></td><td>'+esc(fmtDetNumber(row.bbox_area_ratio*100,2))+'%</td></tr>').join('')+'</tbody></table></div>';}
   const attempts=detector.attempts||[];

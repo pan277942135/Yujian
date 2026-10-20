@@ -5,6 +5,7 @@ import io
 import json
 import os
 import re
+import threading
 from typing import Any
 
 import google.auth
@@ -13,25 +14,38 @@ from google.auth.transport.requests import AuthorizedSession
 from google.cloud import storage
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.detector_parity_api import _normalized_xywh, _overlay, _pixel_box
-from app.detector_runtime import DETECTOR_MODEL_FILENAME, DETECTOR_MODEL_VERSION, detect, normalize_android_source
+from app.detector_runtime import (
+    DETECTOR_MODEL_FILENAME,
+    DETECTOR_MODEL_VERSION,
+    detect,
+    load_detector_for_version,
+    normalize_android_source,
+)
 from app.factory import get_bucket_name
 from app.platform.services.crop_dataset import accepted_pool_snapshot
 from app.recognition_pipeline import assess_detections, boundary_debug_payload, load_contract
+from trainer.detector_dataset_gate import DATASET_VERSION, validate_v02_dataset
 
 
 router = APIRouter(tags=["det-fish-console"])
 
-DATASET_VERSION = "DET_DS_v0.2"
 MODEL_VERSION = "DET_FISH_v0.2"
 TRAINING_JOB_NAME = os.getenv("DETECTOR_TRAINING_JOB_NAME", "yujian-detector-trainer").strip()
-GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", os.getenv("GOOGLE_CLOUD_PROJECT", "gemini-api-project-503706")).strip()
+# The region default mirrors scripts/deploy_detector_training_gcp.sh. The GCP
+# project is deliberately environment-only: a historical project fallback could
+# direct an otherwise valid request to the wrong account.
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", os.getenv("GOOGLE_CLOUD_PROJECT", "")).strip()
 GPU_REGION = os.getenv("DETECTOR_GPU_REGION", "asia-southeast1").strip()
 MAX_TEST_IMAGE_BYTES = 25 * 1024 * 1024
+MAX_TEST_IMAGE_PIXELS = 40_000_000
 ALLOWED_MODEL_VERSIONS = {"DET_FISH_v0.1", "DET_FISH_v0.2"}
+_TRAINING_LOCK_ID = 0x594A4446
+_LOCAL_TRAINING_LOCK = threading.Lock()
 
 
 class DetectorTrainingStart(BaseModel):
@@ -55,110 +69,198 @@ def _read_json_blob(bucket, object_name: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+def _blob_sha256(blob) -> str | None:
+    """Hash a GCS object as a stream so a frozen archive is not loaded in RAM."""
+    digest = hashlib.sha256()
+    try:
+        with blob.open("rb") as stream:
+            while True:
+                chunk = stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+    except Exception:
+        return None
+    return digest.hexdigest()
+
+
+def _dataset_artifacts(bucket) -> tuple[dict[str, Any] | None, bytes | None, str | None, bool, bool]:
+    prefix = "detector-datasets/" + DATASET_VERSION
+    report = _read_json_blob(bucket, prefix + "/bootstrap_report.json")
+    manifest_blob = bucket.blob(prefix + "/bootstrap_manifest.json")
+    archive_blob = bucket.blob(prefix + "/" + DATASET_VERSION + ".tar.gz")
+    try:
+        manifest_bytes = manifest_blob.download_as_bytes(timeout=60) if manifest_blob.exists(timeout=10) else None
+    except Exception:
+        manifest_bytes = None
+    archive_exists = bool(archive_blob.exists(timeout=10))
+    archive_sha256 = _blob_sha256(archive_blob) if archive_exists else None
+    manifest_verified = bool(
+        report
+        and manifest_bytes is not None
+        and hashlib.sha256(manifest_bytes).hexdigest() == str(report.get("manifest_sha256") or "")
+    )
+    return report, manifest_bytes, archive_sha256, archive_exists, manifest_verified
+
+
 def _model_summary(bucket, version: str) -> dict[str, Any]:
     prefix = "models/" + version + "/"
+    reason = ""
+    metadata = None
+    actual_sha = None
+    onnx_bytes = None
+    output_shape = None
+    metadata_exists = False
+    onnx_exists = False
     try:
-        metadata = _read_json_blob(bucket, prefix + "detector_metadata.json")
-        onnx_exists = bucket.blob(prefix + DETECTOR_MODEL_FILENAME).exists(timeout=10)
+        metadata_blob = bucket.blob(prefix + "detector_metadata.json")
+        metadata_exists = bool(metadata_blob.exists(timeout=10))
+        metadata = _read_json_blob(bucket, prefix + "detector_metadata.json") if metadata_exists else None
+        if metadata is None:
+            reason = "缺少 detector_metadata.json"
+        else:
+            onnx_blob = bucket.blob(prefix + DETECTOR_MODEL_FILENAME)
+            onnx_exists = bool(onnx_blob.exists(timeout=10))
+            if not onnx_exists:
+                reason = "缺少 ONNX 文件"
+            else:
+                # Use the same loader as the real test endpoint. It verifies the
+                # artifact SHA, recognition contract, ONNX input contract, and
+                # creates an actual ONNX Runtime session before the UI lists a
+                # model as selectable.
+                runtime_model = load_detector_for_version(version)
+                actual_sha = runtime_model.onnx_sha256
+                onnx_bytes = runtime_model.onnx_bytes
+                output_shape = list(runtime_model.session.get_outputs()[0].shape)
+                if metadata.get("model_version") != version:
+                    reason = "metadata 模型版本与目录不一致"
+                elif metadata.get("model_family") != "YOLOX_NANO":
+                    reason = "模型架构不是 YOLOX_NANO"
+                elif not re.fullmatch(r"[0-9a-f]{64}", str(metadata.get("onnx_sha256") or "")):
+                    reason = "metadata 缺少有效 ONNX SHA-256"
+                elif metadata.get("onnx_sha256") != actual_sha:
+                    reason = "ONNX 实际 SHA-256 与 metadata 不一致"
+                elif int(metadata.get("onnx_bytes") or 0) != onnx_bytes:
+                    reason = "ONNX 实际字节数与 metadata 不一致"
+                elif len(output_shape) != 3 or output_shape[0] != 1 or not isinstance(output_shape[-1], int) or output_shape[-1] < 6:
+                    reason = "ONNX 实际输出形状不符合 [1, 候选数, 至少 6 列] 合同"
     except Exception:
-        metadata = None
-        onnx_exists = False
+        reason = "模型无法通过生产 ONNX Runtime 加载与工件校验"
+    available = bool(metadata and not reason and actual_sha)
     metadata_matches = bool(metadata and metadata.get("model_version") == version)
-    available = bool(
-        metadata_matches
-        and onnx_exists
-        and re.fullmatch(r"[0-9a-f]{64}", str(metadata.get("onnx_sha256") or ""))
-    )
     return {
         "model_version": version,
         "available": available,
-        "reason": None if available else "尚未找到完整且元数据匹配的 ONNX 模型产物",
+        "artifact_objects_present": metadata_exists or onnx_exists,
+        "reason": None if available else (reason or "尚未找到完整模型产物"),
         "is_configured_production_version": version == DETECTOR_MODEL_VERSION,
         "dataset_version": metadata.get("dataset_version") if metadata_matches else None,
-        "onnx_sha256": metadata.get("onnx_sha256") if metadata_matches else None,
+        "onnx_sha256": actual_sha if available else None,
+        "onnx_bytes": onnx_bytes if available else None,
+        "output_shape": output_shape if available else None,
         "epochs_completed": ((metadata.get("training") or {}).get("epochs_completed") if metadata_matches else None),
         "ap50": ((metadata.get("training") or {}).get("ap50") if metadata_matches else None),
         "ap50_95": ((metadata.get("training") or {}).get("ap50_95") if metadata_matches else None),
     }
 
 
-def _manifest_sha_matches(bucket, report: dict[str, Any] | None) -> bool:
-    if not report:
-        return False
-    expected = str(report.get("manifest_sha256") or "")
-    if not re.fullmatch(r"[0-9a-f]{64}", expected):
-        return False
-    blob = bucket.blob("detector-datasets/" + DATASET_VERSION + "/bootstrap_manifest.json")
-    if not blob.exists(timeout=10):
-        return False
-    actual = hashlib.sha256(blob.download_as_bytes(timeout=60)).hexdigest()
-    return actual == expected
+def _dataset_gate(
+    report: dict[str, Any] | None,
+    manifest_bytes: bytes | None,
+    archive_sha256: str | None,
+) -> dict[str, Any]:
+    return validate_v02_dataset(report, manifest_bytes, archive_sha256)
 
 
-def _gate_flag(report: dict[str, Any], name: str) -> bool:
-    nested = report.get("training_gate") or report.get("gate") or {}
-    return report.get(name) is True or (isinstance(nested, dict) and nested.get(name) is True)
+def _configured_cloud_run_context() -> tuple[str, str, str]:
+    if not GCP_PROJECT_ID:
+        raise RuntimeError("GCP_PROJECT_ID / GOOGLE_CLOUD_PROJECT 未配置；未选择 Cloud Run 项目")
+    if not GPU_REGION:
+        raise RuntimeError("DETECTOR_GPU_REGION 未配置；未选择训练 Job 区域")
+    if not TRAINING_JOB_NAME:
+        raise RuntimeError("DETECTOR_TRAINING_JOB_NAME 未配置；未选择训练 Job")
+    return GCP_PROJECT_ID, GPU_REGION, TRAINING_JOB_NAME
 
 
-def _dataset_gate(report: dict[str, Any] | None, archive_exists: bool, manifest_verified: bool = False) -> dict[str, Any]:
+def _cloud_run_job_url() -> str:
+    project_id, region, job_name = _configured_cloud_run_context()
+    return f"https://run.googleapis.com/v2/projects/{project_id}/locations/{region}/jobs/{job_name}"
+
+
+def _validate_detector_job(job: dict[str, Any]) -> list[str]:
     blockers: list[str] = []
-    if not report:
-        return {
-            "ready": False,
-            "blockers": ["尚未找到 DET_DS_v0.2/bootstrap_report.json"],
-            "counts": {},
-        }
+    task = ((job.get("template") or {}).get("template") or {})
+    containers = task.get("containers") or []
+    if not containers:
+        return ["训练 Job 没有可核验的容器配置"]
+    container = containers[0]
+    image = str(container.get("image") or "")
+    if "/detector-trainer:" not in image:
+        blockers.append("训练 Job 镜像不是仓库 detector-trainer 镜像")
+    command = " ".join(str(item) for item in (container.get("command") or []) + (container.get("args") or []))
+    if command and "trainer.train_detector" not in command:
+        blockers.append("训练 Job 覆盖了非 DET_FISH 训练入口")
+    if not task.get("serviceAccount"):
+        blockers.append("训练 Job 未配置运行服务账号")
 
-    if report.get("dataset_version") != DATASET_VERSION:
-        blockers.append("数据集版本不是 DET_DS_v0.2")
-    if report.get("status") != "FROZEN_READY_FOR_TRAINING":
-        blockers.append("数据集尚未标记为 FROZEN_READY_FOR_TRAINING")
-    source = str(report.get("source") or report.get("label_source") or "").strip().lower()
-    if source not in {"accepted_bbox_human_review", "human_reviewed_accepted_bbox"}:
-        blockers.append("标签来源没有明确声明为人工 accepted_bbox")
-    if not _gate_flag(report, "human_review_verified"):
-        blockers.append("缺少人工标签核验通过证据")
-    if not _gate_flag(report, "held_out_exclusions_verified"):
-        blockers.append("缺少 Case A / Case B / 04-181200 留出集排除证据")
-    split_integrity = report.get("split_integrity")
-    nested_gate = report.get("training_gate") or report.get("gate") or {}
-    if split_integrity != "PASS" and not (isinstance(nested_gate, dict) and nested_gate.get("split_integrity") == "PASS"):
-        blockers.append("缺少按来源分组的数据泄漏检查 PASS")
-    if not _gate_flag(report, "negative_coverage_verified"):
-        blockers.append("缺少人工确认无鱼负样本覆盖通过证据")
-    manifest_sha = str(report.get("manifest_sha256") or "")
-    if not re.fullmatch(r"[0-9a-f]{64}", manifest_sha):
-        blockers.append("缺少有效的 manifest_sha256")
-    if not manifest_verified:
-        blockers.append("bootstrap_manifest.json 不存在或 SHA-256 与报告不一致")
-    if not archive_exists:
-        blockers.append("缺少 DET_DS_v0.2.tar.gz 冻结数据包")
+    limits = container.get("resources", {}).get("limits", {})
+    try:
+        cpu = str(limits.get("cpu", "0"))
+        cpu_value = float(cpu[:-1]) / 1000.0 if cpu.endswith("m") else float(cpu)
+        cpu_ok = cpu_value >= 4
+    except (TypeError, ValueError):
+        cpu_ok = False
+    memory = str(limits.get("memory") or "")
+    memory_ok = memory.lower() in {"16gi", "17g", "16384mi"} or bool(re.fullmatch(r"(?:1[6-9]|[2-9][0-9])Gi", memory, re.I))
+    node_selector = task.get("nodeSelector") or {}
+    accelerator = str(node_selector.get("run.googleapis.com/accelerator") or "").lower()
+    gpu_count = str(limits.get("nvidia.com/gpu") or "")
+    if gpu_count != "1":
+        blockers.append("训练 Job 未配置 1 张 NVIDIA GPU")
+    if accelerator != "nvidia-l4":
+        blockers.append("训练 Job GPU 型号不是 NVIDIA L4")
+    if not cpu_ok or not memory_ok:
+        blockers.append("训练 Job 资源低于 L4 所需的 4 CPU / 16 GiB 内存")
+    if int(task.get("maxRetries") or 0) != 0:
+        blockers.append("训练 Job maxRetries 不是 0")
+    if not task.get("gpuZonalRedundancyDisabled"):
+        blockers.append("训练 Job 未关闭 GPU 区域冗余")
+    return blockers
 
-    splits = report.get("splits") or {}
-    train = splits.get("train") or {}
-    val = splits.get("val") or {}
-    test = splits.get("test") or {}
-    counts = {
-        "train_images": int(train.get("images") or 0),
-        "train_boxes": int(train.get("annotations") or 0),
-        "val_images": int(val.get("images") or 0),
-        "val_boxes": int(val.get("annotations") or 0),
-        "test_images": int(test.get("images") or 0),
-        "test_boxes": int(test.get("annotations") or 0),
-        "human_reviewed_negatives": int(report.get("negatives") or 0),
-    }
-    if counts["train_images"] < 40:
-        blockers.append("训练集完整场景图片不足 40 张")
-    if counts["train_boxes"] < 30:
-        blockers.append("训练集人工鱼体框不足 30 个")
-    if counts["val_boxes"] < 3:
-        blockers.append("验证集人工鱼体框不足 3 个")
-    if counts["test_images"] < 1:
-        blockers.append("独立测试集为空")
-    if counts["human_reviewed_negatives"] < 1:
-        blockers.append("缺少人工确认的无鱼负样本")
 
-    return {"ready": not blockers, "blockers": blockers, "counts": counts}
+def _job_configuration() -> dict[str, Any]:
+    try:
+        url = _cloud_run_job_url()
+        credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        response = AuthorizedSession(credentials).get(url, timeout=20)
+        if response.status_code == 404:
+            return {"status": "BLOCKED", "verified": False, "blockers": ["Cloud Run DET_FISH 训练 Job 不存在"]}
+        if response.status_code >= 400:
+            return {"status": "NOT_VERIFIED", "verified": False, "blockers": [f"无法读取训练 Job 配置（HTTP {response.status_code}）"]}
+        blockers = _validate_detector_job(response.json())
+        return {"status": "READY" if not blockers else "BLOCKED", "verified": not blockers, "blockers": blockers}
+    except Exception as exc:
+        message = str(exc) if isinstance(exc, RuntimeError) else "当前运行身份无法核验 Cloud Run Job 配置"
+        return {"status": "NOT_VERIFIED", "verified": False, "blockers": [message]}
+
+
+def _acquire_training_lock(db: Session) -> str:
+    """Serialize launch requests across app instances using Cloud SQL advisory lock."""
+    dialect = db.get_bind().dialect.name
+    if dialect == "postgresql":
+        acquired = bool(db.execute(text("SELECT pg_try_advisory_lock(:lock_id)"), {"lock_id": _TRAINING_LOCK_ID}).scalar())
+        return "postgresql" if acquired else "busy"
+    if dialect == "sqlite":
+        return "sqlite" if _LOCAL_TRAINING_LOCK.acquire(blocking=False) else "busy"
+    raise RuntimeError("数据库不支持安全的 DET_FISH 训练启动锁")
+
+
+def _release_training_lock(db: Session, lock_kind: str) -> None:
+    if lock_kind == "postgresql":
+        db.execute(text("SELECT pg_advisory_unlock(:lock_id)"), {"lock_id": _TRAINING_LOCK_ID})
+        db.commit()
+    elif lock_kind == "sqlite":
+        _LOCAL_TRAINING_LOCK.release()
 
 
 def _execution_status(execution: dict[str, Any]) -> str:
@@ -169,36 +271,39 @@ def _execution_status(execution: dict[str, Any]) -> str:
     return "QUEUED"
 
 
-def _list_job_executions(limit: int = 8) -> list[dict[str, Any]]:
+def _list_job_executions(limit: int | None = 8) -> list[dict[str, Any]]:
     credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
     session = AuthorizedSession(credentials)
-    url = (
-        "https://run.googleapis.com/v2/projects/"
-        + GCP_PROJECT_ID
-        + "/locations/"
-        + GPU_REGION
-        + "/jobs/"
-        + TRAINING_JOB_NAME
-        + "/executions"
-    )
-    response = session.get(url, params={"pageSize": limit}, timeout=20)
-    if response.status_code >= 400:
-        raise RuntimeError("无法读取 Cloud Run 训练任务历史（HTTP " + str(response.status_code) + "）")
-    payload = response.json()
+    url = _cloud_run_job_url() + "/executions"
     executions = []
-    for item in payload.get("executions") or []:
-        executions.append(
-            {
-                "execution_id": str(item.get("name") or "").rsplit("/", 1)[-1],
-                "status": _execution_status(item),
-                "created_at": item.get("createTime"),
-                "started_at": item.get("startTime"),
-                "completed_at": item.get("completionTime"),
-                "running_count": int(item.get("runningCount") or 0),
-                "succeeded_count": int(item.get("succeededCount") or 0),
-                "failed_count": int(item.get("failedCount") or 0),
-            }
-        )
+    page_token = None
+    while True:
+        page_size = 1000 if limit is None else min(max(limit - len(executions), 1), 1000)
+        params = {"pageSize": page_size}
+        if page_token:
+            params["pageToken"] = page_token
+        response = session.get(url, params=params, timeout=20)
+        if response.status_code >= 400:
+            raise RuntimeError("无法读取 Cloud Run 训练任务历史（HTTP " + str(response.status_code) + ")")
+        payload = response.json()
+        for item in payload.get("executions") or []:
+            executions.append(
+                {
+                    "execution_id": str(item.get("name") or "").rsplit("/", 1)[-1],
+                    "status": _execution_status(item),
+                    "created_at": item.get("createTime"),
+                    "started_at": item.get("startTime"),
+                    "completed_at": item.get("completionTime"),
+                    "running_count": int(item.get("runningCount") or 0),
+                    "succeeded_count": int(item.get("succeededCount") or 0),
+                    "failed_count": int(item.get("failedCount") or 0),
+                }
+            )
+        page_token = payload.get("nextPageToken")
+        if not page_token or (limit is not None and len(executions) >= limit):
+            break
+    if limit is not None:
+        executions = executions[:limit]
     return executions
 
 
@@ -207,7 +312,7 @@ def det_fish_models() -> dict[str, Any]:
     try:
         bucket = _bucket()
         return {
-            "models": [_model_summary(bucket, version) for version in ("DET_FISH_v0.1", "DET_FISH_v0.2")],
+            "models": [_model_summary(bucket, version) for version in sorted(ALLOWED_MODEL_VERSIONS)],
             "default_model_version": DETECTOR_MODEL_VERSION,
         }
     except Exception as exc:
@@ -218,10 +323,8 @@ def det_fish_models() -> dict[str, Any]:
 def det_fish_training_status(db: Session = Depends(get_db)) -> dict[str, Any]:
     try:
         bucket = _bucket()
-        report = _read_json_blob(bucket, "detector-datasets/" + DATASET_VERSION + "/bootstrap_report.json")
-        archive_exists = bucket.blob("detector-datasets/" + DATASET_VERSION + "/" + DATASET_VERSION + ".tar.gz").exists(timeout=10)
-        manifest_verified = _manifest_sha_matches(bucket, report)
-        gate = _dataset_gate(report, archive_exists, manifest_verified)
+        report, manifest_bytes, archive_sha256, archive_exists, manifest_verified = _dataset_artifacts(bucket)
+        gate = _dataset_gate(report, manifest_bytes, archive_sha256)
         model = _model_summary(bucket, MODEL_VERSION)
         pool = accepted_pool_snapshot(db)
         try:
@@ -230,20 +333,46 @@ def det_fish_training_status(db: Session = Depends(get_db)) -> dict[str, Any]:
         except Exception:
             executions = []
             execution_history_error = "当前运行身份无法读取 Cloud Run 训练执行历史"
+        job_configuration = _job_configuration()
+        training_blockers = list(gate["blockers"])
+        training_blockers.extend(job_configuration["blockers"])
+        if model.get("artifact_objects_present"):
+            training_blockers.append("DET_FISH_v0.2 目标产物路径已存在；为避免覆盖不可变模型工件，已阻止重复训练")
+        if execution_history_error:
+            training_blockers.append(execution_history_error)
+        active = [item for item in executions if item["status"] in {"RUNNING", "QUEUED"}]
+        if active:
+            training_blockers.append("已有 DET_FISH 训练任务正在运行或排队")
+        training_gate = {
+            "ready": not training_blockers,
+            "blockers": list(dict.fromkeys(training_blockers)),
+        }
         return {
             "accepted_pool": {
                 "accepted_images": int(pool.get("count") or 0),
                 "accepted_bbox": int(pool.get("accepted_bbox_pool_count") or 0),
+                "source": pool.get("source"),
+                "note": "Accepted Pool 记录数不代表已进入 DET_DS_v0.2 冻结训练集",
             },
             "dataset": {
                 "version": DATASET_VERSION,
                 "status": (report or {}).get("status", "NOT_BUILT"),
                 "archive_available": archive_exists,
+                "manifest_available": manifest_bytes is not None,
+                "manifest_sha256_verified": manifest_verified,
+                "archive_sha256_verified": bool(
+                    report and report.get("archive_sha256") and archive_sha256 == report.get("archive_sha256")
+                ),
+                "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest() if manifest_bytes is not None else None,
+                "archive_sha256": archive_sha256,
+                "source": (report or {}).get("source"),
                 "gate": gate,
             },
             "model": model,
             "execution_history": executions,
             "execution_history_error": execution_history_error,
+            "job_configuration": job_configuration,
+            "training_gate": training_gate,
             "training_config": {
                 "model_family": "YOLOX_NANO",
                 "input_size": 416,
@@ -257,44 +386,53 @@ def det_fish_training_status(db: Session = Depends(get_db)) -> dict[str, Any]:
 
 
 @router.post("/api/det-fish/training/start")
-def det_fish_training_start(payload: DetectorTrainingStart) -> dict[str, Any]:
+def det_fish_training_start(payload: DetectorTrainingStart, db: Session = Depends(get_db)) -> dict[str, Any]:
     try:
-        bucket = _bucket()
-        report = _read_json_blob(bucket, "detector-datasets/" + DATASET_VERSION + "/bootstrap_report.json")
-        archive_exists = bucket.blob("detector-datasets/" + DATASET_VERSION + "/" + DATASET_VERSION + ".tar.gz").exists(timeout=10)
-        manifest_verified = _manifest_sha_matches(bucket, report)
-        gate = _dataset_gate(report, archive_exists, manifest_verified)
+        lock_kind = _acquire_training_lock(db)
     except Exception as exc:
-        raise HTTPException(status_code=503, detail="无法验证 DET_DS_v0.2 数据集门禁") from exc
-    if not gate["ready"]:
-        raise HTTPException(
-            status_code=409,
-            detail={"message": "DET_DS_v0.2 尚未通过训练门禁，已阻止启动 GPU 任务。", "blockers": gate["blockers"]},
-        )
-
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if lock_kind == "busy":
+        raise HTTPException(status_code=409, detail="已有 DET_FISH 训练启动请求正在处理；为避免重复任务，本次已停止。")
     try:
-        executions = _list_job_executions()
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="无法确认现有训练任务状态；为避免重复启动，本次已停止。") from exc
-    active = [item for item in executions if item["status"] in {"RUNNING", "QUEUED"}]
-    if active:
-        raise HTTPException(
-            status_code=409,
-            detail={"message": "已有 DET_FISH 训练任务正在运行或排队。", "execution_id": active[0]["execution_id"]},
-        )
+        try:
+            bucket = _bucket()
+            report, manifest_bytes, archive_sha256, _archive_exists, _manifest_verified = _dataset_artifacts(bucket)
+            gate = _dataset_gate(report, manifest_bytes, archive_sha256)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="无法验证 DET_DS_v0.2 冻结数据集") from exc
+        if not gate["ready"]:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "DET_DS_v0.2 尚未通过逐图数据与哈希门禁，已阻止启动 GPU 任务。", "blockers": gate["blockers"]},
+            )
 
-    try:
+        existing_model = _model_summary(bucket, MODEL_VERSION)
+        if existing_model.get("artifact_objects_present"):
+            raise HTTPException(
+                status_code=409,
+                detail="DET_FISH_v0.2 目标产物路径已存在；为避免覆盖不可变模型工件，训练已停止。",
+            )
+
+        job_configuration = _job_configuration()
+        if not job_configuration["verified"]:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "Cloud Run DET_FISH Job 配置未通过核验，已阻止启动。", "blockers": job_configuration["blockers"]},
+            )
+        try:
+            executions = _list_job_executions(limit=None)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="无法确认现有训练任务状态；为避免重复启动，本次已停止。") from exc
+        active = [item for item in executions if item["status"] in {"RUNNING", "QUEUED"}]
+        if active:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "已有 DET_FISH 训练任务正在运行或排队。", "execution_id": active[0]["execution_id"]},
+            )
+
         credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
         session = AuthorizedSession(credentials)
-        url = (
-            "https://run.googleapis.com/v2/projects/"
-            + GCP_PROJECT_ID
-            + "/locations/"
-            + GPU_REGION
-            + "/jobs/"
-            + TRAINING_JOB_NAME
-            + ":run"
-        )
+        url = _cloud_run_job_url() + ":run"
         env = [
             {"name": "GCS_BUCKET", "value": get_bucket_name()},
             {"name": "DETECTOR_DATASET_VERSION", "value": DATASET_VERSION},
@@ -320,8 +458,15 @@ def det_fish_training_start(payload: DetectorTrainingStart) -> dict[str, Any]:
             "batch_size": payload.batch_size,
             "operation_name": operation.get("name"),
         }
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc) if isinstance(exc, RuntimeError) else "启动 Cloud Run 训练任务失败") from exc
+    finally:
+        try:
+            _release_training_lock(db, lock_kind)
+        except Exception:
+            db.rollback()
 
 
 async def _read_test_image(file: UploadFile) -> bytes:
@@ -332,6 +477,21 @@ async def _read_test_image(file: UploadFile) -> bytes:
         raise HTTPException(status_code=400, detail="请选择一张照片")
     if len(data) > MAX_TEST_IMAGE_BYTES:
         raise HTTPException(status_code=400, detail="图片不能超过 25 MiB")
+    try:
+        with Image.open(io.BytesIO(data)) as probe:
+            if probe.format not in {"JPEG", "PNG", "WEBP"}:
+                raise HTTPException(status_code=400, detail="文件内容不是受支持的 JPG、PNG 或 WEBP 图片")
+            expected_content_type = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}[probe.format]
+            if file.content_type and file.content_type != expected_content_type:
+                raise HTTPException(status_code=400, detail="图片 MIME 类型与实际文件内容不一致")
+            width, height = probe.size
+            if width <= 0 or height <= 0 or width * height > MAX_TEST_IMAGE_PIXELS:
+                raise HTTPException(status_code=400, detail="图片尺寸无效或超过 40 百万像素")
+            probe.verify()
+    except HTTPException:
+        raise
+    except (UnidentifiedImageError, OSError, SyntaxError, Image.DecompressionBombError) as exc:
+        raise HTTPException(status_code=400, detail="无法读取图片，请使用完整且有效的 JPG / PNG / WEBP 文件") from exc
     return data
 
 
@@ -392,6 +552,17 @@ async def det_fish_test(
                 "oriented_height": oriented_height,
                 "width": source.width,
                 "height": source.height,
+            },
+            "model_input": {
+                "shape": [1, 3, detector_run.input_size, detector_run.input_size],
+                "dtype": "float32",
+                "layout": "NCHW",
+                "width": detector_run.input_size,
+                "height": detector_run.input_size,
+                "pixel_range": [0, 255],
+                "resized_content_width": detector_run.input_draw_width,
+                "resized_content_height": detector_run.input_draw_height,
+                "letterbox_fill": 114,
             },
             "detector": {
                 **(primary_payload or {"confidence": None, "bbox_pixel": None, "bbox_normalized_xywh": None, "bbox_area_ratio": 0.0}),

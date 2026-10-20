@@ -13,10 +13,16 @@
 </div>
 <div id="detTrainingNotice"></div>
 <div class="metric-grid" style="margin-top:14px">
-  <div class="metric-card"><div class="metric-label">人工 accepted_bbox</div><div id="acceptedBboxCount" class="metric-value">—</div><div class="metric-detail">只统计人工确认标签</div></div>
+  <div class="metric-card"><div class="metric-label">人工 Accepted Pool 图片</div><div id="acceptedPoolImages" class="metric-value">—</div><div id="acceptedBboxCount" class="metric-detail">人工 accepted_bbox —</div></div>
   <div class="metric-card"><div class="metric-label">DET_DS_v0.2</div><div id="datasetStatus" class="metric-value" style="font-size:22px">—</div><div id="datasetArchive" class="metric-detail">冻结数据包状态</div></div>
-  <div class="metric-card"><div class="metric-label">Train 图片</div><div id="trainImages" class="metric-value">—</div><div id="trainBoxes" class="metric-detail">鱼体框数量 —</div></div>
-  <div class="metric-card"><div class="metric-label">DET_FISH_v0.2</div><div id="modelStatus" class="metric-value" style="font-size:22px">—</div><div id="modelSha" class="metric-detail">模型 SHA-256</div></div><div class="metric-card"><div class="metric-label">AP50</div><div id="modelAp50" class="metric-value">—</div><div class="metric-detail">mAP@0.5</div></div><div class="metric-card"><div class="metric-label">AP50:95</div><div id="modelAp50_95" class="metric-value">—</div><div class="metric-detail">COCO mAP</div></div>
+  <div class="metric-card"><div class="metric-label">冻结完整场景图片</div><div id="totalDatasetImages" class="metric-value">—</div><div id="totalDatasetBoxes" class="metric-detail">人工鱼体框 — · 有框图片 —</div></div>
+  <div class="metric-card"><div class="metric-label">Train 图片</div><div id="trainImages" class="metric-value">—</div><div id="trainBoxes" class="metric-detail">鱼体框 —</div></div>
+  <div class="metric-card"><div class="metric-label">Validation 图片</div><div id="valImages" class="metric-value">—</div><div id="valBoxes" class="metric-detail">鱼体框 —</div></div>
+  <div class="metric-card"><div class="metric-label">独立 Test 图片</div><div id="testImages" class="metric-value">—</div><div id="testBoxes" class="metric-detail">鱼体框 —</div></div>
+  <div class="metric-card"><div class="metric-label">确认无鱼负样本</div><div id="negativeCount" class="metric-value">—</div><div class="metric-detail">冻结 Manifest 核验值</div></div>
+  <div class="metric-card"><div class="metric-label">DET_FISH_v0.2</div><div id="modelStatus" class="metric-value" style="font-size:22px">—</div><div id="modelSha" class="metric-detail">模型 SHA-256</div></div>
+  <div class="metric-card"><div class="metric-label">AP50</div><div id="modelAp50" class="metric-value">—</div><div class="metric-detail">mAP@0.5</div></div>
+  <div class="metric-card"><div class="metric-label">AP50:95</div><div id="modelAp50_95" class="metric-value">—</div><div class="metric-detail">COCO mAP</div></div>
 </div>
 <div class="form-grid" style="margin-top:16px">
   <section class="panel">
@@ -57,7 +63,7 @@
 {% endblock %}
 {% block scripts %}
 <script>
-function fmtCount(value){return Number.isFinite(Number(value))?Number(value).toLocaleString('en-US'):'—'}
+function fmtCount(value){return value==null||!Number.isFinite(Number(value))?'—':Number(value).toLocaleString('en-US')}
 function fmtAP(value){return value==null||!Number.isFinite(Number(value))?'—':(Number(value)*100).toFixed(1)+'%'}
 function fmtDate(value){if(!value)return '—';const date=new Date(value);return Number.isNaN(date.getTime())?String(value):date.toLocaleString()}
 function renderExecutionHistory(rows,error){
@@ -70,25 +76,34 @@ function renderGate(gate){
   const target=document.getElementById('gateBlockers');
   const tag=document.getElementById('gateTag');
   document.getElementById('startDetTraining').disabled=!gate||!gate.ready;
-  if(gate&&gate.ready){tag.className='status-tag status-success';tag.textContent='PASS';target.innerHTML='<div class="notice">数据集门禁已通过。启动时会再次校验数据包和训练任务状态。</div>';}
+  if(gate&&gate.ready){tag.className='status-tag status-success';tag.textContent='PASS';target.innerHTML='<div class="notice">数据集、训练 Job 配置与活动任务状态均已核验。启动时会再次执行服务端门禁。</div>';}
   else{tag.className='status-tag status-failed';tag.textContent='BLOCKED';const blockers=(gate&&gate.blockers)||['无法读取数据集门禁'];target.innerHTML='<div class="error-state"><strong>尚不能启动训练：</strong><ul>'+blockers.map(item=>'<li>'+esc(item)+'</li>').join('')+'</ul></div>';}
 }
 function renderDetTrainingStatus(data){
-  const pool=data.accepted_pool||{},dataset=data.dataset||{},gate=dataset.gate||{},counts=gate.counts||{},model=data.model||{};
-  document.getElementById('acceptedBboxCount').textContent=fmtCount(pool.accepted_bbox);
+  const pool=data.accepted_pool||{},dataset=data.dataset||{},datasetGate=dataset.gate||{},counts=datasetGate.counts||{},model=data.model||{};
+  const countsKnown=Boolean(datasetGate.counts_verified);
+  document.getElementById('acceptedPoolImages').textContent=fmtCount(pool.accepted_images);
+  document.getElementById('acceptedBboxCount').textContent='人工 accepted_bbox '+fmtCount(pool.accepted_bbox)+' · 不代表已冻结入训';
   document.getElementById('datasetStatus').textContent=dataset.status||'NOT_BUILT';
-  document.getElementById('datasetArchive').textContent=dataset.archive_available?'冻结归档已找到':'未找到冻结归档';
-  document.getElementById('trainImages').textContent=fmtCount(counts.train_images);
-  document.getElementById('trainBoxes').textContent='鱼体框 '+fmtCount(counts.train_boxes)+' · Val '+fmtCount(counts.val_boxes)+' · Test '+fmtCount(counts.test_images);
+  document.getElementById('datasetArchive').textContent='归档 SHA '+(dataset.archive_sha256_verified?'已核验':'未核验')+' · Manifest SHA '+(dataset.manifest_sha256_verified?'已核验':'未核验');
+  document.getElementById('totalDatasetImages').textContent=fmtCount(countsKnown?counts.human_reviewed_complete_scene_images:null);
+  document.getElementById('totalDatasetBoxes').textContent='人工鱼体框 '+fmtCount(countsKnown?counts.train_boxes+counts.val_boxes+counts.test_boxes:null)+' · 有框图片 '+fmtCount(countsKnown?counts.human_reviewed_bbox_images:null);
+  document.getElementById('trainImages').textContent=fmtCount(countsKnown?counts.train_images:null);
+  document.getElementById('trainBoxes').textContent='鱼体框 '+fmtCount(countsKnown?counts.train_boxes:null);
+  document.getElementById('valImages').textContent=fmtCount(countsKnown?counts.val_images:null);
+  document.getElementById('valBoxes').textContent='鱼体框 '+fmtCount(countsKnown?counts.val_boxes:null);
+  document.getElementById('testImages').textContent=fmtCount(countsKnown?counts.test_images:null);
+  document.getElementById('testBoxes').textContent='鱼体框 '+fmtCount(countsKnown?counts.test_boxes:null);
+  document.getElementById('negativeCount').textContent=fmtCount(countsKnown?counts.human_reviewed_negatives:null);
   document.getElementById('modelStatus').textContent=model.available?'已生成':'未生成';
-  document.getElementById('modelSha').textContent=model.onnx_sha256?('SHA-256 '+model.onnx_sha256):'尚无模型 SHA-256';
+  document.getElementById('modelSha').textContent=model.onnx_sha256?('SHA-256 '+model.onnx_sha256):(model.reason||'尚无已核验模型');
   document.getElementById('modelAp50').textContent=fmtAP(model.ap50);
   document.getElementById('modelAp50_95').textContent=fmtAP(model.ap50_95);
-  renderGate(gate);
+  renderGate(data.training_gate);
   renderExecutionHistory(data.execution_history||[],data.execution_history_error);
 }
 async function loadStatus(){
-  const notice=document.getElementById('detTrainingNotice');notice.innerHTML='<div class="loading">正在读取 Accepted Pool、数据集门禁和训练执行记录…</div>';
+  const notice=document.getElementById('detTrainingNotice');notice.innerHTML='<div class="loading">正在读取 Accepted Pool、冻结数据门禁、模型与训练执行记录…</div>';
   try{const data=await platformFetch('/api/det-fish/training/status');renderDetTrainingStatus(data);notice.innerHTML='';}
   catch(error){notice.innerHTML='<div class="error-state">'+esc(platformError(error))+'</div>';document.getElementById('startDetTraining').disabled=true;}
 }
