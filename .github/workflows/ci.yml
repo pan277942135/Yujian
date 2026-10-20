@@ -35,7 +35,7 @@ jobs:
           REGISTRY_DB_URL: 'sqlite:///:memory:'
         run: python -c "from app.entry import app; p=app.openapi()['paths']; assert '/platform/model/det-fish-training' in p; assert '/platform/model/det-fish-test' in p; assert '/api/det-fish/training/status' in p; assert '/api/det-fish/training/start' in p; assert '/api/det-fish/models' in p; assert '/api/det-fish/test' in p"
       - name: Run DET_FISH dataset gate unit tests
-        run: pytest -q tests/test_det_fish_console.py
+        run: python -m pytest -q tests/test_det_fish_console.py
       - name: Run unified top navigation smoke test
         env:
           REGISTRY_DB_URL: 'sqlite:///:memory:'
