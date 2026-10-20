@@ -54,7 +54,7 @@ from app.unified_nav import install_unified_nav
 from app.db import SessionLocal
 from app.species_policy import ensure_target_species
 from app.platform.routes.pages import router as platform_pages_router
-from app.platform.routes.det_fish import router as det_fish_console_router
+from app.det_fish_console import router as det_fish_console_router
 from app.services.fish_bside_jobs import recover_pending_bside_jobs
 from app.services.image_studio_jobs import recover_pending_image_studio_jobs
 
