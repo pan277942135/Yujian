@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -81,12 +82,25 @@ def _model_summary(bucket, version: str) -> dict[str, Any]:
     }
 
 
+def _manifest_sha_matches(bucket, report: dict[str, Any] | None) -> bool:
+    if not report:
+        return False
+    expected = str(report.get("manifest_sha256") or "")
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        return False
+    blob = bucket.blob("detector-datasets/" + DATASET_VERSION + "/bootstrap_manifest.json")
+    if not blob.exists(timeout=10):
+        return False
+    actual = hashlib.sha256(blob.download_as_bytes(timeout=60)).hexdigest()
+    return actual == expected
+
+
 def _gate_flag(report: dict[str, Any], name: str) -> bool:
     nested = report.get("training_gate") or report.get("gate") or {}
     return report.get(name) is True or (isinstance(nested, dict) and nested.get(name) is True)
 
 
-def _dataset_gate(report: dict[str, Any] | None, archive_exists: bool) -> dict[str, Any]:
+def _dataset_gate(report: dict[str, Any] | None, archive_exists: bool, manifest_verified: bool = False) -> dict[str, Any]:
     blockers: list[str] = []
     if not report:
         return {
@@ -115,6 +129,8 @@ def _dataset_gate(report: dict[str, Any] | None, archive_exists: bool) -> dict[s
     manifest_sha = str(report.get("manifest_sha256") or "")
     if not re.fullmatch(r"[0-9a-f]{64}", manifest_sha):
         blockers.append("缺少有效的 manifest_sha256")
+    if not manifest_verified:
+        blockers.append("bootstrap_manifest.json 不存在或 SHA-256 与报告不一致")
     if not archive_exists:
         blockers.append("缺少 DET_DS_v0.2.tar.gz 冻结数据包")
 
@@ -204,7 +220,8 @@ def det_fish_training_status(db: Session = Depends(get_db)) -> dict[str, Any]:
         bucket = _bucket()
         report = _read_json_blob(bucket, "detector-datasets/" + DATASET_VERSION + "/bootstrap_report.json")
         archive_exists = bucket.blob("detector-datasets/" + DATASET_VERSION + "/" + DATASET_VERSION + ".tar.gz").exists(timeout=10)
-        gate = _dataset_gate(report, archive_exists)
+        manifest_verified = _manifest_sha_matches(bucket, report)
+        gate = _dataset_gate(report, archive_exists, manifest_verified)
         model = _model_summary(bucket, MODEL_VERSION)
         pool = accepted_pool_snapshot(db)
         try:
@@ -245,7 +262,8 @@ def det_fish_training_start(payload: DetectorTrainingStart) -> dict[str, Any]:
         bucket = _bucket()
         report = _read_json_blob(bucket, "detector-datasets/" + DATASET_VERSION + "/bootstrap_report.json")
         archive_exists = bucket.blob("detector-datasets/" + DATASET_VERSION + "/" + DATASET_VERSION + ".tar.gz").exists(timeout=10)
-        gate = _dataset_gate(report, archive_exists)
+        manifest_verified = _manifest_sha_matches(bucket, report)
+        gate = _dataset_gate(report, archive_exists, manifest_verified)
     except Exception as exc:
         raise HTTPException(status_code=503, detail="无法验证 DET_DS_v0.2 数据集门禁") from exc
     if not gate["ready"]:

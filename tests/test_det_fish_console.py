@@ -21,7 +21,7 @@ def _ready_report():
 
 
 def test_dataset_gate_accepts_only_frozen_human_reviewed_dataset():
-    result = _dataset_gate(_ready_report(), archive_exists=True)
+    result = _dataset_gate(_ready_report(), archive_exists=True, manifest_verified=True)
     assert result["ready"] is True
     assert result["blockers"] == []
     assert result["counts"]["train_images"] == 100
@@ -31,7 +31,7 @@ def test_dataset_gate_fails_closed_for_missing_archive_and_provenance():
     report = _ready_report()
     report["source"] = "FishPresenceResult/google-vision-presence-v0.4"
     report["held_out_exclusions_verified"] = False
-    result = _dataset_gate(report, archive_exists=False)
+    result = _dataset_gate(report, archive_exists=False, manifest_verified=False)
     assert result["ready"] is False
     assert any("人工 accepted_bbox" in item for item in result["blockers"])
     assert any("留出集排除" in item for item in result["blockers"])
@@ -42,7 +42,7 @@ def test_dataset_gate_requires_independent_test_and_negative_coverage():
     report = _ready_report()
     report["negative_coverage_verified"] = False
     report["splits"]["test"]["images"] = 0
-    result = _dataset_gate(report, archive_exists=True)
+    result = _dataset_gate(report, archive_exists=True, manifest_verified=True)
     assert result["ready"] is False
     assert any("无鱼负样本" in item for item in result["blockers"])
     assert any("独立测试集" in item for item in result["blockers"])
@@ -56,3 +56,8 @@ def test_execution_status_distinguishes_running_and_failed():
 
 def test_only_supported_detector_versions_can_be_selected():
     assert ALLOWED_MODEL_VERSIONS == {"DET_FISH_v0.1", "DET_FISH_v0.2"}
+
+def test_dataset_gate_requires_manifest_bytes_to_match_report_sha():
+    result = _dataset_gate(_ready_report(), archive_exists=True, manifest_verified=False)
+    assert result["ready"] is False
+    assert any("manifest.json" in item for item in result["blockers"])
