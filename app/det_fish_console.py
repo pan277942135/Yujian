@@ -285,7 +285,6 @@ def det_fish_training_start(payload: DetectorTrainingStart) -> dict[str, Any]:
             {"name": "DETECTOR_BATCH_SIZE", "value": str(payload.batch_size)},
             {"name": "DETECTOR_SEED", "value": str(payload.seed)},
             {"name": "DETECTOR_EVAL_INTERVAL", "value": "2"},
-            {"name": "APP_GIT_COMMIT", "value": os.getenv("APP_GIT_COMMIT", "unknown").strip() or "unknown"},
         ]
         response = session.post(
             url,
