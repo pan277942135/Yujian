@@ -25,7 +25,7 @@ env:
   TAG: det-fish-pr166
   WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
   DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
-  BUILD_SERVICE_ACCOUNT: projects/571785698442/serviceAccounts/571785698442-compute@developer.gserviceaccount.com
+  BUILD_SERVICE_ACCOUNT: projects/gemini-api-project-503706/serviceAccounts/571785698442-compute@developer.gserviceaccount.com
   RUNTIME_SERVICE_ACCOUNT: yujian-model-factory@gemini-api-project-503706.iam.gserviceaccount.com
 
 jobs:
