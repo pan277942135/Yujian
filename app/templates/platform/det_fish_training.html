@@ -1,0 +1,100 @@
+{% extends "platform/base.html" %}
+{% block content %}
+<div class="page-heading">
+  <div>
+    <h1>DET_FISH 训练</h1>
+    <p>基于人工 accepted_bbox 冻结完整场景检测数据集，启动独立的 YOLOX-Nano GPU 训练。此页面不会修改或发布生产模型。</p>
+  </div>
+  <div class="page-actions">
+    <button class="button" type="button" onclick="loadStatus()">刷新状态</button>
+    <a class="button" href="/platform/data/datasets">数据集管理</a>
+    <a class="button" href="/platform/model/det-fish-test">模型测试</a>
+  </div>
+</div>
+<div id="detTrainingNotice"></div>
+<div class="metric-grid" style="margin-top:14px">
+  <div class="metric-card"><div class="metric-label">人工 accepted_bbox</div><div id="acceptedBboxCount" class="metric-value">—</div><div class="metric-detail">只统计人工确认标签</div></div>
+  <div class="metric-card"><div class="metric-label">DET_DS_v0.2</div><div id="datasetStatus" class="metric-value" style="font-size:22px">—</div><div id="datasetArchive" class="metric-detail">冻结数据包状态</div></div>
+  <div class="metric-card"><div class="metric-label">Train 图片</div><div id="trainImages" class="metric-value">—</div><div id="trainBoxes" class="metric-detail">鱼体框数量 —</div></div>
+  <div class="metric-card"><div class="metric-label">DET_FISH_v0.2</div><div id="modelStatus" class="metric-value" style="font-size:22px">—</div><div id="modelSha" class="metric-detail">模型 SHA-256</div></div>
+</div>
+<div class="form-grid" style="margin-top:16px">
+  <section class="panel">
+    <div class="panel-heading"><div><h2>训练门禁</h2><p>门禁未通过时，GPU 启动按钮会保持禁用</p></div><span id="gateTag" class="status-tag status-neutral">检查中</span></div>
+    <div id="gateBlockers" class="loading">正在读取冻结数据集与证据…</div>
+    <div class="notice warning" style="margin-top:14px">训练输入必须是原始完整场景图和人工 accepted_bbox；6,308 张 Crop 是分类器素材，不能直接替代检测器原图。</div>
+  </section>
+  <section class="panel">
+    <div class="panel-heading"><div><h2>启动 DET_FISH_v0.2</h2><p>YOLOX-Nano · 416×416 · NVIDIA L4</p></div><span class="status-tag status-neutral">独立版本</span></div>
+    <form id="detTrainingForm">
+      <div class="form-grid">
+        <div class="field"><label for="detEpochs">训练轮数 Epochs</label><input id="detEpochs" type="number" min="1" max="100" value="30" required></div>
+        <div class="field"><label for="detBatchSize">Batch Size</label><input id="detBatchSize" type="number" min="1" max="64" value="16" required></div>
+        <div class="field full"><label for="detSeed">随机种子</label><input id="detSeed" type="number" min="0" max="2147483647" value="20261020" required></div>
+      </div>
+      <div class="form-actions"><button id="startDetTraining" class="button primary" type="submit" disabled>开始 GPU 训练</button></div>
+    </form>
+    <div class="muted" style="font-size:12px;margin-top:10px">启动前会重新读取数据集报告和归档，并检查是否已有运行中的训练任务。训练失败不会自动切换生产模型。</div>
+  </section>
+</div>
+<section class="panel" style="margin-top:16px">
+  <div class="panel-heading"><div><h2>训练执行记录</h2><p>Cloud Run Job · yujian-detector-trainer</p></div><button class="button" type="button" onclick="loadStatus()">刷新记录</button></div>
+  <div id="detExecutionHistory" class="loading">加载中…</div>
+</section>
+<section class="panel" style="margin-top:16px">
+  <div class="panel-heading"><div><h2>训练完成后的验收指标</h2><p>独立测试集必须与 v0.1 使用相同阈值与评估口径</p></div></div>
+  <div class="table-wrap"><table class="data-table">
+    <thead><tr><th>指标</th><th>验收要求</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td>AP50 / AP50:95</td><td>必须报告实测值</td><td>检测框整体质量</td></tr>
+      <tr><td>独立测试集召回率</td><td>按固定测试集统计</td><td>漏检风险</td></tr>
+      <tr><td>困难场景召回率</td><td>竖拍、夜拍、手持鱼、8–20% 鱼体面积</td><td>目标域覆盖</td></tr>
+      <tr><td>无鱼误检率</td><td>人工确认负样本单独统计</td><td>防止假鱼框</td></tr>
+      <tr><td>固定事故留出集</td><td>Case A / Case B / 04-181200 独立回归</td><td>防止针对事故样本过拟合</td></tr>
+    </tbody>
+  </table></div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+function fmtCount(value){return Number.isFinite(Number(value))?Number(value).toLocaleString('en-US'):'—'}
+function fmtDate(value){if(!value)return '—';const date=new Date(value);return Number.isNaN(date.getTime())?String(value):date.toLocaleString()}
+function renderExecutionHistory(rows,error){
+  const target=document.getElementById('detExecutionHistory');
+  if(error){target.innerHTML='<div class="notice warning">'+esc(error)+'</div>';}
+  else if(!rows||!rows.length){target.innerHTML='<div class="empty">暂无可读取的 DET_FISH 训练执行记录</div>';}
+  else{target.innerHTML='<div class="table-wrap"><table class="data-table"><thead><tr><th>Execution</th><th>状态</th><th>创建时间</th><th>开始时间</th><th>结束时间</th><th>成功/失败/运行中</th></tr></thead><tbody>'+rows.map(row=>'<tr><td><strong class="code">'+esc(row.execution_id||'—')+'</strong></td><td><span class="status-tag status-'+String(row.status||'').toLowerCase()+'">'+esc(row.status||'—')+'</span></td><td>'+esc(fmtDate(row.created_at))+'</td><td>'+esc(fmtDate(row.started_at))+'</td><td>'+esc(fmtDate(row.completed_at))+'</td><td>'+fmtCount(row.succeeded_count)+' / '+fmtCount(row.failed_count)+' / '+fmtCount(row.running_count)+'</td></tr>').join('')+'</tbody></table></div>';}
+}
+function renderGate(gate){
+  const target=document.getElementById('gateBlockers');
+  const tag=document.getElementById('gateTag');
+  document.getElementById('startDetTraining').disabled=!gate||!gate.ready;
+  if(gate&&gate.ready){tag.className='status-tag status-success';tag.textContent='PASS';target.innerHTML='<div class="notice">数据集门禁已通过。启动时会再次校验数据包和训练任务状态。</div>';}
+  else{tag.className='status-tag status-failed';tag.textContent='BLOCKED';const blockers=(gate&&gate.blockers)||['无法读取数据集门禁'];target.innerHTML='<div class="error-state"><strong>尚不能启动训练：</strong><ul>'+blockers.map(item=>'<li>'+esc(item)+'</li>').join('')+'</ul></div>';}
+}
+function renderDetTrainingStatus(data){
+  const pool=data.accepted_pool||{},dataset=data.dataset||{},gate=dataset.gate||{},counts=gate.counts||{},model=data.model||{};
+  document.getElementById('acceptedBboxCount').textContent=fmtCount(pool.accepted_bbox);
+  document.getElementById('datasetStatus').textContent=dataset.status||'NOT_BUILT';
+  document.getElementById('datasetArchive').textContent=dataset.archive_available?'冻结归档已找到':'未找到冻结归档';
+  document.getElementById('trainImages').textContent=fmtCount(counts.train_images);
+  document.getElementById('trainBoxes').textContent='鱼体框 '+fmtCount(counts.train_boxes)+' · Val '+fmtCount(counts.val_boxes)+' · Test '+fmtCount(counts.test_images);
+  document.getElementById('modelStatus').textContent=model.available?'已生成':'未生成';
+  document.getElementById('modelSha').textContent=model.onnx_sha256?('SHA-256 '+model.onnx_sha256):'尚无模型 SHA-256';
+  renderGate(gate);
+  renderExecutionHistory(data.execution_history||[],data.execution_history_error);
+}
+async function loadStatus(){
+  const notice=document.getElementById('detTrainingNotice');notice.innerHTML='<div class="loading">正在读取 Accepted Pool、数据集门禁和训练执行记录…</div>';
+  try{const data=await platformFetch('/api/det-fish/training/status');renderDetTrainingStatus(data);notice.innerHTML='';}
+  catch(error){notice.innerHTML='<div class="error-state">'+esc(platformError(error))+'</div>';document.getElementById('startDetTraining').disabled=true;}
+}
+document.getElementById('detTrainingForm').addEventListener('submit',async function(event){
+  event.preventDefault();const button=document.getElementById('startDetTraining');button.disabled=true;
+  const notice=document.getElementById('detTrainingNotice');notice.innerHTML='<div class="notice">正在重新校验冻结数据集并提交 GPU 任务…</div>';
+  try{const data=await platformFetch('/api/det-fish/training/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({epochs:Number(document.getElementById('detEpochs').value),batch_size:Number(document.getElementById('detBatchSize').value),seed:Number(document.getElementById('detSeed').value)})});notice.innerHTML='<div class="notice">训练任务已提交：<strong>'+esc(data.model_version)+'</strong> · '+esc(data.operation_name||'Cloud Run operation 已返回')+'</div>';await loadStatus();}
+  catch(error){notice.innerHTML='<div class="error-state">'+esc(platformError(error))+'</div>';await loadStatus();}
+});
+loadStatus();
+</script>
+{% endblock %}
