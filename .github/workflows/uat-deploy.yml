@@ -59,6 +59,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
+          WORKFLOW_HEAD_MESSAGE: ${{ github.event.workflow_run.head_commit.message }}
           DISPATCH_SHA: ${{ github.sha }}
         shell: bash
         run: |
@@ -68,6 +69,12 @@ jobs:
             DEPLOY_SHA="$WORKFLOW_SHA"
             CI_OK=false
             [[ "$WORKFLOW_CONCLUSION" == "success" ]] && CI_OK=true
+            # A dedicated no-traffic deploy workflow is merged with this marker.
+            # Do not let the normal UAT workflow deploy main or run its smoke suite for that merge.
+            if [[ "$WORKFLOW_HEAD_MESSAGE" == *"[skip-uat-deploy]"* ]]; then
+              CI_OK=false
+              echo "Regular UAT deploy skipped for the no-traffic deployment-workflow installation commit."
+            fi
           else
             DEPLOY_SHA="$DISPATCH_SHA"
             CI_OK=true

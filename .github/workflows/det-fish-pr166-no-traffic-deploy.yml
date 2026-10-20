@@ -1,0 +1,124 @@
+name: DET_FISH PR166 No-Traffic Deploy
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/det-fish-pr166-no-traffic-deploy.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: yujian-det-fish-pr166-no-traffic-deploy
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: gemini-api-project-503706
+  PROJECT_NUMBER: '571785698442'
+  REGION: asia-east1
+  SERVICE: yujian-model-factory-console
+  TARGET_SHA: 257abd2280574098eb3a81a24624f5a62d2fc913
+  TAG: det-fish-pr166
+  WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+  DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+  BUILD_SERVICE_ACCOUNT: projects/571785698442/serviceAccounts/571785698442-compute@developer.gserviceaccount.com
+  RUNTIME_SERVICE_ACCOUNT: yujian-model-factory@gemini-api-project-503706.iam.gserviceaccount.com
+
+jobs:
+  deploy-no-traffic:
+    if: github.repository == 'pan277942135/Yujian' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout the exact approved PR #166 commit
+        uses: actions/checkout@v4
+        with:
+          ref: 257abd2280574098eb3a81a24624f5a62d2fc913
+          fetch-depth: 1
+
+      - name: Confirm checkout provenance (no application tests)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          test "$ACTUAL_SHA" = "$TARGET_SHA"
+          echo "Deployment source SHA: $ACTUAL_SHA" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Authenticate to Google Cloud with GitHub OIDC/WIF
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          version: '>= 416.0.0'
+
+      - name: Deploy a tagged revision without changing production traffic
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run deploy "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --source . \
+            --build-service-account "$BUILD_SERVICE_ACCOUNT" \
+            --service-account "$RUNTIME_SERVICE_ACCOUNT" \
+            --cpu 1 \
+            --memory 4Gi \
+            --timeout=1200s \
+            --no-cpu-throttling \
+            --update-env-vars="APP_GIT_COMMIT=$TARGET_SHA" \
+            --no-traffic \
+            --tag "$TAG" \
+            --quiet
+
+      - name: Record tagged revision URL (metadata only; no health checks)
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run services describe "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format=json > "$RUNNER_TEMP/cloud-run-service.json"
+
+          python3 - "$RUNNER_TEMP/cloud-run-service.json" "$TAG" "$TARGET_SHA" <<'PY'
+          import json
+          import sys
+
+          path, tag, target_sha = sys.argv[1:]
+          with open(path, encoding="utf-8") as handle:
+              service = json.load(handle)
+
+          tagged = next(
+              (entry for entry in (service.get("status", {}).get("traffic") or [])
+               if entry.get("tag") == tag),
+              None,
+          )
+          if not tagged or not tagged.get("url") or not tagged.get("revisionName"):
+              raise SystemExit(f"Cloud Run did not return the expected tagged revision {tag!r}")
+
+          revision = tagged["revisionName"]
+          url = tagged["url"]
+          with open(__import__("os").environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"revision={revision}\n")
+              output.write(f"url={url}\n")
+
+          with open(__import__("os").environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## DET_FISH PR #166 no-traffic deployment\n")
+              summary.write(f"- Source SHA: `{target_sha}`\n")
+              summary.write(f"- Revision: `{revision}`\n")
+              summary.write(f"- Tag: `{tag}`\n")
+              summary.write(f"- Tagged URL: {url}\n")
+              summary.write("- Production traffic: not changed by this workflow\n")
+              summary.write("- Application tests / health checks: not run\n")
+          print(f"REVISION={revision}")
+          print(f"TAGGED_URL={url}")
+          PY
