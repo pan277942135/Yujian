@@ -111,7 +111,7 @@
     <div class="negative-modal-header"><div><h2 id="negativeCandidatesTitle">从已标记无鱼的图片中批量添加</h2><p>机器无鱼标签仅为候选来源；点击“确认添加”即表示你确认所选图片无鱼。原始 AI 判定与审批记录保持不变。</p></div><button class="button" type="button" onclick="closeNegativeCandidates()">关闭</button></div>
     <div class="negative-modal-toolbar">
       <select id="negativeCandidateSource" onchange="switchNegativeCandidateSource()"><option value="PRESENCE_NO_FISH">系统已标记无鱼</option><option value="DET_DS_V0_1">历史 DET_DS_v0.1 候选</option></select>
-      <select id="negativeCandidateVerification" onchange="loadNegativeCandidates(0)"><option value="ALL">所有确认状态</option><option value="PENDING">待人工确认</option><option value="HUMAN">已有人工确认</option></select>
+      <span class="muted" role="status">仅显示待确认且尚未加入 DET_FISH 负样本池的记录</span>
       <label class="muted">每页<select id="negativeCandidatePageSize" aria-label="历史候选每页条数" onchange="changeNegativeCandidatePageSize(this.value)"><option value="20">20 条</option><option value="50" selected>50 条</option><option value="100">100 条</option></select></label>
       <input id="negativeCandidateBatch" type="search" placeholder="按来源批次筛选" onkeydown="if(event.key==='Enter')loadNegativeCandidates(0)">
       <label class="muted"><input id="selectAllCandidateRows" type="checkbox" onchange="selectCurrentCandidatePage(this.checked)"> 全选本页</label>
@@ -223,12 +223,12 @@ async function reAddPoolEntry(entryId){
     const message=result.added.length?'已重新加入并记录新操作。':(result.rejected[0]?.reason||'未加入。');setNegativeStatus('negativePoolStatus',message);await loadNegativePoolSummary();await loadNegativePool(negativePoolOffset);
   }catch(error){setNegativeStatus('negativePoolStatus','重新加入失败：'+platformError(error));}
 }
-function openNegativeCandidates(){negativeCandidateSelection.clear();negativeCandidateOffset=0;document.getElementById('negativeCandidatesModal').hidden=false;document.getElementById('negativeCandidateVerification').value='ALL';document.body.style.overflow='hidden';updateCandidateSelection();loadNegativeCandidates(0);}
-function openHistoricalPendingCandidates(){negativeCandidateSelection.clear();negativeCandidateOffset=0;negativeCandidateFilterKey='';document.getElementById('negativeCandidatesModal').hidden=false;document.body.style.overflow='hidden';document.getElementById('negativeCandidateSource').value='DET_DS_V0_1';document.getElementById('negativeCandidateVerification').value='PENDING';updateCandidateSelection();loadNegativeCandidates(0);}
+function openNegativeCandidates(){negativeCandidateSelection.clear();negativeCandidateOffset=0;document.getElementById('negativeCandidatesModal').hidden=false;document.body.style.overflow='hidden';updateCandidateSelection();loadNegativeCandidates(0);}
+function openHistoricalPendingCandidates(){negativeCandidateSelection.clear();negativeCandidateOffset=0;negativeCandidateFilterKey='';document.getElementById('negativeCandidatesModal').hidden=false;document.body.style.overflow='hidden';document.getElementById('negativeCandidateSource').value='DET_DS_V0_1';updateCandidateSelection();loadNegativeCandidates(0);}
 function closeNegativeCandidates(){document.getElementById('negativeCandidatesModal').hidden=true;negativeCandidateSelection.clear();updateCandidateSelection();}
 function switchNegativeCandidateSource(){negativeCandidateSelection.clear();updateCandidateSelection();loadNegativeCandidates(0);}
 async function loadNegativeCandidates(offset){
-  negativeCandidateOffset=Math.max(0,offset);const sourceKind=document.getElementById('negativeCandidateSource').value;const batch=document.getElementById('negativeCandidateBatch').value.trim();const verification=document.getElementById('negativeCandidateVerification').value;
+  negativeCandidateOffset=Math.max(0,offset);const sourceKind=document.getElementById('negativeCandidateSource').value;const batch=document.getElementById('negativeCandidateBatch').value.trim();const verification='PENDING';
   const filterKey=[sourceKind,batch,verification].join('|');if(negativeCandidateFilterKey&&negativeCandidateFilterKey!==filterKey){negativeCandidateSelection.clear();updateCandidateSelection();}negativeCandidateFilterKey=filterKey;
   const query=new URLSearchParams({source_kind:sourceKind,limit:String(negativeCandidateLimit),offset:String(negativeCandidateOffset),verification});if(batch)query.set('batch_id',batch);
   const target=document.getElementById('negativeCandidateRows');target.innerHTML='<div class="loading">正在读取现有无鱼候选…</div>';setNegativeStatus('negativeCandidateStatus','');
