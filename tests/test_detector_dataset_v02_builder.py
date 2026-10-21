@@ -44,7 +44,23 @@ def fixture_records():
                 "review_status": "ACCEPTED",
             })
         else:
-            negatives.append({**common, "kind": "negative", "review_status": "NO_FISH_CONFIRMED"})
+            pool_source_sha = hashlib.sha256(png_bytes(index)).hexdigest()
+            negatives.append({
+                **common,
+                "review_record_id": f"det_fish_negative_pool_entry:{index}:event:{index}",
+                "kind": "negative",
+                "review_status": "NO_FISH_CONFIRMED",
+                "pool_entry_id": index,
+                "pool_event_id": index,
+                "pool_action": "ADD",
+                "pool_source_kind": "PRESENCE_NO_FISH",
+                "pool_source_record_id": f"presence-{index}",
+                "pool_source_image_sha256": pool_source_sha,
+                "pool_source_provider": "fixture",
+                "pool_source_model_version": "fixture-v0",
+                "pool_source_status": "no_fish",
+                "pool_confirmation_snapshot": {"det_fish_manual_confirmation": True},
+            })
     records = {
         "positives": positives,
         "negatives": negatives,
@@ -92,7 +108,22 @@ def test_builder_freezes_full_scenes_with_provenance_and_deterministic_archive(t
     assert all(row["image_kind"] == "complete_scene" for row in manifest)
     assert all(row["file_name"].endswith(".png") for row in manifest)
     positive_rows = [row for row in manifest if row["fish_present"]]
+    negative_rows = [row for row in manifest if not row["fish_present"]]
     assert len({record for row in positive_rows for record in row["review_record_ids"]}) == 54
+    assert len(negative_rows) == 6
+    negative_files_by_split = {
+        split: {row["file_name"] for row in negative_rows if row["split"] == split}
+        for split in ("train", "val", "test")
+    }
+    with tarfile.open(first / "DET_DS_v0.2.tar.gz", "r:gz") as archive:
+        for split in ("train", "val", "test"):
+            annotation_file = archive.extractfile(f"DET_DS_v0.2/annotations/instances_{split}2017.json")
+            assert annotation_file is not None
+            coco = json.loads(annotation_file.read())
+            image_ids_by_name = {row["file_name"]: row["id"] for row in coco["images"]}
+            assert negative_files_by_split[split].issubset(image_ids_by_name)
+            negative_image_ids = {image_ids_by_name[name] for name in negative_files_by_split[split]}
+            assert not any(annotation["image_id"] in negative_image_ids for annotation in coco["annotations"])
     capture_splits = {row["split"] for row in positive_rows if "capture-group-a" in row["source_group_ids"]}
     assert len(capture_splits) == 1
 

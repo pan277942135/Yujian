@@ -92,17 +92,18 @@ def _source_group(image: Any) -> tuple[str, str]:
 
 
 def collect_source_records(db) -> dict[str, Any]:
-    """Read real accepted bbox rows and explicitly audited no-fish decisions.
+    """Read accepted bbox rows and active, explicitly confirmed DET_FISH pool rows.
 
     Crop paths and Google Vision boxes are intentionally never selected. A
-    negative is admitted only when the current presence state is an explicit
-    human override and a matching human review event is present.
+    negative is admitted only through an active DET_FISH-specific pool member
+    and its most recent ADD/RE_ADD audit event. The UI operation records the
+    actor, time, source state, and explicit confirmation without changing the
+    source presence/review rows.
     """
 
     from sqlalchemy import select
 
-    from app.models import BatchCropReview, ImageAsset, ReviewEvent
-    from app.presence import FishPresenceResult
+    from app.models import BatchCropReview, DetectorNegativePoolEntry, DetectorNegativePoolEvent, ImageAsset
 
     positive_query = (
         select(BatchCropReview, ImageAsset)
@@ -137,47 +138,77 @@ def collect_source_records(db) -> dict[str, Any]:
             ),
         })
 
-    negative_query = (
-        select(ImageAsset, FishPresenceResult)
-        .join(FishPresenceResult, FishPresenceResult.image_asset_id == ImageAsset.id)
-        .where(
-            ImageAsset.training_eligible.is_(True),
-            FishPresenceResult.provider == "human_override",
-            FishPresenceResult.status == "no_fish",
-        )
-        .order_by(ImageAsset.id)
-    )
     negatives: list[dict[str, Any]] = []
-    for image, presence in db.execute(negative_query).all():
-        evidence = _json(presence.evidence_json) or {}
-        if not isinstance(evidence, dict) or evidence.get("human_override") != "no_fish":
+    negative_pool_errors: list[dict[str, str]] = []
+    active_pool_rows = db.execute(
+        select(DetectorNegativePoolEntry, ImageAsset)
+        .join(ImageAsset, ImageAsset.id == DetectorNegativePoolEntry.image_asset_id)
+        .where(DetectorNegativePoolEntry.state == "ACTIVE")
+        .order_by(DetectorNegativePoolEntry.id)
+    ).all()
+    for pool_entry, image in active_pool_rows:
+        if not image.training_eligible:
+            negative_pool_errors.append({"record_id": str(pool_entry.id), "error": "active negative pool member is not training eligible"})
+            continue
+        if image.duplicate_of_image_asset_id:
+            negative_pool_errors.append({"record_id": str(pool_entry.id), "error": "active negative pool member is a known duplicate"})
+            continue
+        if image.review_status == "approved" and str(image.truth_species or "").strip():
+            negative_pool_errors.append({"record_id": str(pool_entry.id), "error": "negative pool member conflicts with approved positive truth"})
+            continue
+        positive_review = db.scalar(select(BatchCropReview.id).where(
+            BatchCropReview.image_asset_id == image.id,
+            BatchCropReview.status.in_({"ACCEPTED", "TRAINING_READY"}),
+            BatchCropReview.accepted_bbox_json.is_not(None),
+        ))
+        if positive_review is not None:
+            negative_pool_errors.append({"record_id": str(pool_entry.id), "error": "negative pool member conflicts with accepted positive bbox"})
             continue
         events = db.scalars(
-            select(ReviewEvent)
-            .where(
-                ReviewEvent.image_asset_id == image.id,
-                ReviewEvent.action == "presence_override_update",
-            )
-            .order_by(ReviewEvent.created_at.desc(), ReviewEvent.id.desc())
+            select(DetectorNegativePoolEvent)
+            .where(DetectorNegativePoolEvent.pool_entry_id == pool_entry.id)
+            .order_by(DetectorNegativePoolEvent.occurred_at.desc(), DetectorNegativePoolEvent.id.desc())
         ).all()
-        event = next((item for item in events if (_json(item.after_json) or {}).get("human_override") == "no_fish"), None)
-        if event is None:
+        event = events[0] if events else None
+        snapshot = _json(event.source_snapshot_json) if event else {}
+        if (
+            event is None
+            or event.action not in {"ADD", "RE_ADD"}
+            or event.after_state != "ACTIVE"
+            or not str(event.actor or "").strip()
+            or not event.occurred_at
+            or snapshot.get("det_fish_manual_confirmation") is not True
+            or not _is_sha256(str(pool_entry.source_image_sha256 or ""))
+            or str(pool_entry.source_uri or "") != str(image.gcs_uri or "")
+        ):
+            negative_pool_errors.append({"record_id": str(pool_entry.id), "error": "active pool member lacks latest valid manual ADD/RE_ADD provenance, source URI or source SHA"})
             continue
         group_id, group_source = _source_group(image)
         negatives.append({
             "kind": "negative",
-            "review_record_id": f"human_no_fish_event:{event.id}",
+            "review_record_id": f"det_fish_negative_pool_entry:{pool_entry.id}:event:{event.id}",
             "batch_id": str(image.batch_id),
             "image_id": str(image.image_id),
             "source_uri": str(image.gcs_uri or "").strip(),
             "source_group_id": group_id,
             "source_group_basis": group_source,
             "review_status": "NO_FISH_CONFIRMED",
-            "reviewer_id": str(event.reviewer or "").strip(),
-            "reviewed_at": event.created_at.isoformat() if event.created_at else "",
+            "reviewer_id": str(event.actor or "").strip(),
+            "reviewed_at": event.occurred_at.isoformat() if event.occurred_at else "",
+            "pool_entry_id": int(pool_entry.id),
+            "pool_event_id": int(event.id),
+            "pool_action": str(event.action),
+            "pool_source_kind": str(pool_entry.source_kind),
+            "pool_source_record_id": str(pool_entry.source_record_id),
+            "pool_source_dataset_version": pool_entry.source_dataset_version,
+            "pool_source_image_sha256": str(pool_entry.source_image_sha256),
+            "pool_source_provider": pool_entry.source_provider,
+            "pool_source_model_version": pool_entry.source_model_version,
+            "pool_source_status": pool_entry.source_status,
+            "pool_confirmation_snapshot": snapshot,
             "training_eligibility_basis": (
-                "database_training_eligible=true; FishPresenceResult.provider=human_override; "
-                "FishPresenceResult.human_override=no_fish; matching ReviewEvent present"
+                "ImageAsset.training_eligible=true; active DET_FISH negative pool membership; "
+                "latest ADD/RE_ADD audit event records explicit manual no-fish confirmation, actor and time"
             ),
         })
 
@@ -186,6 +217,9 @@ def collect_source_records(db) -> dict[str, Any]:
         "negatives": negatives,
         "accepted_bbox_record_count": len(positives),
         "explicit_human_negative_record_count": len(negatives),
+        "negative_pool_active_member_count": len(active_pool_rows),
+        "negative_pool_member_errors": negative_pool_errors,
+        "source_record_errors": negative_pool_errors,
     }
 
 
@@ -647,7 +681,8 @@ def _materialize(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     source_records = list(records.get("positives") or [])
     negatives = list(records.get("negatives") or [])
-    errors: list[dict[str, str]] = list(source_object_audit.get("errors") or [])
+    errors: list[dict[str, str]] = list(records.get("source_record_errors") or [])
+    errors.extend(source_object_audit.get("errors") or [])
     held_out_positive_ids: list[str] = []
     held_out_negative_ids: list[str] = []
     images: dict[str, dict[str, Any]] = {}
@@ -784,8 +819,8 @@ def _materialize(
         except (KeyError, OSError, TypeError, ValueError, UnidentifiedImageError) as exc:
             errors.append({"record_id": record_id or "unknown", "error": str(exc)})
 
-    # Human no-fish overrides must carry a matching review event and permission
-    # basis. Machine-only presence results never reach this materializer.
+    # Active DET_FISH pool members must carry a matching current source SHA and
+    # append-only manual confirmation event. Machine labels alone never pass.
     negative_record_ids: set[str] = set()
     for record in negatives:
         record_id = str(record.get("review_record_id") or "").strip()
@@ -806,6 +841,9 @@ def _materialize(
             source_sha = str(source_audit.get("source_image_sha256") or "")
             if not _is_sha256(source_sha):
                 raise ValueError("source image audit has no valid SHA-256")
+            expected_pool_sha = str(record.get("pool_source_image_sha256") or "")
+            if not _is_sha256(expected_pool_sha) or source_sha != expected_pool_sha:
+                raise ValueError("negative pool source SHA does not match the actual original scene bytes")
             metadata = source_image_metadata.get(source_sha)
             if metadata is None:
                 raise ValueError("source image metadata missing from complete source-object audit")
@@ -844,6 +882,16 @@ def _materialize(
                 "reviewer_id": str(record["reviewer_id"]).strip(),
                 "reviewed_at": str(record["reviewed_at"]).strip(),
                 "review_status": "NO_FISH_CONFIRMED",
+                "pool_entry_id": int(record["pool_entry_id"]),
+                "pool_event_id": int(record["pool_event_id"]),
+                "pool_action": str(record.get("pool_action") or ""),
+                "pool_source_kind": str(record.get("pool_source_kind") or ""),
+                "pool_source_record_id": str(record.get("pool_source_record_id") or ""),
+                "pool_source_dataset_version": record.get("pool_source_dataset_version"),
+                "pool_source_image_sha256": expected_pool_sha,
+                "pool_source_provider": record.get("pool_source_provider"),
+                "pool_source_model_version": record.get("pool_source_model_version"),
+                "pool_source_status": record.get("pool_source_status"),
             }
         except (KeyError, OSError, TypeError, ValueError, UnidentifiedImageError) as exc:
             errors.append({"record_id": record_id or "unknown", "error": str(exc)})
@@ -852,6 +900,8 @@ def _materialize(
         return [], {
             "source_accepted_bbox_record_count": len(source_records),
             "source_human_negative_record_count": len(negatives),
+            "negative_pool_active_member_count": int(records.get("negative_pool_active_member_count") or len(negatives)),
+            "negative_pool_member_errors": list(records.get("negative_pool_member_errors") or []),
             "excluded_held_out_accepted_bbox_record_count": len(held_out_positive_ids),
             "excluded_held_out_accepted_bbox_record_ids": sorted(held_out_positive_ids),
             "excluded_held_out_negative_record_count": len(held_out_negative_ids),
@@ -874,7 +924,7 @@ def _materialize(
     split_by_component = _stable_split(component_images)
 
     manifest_rows: list[dict[str, Any]] = []
-    split_counts = {split: {"images": 0, "annotations": 0} for split in SPLIT_RATIOS}
+    split_counts = {split: {"images": 0, "annotations": 0, "negative_images": 0} for split in SPLIT_RATIOS}
     coco = {
         split: {"images": [], "annotations": [], "categories": [{"id": 1, "name": "fish"}]}
         for split in SPLIT_RATIOS
@@ -937,13 +987,14 @@ def _materialize(
             "training_eligibility_basis": ";".join(sorted({str(record.get("training_eligibility_basis") or "") for record in (source_records + negatives) if str(record.get("source_uri") or "") in item["source_uris"] and str(record.get("training_eligibility_basis") or "")})),
             "review_status": "ACCEPTED" if fish_present else "NO_FISH_CONFIRMED",
             "fish_present": fish_present,
-            "label_source": HUMAN_LABEL_SOURCE if fish_present else "human_presence_override",
+            "label_source": HUMAN_LABEL_SOURCE if fish_present else "det_fish_negative_pool_human_confirmation",
             "bbox_coordinate_space": "exif_transposed_normalized_xywh",
             "boxes": boxes,
         }
         manifest_rows.append(row)
         split_counts[split]["images"] += 1
         split_counts[split]["annotations"] += len(boxes)
+        split_counts[split]["negative_images"] += int(not fish_present)
         split_index = len(coco[split]["images"]) + 1
         coco[split]["images"].append({"id": split_index, "file_name": file_name, "width": item["width"], "height": item["height"]})
         for box in boxes:
@@ -989,6 +1040,8 @@ def _materialize(
         "splits": split_counts,
         "source_accepted_bbox_record_count": len(source_records),
         "source_human_negative_record_count": len(negatives),
+        "negative_pool_active_member_count": int(records.get("negative_pool_active_member_count") or len(negatives)),
+        "negative_pool_member_errors": list(records.get("negative_pool_member_errors") or []),
         "manifested_accepted_bbox_record_count": len(actual_manifest_ids),
         "excluded_held_out_accepted_bbox_record_count": len(held_out_positive_ids),
         "excluded_held_out_accepted_bbox_record_ids": sorted(held_out_positive_ids),
@@ -1053,12 +1106,31 @@ def _build_report(data: dict[str, Any], manifest_rows: list[dict[str, Any]], arc
         "human_review_verified": bool(all_have_review and all_positive_reviews == data.get("manifested_accepted_bbox_record_count")),
         "held_out_exclusions_verified": not data.get("source_record_errors"),
         "negative_coverage_verified": negatives > 0,
+        "negative_pool_provenance_verified": bool(negatives) and all(
+            row.get("fish_present")
+            or bool(row.get("review_provenance")) and all(
+                str(provenance.get("pool_entry_id") or "").isdigit()
+                and int(provenance.get("pool_entry_id") or 0) > 0
+                and str(provenance.get("pool_event_id") or "").isdigit()
+                and int(provenance.get("pool_event_id") or 0) > 0
+                and str(provenance.get("pool_source_image_sha256") or "") == str(row.get("image_sha256") or "")
+                for provenance in row.get("review_provenance") or []
+            )
+            for row in manifest_rows
+        ),
         "split_integrity": "PASS" if split_integrity_ok else "BLOCKED",
         "source_accepted_bbox_record_count": int(data.get("source_accepted_bbox_record_count") or 0),
         "manifested_accepted_bbox_record_count": int(data.get("manifested_accepted_bbox_record_count") or 0),
         "excluded_held_out_accepted_bbox_record_count": int(data.get("excluded_held_out_accepted_bbox_record_count") or 0),
         "excluded_held_out_accepted_bbox_record_ids": list(data.get("excluded_held_out_accepted_bbox_record_ids") or []),
         "source_human_negative_record_count": int(data.get("source_human_negative_record_count") or 0),
+        "source_negative_pool_active_member_count": int(data.get("negative_pool_active_member_count") or 0),
+        "negative_pool_member_errors": list(data.get("negative_pool_member_errors") or []),
+        "negative_pool_source_kinds": dict(sorted(Counter(
+            str(provenance.get("pool_source_kind") or "unknown")
+            for row in manifest_rows if not row.get("fish_present")
+            for provenance in row.get("review_provenance") or []
+        ).items())),
         "excluded_held_out_negative_record_count": int(data.get("excluded_held_out_negative_record_count") or 0),
         "source_manifest_sha256": (data.get("source_reconciliation") or {}).get("manifest_sha256") if isinstance(data.get("source_reconciliation"), dict) else None,
         "source_metadata_sha256": (data.get("source_reconciliation") or {}).get("metadata_sha256") if isinstance(data.get("source_reconciliation"), dict) else None,
@@ -1183,7 +1255,9 @@ def build_dataset(
             data = {
                 "source_accepted_bbox_record_count": len(records.get("positives") or []),
                 "source_human_negative_record_count": len(records.get("negatives") or []),
-                "source_record_errors": list(source_object_audit.get("errors") or []),
+            "negative_pool_active_member_count": int(records.get("negative_pool_active_member_count") or len(records.get("negatives") or [])),
+            "negative_pool_member_errors": list(records.get("negative_pool_member_errors") or []),
+                "source_record_errors": list(records.get("source_record_errors") or []) + list(source_object_audit.get("errors") or []),
                 "source_reconciliation": source_reconciliation,
                 "accepted_pool_metadata_summary": records.get("accepted_pool_metadata_summary"),
                 "splits": {name: {"images": 0, "annotations": 0} for name in SPLIT_RATIOS},

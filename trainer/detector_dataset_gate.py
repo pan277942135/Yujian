@@ -94,6 +94,9 @@ def validate_v02_dataset(
         "test_images": 0,
         "test_boxes": 0,
         "human_reviewed_negatives": 0,
+        "train_negative_images": 0,
+        "val_negative_images": 0,
+        "test_negative_images": 0,
         "human_reviewed_complete_scene_images": 0,
         "human_reviewed_bbox_images": 0,
         "human_reviewed_bbox_records": 0,
@@ -134,6 +137,7 @@ def validate_v02_dataset(
         ("human_review_verified", "缺少人工标签核验通过证据"),
         ("held_out_exclusions_verified", "缺少独立事故留出集排除证据"),
         ("negative_coverage_verified", "缺少人工确认无鱼负样本覆盖证据"),
+        ("negative_pool_provenance_verified", "缺少 DET_FISH 负样本池人工操作来源核验"),
     ):
         if report.get(field) is not True:
             blockers.append(message)
@@ -173,6 +177,8 @@ def validate_v02_dataset(
     held_out: set[str] = set()
     row_blockers = 0
     all_review_ids: set[str] = set()
+    all_negative_pool_entry_ids: set[int] = set()
+    all_negative_pool_event_ids: set[int] = set()
 
     if manifest is not None:
         for row_number, row in enumerate(manifest, start=1):
@@ -304,7 +310,8 @@ def validate_v02_dataset(
                 counts["human_reviewed_bbox_images"] += 1
                 split_boxes[split] += len(boxes)
             else:
-                if boxes or review_status != "NO_FISH_CONFIRMED" or not review_provenance:
+                if (boxes or review_status != "NO_FISH_CONFIRMED" or not review_provenance
+                        or label_source != "det_fish_negative_pool_human_confirmation"):
                     row_blockers += 1
                     continue
                 negative_ids = {str(item).strip() for item in review_record_ids}
@@ -314,18 +321,39 @@ def validate_v02_dataset(
                         row_blockers += 1
                         continue
                     record_id = str(provenance.get("review_record_id") or "").strip()
+                    try:
+                        pool_entry_id = int(provenance.get("pool_entry_id") or 0)
+                        pool_event_id = int(provenance.get("pool_event_id") or 0)
+                    except (TypeError, ValueError):
+                        pool_entry_id = pool_event_id = 0
+                    provenance_sha = str(provenance.get("pool_source_image_sha256") or "").strip()
                     if (
                         record_id
                         and str(provenance.get("reviewer_id") or "").strip()
                         and str(provenance.get("reviewed_at") or "").strip()
                         and str(provenance.get("review_status") or "").upper() == "NO_FISH_CONFIRMED"
+                        and pool_entry_id > 0
+                        and pool_event_id > 0
+                        and str(provenance.get("pool_action") or "").upper() in {"ADD", "RE_ADD"}
+                        and str(provenance.get("pool_source_kind") or "") in {"PRESENCE_NO_FISH", "DET_DS_V0_1"}
+                        and str(provenance.get("pool_source_record_id") or "").strip()
+                        and provenance_sha == image_sha
                     ):
                         valid_negative_ids.add(record_id)
                     else:
                         row_blockers += 1
+                        continue
+                    if pool_entry_id in all_negative_pool_entry_ids or pool_event_id in all_negative_pool_event_ids:
+                        row_blockers += 1
+                    all_negative_pool_entry_ids.add(pool_entry_id)
+                    all_negative_pool_event_ids.add(pool_event_id)
                 if valid_negative_ids != negative_ids:
                     row_blockers += 1
+                if negative_ids & all_review_ids:
+                    row_blockers += 1
+                all_review_ids.update(negative_ids)
                 counts["human_reviewed_negatives"] += 1
+                counts[f"{split}_negative_images"] += 1
 
             split_images[split] += 1
             counts["human_reviewed_complete_scene_images"] += 1
@@ -355,6 +383,11 @@ def validate_v02_dataset(
     source_record_count = _count(report.get("source_accepted_bbox_record_count"))
     excluded_record_count = _count(report.get("excluded_held_out_accepted_bbox_record_count"))
     source_negative_count = _count(report.get("source_human_negative_record_count"))
+    active_pool_count = _count(report.get("source_negative_pool_active_member_count"))
+    if active_pool_count is None or source_negative_count is None or active_pool_count != source_negative_count:
+        blockers.append("活动 DET_FISH 负样本池成员数与构建读取数不一致")
+    if report.get("negative_pool_member_errors"):
+        blockers.append("DET_FISH 负样本池存在无效或冲突成员")
     audit_rows = report.get("source_image_audit")
     audit_by_review_id: dict[str, str] = {}
     audit_rows_valid = isinstance(audit_rows, list) and bool(audit_rows)
@@ -432,6 +465,10 @@ def validate_v02_dataset(
         if reported_images != counts[f"{split}_images"] or reported_boxes != counts[f"{split}_boxes"]:
             report_splits_match = False
             blockers.append(f"冻结报告中的 {split} 图片数或 BBox 数与逐图 Manifest 不一致")
+        reported_negatives = _count(reported.get("negative_images"))
+        if reported_negatives != counts[f"{split}_negative_images"]:
+            report_splits_match = False
+            blockers.append(f"冻结报告中的 {split} 无鱼图片数与逐图 Manifest 不一致")
 
     negatives_match = _count(report.get("negatives")) == counts["human_reviewed_negatives"]
     if not negatives_match:

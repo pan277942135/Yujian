@@ -11,7 +11,8 @@ def ready_dataset():
     for split, image_count in split_image_counts.items():
         for index in range(image_count):
             negative = split == "train" and index == image_count - 1
-            review_id = f"review-{split}-{index}"
+            image_sha = hashlib.sha256(f"source-{split}-{index}".encode()).hexdigest()
+            review_id = f"det_fish_negative_pool_entry:{index + 1}:event:{index + 1}" if negative else f"review-{split}-{index}"
             box = {"bbox_xyxy": [0.1, 0.1, 0.6, 0.8], "review_record_ids": [review_id]}
             row_provenance = [{
                 "review_record_id": review_id,
@@ -20,9 +21,18 @@ def ready_dataset():
                 "review_status": "NO_FISH_CONFIRMED" if negative else "ACCEPTED",
                 "accepted_bbox_xywh": [0.1, 0.1, 0.5, 0.7],
             }]
+            if negative:
+                row_provenance[0].update({
+                    "pool_entry_id": 1,
+                    "pool_event_id": 1,
+                    "pool_action": "ADD",
+                    "pool_source_kind": "PRESENCE_NO_FISH",
+                    "pool_source_record_id": "presence-1",
+                    "pool_source_image_sha256": image_sha,
+                })
             rows.append({
                 "image_id": f"{split}-{index}",
-                "image_sha256": hashlib.sha256(f"source-{split}-{index}".encode()).hexdigest(),
+                "image_sha256": image_sha,
                 "materialized_image_sha256": hashlib.sha256(b"fixture image").hexdigest(),
                 "source_group_id": f"group-{split}-{index}",
                 "split": split,
@@ -36,7 +46,7 @@ def ready_dataset():
                 "training_eligibility_basis": "database eligibility fixture",
                 "review_status": "NO_FISH_CONFIRMED" if negative else "ACCEPTED",
                 "fish_present": not negative,
-                "label_source": "accepted_bbox_human_review" if not negative else "human_review",
+                "label_source": "accepted_bbox_human_review" if not negative else "det_fish_negative_pool_human_confirmation",
                 "review_record_ids": [review_id],
                 "review_provenance": row_provenance,
                 "boxes": [] if negative else [box],
@@ -58,9 +68,9 @@ def ready_dataset():
         for review_id in row["review_record_ids"]
     ]
     counts = {
-        "train": {"images": 41, "annotations": 40},
-        "val": {"images": 3, "annotations": 3},
-        "test": {"images": 1, "annotations": 1},
+        "train": {"images": 41, "annotations": 40, "negative_images": 1},
+        "val": {"images": 3, "annotations": 3, "negative_images": 0},
+        "test": {"images": 1, "annotations": 1, "negative_images": 0},
     }
     report = {
         "dataset_version": "DET_DS_v0.2",
@@ -72,6 +82,7 @@ def ready_dataset():
         "held_out_exclusions_verified": True,
         "split_integrity": "PASS",
         "negative_coverage_verified": True,
+        "negative_pool_provenance_verified": True,
         "source_reconciliation": {
             "status": "PASS",
             "manifest_sha256": "1" * 64,
@@ -82,6 +93,8 @@ def ready_dataset():
         },
         "source_accepted_bbox_record_count": 44,
         "source_human_negative_record_count": 1,
+        "source_negative_pool_active_member_count": 1,
+        "negative_pool_member_errors": [],
         "excluded_held_out_accepted_bbox_record_count": 0,
         "excluded_held_out_negative_record_count": 0,
         "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),

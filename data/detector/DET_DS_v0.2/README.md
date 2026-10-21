@@ -14,7 +14,9 @@ The manifest records `training_eligibility_basis`: the database selection condit
 
 Train/validation/test assignment is deterministic and groups exact source SHA hashes with `ImageAsset.group_id`; when no group ID exists, it conservatively uses the batch ID. The former Accepted Pool `stable_hash_per_pool_key` split is ignored. Case A, Case B, `04-181200.jpg`, and the seven reviewed hard-case fixtures are excluded by source SHA.
 
-Negative images are admitted only when the database contains an explicit `human_override=no_fish` state and its matching human review event. An empty box list or machine-generated `no_fish` status is not a negative label. If no qualified human negative exists, the report records the actual count and training remains blocked.
+Negative images are read only from active `det_fish_negative_pool_entries`. Each member must have a latest `ADD`/`RE_ADD` event with an operator and timestamp, a DET_FISH-scoped explicit no-fish confirmation snapshot, a complete-scene source URI, and a stored source SHA that matches the bytes downloaded during the build. The console pool is independent of `FishPresenceResult` and the frozen bulk-review workflow: machine-only `no_fish` records remain pending until an operator checks the original scene and confirms the selection in the DET_FISH add dialog. That action adds an append-only pool event; it does not rewrite the original AI result or approval record. The COCO package retains the negative image in `images` and creates no fish annotation. If the pool is empty or a member has missing evidence, a source mismatch, a positive-label conflict, or a duplicate source SHA, the build report records the issue and the gate stays blocked.
+
+Historical v0.1 Google Vision negatives are exposed as candidates for manual review only. They are not imported into the DET_FISH pool automatically and their presence in the old pseudo-label dataset is not human confirmation.
 
 ## Build from the project's existing Cloud Shell
 
