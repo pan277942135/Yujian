@@ -33,6 +33,7 @@ echo "Git SHA: ${GIT_SHA}"
 echo "Dataset: ${DATASET_VERSION}"
 echo "Model:   ${MODEL_VERSION}"
 echo "Project: ${PROJECT_ID}"
+gcloud config set project "${PROJECT_ID}" >/dev/null
 
 echo ""
 echo "========== Ensure target model version has no published final artifacts =========="
