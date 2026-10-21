@@ -48,7 +48,7 @@
   <div class="metric-card"><div class="metric-label">Validation 图片</div><div id="valImages" class="metric-value">—</div><div id="valBoxes" class="metric-detail">鱼体框 —</div></div>
   <div class="metric-card"><div class="metric-label">独立 Test 图片</div><div id="testImages" class="metric-value">—</div><div id="testBoxes" class="metric-detail">鱼体框 —</div></div>
   <div class="metric-card"><div class="metric-label">确认无鱼负样本</div><button id="negativeCount" class="negative-count-button" type="button" onclick="openNegativePool()" aria-haspopup="dialog" aria-controls="negativePoolModal">—</button><div id="negativePoolDetail" class="metric-detail">DET_FISH 专用池成员 · 不等同于冻结入训数</div></div>
-  <div class="metric-card"><div class="metric-label">DET_FISH_v0.2</div><div id="modelStatus" class="metric-value" style="font-size:22px">—</div><div id="modelSha" class="metric-detail">模型 SHA-256</div></div>
+  <div class="metric-card"><div class="metric-label" id="targetModelVersionLabel">训练目标模型</div><div id="modelStatus" class="metric-value" style="font-size:22px">—</div><div id="modelSha" class="metric-detail">模型 SHA-256</div></div>
   <div class="metric-card"><div class="metric-label">AP50</div><div id="modelAp50" class="metric-value">—</div><div class="metric-detail">mAP@0.5</div></div>
   <div class="metric-card"><div class="metric-label">AP50:95</div><div id="modelAp50_95" class="metric-value">—</div><div class="metric-detail">COCO mAP</div></div>
 </div>
@@ -59,7 +59,7 @@
     <div class="notice warning" style="margin-top:14px">数据输入规范：检测器从 Accepted Pool 关联的原始完整场景图读取图片，并使用核验通过的人工 accepted_bbox 作为标签。分类器 Crop 素材不能直接替代检测器原图。本提示是固定规范说明；当前是否可训练，以本页实时门禁和冻结数据集报告为准。</div>
   </section>
   <section class="panel">
-    <div class="panel-heading"><div><h2>启动 DET_FISH_v0.2</h2><p>YOLOX-Nano · 416×416 · NVIDIA L4</p></div><span class="status-tag status-neutral">独立版本</span></div>
+    <div class="panel-heading"><div><h2 id="startTrainingHeading">启动 DET_FISH 训练</h2><p>YOLOX-Nano · 416×416 · NVIDIA L4</p></div><span class="status-tag status-neutral">独立版本</span></div>
     <form id="detTrainingForm">
       <div class="form-grid">
         <div class="field"><label for="detEpochs">训练轮数 Epochs</label><input id="detEpochs" type="number" min="1" max="100" value="30" required></div>
@@ -146,8 +146,11 @@ function renderGate(gate){
   else{tag.className='status-tag status-failed';tag.textContent='BLOCKED';const blockers=(gate&&gate.blockers)||['无法读取数据集门禁'];target.innerHTML='<div class="error-state"><strong>尚不能启动训练：</strong><ul>'+blockers.map(item=>'<li>'+esc(item)+'</li>').join('')+'</ul></div>';}
 }
 function renderDetTrainingStatus(data){
-  const pool=data.accepted_pool||{},dataset=data.dataset||{},datasetGate=dataset.gate||{},counts=datasetGate.counts||{},model=data.model||{};
+  const pool=data.accepted_pool||{},dataset=data.dataset||{},datasetGate=dataset.gate||{},counts=datasetGate.counts||{},model=data.model||{},trainingConfig=data.training_config||{};
   const countsKnown=Boolean(datasetGate.counts_verified);
+  const targetModelVersion=trainingConfig.model_version||model.model_version||'DET_FISH';
+  document.getElementById('targetModelVersionLabel').textContent=targetModelVersion;
+  document.getElementById('startTrainingHeading').textContent='启动 '+targetModelVersion;
   document.getElementById('acceptedPoolImages').textContent=fmtCount(pool.accepted_images);
   document.getElementById('acceptedBboxCount').textContent='人工 accepted_bbox '+fmtCount(pool.accepted_bbox)+' · 不代表已冻结入训';
   document.getElementById('datasetVersionLabel').textContent=dataset.version||'当前冻结数据集';

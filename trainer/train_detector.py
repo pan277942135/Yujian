@@ -24,6 +24,7 @@ from trainer.detector_dataset_gate import (
     validate_v02_dataset,
     validate_v02_materialized_dataset,
 )
+from trainer.detector_training_contract import validate_training_target_versions
 
 
 PRETRAIN_URL = "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_nano.pth"
@@ -55,7 +56,9 @@ def download_gcs(bucket_name: str, object_name: str, target: Path) -> None:
 
 def upload_gcs(bucket_name: str, object_name: str, source: Path, content_type: str | None = None) -> str:
     blob = storage.Client().bucket(bucket_name).blob(object_name)
-    blob.upload_from_filename(str(source), content_type=content_type)
+    # Final detector artifacts are create-only: concurrent executions or retries
+    # must never overwrite a published model version.
+    blob.upload_from_filename(str(source), content_type=content_type, if_generation_match=0)
     return f"gs://{bucket_name}/{object_name}"
 
 
@@ -73,13 +76,13 @@ def load_trusted_yolox_checkpoint(path: Path):
 def write_failure_diagnostic(error: BaseException) -> None:
     """Persist the Cloud Run traceback where GitHub Actions can read it after a failed GPU task."""
     bucket = os.environ.get("GCS_BUCKET", "").strip()
-    model_version = os.environ.get("DETECTOR_MODEL_VERSION", "DET_FISH_v0.2").strip()
+    model_version = os.environ.get("DETECTOR_MODEL_VERSION", "unknown").strip()
     if not bucket:
         return
     diagnostic = {
         "status": "DET_FISH_TRAINING_FAIL",
         "model_version": model_version,
-        "dataset_version": os.environ.get("DETECTOR_DATASET_VERSION", "DET_DS_v0.2"),
+        "dataset_version": os.environ.get("DETECTOR_DATASET_VERSION", "unknown"),
         "git_commit": os.environ.get("APP_GIT_COMMIT", "unknown"),
         "error_type": type(error).__name__,
         "error": str(error),
@@ -312,15 +315,42 @@ def export_onnx(checkpoint: Path, output: Path) -> dict:
 
 
 def main() -> None:
+    bucket = os.environ.get("GCS_BUCKET", "").strip()
+    dataset_version = os.environ.get("DETECTOR_DATASET_VERSION", "").strip()
+    model_version = os.environ.get("DETECTOR_MODEL_VERSION", "").strip()
+    app_git_commit = os.environ.get("APP_GIT_COMMIT", "").strip()
+    try:
+        validate_training_target_versions(
+            dataset_version,
+            model_version,
+            REVIEWED_DATASET_VERSION,
+            app_git_commit,
+        )
+    except ValueError as exc:
+        raise RuntimeError(f"DETECTOR_TRAINING_CONTRACT_FAIL: {exc}") from exc
+    if not bucket:
+        raise RuntimeError("GCS_BUCKET is required")
     if not torch.cuda.is_available():
         raise RuntimeError("DET_FISH training requires CUDA; Cloud Run GPU was not attached")
 
-    bucket = os.environ.get("GCS_BUCKET", "").strip()
-    if not bucket:
-        raise RuntimeError("GCS_BUCKET is required")
-    dataset_version = os.environ.get("DETECTOR_DATASET_VERSION", "DET_DS_v0.2").strip()
-    model_version = os.environ.get("DETECTOR_MODEL_VERSION", "DET_FISH_v0.2").strip()
-    app_git_commit = os.environ.get("APP_GIT_COMMIT", "unknown").strip()
+    # Final model artifacts are immutable. A retry may follow a failure diagnostic,
+    # but it must never overwrite a previously published model version.
+    final_artifacts = {
+        f"models/{model_version}/detector_metadata.json",
+        f"models/{model_version}/fish_detector_yolox_nano_v0_1.onnx",
+        f"models/{model_version}/best_ckpt.pth",
+        f"models/{model_version}/recognition_pipeline_v1.json",
+    }
+    existing_artifacts = sorted(
+        blob.name
+        for blob in storage.Client().bucket(bucket).list_blobs(prefix=f"models/{model_version}/")
+        if blob.name in final_artifacts
+    )
+    if existing_artifacts:
+        raise RuntimeError(
+            f"immutable model version {model_version} already has final artifacts: "
+            + ", ".join(existing_artifacts)
+        )
 
     work = Path("/tmp/yujian-detector")
     if work.exists():
@@ -333,26 +363,30 @@ def main() -> None:
     download_gcs(bucket, f"{prefix}/{dataset_version}.tar.gz", archive)
     download_gcs(bucket, f"{prefix}/bootstrap_report.json", report_path)
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    manifest_bytes = None
-    if dataset_version == REVIEWED_DATASET_VERSION:
-        manifest_path = work / "bootstrap_manifest.json"
-        download_gcs(bucket, f"{prefix}/bootstrap_manifest.json", manifest_path)
-        manifest_bytes = manifest_path.read_bytes()
-        gate = validate_v02_dataset(report, manifest_bytes, sha256_file(archive))
-        if not gate["ready"]:
-            raise RuntimeError("DET_DS_v0.2 data gate failed: " + "; ".join(gate["blockers"]))
-    else:
-        require_dataset(report)
+    if dataset_version != REVIEWED_DATASET_VERSION:
+        raise RuntimeError(
+            "DETECTOR_TRAINING_CONTRACT_FAIL: runtime dataset version differs from the "
+            "version-bound reviewed dataset gate"
+        )
+    manifest_path = work / "bootstrap_manifest.json"
+    download_gcs(bucket, f"{prefix}/bootstrap_manifest.json", manifest_path)
+    manifest_bytes = manifest_path.read_bytes()
+    gate = validate_v02_dataset(report, manifest_bytes, sha256_file(archive))
+    if not gate["ready"] or not gate.get("counts_verified"):
+        raise RuntimeError(
+            f"{dataset_version} data gate failed: " + "; ".join(gate["blockers"])
+        )
 
     extracted = work / "dataset"
     safe_extract(archive, extracted)
     dataset_root = extracted / dataset_version
-    if dataset_version == REVIEWED_DATASET_VERSION:
-        package_blockers = validate_v02_materialized_dataset(dataset_root, manifest_bytes or b"", gate["counts"])
-        if package_blockers:
-            raise RuntimeError("DET_DS_v0.2 COCO package gate failed: " + "; ".join(package_blockers))
-    elif not (dataset_root / "annotations" / "instances_train2017.json").exists():
-        raise RuntimeError(f"invalid detector dataset archive: {dataset_root}")
+    package_blockers = validate_v02_materialized_dataset(
+        dataset_root, manifest_bytes, gate["counts"]
+    )
+    if package_blockers:
+        raise RuntimeError(
+            f"{dataset_version} COCO package gate failed: " + "; ".join(package_blockers)
+        )
 
     pretrain = work / "yolox_nano_pretrained.pth"
     urllib.request.urlretrieve(PRETRAIN_URL, pretrain)
@@ -374,6 +408,10 @@ def main() -> None:
         "class_names": ["fish"],
         "dataset_version": dataset_version,
         "git_commit": app_git_commit,
+        "trainer_image_digest": os.environ.get("DETECTOR_TRAINER_IMAGE_DIGEST", "").strip() or None,
+        "trainer_image_uri": os.environ.get("DETECTOR_TRAINER_IMAGE_URI", "").strip() or None,
+        "dataset_archive_sha256": sha256_file(archive),
+        "dataset_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
         "training": {
             "epochs": int(os.environ.get("DETECTOR_EPOCHS", "30")),
             "epochs_completed": completed_epochs,

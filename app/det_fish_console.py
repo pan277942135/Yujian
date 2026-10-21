@@ -34,16 +34,23 @@ from trainer.detector_dataset_gate import DATASET_VERSION, validate_v02_dataset
 
 router = APIRouter(tags=["det-fish-console"])
 
-MODEL_VERSION = "DET_FISH_v0.2"
+MODEL_VERSION = os.getenv(
+    "DETECTOR_TRAINING_MODEL_VERSION",
+    {
+        "DET_DS_v0.2": "DET_FISH_v0.2",
+        "DET_DS_v0.3": "DET_FISH_v0.3",
+    }.get(DATASET_VERSION, "DET_FISH_v0.2"),
+).strip()
 TRAINING_JOB_NAME = os.getenv("DETECTOR_TRAINING_JOB_NAME", "yujian-detector-trainer").strip()
 # The region default mirrors scripts/deploy_detector_training_gcp.sh. The GCP
 # project is deliberately environment-only: a historical project fallback could
 # direct an otherwise valid request to the wrong account.
 GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", os.getenv("GOOGLE_CLOUD_PROJECT", "")).strip()
+CONSOLE_GIT_COMMIT = os.getenv("APP_GIT_COMMIT", "").strip()
 GPU_REGION = os.getenv("DETECTOR_GPU_REGION", "asia-southeast1").strip()
 MAX_TEST_IMAGE_BYTES = 25 * 1024 * 1024
 MAX_TEST_IMAGE_PIXELS = 40_000_000
-ALLOWED_MODEL_VERSIONS = {"DET_FISH_v0.1", "DET_FISH_v0.2"}
+ALLOWED_MODEL_VERSIONS = {"DET_FISH_v0.1", "DET_FISH_v0.2", "DET_FISH_v0.3"}
 _TRAINING_LOCK_ID = 0x594A4446
 _LOCAL_TRAINING_LOCK = threading.Lock()
 
@@ -204,14 +211,29 @@ def _validate_detector_job(job: dict[str, Any]) -> list[str]:
         if isinstance(item, dict)
     }
     if env.get("DETECTOR_DATASET_VERSION") != DATASET_VERSION:
-        blockers.append(f"训练 Job 未显式配置 DETECTOR_DATASET_VERSION={DATASET_VERSION}；禁止使用其他数据集版本启动")
-    if env.get("DETECTOR_MODEL_VERSION") != "DET_FISH_v0.2":
-        blockers.append("训练 Job 未显式配置 DETECTOR_MODEL_VERSION=DET_FISH_v0.2")
+        blockers.append(
+            f"训练 Job 未显式配置 DETECTOR_DATASET_VERSION={DATASET_VERSION}；禁止使用其他数据集版本启动"
+        )
+    if not MODEL_VERSION:
+        blockers.append("控制台未配置受支持的数据集/模型版本组合")
+    elif env.get("DETECTOR_MODEL_VERSION") != MODEL_VERSION:
+        blockers.append(
+            f"训练 Job 未显式配置 DETECTOR_MODEL_VERSION={MODEL_VERSION}"
+        )
     build_sha = env.get("APP_GIT_COMMIT", "").strip()
     if not build_sha:
         blockers.append("训练 Job 缺少构建代码提交 SHA，无法核对训练镜像来源")
     elif not re.fullmatch(r"[0-9a-fA-F]{40}", build_sha):
         blockers.append("训练 Job 的 APP_GIT_COMMIT 不是完整 Git SHA")
+    if not re.fullmatch(r"[0-9a-f]{40}", CONSOLE_GIT_COMMIT):
+        blockers.append("控制台缺少完整 APP_GIT_COMMIT，无法核验精确源码版本")
+    elif build_sha != CONSOLE_GIT_COMMIT:
+        blockers.append("训练镜像源码 SHA 与控制台源码 SHA 不一致")
+    digest_match = re.search(r"@sha256:([0-9a-f]{64})$", image)
+    if digest_match and env.get("DETECTOR_TRAINER_IMAGE_DIGEST") != "sha256:" + digest_match.group(1):
+        blockers.append("训练 Job 的 DETECTOR_TRAINER_IMAGE_DIGEST 与镜像 URI digest 不一致")
+    if env.get("DETECTOR_TRAINER_IMAGE_URI") != image:
+        blockers.append("训练 Job 的 DETECTOR_TRAINER_IMAGE_URI 与实际运行镜像 URI 不一致")
     if "@sha256:" not in image:
         blockers.append("训练 Job 镜像未固定为 Artifact Registry digest；禁止使用可变标签启动训练")
     elif not re.search(r"@sha256:[0-9a-f]{64}$", image):
@@ -401,7 +423,9 @@ def det_fish_training_status(db: Session = Depends(get_db)) -> dict[str, Any]:
         training_blockers.extend(accepted_pool_reconciliation["blockers"] if not accepted_pool_reconciliation["verified"] else [])
         training_blockers.extend(job_configuration["blockers"])
         if model.get("artifact_objects_present"):
-            training_blockers.append("DET_FISH_v0.2 目标产物路径已存在；为避免覆盖不可变模型工件，已阻止重复训练")
+            training_blockers.append(
+                f"{MODEL_VERSION} 目标产物路径已存在；为避免覆盖不可变模型工件，已阻止重复训练"
+            )
         if execution_history_error:
             training_blockers.append(execution_history_error)
         active = [item for item in executions if item["status"] in {"RUNNING", "QUEUED"}]
@@ -444,6 +468,8 @@ def det_fish_training_status(db: Session = Depends(get_db)) -> dict[str, Any]:
             "job_configuration": job_configuration,
             "training_gate": training_gate,
             "training_config": {
+                "dataset_version": DATASET_VERSION,
+                "model_version": MODEL_VERSION,
                 "model_family": "YOLOX_NANO",
                 "input_size": 416,
                 "default_epochs": 30,
@@ -480,7 +506,7 @@ def det_fish_training_start(payload: DetectorTrainingStart, db: Session = Depend
         if existing_model.get("artifact_objects_present"):
             raise HTTPException(
                 status_code=409,
-                detail="DET_FISH_v0.2 目标产物路径已存在；为避免覆盖不可变模型工件，训练已停止。",
+                detail=f"{MODEL_VERSION} 目标产物路径已存在；为避免覆盖不可变模型工件，训练已停止。",
             )
 
         job_configuration = _job_configuration()
