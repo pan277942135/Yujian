@@ -31,7 +31,8 @@ def test_only_supported_detector_versions_can_be_selected():
     assert ALLOWED_MODEL_VERSIONS == {"DET_FISH_v0.1", "DET_FISH_v0.2", "DET_FISH_v0.3"}
 
 
-def test_cloud_run_detector_job_must_match_l4_worker_contract():
+def test_cloud_run_detector_job_must_match_l4_worker_contract(monkeypatch):
+    monkeypatch.setattr(console, "CONSOLE_GIT_COMMIT", "b" * 40)
     job = {
         "template": {
             "template": {
@@ -41,6 +42,7 @@ def test_cloud_run_detector_job_must_match_l4_worker_contract():
                         {"name": "DETECTOR_DATASET_VERSION", "value": "DET_DS_v0.2"},
                         {"name": "DETECTOR_MODEL_VERSION", "value": "DET_FISH_v0.2"},
                         {"name": "APP_GIT_COMMIT", "value": "b" * 40},
+                        {"name": "DETECTOR_TRAINER_IMAGE_DIGEST", "value": "sha256:" + "a" * 64},
                     ],
                     "resources": {"limits": {"cpu": "4", "memory": "16Gi", "nvidia.com/gpu": "1"}},
                 }],
@@ -111,6 +113,7 @@ def test_upload_rejects_nonimage_bytes_and_mime_mismatch():
 def test_cloud_run_detector_job_accepts_exact_v03_pair(monkeypatch):
     monkeypatch.setattr(console, "DATASET_VERSION", "DET_DS_v0.3")
     monkeypatch.setattr(console, "MODEL_VERSION", "DET_FISH_v0.3")
+    monkeypatch.setattr(console, "CONSOLE_GIT_COMMIT", "d" * 40)
     job = {
         "template": {
             "template": {
@@ -120,6 +123,7 @@ def test_cloud_run_detector_job_accepts_exact_v03_pair(monkeypatch):
                         {"name": "DETECTOR_DATASET_VERSION", "value": "DET_DS_v0.3"},
                         {"name": "DETECTOR_MODEL_VERSION", "value": "DET_FISH_v0.3"},
                         {"name": "APP_GIT_COMMIT", "value": "d" * 40},
+                        {"name": "DETECTOR_TRAINER_IMAGE_DIGEST", "value": "sha256:" + "c" * 64},
                     ],
                     "resources": {"limits": {"cpu": "4", "memory": "16Gi", "nvidia.com/gpu": "1"}},
                 }],
