@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT_ID="${PROJECT_ID:-gemini-api-project-503706}"
+PROJECT_ID="${PROJECT_ID:-${GOOGLE_CLOUD_PROJECT:-}}"
+if [[ -z "$PROJECT_ID" ]]; then
+  echo "Set PROJECT_ID or GOOGLE_CLOUD_PROJECT to the reviewed target project." >&2
+  exit 2
+fi
 REGION="${REGION:-asia-east1}"
 BUCKET="${BUCKET:-yujian-model-factory-571785698442}"
 JOB_NAME="${TRAINING_JOB_NAME:-yujian-classifier-trainer}"

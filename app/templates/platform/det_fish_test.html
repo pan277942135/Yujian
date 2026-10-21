@@ -1,0 +1,84 @@
+{% extends "platform/base.html" %}
+{% block content %}
+<div class="page-heading">
+  <div><h1>DET_FISH 模型测试</h1><p>上传一张照片，查看检测框、坐标、置信度和方向重试结果。测试仅调用所选模型，不会保存图片或写入训练集。</p></div>
+  <div class="page-actions"><a class="button" href="/platform/model/det-fish-training">DET_FISH 训练</a><button class="button" type="button" onclick="loadModels()">刷新模型列表</button></div>
+</div>
+<div id="detTestNotice"></div>
+<div class="form-grid">
+  <section class="panel">
+    <div class="panel-heading"><div><h2>输入照片</h2><p>JPG / PNG / WEBP，最大 25 MiB</p></div></div>
+    <div class="field"><label for="detTestModel">测试模型版本</label><select id="detTestModel"><option value="">读取模型列表中…</option></select><small id="detTestModelMeta">选择已验证 ONNX 元数据的模型</small></div>
+    <div class="field" style="margin-top:14px"><label for="detTestFile">上传鱼获照片</label><input id="detTestFile" type="file" accept="image/jpeg,image/png,image/webp"></div>
+    <div id="detTestOriginalWrap" style="margin-top:14px">
+      <div class="muted" style="font-size:12px;margin-bottom:7px">原始预览</div>
+      <div class="bbox-preview" style="min-height:250px;display:grid;place-items:center"><img id="detTestOriginal" alt="原始上传照片" hidden><span id="detTestOriginalEmpty" class="muted">选择照片后显示预览</span></div>
+    </div>
+    <div class="form-actions"><button id="detTestRun" class="button primary" type="button" disabled>运行 BBox 检测</button></div>
+  </section>
+  <section class="panel">
+    <div class="panel-heading"><div><h2>检测结果可视化</h2><p id="detTestResultMeta">尚未运行检测</p></div></div>
+    <div class="bbox-preview" style="min-height:300px;display:grid;place-items:center"><img id="detTestOverlay" alt="带检测框的结果图" hidden><span id="detTestOverlayEmpty" class="muted">运行检测后显示 BBox 叠加图</span></div>
+    <div id="detTestSummary"></div>
+  </section>
+</div>
+<section class="panel" style="margin-top:16px">
+  <div class="panel-heading"><div><h2>全部 BBox</h2><p>原图坐标为 EXIF 校正后的坐标 [x1, y1, x2, y2]；检测源图最长边不超过 2048px，模型实际输入为 416×416 float32 NCHW；归一化坐标为 [x, y, width, height]，范围 0–1。</p></div></div>
+  <div id="detTestBoxes" class="empty">暂无检测框</div>
+</section>
+<section class="panel" style="margin-top:16px">
+  <div class="panel-heading"><div><h2>方向重试与运行信息</h2><p>ORIGINAL 优先；仅当原图结果为 NO_FISH 时执行 CW90 / CCW90。</p></div></div>
+  <div id="detTestTrace" class="empty">暂无运行信息</div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+let detTestPreviewUrl=null;
+let detTestModels=[];
+function detTestReady(){return Boolean(document.getElementById('detTestModel').value&&document.getElementById('detTestFile').files&&document.getElementById('detTestFile').files[0]);}
+function updateDetTestButton(){document.getElementById('detTestRun').disabled=!detTestReady();}
+async function loadModels(){
+  const select=document.getElementById('detTestModel');select.innerHTML='<option value="">正在读取模型…</option>';
+  try{
+    const data=await platformFetch('/api/det-fish/models');detTestModels=data.models||[];
+    const available=detTestModels.filter(item=>item.available);
+    select.innerHTML=available.map(item=>'<option value="'+esc(item.model_version)+'">'+esc(item.model_version)+(item.is_configured_production_version?' · 当前配置版本':'')+'</option>').join('');
+    if(!available.length){select.innerHTML='<option value="">暂无可测试模型</option>';}
+    const chosen=available.find(item=>item.is_configured_production_version)||available[0];
+    if(chosen)select.value=chosen.model_version;
+    const unavailable=detTestModels.filter(item=>!item.available).map(item=>item.model_version+'：'+item.reason).join('；');
+    document.getElementById('detTestModelMeta').textContent=chosen?(chosen.dataset_version+' · '+(chosen.onnx_sha256?'SHA-256 '+chosen.onnx_sha256:'SHA 尚不可用')):(unavailable||'暂无模型产物');
+    if(unavailable){document.getElementById('detTestNotice').innerHTML='<div class="notice warning">不可用模型：'+esc(unavailable)+'</div>';}
+  }catch(error){select.innerHTML='<option value="">模型列表读取失败</option>';document.getElementById('detTestNotice').innerHTML='<div class="error-state">'+esc(platformError(error))+'</div>';}
+  updateDetTestButton();
+}
+document.getElementById('detTestModel').addEventListener('change',function(){const item=detTestModels.find(row=>row.model_version===this.value);document.getElementById('detTestModelMeta').textContent=item?(item.dataset_version+' · SHA-256 '+(item.onnx_sha256||'—')):'选择模型';updateDetTestButton();});
+document.getElementById('detTestFile').addEventListener('change',function(){
+  const file=this.files&&this.files[0];const image=document.getElementById('detTestOriginal');const empty=document.getElementById('detTestOriginalEmpty');
+  if(detTestPreviewUrl)URL.revokeObjectURL(detTestPreviewUrl);
+  if(!file){image.hidden=true;empty.hidden=false;updateDetTestButton();return;}
+  detTestPreviewUrl=URL.createObjectURL(file);image.src=detTestPreviewUrl;image.hidden=false;empty.hidden=true;
+  document.getElementById('detTestNotice').innerHTML='';updateDetTestButton();
+});
+function fmtDetNumber(value,digits){return value==null?'—':Number(value).toFixed(digits===undefined?4:digits);}
+function renderDetTestResult(data){
+  const detector=data.detector||{},input=data.input||{},modelInput=data.model_input||{},detections=detector.detections||[];
+  const overlay=document.getElementById('detTestOverlay');overlay.src=data.overlay_data_url;overlay.hidden=false;document.getElementById('detTestOverlayEmpty').hidden=true;
+  document.getElementById('detTestResultMeta').textContent=data.model_version+' · 原图 '+input.oriented_width+'×'+input.oriented_height+' · 检测源图 '+input.width+'×'+input.height+' · 模型输入 '+(modelInput.width||'—')+'×'+(modelInput.height||'—')+' · '+fmtDetNumber(detector.latency_ms,1)+' ms';
+  document.getElementById('detTestSummary').innerHTML='<div class="stat-grid" style="margin-top:14px"><div class="stat"><strong>'+esc(detector.assessment||'—')+'</strong><span>检测门禁</span></div><div class="stat"><strong>'+esc(detections.length)+'</strong><span>BBox 数量</span></div><div class="stat"><strong>'+esc(detector.confidence==null?'—':fmtDetNumber(detector.confidence,4))+'</strong><span>主框置信度</span></div></div><div class="muted" style="font-size:12px;margin-top:10px">模型张量：'+esc(JSON.stringify(modelInput.shape||null))+' · '+esc(modelInput.dtype||'—')+' '+esc(modelInput.layout||'')+' · Letterbox 内容 '+esc(modelInput.resized_content_width||'—')+'×'+esc(modelInput.resized_content_height||'—')+' · 填充值 '+esc(modelInput.letterbox_fill==null?'—':modelInput.letterbox_fill)+'</div><div class="muted" style="font-size:12px;margin-top:6px;word-break:break-all">ONNX SHA-256：'+esc(data.onnx_sha256||'—')+'</div><div class="muted" style="font-size:12px;margin-top:5px">主框像素坐标：'+esc(JSON.stringify(detector.bbox_pixel||null))+' · 归一化 XYWH：'+esc(JSON.stringify(detector.bbox_normalized_xywh||null))+'</div>';
+  if(!detections.length){document.getElementById('detTestBoxes').innerHTML='<div class="empty">没有检测到满足生产门槛的 BBox。该结果不代表图片中绝对没有鱼。</div>';}
+  else{document.getElementById('detTestBoxes').innerHTML='<div class="table-wrap"><table class="data-table"><thead><tr><th>Rank</th><th>Confidence</th><th>原图像素 BBox [x1,y1,x2,y2]</th><th>推理栅格 BBox</th><th>归一化 BBox [x,y,w,h]</th><th>面积占比</th></tr></thead><tbody>'+detections.map(row=>'<tr><td>'+esc(row.rank)+'</td><td>'+esc(fmtDetNumber(row.confidence,6))+'</td><td><code>'+esc(JSON.stringify(row.bbox_pixel))+'</code></td><td><code>'+esc(JSON.stringify(row.bbox_pixel_input))+'</code></td><td><code>'+esc(JSON.stringify(row.bbox_normalized_xywh))+'</code></td><td>'+esc(fmtDetNumber(row.bbox_area_ratio*100,2))+'%</td></tr>').join('')+'</tbody></table></div>';}
+  const attempts=detector.attempts||[];
+  document.getElementById('detTestTrace').innerHTML='<div class="stat-grid">'+attempts.map(row=>'<div class="stat"><strong>'+esc(row.orientation_attempt)+'</strong><span>'+esc(row.quality_status)+' / '+esc(row.quality_level)+'</span><span>'+esc(row.detection_count)+' boxes · Top '+esc(fmtDetNumber(row.top_confidence,4))+'</span></div>').join('')+'</div><div class="notice" style="margin-top:12px">最终选择：'+esc(detector.selected_orientation||'—')+' · '+esc(detector.selection_reason||'—')+'<br>判断原因：'+esc(detector.reason||'—')+'</div>';
+}
+document.getElementById('detTestRun').addEventListener('click',async function(){
+  const file=document.getElementById('detTestFile').files[0];if(!file)return;
+  const button=this;button.disabled=true;button.textContent='检测中…';document.getElementById('detTestNotice').innerHTML='<div class="notice">正在运行所选 DET_FISH 模型；上传图片仅用于本次推理，不会写入训练集。</div>';
+  const form=new FormData();form.append('image',file);form.append('model_version',document.getElementById('detTestModel').value);
+  try{const data=await platformFetch('/api/det-fish/test',{method:'POST',body:form});renderDetTestResult(data);document.getElementById('detTestNotice').innerHTML='';}
+  catch(error){document.getElementById('detTestNotice').innerHTML='<div class="error-state">'+esc(platformError(error))+'</div>';}
+  finally{button.textContent='运行 BBox 检测';updateDetTestButton();}
+});
+loadModels();
+</script>
+{% endblock %}

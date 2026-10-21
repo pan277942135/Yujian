@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import relationship, synonym
 
 from app.db import Base
@@ -386,6 +386,67 @@ class ReviewEvent(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
     image = relationship("ImageAsset", back_populates="review_events")
+
+
+class DetectorNegativePoolEntry(Base):
+    """Current DET_FISH-only membership for a human-confirmed no-fish scene.
+
+    This table is intentionally separate from ImageAsset review state and the
+    frozen bulk-review workflow. Membership is soft-removed so a user can
+    inspect, remove, and later re-add the same source without losing history.
+    """
+
+    __tablename__ = "det_fish_negative_pool_entries"
+    __table_args__ = (
+        UniqueConstraint("image_asset_id", name="uq_det_fish_negative_pool_asset"),
+        CheckConstraint("state IN ('ACTIVE', 'REMOVED')", name="ck_det_fish_negative_pool_state"),
+        Index(
+            "uq_det_fish_negative_pool_active_source_sha256",
+            "source_image_sha256",
+            unique=True,
+            sqlite_where=text("state = 'ACTIVE' AND source_image_sha256 IS NOT NULL"),
+            postgresql_where=text("state = 'ACTIVE' AND source_image_sha256 IS NOT NULL"),
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    image_asset_id = Column(Integer, ForeignKey("image_assets.id"), nullable=False, index=True)
+    source_kind = Column(String(32), nullable=False, index=True)
+    source_record_id = Column(String(256), nullable=False)
+    source_dataset_version = Column(String(128))
+    source_uri = Column(Text, nullable=False)
+    source_status = Column(String(32), nullable=False)
+    source_provider = Column(String(128))
+    source_model_version = Column(String(128))
+    source_evidence_sha256 = Column(String(64))
+    source_snapshot_json = Column(Text, nullable=False, default="{}")
+    source_image_sha256 = Column(String(64))
+    state = Column(String(16), nullable=False, default="ACTIVE", index=True)
+    added_by = Column(String(256), nullable=False)
+    added_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+    removed_by = Column(String(256))
+    removed_at = Column(DateTime(timezone=True))
+
+
+class DetectorNegativePoolEvent(Base):
+    """Append-only audit event for add, remove, and re-add operations."""
+
+    __tablename__ = "det_fish_negative_pool_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    pool_entry_id = Column(
+        Integer,
+        ForeignKey("det_fish_negative_pool_entries.id"),
+        nullable=False,
+        index=True,
+    )
+    image_asset_id = Column(Integer, ForeignKey("image_assets.id"), nullable=False, index=True)
+    action = Column(String(16), nullable=False, index=True)
+    actor = Column(String(256), nullable=False)
+    occurred_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+    before_state = Column(String(16))
+    after_state = Column(String(16), nullable=False)
+    source_snapshot_json = Column(Text, nullable=False, default="{}")
 
 
 class DatasetVersion(Base):

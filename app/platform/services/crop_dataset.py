@@ -181,6 +181,7 @@ def accepted_bbox_pool_count(db) -> int:
             .select_from(BatchCropReview)
             .join(ImageAsset, ImageAsset.id == BatchCropReview.image_asset_id)
             .where(
+                ImageAsset.review_status == "approved",
                 BatchCropReview.status.in_(ACCEPTED_STATUSES),
                 BatchCropReview.accepted_bbox_json.is_not(None),
                 ImageAsset.training_eligible.is_(True),

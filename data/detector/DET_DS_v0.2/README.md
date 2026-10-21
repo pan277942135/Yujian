@@ -1,47 +1,37 @@
-# DET_DS_v0.2 intake gate
+# DET_DS_v0.2 reviewed detector dataset
 
-Status: **INTAKE_OPEN / NOT TRAINABLE**. This directory is only a collection protocol. It contains no image samples and no ground-truth labels.
+**Current repository status: `INTAKE_OPEN / NOT TRAINABLE`.** No Accepted Pool export, database snapshot, source scenes, frozen Manifest, or COCO package is checked into this directory. The previous v0.1 Google Vision pseudo-label dataset is not a v0.2 substitute.
 
-## Frozen boundaries
+## Source and label contract
 
-- Do not edit or rebuild `DET_DS_v0.1`.
-- Keep both incident images held out from train, validation, and test.
-  - Case A SHA-256: `2dd703a46b378093604e10f0add454606393138f7501774bd3bbcca75352c9fe`.
-  - Case B SHA-256: `a7ed3bb0410c191364f6d853b4078aebdc2f3b9baa4da34b7b3f6e8e0e93a56b`.
-- Do not accept detector-produced boxes as annotations.
+The v0.2 builder reads the actual `datasets/accepted_pool/manifest.csv` and `metadata.json`, then reconciles every `source_review_id`, source URI, and `accepted_bbox` against current human review rows. It downloads and audits each manifest source URI even when the review row or label later fails reconciliation. It never uses `crop_path`, the materialized crop, `detector_bbox`, or Google Vision candidate boxes as detector labels.
 
-## Required manually reviewed positives
+The `accepted_bbox` and its `bbox` alias are normalized `xywh` on the EXIF-transposed full scene. `pixel_bbox` is source-scene pixel `xyxy` calculated against `source_size`; `crop_left/top/right/bottom` describe the source-scene crop rectangle and are not detector labels. The builder checks these relationships against downloaded bytes. It records the raw source SHA, EXIF orientation, and normalized dimensions for each source record. PNG sources are preserved losslessly as normalized PNG; other supported source formats are normalized to RGB high-quality JPEG (quality 95), with both raw source SHA and materialized-image SHA recorded.
 
-Collect distinct source images for each applicable category and assign human-reviewed fish boxes:
+The manifest records `training_eligibility_basis`: the database selection conditions (`training_eligible=true` plus the accepted human bbox review state). This field is not a claim of a separate legal consent record. A missing accepted review, reviewer, timestamp, or database training eligibility blocks the dataset.
 
-- vertical fish orientation;
-- person holding fish;
-- hand near or partly occluding fish;
-- night / flash capture;
-- black background;
-- elongated fish;
-- fish occupying 8–20% of frame area;
-- hook or line interference;
-- cluttered vegetation or rock backgrounds.
+## Split, held-out cases, and negatives
 
-## Matched hard negatives
+Train/validation/test assignment is deterministic and groups exact source SHA hashes with `ImageAsset.group_id`; when no group ID exists, it conservatively uses the batch ID. The former Accepted Pool `stable_hash_per_pool_key` split is ignored. Case A, Case B, `04-181200.jpg`, and the seven reviewed hard-case fixtures are excluded by source SHA.
 
-Collect images with no fish for: person only, hand only, rod or hook only, rocks, vegetation, night scenes, and water reflections. A negative row must explicitly record `fish_present=false` after human review; an empty box list alone is not proof.
+Negative images are read only from active `det_fish_negative_pool_entries`. Each member must have a latest `ADD`/`RE_ADD` event with an operator and timestamp, a DET_FISH-scoped explicit no-fish confirmation snapshot, a complete-scene source URI, and a stored source SHA that matches the bytes downloaded during the build. The console pool is independent of `FishPresenceResult` and the frozen bulk-review workflow: machine-only `no_fish` records remain pending until an operator checks the original scene and confirms the selection in the DET_FISH add dialog. That action adds an append-only pool event; it does not rewrite the original AI result or approval record. The COCO package retains the negative image in `images` and creates no fish annotation. If the pool is empty or a member has missing evidence, a source mismatch, a positive-label conflict, or a duplicate source SHA, the build report records the issue and the gate stays blocked.
 
-## Per-image intake record
+Historical v0.1 Google Vision negatives are exposed as candidates for manual review only. They are not imported into the DET_FISH pool automatically and their presence in the old pseudo-label dataset is not human confirmation.
 
-Keep a version-controlled, privacy-safe manifest with one row per source image:
+## Build from the project's existing Cloud Shell
 
-- stable image ID and SHA-256;
-- source URI and license / permission basis;
-- image dimensions and orientation policy;
-- train / validation / test split and source-group ID;
-- positive/negative label and hard-case tags;
-- normalized xyxy fish boxes, or an explicit no-fish decision;
-- reviewer ID, review date, and review status.
+Check out the current PR #166 head, then run:
 
-Keep identifiable or otherwise sensitive source images in access-controlled storage; do not commit them to this repository. Use group-wise splits so near-duplicate frames and the same source session cannot leak across train, validation, or test.
+```bash
+bash scripts/build_det_ds_v02_cloud_shell.sh
+```
 
-## Training gate
+The script reads the live console service configuration, derives its Cloud SQL connection, DB secret reference and runtime service account, and stops if the required existing Artifact Registry or resources cannot be read. It builds and executes a dedicated CPU-only Cloud Run dataset-builder Job. It does not run the GPU training Job or grant IAM roles.
 
-No `DET_FISH_v0.2` training starts until the image inventory, human review, licensing/permission, held-out exclusion, split integrity, and negative coverage have been checked and the frozen dataset package is independently validated. The v0.2 YOLOX experiment must select exact 90°, 180°, and 270° augmentations. No AP-only acceptance is allowed.
+The only frozen artifacts are published to:
+
+```text
+gs://yujian-model-factory-571785698442/detector-datasets/DET_DS_v0.2/
+```
+
+The runtime service account needs existing read access to Accepted Pool and source-scene objects, write access to the versioned detector-dataset prefix, Cloud SQL connectivity, and access to the DB secret. The caller needs existing Cloud Build and Cloud Run Job permissions. If any prerequisite or data gate fails, the job reports `BLOCKED` and does not publish a ready report. Uploads use GCS generation preconditions, and the report is uploaded last as the commit marker; different existing frozen objects are never overwritten.

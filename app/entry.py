@@ -54,6 +54,8 @@ from app.unified_nav import install_unified_nav
 from app.db import SessionLocal
 from app.species_policy import ensure_target_species
 from app.platform.routes.pages import router as platform_pages_router
+from app.det_fish_console import router as det_fish_console_router
+from app.det_fish_negative_pool import router as det_fish_negative_pool_router
 from app.services.fish_bside_jobs import recover_pending_bside_jobs
 from app.services.image_studio_jobs import recover_pending_image_studio_jobs
 
@@ -193,6 +195,8 @@ app.include_router(fish_asset_import_router)
 app.include_router(fish_knowledge_asset_v13_router)
 app.include_router(fish_asset_import_page_router)
 app.include_router(platform_pages_router)
+app.include_router(det_fish_console_router)
+app.include_router(det_fish_negative_pool_router)
 app.include_router(platform_portrait_router)
 app.include_router(qwen_image_edit_lab_router)
 app.include_router(image_studio_router)

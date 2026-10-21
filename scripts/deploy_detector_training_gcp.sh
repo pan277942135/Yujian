@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT_ID="${PROJECT_ID:-gemini-api-project-503706}"
+PROJECT_ID="${PROJECT_ID:-${GOOGLE_CLOUD_PROJECT:-}}"
+if [[ -z "$PROJECT_ID" ]]; then
+  echo "Set PROJECT_ID or GOOGLE_CLOUD_PROJECT to the reviewed target project." >&2
+  exit 2
+fi
 REGION="${DETECTOR_GPU_REGION:-asia-southeast1}"
 BUCKET="${BUCKET:-yujian-model-factory-571785698442}"
 JOB_NAME="${DETECTOR_TRAINING_JOB_NAME:-yujian-detector-trainer}"
 AR_REPOSITORY="${DETECTOR_AR_REPOSITORY:-yujian-detector-training}"
 RUNTIME_SA="${RUNTIME_SA:-yujian-model-factory@${PROJECT_ID}.iam.gserviceaccount.com}"
-DATASET_VERSION="${DETECTOR_DATASET_VERSION:-DET_DS_v0.1}"
-MODEL_VERSION="${DETECTOR_MODEL_VERSION:-DET_FISH_v0.1}"
+DATASET_VERSION="${DETECTOR_DATASET_VERSION:-DET_DS_v0.2}"
+MODEL_VERSION="${DETECTOR_MODEL_VERSION:-DET_FISH_v0.2}"
 DATASET_ROOT="/tmp/yujian-detector/dataset/${DATASET_VERSION}"
 
 log() { printf '\n==> %s\n' "$*"; }
@@ -32,13 +36,20 @@ if ! gcloud artifacts docker images describe "$IMAGE_URI" --project "$PROJECT_ID
   gcloud builds submit . --project "$PROJECT_ID" --config infra/cloudbuild.detector.yaml --substitutions="_IMAGE_URI=${IMAGE_URI}"
 fi
 
+IMAGE_DIGEST="$(gcloud artifacts docker images describe "$IMAGE_URI" --project "$PROJECT_ID" --format='value(image_summary.digest)')"
+if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  echo "Unable to resolve an immutable detector trainer image digest for ${IMAGE_URI}; refusing Job deployment." >&2
+  exit 3
+fi
+PINNED_IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPOSITORY}/detector-trainer@${IMAGE_DIGEST}"
+
 log "Deploying L4 detector training job ${JOB_NAME} in ${REGION}"
 # Cloud Run Jobs caps GPU task timeout at one hour. The detector dataset is small enough
 # for the complete train → evaluate → ONNX export path to fit this platform limit.
 gcloud run jobs deploy "$JOB_NAME" \
   --project "$PROJECT_ID" \
   --region "$REGION" \
-  --image "$IMAGE_URI" \
+  --image "$PINNED_IMAGE_URI" \
   --service-account "$RUNTIME_SA" \
   --set-env-vars="GCS_BUCKET=${BUCKET},DETECTOR_DATASET_VERSION=${DATASET_VERSION},DETECTOR_DATASET_ROOT=${DATASET_ROOT},DETECTOR_MODEL_VERSION=${MODEL_VERSION},APP_GIT_COMMIT=${GIT_SHA},DETECTOR_EPOCHS=${DETECTOR_EPOCHS:-30},DETECTOR_BATCH_SIZE=${DETECTOR_BATCH_SIZE:-16}" \
   --cpu=4 \

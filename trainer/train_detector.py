@@ -19,6 +19,11 @@ import torch
 from google.cloud import storage
 
 from trainer.yolox_fish_exp import Exp
+from trainer.detector_dataset_gate import (
+    DATASET_VERSION as REVIEWED_DATASET_VERSION,
+    validate_v02_dataset,
+    validate_v02_materialized_dataset,
+)
 
 
 PRETRAIN_URL = "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_nano.pth"
@@ -68,13 +73,13 @@ def load_trusted_yolox_checkpoint(path: Path):
 def write_failure_diagnostic(error: BaseException) -> None:
     """Persist the Cloud Run traceback where GitHub Actions can read it after a failed GPU task."""
     bucket = os.environ.get("GCS_BUCKET", "").strip()
-    model_version = os.environ.get("DETECTOR_MODEL_VERSION", "DET_FISH_v0.1").strip()
+    model_version = os.environ.get("DETECTOR_MODEL_VERSION", "DET_FISH_v0.2").strip()
     if not bucket:
         return
     diagnostic = {
         "status": "DET_FISH_TRAINING_FAIL",
         "model_version": model_version,
-        "dataset_version": os.environ.get("DETECTOR_DATASET_VERSION", "DET_DS_v0.1"),
+        "dataset_version": os.environ.get("DETECTOR_DATASET_VERSION", "DET_DS_v0.2"),
         "git_commit": os.environ.get("APP_GIT_COMMIT", "unknown"),
         "error_type": type(error).__name__,
         "error": str(error),
@@ -313,8 +318,8 @@ def main() -> None:
     bucket = os.environ.get("GCS_BUCKET", "").strip()
     if not bucket:
         raise RuntimeError("GCS_BUCKET is required")
-    dataset_version = os.environ.get("DETECTOR_DATASET_VERSION", "DET_DS_v0.1").strip()
-    model_version = os.environ.get("DETECTOR_MODEL_VERSION", "DET_FISH_v0.1").strip()
+    dataset_version = os.environ.get("DETECTOR_DATASET_VERSION", "DET_DS_v0.2").strip()
+    model_version = os.environ.get("DETECTOR_MODEL_VERSION", "DET_FISH_v0.2").strip()
     app_git_commit = os.environ.get("APP_GIT_COMMIT", "unknown").strip()
 
     work = Path("/tmp/yujian-detector")
@@ -328,12 +333,25 @@ def main() -> None:
     download_gcs(bucket, f"{prefix}/{dataset_version}.tar.gz", archive)
     download_gcs(bucket, f"{prefix}/bootstrap_report.json", report_path)
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    require_dataset(report)
+    manifest_bytes = None
+    if dataset_version == REVIEWED_DATASET_VERSION:
+        manifest_path = work / "bootstrap_manifest.json"
+        download_gcs(bucket, f"{prefix}/bootstrap_manifest.json", manifest_path)
+        manifest_bytes = manifest_path.read_bytes()
+        gate = validate_v02_dataset(report, manifest_bytes, sha256_file(archive))
+        if not gate["ready"]:
+            raise RuntimeError("DET_DS_v0.2 data gate failed: " + "; ".join(gate["blockers"]))
+    else:
+        require_dataset(report)
 
     extracted = work / "dataset"
     safe_extract(archive, extracted)
     dataset_root = extracted / dataset_version
-    if not (dataset_root / "annotations" / "instances_train2017.json").exists():
+    if dataset_version == REVIEWED_DATASET_VERSION:
+        package_blockers = validate_v02_materialized_dataset(dataset_root, manifest_bytes or b"", gate["counts"])
+        if package_blockers:
+            raise RuntimeError("DET_DS_v0.2 COCO package gate failed: " + "; ".join(package_blockers))
+    elif not (dataset_root / "annotations" / "instances_train2017.json").exists():
         raise RuntimeError(f"invalid detector dataset archive: {dataset_root}")
 
     pretrain = work / "yolox_nano_pretrained.pth"

@@ -93,14 +93,15 @@ def _parse_gs_uri(uri: str) -> tuple[str, str]:
     return tuple(uri[5:].split("/", 1))  # type: ignore[return-value]
 
 
-def _artifact_uri() -> str:
-    configured = os.getenv("DETECTOR_ONNX_URI", "").strip()
+def _artifact_uri(model_version: str | None = None) -> str:
+    version = (model_version or DETECTOR_MODEL_VERSION).strip()
+    configured = os.getenv("DETECTOR_ONNX_URI", "").strip() if version == DETECTOR_MODEL_VERSION else ""
     if configured:
         return configured
     bucket = os.getenv("GCS_BUCKET", "").strip()
     if not bucket:
-        raise DetectorRuntimeError("GCS_BUCKET is required for the production fish detector")
-    return f"gs://{bucket}/models/{DETECTOR_MODEL_VERSION}/{DETECTOR_MODEL_FILENAME}"
+        raise DetectorRuntimeError("GCS_BUCKET is required for the fish detector")
+    return f"gs://{bucket}/models/{version}/{DETECTOR_MODEL_FILENAME}"
 
 
 def _download_bytes(client: storage.Client, uri: str) -> bytes:
@@ -126,10 +127,8 @@ def _same_json(left: dict, right: dict) -> bool:
     )
 
 
-@lru_cache(maxsize=1)
-def load_detector() -> DetectorModel:
-    """Load only the signed-by-metadata DET_FISH_v0.1 ONNX artifact from GCS."""
-    uri = _artifact_uri()
+def _load_detector_version(model_version: str) -> DetectorModel:
+    uri = _artifact_uri(model_version)
     client = storage.Client()
     onnx_bytes = _download_bytes(client, uri)
     try:
@@ -141,12 +140,12 @@ def load_detector() -> DetectorModel:
     expected_contract = load_contract()
     if not _same_json(artifact_contract, expected_contract):
         raise DetectorRuntimeError("detector recognition contract does not match backend contract")
-    if metadata.get("model_version") != DETECTOR_MODEL_VERSION:
+    if metadata.get("model_version") != model_version:
         raise DetectorRuntimeError(
-            f"detector model version mismatch: expected {DETECTOR_MODEL_VERSION}, got {metadata.get('model_version')}"
+            f"detector model version mismatch: expected {model_version}, got {metadata.get('model_version')}"
         )
     if metadata.get("model_family") != "YOLOX_NANO":
-        raise DetectorRuntimeError("production detector must be YOLOX_NANO")
+        raise DetectorRuntimeError("fish detector must be YOLOX_NANO")
     actual_sha = hashlib.sha256(onnx_bytes).hexdigest()
     if metadata.get("onnx_sha256") != actual_sha:
         raise DetectorRuntimeError("detector ONNX SHA256 mismatch")
@@ -165,8 +164,8 @@ def load_detector() -> DetectorModel:
 
     try:
         import onnxruntime as ort
-    except Exception as exc:  # pragma: no cover - validated in runtime image CI
-        raise DetectorRuntimeError("onnxruntime is required for production fish detection") from exc
+    except Exception as exc:  # pragma: no cover - exercised only in deployed runtime
+        raise DetectorRuntimeError("onnxruntime is required for fish detector testing") from exc
 
     session = ort.InferenceSession(onnx_bytes, providers=["CPUExecutionProvider"])
     inputs = session.get_inputs()
@@ -177,7 +176,7 @@ def load_detector() -> DetectorModel:
         raise DetectorRuntimeError(f"unexpected detector ONNX input shape: {inputs[0].shape}")
 
     return DetectorModel(
-        model_version=DETECTOR_MODEL_VERSION,
+        model_version=model_version,
         onnx_sha256=actual_sha,
         onnx_bytes=len(onnx_bytes),
         input_name=inputs[0].name,
@@ -186,10 +185,27 @@ def load_detector() -> DetectorModel:
     )
 
 
+@lru_cache(maxsize=1)
+def load_detector() -> DetectorModel:
+    """Load the configured production detector after metadata and SHA verification."""
+    return _load_detector_version(DETECTOR_MODEL_VERSION)
+
+
+@lru_cache(maxsize=2)
+def load_detector_for_version(model_version: str) -> DetectorModel:
+    """Load one explicitly selected detector version for the read-only test console."""
+    if model_version not in {"DET_FISH_v0.1", "DET_FISH_v0.2"}:
+        raise DetectorRuntimeError(f"unsupported detector model version: {model_version}")
+    if model_version == DETECTOR_MODEL_VERSION:
+        return load_detector()
+    return _load_detector_version(model_version)
+
+
 def reset_detector_cache() -> None:
-    """Test-only cache reset; production uses a single immutable verified artifact per process."""
+    """Test-only cache reset; production uses immutable, hash-verified artifacts."""
     with _MODEL_LOCK:
         load_detector.cache_clear()
+        load_detector_for_version.cache_clear()
 
 
 def normalize_android_source(image: Image.Image) -> Image.Image:
@@ -401,9 +417,9 @@ def decode_yolox_candidates(
     )
 
 
-def detect(image: Image.Image) -> DetectorRun:
+def detect(image: Image.Image, model_version: str | None = None) -> DetectorRun:
     started = time.perf_counter()
-    model = load_detector()
+    model = load_detector() if model_version is None else load_detector_for_version(model_version)
     contract = load_contract()
     source_width, source_height = image.width, image.height
     attempt_trace: list[DetectorAttemptTrace] = []

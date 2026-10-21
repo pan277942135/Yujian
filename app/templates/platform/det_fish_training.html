@@ -1,0 +1,273 @@
+{% extends "platform/base.html" %}
+{% block head %}
+<style>
+  .negative-count-button{display:block;border:0;background:transparent;padding:0;text-align:left;color:inherit;cursor:pointer;font:inherit;font-size:31px;font-weight:850;letter-spacing:-.04em;margin-top:8px}
+  .negative-count-button:hover{text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:4px;color:#164f48}
+  .negative-modal-backdrop{position:fixed;inset:0;z-index:70;background:rgba(8,25,21,.52);display:grid;place-items:center;padding:20px}
+  .negative-modal-backdrop[hidden]{display:none}
+  .negative-modal{width:min(1180px,100%);max-height:min(88vh,900px);overflow:auto;background:#f8fbf9;border:1px solid #d6e5de;border-radius:18px;box-shadow:0 24px 80px rgba(9,31,25,.28);padding:20px}
+  .negative-modal-backdrop.nested{z-index:80}
+  .negative-modal-header{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:14px}
+  .negative-modal-header h2{margin:0;font-size:21px}.negative-modal-header p{margin:5px 0 0;color:#71817d;font-size:12px}
+  .negative-modal-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .negative-modal-toolbar input,.negative-modal-toolbar select{border:1px solid #cfddd8;border-radius:9px;background:#fff;padding:9px 10px;min-height:40px}
+  .negative-items{display:grid;gap:9px}
+  .negative-item{display:grid;grid-template-columns:24px 112px minmax(0,1fr) auto;align-items:center;gap:12px;padding:10px;border:1px solid #e0ebe6;border-radius:12px;background:#fff}
+  .negative-item img{width:112px;height:82px;object-fit:cover;border-radius:8px;background:#edf3f0}
+  .negative-item-meta{min-width:0}.negative-item-meta strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .negative-item-meta small{display:block;color:#73837e;font-size:12px;line-height:1.55;margin-top:3px}
+  .negative-item-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+  .negative-footer{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:14px}
+  .negative-pagination{display:flex;gap:7px;align-items:center}
+  .negative-warning{padding:10px 12px;border-radius:10px;background:#fff8e8;color:#795a20;border:1px solid #ead093;font-size:12px;line-height:1.5}
+  .negative-selection-confirm{display:flex;align-items:flex-start;gap:8px;padding:10px 12px;border:1px solid #ead093;border-radius:10px;background:#fff8e8;color:#795a20;font-size:12px;line-height:1.45}
+  .negative-selection-confirm input{margin-top:2px}
+  @media(max-width:700px){.negative-modal-backdrop{padding:8px}.negative-modal{padding:14px;max-height:94vh}.negative-item{grid-template-columns:22px 78px minmax(0,1fr)}.negative-item img{width:78px;height:70px}.negative-item-actions{grid-column:2/-1;justify-content:flex-start}.negative-count-button{font-size:25px}}
+</style>
+{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div>
+    <h1>DET_FISH 训练</h1>
+    <p>基于人工 accepted_bbox 冻结完整场景检测数据集，启动独立的 YOLOX-Nano GPU 训练。此页面不会修改或发布生产模型。</p>
+  </div>
+  <div class="page-actions">
+    <button class="button" type="button" onclick="loadStatus()">刷新状态</button>
+    <a class="button" href="/platform/data/datasets">数据集管理</a>
+    <a class="button" href="/platform/model/det-fish-test">模型测试</a>
+  </div>
+</div>
+<div id="detTrainingNotice"></div>
+<div class="metric-grid" style="margin-top:14px">
+  <div class="metric-card"><div class="metric-label">人工 Accepted Pool 图片</div><div id="acceptedPoolImages" class="metric-value">—</div><div id="acceptedBboxCount" class="metric-detail">人工 accepted_bbox —</div></div>
+  <div class="metric-card"><div class="metric-label">DET_DS_v0.2</div><div id="datasetStatus" class="metric-value" style="font-size:22px">—</div><div id="datasetArchive" class="metric-detail">冻结数据包状态</div></div>
+  <div class="metric-card"><div class="metric-label">冻结完整场景图片</div><div id="totalDatasetImages" class="metric-value">—</div><div id="totalDatasetBoxes" class="metric-detail">人工鱼体框 — · 有框图片 —</div></div>
+  <div class="metric-card"><div class="metric-label">Train 图片</div><div id="trainImages" class="metric-value">—</div><div id="trainBoxes" class="metric-detail">鱼体框 —</div></div>
+  <div class="metric-card"><div class="metric-label">Validation 图片</div><div id="valImages" class="metric-value">—</div><div id="valBoxes" class="metric-detail">鱼体框 —</div></div>
+  <div class="metric-card"><div class="metric-label">独立 Test 图片</div><div id="testImages" class="metric-value">—</div><div id="testBoxes" class="metric-detail">鱼体框 —</div></div>
+  <div class="metric-card"><div class="metric-label">确认无鱼负样本</div><button id="negativeCount" class="negative-count-button" type="button" onclick="openNegativePool()" aria-haspopup="dialog" aria-controls="negativePoolModal">—</button><div id="negativePoolDetail" class="metric-detail">DET_FISH 专用池成员 · 不等同于冻结入训数</div></div>
+  <div class="metric-card"><div class="metric-label">DET_FISH_v0.2</div><div id="modelStatus" class="metric-value" style="font-size:22px">—</div><div id="modelSha" class="metric-detail">模型 SHA-256</div></div>
+  <div class="metric-card"><div class="metric-label">AP50</div><div id="modelAp50" class="metric-value">—</div><div class="metric-detail">mAP@0.5</div></div>
+  <div class="metric-card"><div class="metric-label">AP50:95</div><div id="modelAp50_95" class="metric-value">—</div><div class="metric-detail">COCO mAP</div></div>
+</div>
+<div class="form-grid" style="margin-top:16px">
+  <section class="panel">
+    <div class="panel-heading"><div><h2>训练门禁</h2><p>门禁未通过时，GPU 启动按钮会保持禁用</p></div><span id="gateTag" class="status-tag status-neutral">检查中</span></div>
+    <div id="gateBlockers" class="loading">正在读取冻结数据集与证据…</div>
+    <div class="notice warning" style="margin-top:14px">训练输入必须是原始完整场景图和人工 accepted_bbox；6,308 张 Crop 是分类器素材，不能直接替代检测器原图。</div>
+  </section>
+  <section class="panel">
+    <div class="panel-heading"><div><h2>启动 DET_FISH_v0.2</h2><p>YOLOX-Nano · 416×416 · NVIDIA L4</p></div><span class="status-tag status-neutral">独立版本</span></div>
+    <form id="detTrainingForm">
+      <div class="form-grid">
+        <div class="field"><label for="detEpochs">训练轮数 Epochs</label><input id="detEpochs" type="number" min="1" max="100" value="30" required></div>
+        <div class="field"><label for="detBatchSize">Batch Size</label><input id="detBatchSize" type="number" min="1" max="64" value="16" required></div>
+        <div class="field full"><label for="detSeed">随机种子</label><input id="detSeed" type="number" min="0" max="2147483647" value="20261020" required></div>
+      </div>
+      <div class="form-actions"><button id="startDetTraining" class="button primary" type="submit" disabled>开始 GPU 训练</button></div>
+    </form>
+    <div class="muted" style="font-size:12px;margin-top:10px">启动前会重新读取数据集报告和归档，并检查是否已有运行中的训练任务。训练失败不会自动切换生产模型。</div>
+  </section>
+</div>
+<section class="panel" style="margin-top:16px">
+  <div class="panel-heading"><div><h2>训练执行记录</h2><p>Cloud Run Job · yujian-detector-trainer</p></div><button class="button" type="button" onclick="loadStatus()">刷新记录</button></div>
+  <div id="detExecutionHistory" class="loading">加载中…</div>
+</section>
+<section class="panel" style="margin-top:16px">
+  <div class="panel-heading"><div><h2>训练完成后的验收指标</h2><p>独立测试集必须与 v0.1 使用相同阈值与评估口径</p></div></div>
+  <div class="table-wrap"><table class="data-table">
+    <thead><tr><th>指标</th><th>验收要求</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td>AP50 / AP50:95</td><td>必须报告实测值</td><td>检测框整体质量</td></tr>
+      <tr><td>独立测试集召回率</td><td>按固定测试集统计</td><td>漏检风险</td></tr>
+      <tr><td>困难场景召回率</td><td>竖拍、夜拍、手持鱼、8–20% 鱼体面积</td><td>目标域覆盖</td></tr>
+      <tr><td>无鱼误检率</td><td>人工确认负样本单独统计</td><td>防止假鱼框</td></tr>
+      <tr><td>固定事故留出集</td><td>Case A / Case B / 04-181200 独立回归</td><td>防止针对事故样本过拟合</td></tr>
+    </tbody>
+  </table></div>
+</section>
+<div id="negativePoolModal" class="negative-modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="negativePoolTitle" onclick="if(event.target===this)closeNegativePool()">
+  <section class="negative-modal">
+    <div class="negative-modal-header"><div><h2 id="negativePoolTitle">无鱼负样本列表</h2><p>仅管理 DET_FISH 专用池成员；移除不会删除原图、审核记录或冻结数据集。</p></div><button class="button" type="button" onclick="closeNegativePool()">关闭</button></div>
+    <div class="negative-modal-toolbar">
+      <select id="negativePoolState" onchange="loadNegativePool(0)"><option value="ACTIVE">池内记录</option><option value="REMOVED">已移除记录</option><option value="ALL">全部状态</option></select>
+      <input id="negativePoolBatch" type="search" placeholder="按来源批次筛选" onkeydown="if(event.key==='Enter')loadNegativePool(0)">
+      <label class="muted"><input id="selectAllPoolRows" type="checkbox" onchange="selectCurrentPoolPage(this.checked)"> 全选本页</label>
+      <button class="button" type="button" onclick="loadNegativePool(0)">刷新</button>
+      <button class="button gold" type="button" onclick="openNegativeCandidates()">增加无鱼</button>
+      <input id="negativePoolActor" type="text" maxlength="256" placeholder="操作人（必填）" aria-label="操作人">
+      <button id="removeSelectedNegatives" class="button danger" type="button" onclick="removeSelectedPoolRows()" disabled>移除所选</button>
+    </div>
+    <div id="negativePoolStatus" class="negative-warning" hidden></div>
+    <div id="negativePoolRows" class="loading">加载中…</div>
+    <div class="negative-footer"><span id="negativePoolPageLabel" class="muted"></span><div class="negative-pagination"><button class="button" type="button" onclick="pageNegativePool(-1)">上一页</button><button class="button" type="button" onclick="pageNegativePool(1)">下一页</button></div></div>
+    <div id="historical154Audit" class="negative-warning" style="margin-top:12px">历史 DET_DS_v0.1 无鱼记录尚未执行实时核查。<button class="button" type="button" onclick="loadHistoricalNegativeAudit()" style="margin-left:8px">核查历史记录</button></div>
+  </section>
+</div>
+<div id="negativeCandidatesModal" class="negative-modal-backdrop nested" hidden role="dialog" aria-modal="true" aria-labelledby="negativeCandidatesTitle" onclick="if(event.target===this)closeNegativeCandidates()">
+  <section class="negative-modal">
+    <div class="negative-modal-header"><div><h2 id="negativeCandidatesTitle">从已标记无鱼的图片中批量添加</h2><p>机器无鱼标签仅为候选来源；确认添加前须由操作人确认所选原图确实无鱼。</p></div><button class="button" type="button" onclick="closeNegativeCandidates()">关闭</button></div>
+    <div class="negative-modal-toolbar">
+      <select id="negativeCandidateSource" onchange="switchNegativeCandidateSource()"><option value="PRESENCE_NO_FISH">系统已标记无鱼</option><option value="DET_DS_V0_1">历史 DET_DS_v0.1 候选</option></select>
+      <select id="negativeCandidateVerification" onchange="loadNegativeCandidates(0)"><option value="ALL">所有确认状态</option><option value="PENDING">待人工确认</option><option value="HUMAN">已有人工确认</option></select>
+      <input id="negativeCandidateBatch" type="search" placeholder="按来源批次筛选" onkeydown="if(event.key==='Enter')loadNegativeCandidates(0)">
+      <label class="muted"><input id="selectAllCandidateRows" type="checkbox" onchange="selectCurrentCandidatePage(this.checked)"> 全选本页</label>
+      <button class="button" type="button" onclick="loadNegativeCandidates(0)">刷新候选</button>
+    </div>
+    <div id="negativeCandidateStatus" class="negative-warning" hidden></div>
+    <div id="negativeCandidateRows" class="loading">加载中…</div>
+    <div class="negative-footer"><span id="negativeCandidatePageLabel" class="muted"></span><span id="negativeCandidateSelected" class="code">已选 0 张</span><div class="negative-pagination"><button class="button" type="button" onclick="pageNegativeCandidates(-1)">上一页</button><button class="button" type="button" onclick="pageNegativeCandidates(1)">下一页</button></div></div>
+    <div class="negative-footer">
+      <label class="negative-selection-confirm"><input id="confirmSelectedNoFish" type="checkbox"><span>我已逐张核验当前所选完整场景图没有鱼体。此确认只记录到 DET_FISH 负样本池，不会改写原始 AI 判定或审批记录。</span></label>
+      <div class="negative-pagination"><button class="button" type="button" onclick="closeNegativeCandidates()">取消</button><button id="confirmAddNegativeCandidates" class="button primary" type="button" onclick="addSelectedNegativeCandidates()" disabled>确认添加（0 张）</button></div>
+    </div>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function fmtCount(value){return value==null||!Number.isFinite(Number(value))?'—':Number(value).toLocaleString('en-US')}
+function fmtAP(value){return value==null||!Number.isFinite(Number(value))?'—':(Number(value)*100).toFixed(1)+'%'}
+function fmtDate(value){if(!value)return '—';const date=new Date(value);return Number.isNaN(date.getTime())?String(value):date.toLocaleString()}
+function renderExecutionHistory(rows,error){
+  const target=document.getElementById('detExecutionHistory');
+  if(error){target.innerHTML='<div class="notice warning">'+esc(error)+'</div>';}
+  else if(!rows||!rows.length){target.innerHTML='<div class="empty">暂无可读取的 DET_FISH 训练执行记录</div>';}
+  else{target.innerHTML='<div class="table-wrap"><table class="data-table"><thead><tr><th>Execution</th><th>状态</th><th>创建时间</th><th>开始时间</th><th>结束时间</th><th>成功/失败/运行中</th></tr></thead><tbody>'+rows.map(row=>'<tr><td><strong class="code">'+esc(row.execution_id||'—')+'</strong></td><td><span class="status-tag status-'+String(row.status||'').toLowerCase()+'">'+esc(row.status||'—')+'</span></td><td>'+esc(fmtDate(row.created_at))+'</td><td>'+esc(fmtDate(row.started_at))+'</td><td>'+esc(fmtDate(row.completed_at))+'</td><td>'+fmtCount(row.succeeded_count)+' / '+fmtCount(row.failed_count)+' / '+fmtCount(row.running_count)+'</td></tr>').join('')+'</tbody></table></div>';}
+}
+function renderGate(gate){
+  const target=document.getElementById('gateBlockers');
+  const tag=document.getElementById('gateTag');
+  document.getElementById('startDetTraining').disabled=!gate||!gate.ready;
+  if(gate&&gate.ready){tag.className='status-tag status-success';tag.textContent='PASS';target.innerHTML='<div class="notice">数据集、训练 Job 配置与活动任务状态均已核验。启动时会再次执行服务端门禁。</div>';}
+  else{tag.className='status-tag status-failed';tag.textContent='BLOCKED';const blockers=(gate&&gate.blockers)||['无法读取数据集门禁'];target.innerHTML='<div class="error-state"><strong>尚不能启动训练：</strong><ul>'+blockers.map(item=>'<li>'+esc(item)+'</li>').join('')+'</ul></div>';}
+}
+function renderDetTrainingStatus(data){
+  const pool=data.accepted_pool||{},dataset=data.dataset||{},datasetGate=dataset.gate||{},counts=datasetGate.counts||{},model=data.model||{};
+  const countsKnown=Boolean(datasetGate.counts_verified);
+  document.getElementById('acceptedPoolImages').textContent=fmtCount(pool.accepted_images);
+  document.getElementById('acceptedBboxCount').textContent='人工 accepted_bbox '+fmtCount(pool.accepted_bbox)+' · 不代表已冻结入训';
+  document.getElementById('datasetStatus').textContent=dataset.status||'NOT_BUILT';
+  document.getElementById('datasetArchive').textContent='归档 SHA '+(dataset.archive_sha256_verified?'已核验':'未核验')+' · Manifest SHA '+(dataset.manifest_sha256_verified?'已核验':'未核验');
+  document.getElementById('totalDatasetImages').textContent=fmtCount(countsKnown?counts.human_reviewed_complete_scene_images:null);
+  document.getElementById('totalDatasetBoxes').textContent='人工鱼体框 '+fmtCount(countsKnown?counts.train_boxes+counts.val_boxes+counts.test_boxes:null)+' · 有框图片 '+fmtCount(countsKnown?counts.human_reviewed_bbox_images:null);
+  document.getElementById('trainImages').textContent=fmtCount(countsKnown?counts.train_images:null);
+  document.getElementById('trainBoxes').textContent='鱼体框 '+fmtCount(countsKnown?counts.train_boxes:null);
+  document.getElementById('valImages').textContent=fmtCount(countsKnown?counts.val_images:null);
+  document.getElementById('valBoxes').textContent='鱼体框 '+fmtCount(countsKnown?counts.val_boxes:null);
+  document.getElementById('testImages').textContent=fmtCount(countsKnown?counts.test_images:null);
+  document.getElementById('testBoxes').textContent='鱼体框 '+fmtCount(countsKnown?counts.test_boxes:null);
+  document.getElementById('modelStatus').textContent=model.available?'已生成':'未生成';
+  document.getElementById('modelSha').textContent=model.onnx_sha256?('SHA-256 '+model.onnx_sha256):(model.reason||'尚无已核验模型');
+  document.getElementById('modelAp50').textContent=fmtAP(model.ap50);
+  document.getElementById('modelAp50_95').textContent=fmtAP(model.ap50_95);
+  renderGate(data.training_gate);
+  renderExecutionHistory(data.execution_history||[],data.execution_history_error);
+}
+async function loadStatus(){
+  const notice=document.getElementById('detTrainingNotice');notice.innerHTML='<div class="loading">正在读取 Accepted Pool、冻结数据门禁、模型与训练执行记录…</div>';
+  try{const data=await platformFetch('/api/det-fish/training/status');renderDetTrainingStatus(data);notice.innerHTML='';await loadNegativePoolSummary();}
+  catch(error){notice.innerHTML='<div class="error-state">'+esc(platformError(error))+'</div>';document.getElementById('startDetTraining').disabled=true;}
+}
+
+let negativePoolOffset=0,negativePoolTotal=0,negativePoolLimit=20;
+let negativePoolPageItems=[],negativePoolSelection=new Set();
+let negativeCandidateOffset=0,negativeCandidateTotal=0,negativeCandidateLimit=20;
+let negativeCandidateItems=[],negativeCandidateSelection=new Map();
+let negativeCandidateFilterKey='';
+function setNegativeStatus(id,message){const target=document.getElementById(id);target.hidden=!message;target.textContent=message||'';}
+function currentNegativeActor(){return document.getElementById('negativePoolActor').value.trim();}
+function updatePoolSelection(){document.getElementById('removeSelectedNegatives').disabled=negativePoolSelection.size===0;}
+function updateCandidateSelection(){const count=negativeCandidateSelection.size;document.getElementById('negativeCandidateSelected').textContent='已选 '+fmtCount(count)+' 张';const button=document.getElementById('confirmAddNegativeCandidates');button.textContent='确认添加（'+fmtCount(count)+' 张）';button.disabled=count===0;}
+function openNegativePool(){document.getElementById('negativePoolModal').hidden=false;document.body.style.overflow='hidden';loadNegativePoolSummary();loadNegativePool(0);}
+function closeNegativePool(){document.getElementById('negativeCandidatesModal').hidden=true;document.getElementById('negativePoolModal').hidden=true;document.body.style.overflow='';negativePoolSelection.clear();updatePoolSelection();}
+async function loadNegativePoolSummary(){try{const data=await platformFetch('/api/det-fish/negative-pool/summary');document.getElementById('negativeCount').textContent=fmtCount(data.active_count);document.getElementById('negativePoolDetail').textContent='池内记录 '+fmtCount(data.active_count)+' · 已移除 '+fmtCount(data.removed_count)+' · 不等同于冻结入训数';}catch(error){document.getElementById('negativeCount').textContent='—';document.getElementById('negativePoolDetail').textContent='负样本池状态不可读取：'+platformError(error);}}
+async function loadNegativePool(offset){
+  negativePoolOffset=Math.max(0,offset);const state=document.getElementById('negativePoolState').value;const batch=document.getElementById('negativePoolBatch').value.trim();
+  const query=new URLSearchParams({state,limit:String(negativePoolLimit),offset:String(negativePoolOffset)});if(batch)query.set('batch_id',batch);
+  const target=document.getElementById('negativePoolRows');target.innerHTML='<div class="loading">正在读取 DET_FISH 负样本池…</div>';setNegativeStatus('negativePoolStatus','');
+  try{const data=await platformFetch('/api/det-fish/negative-pool?'+query.toString());negativePoolTotal=data.total;negativePoolPageItems=data.items||[];renderNegativePoolRows();}
+  catch(error){target.innerHTML='<div class="error-state">'+esc(platformError(error))+'</div>';document.getElementById('negativePoolPageLabel').textContent='';}
+}
+function renderNegativePoolRows(){
+  const target=document.getElementById('negativePoolRows');const items=negativePoolPageItems;const state=document.getElementById('negativePoolState').value;
+  if(!items.length){target.innerHTML='<div class="empty">当前筛选下没有负样本池记录</div>';}
+  else{target.innerHTML='<div class="negative-items">'+items.map(row=>{
+    const active=row.state==='ACTIVE';const checked=negativePoolSelection.has(Number(row.entry_id));
+    const source=row.source_dataset_version||row.source_provider||row.source_kind||'—';
+    const status=row.source_human_override==='no_fish'?'原始人工无鱼标签':(row.source_machine_status||row.source_status||'—');
+    const eligibility=row.eligible_for_future_build?'可进入未来构建候选':('当前不可入候选：'+(row.eligibility_blockers||[]).join('；'));
+    return '<article class="negative-item"><input type="checkbox" '+(active?'':'disabled')+' '+(checked?'checked':'')+' aria-label="选择 '+esc(row.file_name)+'" onchange="togglePoolRow('+Number(row.entry_id)+',this.checked)"><a href="'+esc(row.original_url)+'" target="_blank" rel="noopener"><img src="'+esc(row.thumbnail_url)+'" alt="原图缩略图"></a><div class="negative-item-meta"><strong>'+esc(row.image_id)+' · '+esc(row.file_name)+'</strong><small>批次 '+esc(row.batch_id)+' · 来源 '+esc(source)+'<br>原始无鱼状态 '+esc(status)+' · 操作人 '+esc(row.added_by)+' · 加入 '+esc(fmtDate(row.added_at))+'<br>'+esc(eligibility)+'<br>原图 SHA-256 '+esc(row.source_image_sha256||'待数据集构建重新核验')+'</small></div><div class="negative-item-actions">'+(active?'<button class="button danger" type="button" onclick="removePoolEntries(['+Number(row.entry_id)+'])">移除池成员</button>':'<button class="button" type="button" onclick="reAddPoolEntry('+Number(row.entry_id)+')">重新加入</button>')+'</div></article>';
+  }).join('')+'</div>';}
+  const start=negativePoolTotal?negativePoolOffset+1:0,end=Math.min(negativePoolOffset+items.length,negativePoolTotal);document.getElementById('negativePoolPageLabel').textContent=start+'–'+end+' / '+negativePoolTotal+' 条';
+  document.getElementById('selectAllPoolRows').checked=items.length>0&&items.filter(row=>row.state==='ACTIVE').every(row=>negativePoolSelection.has(Number(row.entry_id)));updatePoolSelection();
+}
+function togglePoolRow(id,checked){if(checked)negativePoolSelection.add(id);else negativePoolSelection.delete(id);updatePoolSelection();}
+function selectCurrentPoolPage(checked){negativePoolPageItems.filter(row=>row.state==='ACTIVE').forEach(row=>checked?negativePoolSelection.add(Number(row.entry_id)):negativePoolSelection.delete(Number(row.entry_id)));renderNegativePoolRows();}
+function pageNegativePool(direction){const next=negativePoolOffset+direction*negativePoolLimit;if(next<0||next>=negativePoolTotal)return;loadNegativePool(next);}
+async function removeSelectedPoolRows(){await removePoolEntries(Array.from(negativePoolSelection));}
+async function removePoolEntries(entryIds){
+  const actor=currentNegativeActor();if(!actor){setNegativeStatus('negativePoolStatus','请填写操作人后再移除。');return;}
+  if(!entryIds.length)return;setNegativeStatus('negativePoolStatus','正在从 DET_FISH 池移除成员（保留原图与原始审核记录）…');
+  try{const result=await platformFetch('/api/det-fish/negative-pool/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({entry_ids:entryIds,actor})});negativePoolSelection.clear();setNegativeStatus('negativePoolStatus','已移除 '+result.removed.length+' 条；已移除状态 '+result.already_removed.length+' 条；未找到 '+result.missing.length+' 条。');await loadNegativePoolSummary();await loadNegativePool(negativePoolOffset);}
+  catch(error){setNegativeStatus('negativePoolStatus','移除失败：'+platformError(error));}
+}
+async function reAddPoolEntry(entryId){
+  const actor=currentNegativeActor();if(!actor){setNegativeStatus('negativePoolStatus','请填写操作人后再重新加入。');return;}
+  const row=negativePoolPageItems.find(item=>Number(item.entry_id)===entryId);if(!row)return;
+  if(!window.confirm('将此完整场景图片重新加入 DET_FISH 无鱼池？本操作会记录为一次新的人工确认。'))return;
+  const sourceKind=row.source_kind==='DET_DS_V0_1'?'DET_DS_V0_1':'PRESENCE_NO_FISH';
+  try{const result=await platformFetch('/api/det-fish/negative-pool/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_kind:sourceKind,actor,confirm_pending_as_no_fish:true,items:[{image_asset_id:row.image_asset_id,source_record_id:row.source_record_id}]})});
+    const message=result.added.length?'已重新加入并记录新操作。':(result.rejected[0]?.reason||'未加入。');setNegativeStatus('negativePoolStatus',message);await loadNegativePoolSummary();await loadNegativePool(negativePoolOffset);
+  }catch(error){setNegativeStatus('negativePoolStatus','重新加入失败：'+platformError(error));}
+}
+function openNegativeCandidates(){negativeCandidateSelection.clear();negativeCandidateOffset=0;document.getElementById('negativeCandidatesModal').hidden=false;document.getElementById('negativeCandidateVerification').value='ALL';document.getElementById('confirmSelectedNoFish').checked=false;updateCandidateSelection();loadNegativeCandidates(0);}
+function closeNegativeCandidates(){document.getElementById('negativeCandidatesModal').hidden=true;negativeCandidateSelection.clear();updateCandidateSelection();}
+function switchNegativeCandidateSource(){negativeCandidateSelection.clear();document.getElementById('confirmSelectedNoFish').checked=false;updateCandidateSelection();loadNegativeCandidates(0);}
+async function loadNegativeCandidates(offset){
+  negativeCandidateOffset=Math.max(0,offset);const sourceKind=document.getElementById('negativeCandidateSource').value;const batch=document.getElementById('negativeCandidateBatch').value.trim();const verification=document.getElementById('negativeCandidateVerification').value;
+  const filterKey=[sourceKind,batch,verification].join('|');if(negativeCandidateFilterKey&&negativeCandidateFilterKey!==filterKey){negativeCandidateSelection.clear();document.getElementById('confirmSelectedNoFish').checked=false;updateCandidateSelection();}negativeCandidateFilterKey=filterKey;
+  const query=new URLSearchParams({source_kind:sourceKind,limit:String(negativeCandidateLimit),offset:String(negativeCandidateOffset),verification});if(batch)query.set('batch_id',batch);
+  const target=document.getElementById('negativeCandidateRows');target.innerHTML='<div class="loading">正在读取现有无鱼候选…</div>';setNegativeStatus('negativeCandidateStatus','');
+  try{const data=await platformFetch('/api/det-fish/negative-pool/candidates?'+query.toString());negativeCandidateTotal=data.total;negativeCandidateItems=data.items||[];renderNegativeCandidateRows();}
+  catch(error){target.innerHTML='<div class="error-state">'+esc(platformError(error))+'</div>';document.getElementById('negativeCandidatePageLabel').textContent='';}
+}
+function renderNegativeCandidateRows(){
+  const target=document.getElementById('negativeCandidateRows');const items=negativeCandidateItems;
+  if(!items.length)target.innerHTML='<div class="empty">没有符合当前筛选的现有无鱼候选</div>';
+  else target.innerHTML='<div class="negative-items">'+items.map(row=>{
+    const id=Number(row.image_asset_id||0);const selected=negativeCandidateSelection.has(id);const disabled=!id||!row.eligible_to_add||row.already_added;
+    const state=row.already_added?'已添加':(row.eligible_to_add?'可选':(row.eligibility_blockers||[]).join('；')||'不可加入');
+    return '<article class="negative-item"><input type="checkbox" '+(disabled?'disabled ':'')+(selected?'checked ':'')+'aria-label="选择 '+esc(row.file_name||row.image_id)+'" onchange="toggleCandidateRow('+id+',this.checked)"><a '+(row.original_url?'href="'+esc(row.original_url)+'" target="_blank" rel="noopener"':'')+'><img src="'+esc(row.thumbnail_url||'')+'" alt="原图缩略图"></a><div class="negative-item-meta"><strong>'+esc(row.image_id||'—')+' · '+esc(row.file_name||'原图记录缺失')+'</strong><small>批次 '+esc(row.batch_id||'—')+' · 来源 '+esc(row.source_dataset_version||row.source_model_version||row.source_kind||'—')+'<br>原始无鱼状态 '+esc(row.source_status||'—')+' · '+esc(row.human_confirmation_status||'待人工确认')+'<br>'+esc(state)+'</small></div><div class="negative-item-actions">'+(row.already_added?'<span class="status-tag status-active">已添加</span>':'')+'</div></article>';
+  }).join('')+'</div>';
+  const start=negativeCandidateTotal?negativeCandidateOffset+1:0,end=Math.min(negativeCandidateOffset+items.length,negativeCandidateTotal);document.getElementById('negativeCandidatePageLabel').textContent=start+'–'+end+' / '+negativeCandidateTotal+' 条';
+  document.getElementById('selectAllCandidateRows').checked=items.length>0&&items.filter(row=>row.eligible_to_add&&!row.already_added).every(row=>negativeCandidateSelection.has(Number(row.image_asset_id)));updateCandidateSelection();
+}
+function toggleCandidateRow(id,checked){const row=negativeCandidateItems.find(item=>Number(item.image_asset_id)===id);if(!row||!row.eligible_to_add||row.already_added)return;if(checked)negativeCandidateSelection.set(id,{image_asset_id:id,source_record_id:row.source_record_id});else negativeCandidateSelection.delete(id);updateCandidateSelection();}
+function selectCurrentCandidatePage(checked){negativeCandidateItems.filter(row=>row.eligible_to_add&&!row.already_added&&row.image_asset_id).forEach(row=>{const id=Number(row.image_asset_id);if(checked)negativeCandidateSelection.set(id,{image_asset_id:id,source_record_id:row.source_record_id});else negativeCandidateSelection.delete(id);});renderNegativeCandidateRows();}
+function pageNegativeCandidates(direction){const next=negativeCandidateOffset+direction*negativeCandidateLimit;if(next<0||next>=negativeCandidateTotal)return;loadNegativeCandidates(next);}
+async function addSelectedNegativeCandidates(){
+  const actor=currentNegativeActor();if(!actor){setNegativeStatus('negativeCandidateStatus','请先填写操作人。');return;}
+  if(!document.getElementById('confirmSelectedNoFish').checked){setNegativeStatus('negativeCandidateStatus','请逐张核验并勾选无鱼确认后再提交。');return;}
+  const items=Array.from(negativeCandidateSelection.values());if(!items.length)return;
+  const button=document.getElementById('confirmAddNegativeCandidates');button.disabled=true;setNegativeStatus('negativeCandidateStatus','正在核验原图 SHA 并加入 DET_FISH 专用池…');
+  try{const result=await platformFetch('/api/det-fish/negative-pool/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items,source_kind:document.getElementById('negativeCandidateSource').value,actor,confirm_pending_as_no_fish:true})});
+    negativeCandidateSelection.clear();document.getElementById('confirmSelectedNoFish').checked=false;updateCandidateSelection();const rejects=(result.rejected||[]).map(item=>item.image_asset_id+': '+item.reason).join('；');
+    setNegativeStatus('negativeCandidateStatus','成功新增 '+result.added.length+' 张；已存在 '+result.already_added.length+' 张；拒绝 '+result.rejected.length+' 张。'+(rejects?' 拒绝原因：'+rejects:''));await loadNegativePoolSummary();await loadNegativePool(0);await loadNegativeCandidates(negativeCandidateOffset);
+  }catch(error){setNegativeStatus('negativeCandidateStatus','添加失败：'+platformError(error));}
+  finally{updateCandidateSelection();}
+}
+async function loadHistoricalNegativeAudit(){
+  const target=document.getElementById('historical154Audit');target.textContent='正在读取 DET_DS_v0.1 历史清单并核对每张原图字节…';
+  try{const data=await platformFetch('/api/det-fish/negative-pool/historical-v01-audit');target.textContent='历史 DET_DS_v0.1 无鱼记录：总数 '+fmtCount(data.historical_records_total)+' · 有效 '+fmtCount(data.valid_records)+' · 已加入 '+fmtCount(data.already_in_pool)+' · 待确认 '+fmtCount(data.pending_confirmation)+' · 重复 '+fmtCount(data.duplicate_records)+' · 缺失 '+fmtCount(data.missing_records)+' · 排除 '+fmtCount(data.excluded_records)+'。Manifest SHA-256 '+esc(data.source_artifact.manifest_sha256);}
+  catch(error){target.textContent='历史 DET_DS_v0.1 无鱼记录实时核查未完成：'+platformError(error)+'。当前未将历史数量视为已确认负样本。'}
+}
+document.getElementById('detTrainingForm').addEventListener('submit',async function(event){
+  event.preventDefault();const button=document.getElementById('startDetTraining');button.disabled=true;
+  const notice=document.getElementById('detTrainingNotice');notice.innerHTML='<div class="notice">正在重新校验冻结数据集并提交 GPU 任务…</div>';
+  try{const data=await platformFetch('/api/det-fish/training/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({epochs:Number(document.getElementById('detEpochs').value),batch_size:Number(document.getElementById('detBatchSize').value),seed:Number(document.getElementById('detSeed').value)})});notice.innerHTML='<div class="notice">训练任务已提交：<strong>'+esc(data.model_version)+'</strong> · '+esc(data.operation_name||'Cloud Run operation 已返回')+'</div>';await loadStatus();}
+  catch(error){notice.innerHTML='<div class="error-state">'+esc(platformError(error))+'</div>';await loadStatus();}
+});
+loadStatus();
+</script>
+{% endblock %}
