@@ -232,6 +232,8 @@ def _validate_detector_job(job: dict[str, Any]) -> list[str]:
     digest_match = re.search(r"@sha256:([0-9a-f]{64})$", image)
     if digest_match and env.get("DETECTOR_TRAINER_IMAGE_DIGEST") != "sha256:" + digest_match.group(1):
         blockers.append("训练 Job 的 DETECTOR_TRAINER_IMAGE_DIGEST 与镜像 URI digest 不一致")
+    if env.get("DETECTOR_TRAINER_IMAGE_URI") != image:
+        blockers.append("训练 Job 的 DETECTOR_TRAINER_IMAGE_URI 与实际运行镜像 URI 不一致")
     if "@sha256:" not in image:
         blockers.append("训练 Job 镜像未固定为 Artifact Registry digest；禁止使用可变标签启动训练")
     elif not re.search(r"@sha256:[0-9a-f]{64}$", image):
