@@ -3,26 +3,28 @@
 <style>
   .negative-count-button{display:block;border:0;background:transparent;padding:0;text-align:left;color:inherit;cursor:pointer;font:inherit;font-size:31px;font-weight:850;letter-spacing:-.04em;margin-top:8px}
   .negative-count-button:hover{text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:4px;color:#164f48}
-  .negative-modal-backdrop{position:fixed;inset:0;z-index:70;background:rgba(8,25,21,.52);display:grid;place-items:center;padding:20px}
+  .negative-modal-backdrop{position:fixed;inset:0;z-index:70;background:rgba(8,25,21,.52);display:grid;place-items:stretch;padding:0}
   .negative-modal-backdrop[hidden]{display:none}
-  .negative-modal{width:min(1180px,100%);max-height:min(88vh,900px);overflow:auto;background:#f8fbf9;border:1px solid #d6e5de;border-radius:18px;box-shadow:0 24px 80px rgba(9,31,25,.28);padding:20px}
+  .negative-modal{width:100%;height:100vh;height:100dvh;max-height:none;overflow:auto;background:#f8fbf9;border:0;border-radius:0;box-shadow:none;padding:clamp(14px,2vw,28px)}
   .negative-modal-backdrop.nested{z-index:80}
   .negative-modal-header{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:14px}
   .negative-modal-header h2{margin:0;font-size:21px}.negative-modal-header p{margin:5px 0 0;color:#71817d;font-size:12px}
   .negative-modal-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
   .negative-modal-toolbar input,.negative-modal-toolbar select{border:1px solid #cfddd8;border-radius:9px;background:#fff;padding:9px 10px;min-height:40px}
-  .negative-items{display:grid;gap:9px}
-  .negative-item{display:grid;grid-template-columns:24px 112px minmax(0,1fr) auto;align-items:center;gap:12px;padding:10px;border:1px solid #e0ebe6;border-radius:12px;background:#fff}
-  .negative-item img{width:112px;height:82px;object-fit:cover;border-radius:8px;background:#edf3f0}
-  .negative-item-meta{min-width:0}.negative-item-meta strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .negative-item-meta small{display:block;color:#73837e;font-size:12px;line-height:1.55;margin-top:3px}
-  .negative-item-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+  .negative-modal-toolbar label{display:inline-flex;align-items:center;gap:6px}
+  .negative-items{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:stretch}
+  .negative-item{display:grid;grid-template-columns:28px minmax(0,1fr);grid-template-rows:auto auto auto;align-items:start;gap:8px;padding:12px;border:1px solid #e0ebe6;border-radius:12px;background:#fff;min-width:0}
+  .negative-item>input[type=checkbox]{grid-column:1;grid-row:1;align-self:center;margin:8px 0 0 4px}
+  .negative-item>a{grid-column:2;grid-row:1;display:block;min-width:0}
+  .negative-item img{display:block;width:100%;height:150px;object-fit:contain;border-radius:8px;background:#edf3f0}
+  .negative-item-meta{grid-column:1/-1;grid-row:2;min-width:0}.negative-item-meta strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .negative-item-meta small{display:block;color:#73837e;font-size:12px;line-height:1.55;margin-top:3px;overflow-wrap:anywhere}
+  .negative-item-actions{grid-column:1/-1;grid-row:3;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-start}
   .negative-footer{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:14px}
-  .negative-pagination{display:flex;gap:7px;align-items:center}
+  .negative-pagination{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
   .negative-warning{padding:10px 12px;border-radius:10px;background:#fff8e8;color:#795a20;border:1px solid #ead093;font-size:12px;line-height:1.5}
-  .negative-selection-confirm{display:flex;align-items:flex-start;gap:8px;padding:10px 12px;border:1px solid #ead093;border-radius:10px;background:#fff8e8;color:#795a20;font-size:12px;line-height:1.45}
-  .negative-selection-confirm input{margin-top:2px}
-  @media(max-width:700px){.negative-modal-backdrop{padding:8px}.negative-modal{padding:14px;max-height:94vh}.negative-item{grid-template-columns:22px 78px minmax(0,1fr)}.negative-item img{width:78px;height:70px}.negative-item-actions{grid-column:2/-1;justify-content:flex-start}.negative-count-button{font-size:25px}}
+  @media(max-width:1050px){.negative-items{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media(max-width:650px){.negative-items{grid-template-columns:minmax(0,1fr)}.negative-item img{height:min(52vw,300px)}.negative-modal-header h2{font-size:19px}.negative-count-button{font-size:25px}}
 </style>
 {% endblock %}
 {% block content %}
@@ -91,11 +93,11 @@
     <div class="negative-modal-header"><div><h2 id="negativePoolTitle">无鱼负样本列表</h2><p>仅管理 DET_FISH 专用池成员；移除不会删除原图、审核记录或冻结数据集。</p></div><button class="button" type="button" onclick="closeNegativePool()">关闭</button></div>
     <div class="negative-modal-toolbar">
       <select id="negativePoolState" onchange="loadNegativePool(0)"><option value="ACTIVE">池内记录</option><option value="REMOVED">已移除记录</option><option value="ALL">全部状态</option></select>
+      <label class="muted">每页<select id="negativePoolPageSize" aria-label="负样本池每页条数" onchange="changeNegativePoolPageSize(this.value)"><option value="20">20 条</option><option value="50" selected>50 条</option><option value="100">100 条</option></select></label>
       <input id="negativePoolBatch" type="search" placeholder="按来源批次筛选" onkeydown="if(event.key==='Enter')loadNegativePool(0)">
       <label class="muted"><input id="selectAllPoolRows" type="checkbox" onchange="selectCurrentPoolPage(this.checked)"> 全选本页</label>
       <button class="button" type="button" onclick="loadNegativePool(0)">刷新</button>
       <button class="button gold" type="button" onclick="openNegativeCandidates()">增加无鱼</button>
-      <input id="negativePoolActor" type="text" maxlength="256" placeholder="操作人（必填）" aria-label="操作人">
       <button id="removeSelectedNegatives" class="button danger" type="button" onclick="removeSelectedPoolRows()" disabled>移除所选</button>
     </div>
     <div id="negativePoolStatus" class="negative-warning" hidden></div>
@@ -106,10 +108,11 @@
 </div>
 <div id="negativeCandidatesModal" class="negative-modal-backdrop nested" hidden role="dialog" aria-modal="true" aria-labelledby="negativeCandidatesTitle" onclick="if(event.target===this)closeNegativeCandidates()">
   <section class="negative-modal">
-    <div class="negative-modal-header"><div><h2 id="negativeCandidatesTitle">从已标记无鱼的图片中批量添加</h2><p>机器无鱼标签仅为候选来源；确认添加前须由操作人确认所选原图确实无鱼。</p></div><button class="button" type="button" onclick="closeNegativeCandidates()">关闭</button></div>
+    <div class="negative-modal-header"><div><h2 id="negativeCandidatesTitle">从已标记无鱼的图片中批量添加</h2><p>机器无鱼标签仅为候选来源；点击“确认添加”即表示你确认所选图片无鱼。原始 AI 判定与审批记录保持不变。</p></div><button class="button" type="button" onclick="closeNegativeCandidates()">关闭</button></div>
     <div class="negative-modal-toolbar">
       <select id="negativeCandidateSource" onchange="switchNegativeCandidateSource()"><option value="PRESENCE_NO_FISH">系统已标记无鱼</option><option value="DET_DS_V0_1">历史 DET_DS_v0.1 候选</option></select>
       <select id="negativeCandidateVerification" onchange="loadNegativeCandidates(0)"><option value="ALL">所有确认状态</option><option value="PENDING">待人工确认</option><option value="HUMAN">已有人工确认</option></select>
+      <label class="muted">每页<select id="negativeCandidatePageSize" aria-label="历史候选每页条数" onchange="changeNegativeCandidatePageSize(this.value)"><option value="20">20 条</option><option value="50" selected>50 条</option><option value="100">100 条</option></select></label>
       <input id="negativeCandidateBatch" type="search" placeholder="按来源批次筛选" onkeydown="if(event.key==='Enter')loadNegativeCandidates(0)">
       <label class="muted"><input id="selectAllCandidateRows" type="checkbox" onchange="selectCurrentCandidatePage(this.checked)"> 全选本页</label>
       <button class="button" type="button" onclick="loadNegativeCandidates(0)">刷新候选</button>
@@ -118,7 +121,7 @@
     <div id="negativeCandidateRows" class="loading">加载中…</div>
     <div class="negative-footer"><span id="negativeCandidatePageLabel" class="muted"></span><span id="negativeCandidateSelected" class="code">已选 0 张</span><div class="negative-pagination"><button class="button" type="button" onclick="pageNegativeCandidates(-1)">上一页</button><button class="button" type="button" onclick="pageNegativeCandidates(1)">下一页</button></div></div>
     <div class="negative-footer">
-      <label class="negative-selection-confirm"><input id="confirmSelectedNoFish" type="checkbox"><span>我已逐张核验当前所选完整场景图没有鱼体。此确认只记录到 DET_FISH 负样本池，不会改写原始 AI 判定或审批记录。</span></label>
+      <span class="muted">加入动作会记录到 DET_FISH 专用池，不会改写原始 AI 判定或审批记录。</span>
       <div class="negative-pagination"><button class="button" type="button" onclick="closeNegativeCandidates()">取消</button><button id="confirmAddNegativeCandidates" class="button primary" type="button" onclick="addSelectedNegativeCandidates()" disabled>确认添加（0 张）</button></div>
     </div>
   </section>
@@ -170,15 +173,16 @@ async function loadStatus(){
   catch(error){notice.innerHTML='<div class="error-state">'+esc(platformError(error))+'</div>';document.getElementById('startDetTraining').disabled=true;}
 }
 
-let negativePoolOffset=0,negativePoolTotal=0,negativePoolLimit=20;
+let negativePoolOffset=0,negativePoolTotal=0,negativePoolLimit=50;
 let negativePoolPageItems=[],negativePoolSelection=new Set();
-let negativeCandidateOffset=0,negativeCandidateTotal=0,negativeCandidateLimit=20;
+let negativeCandidateOffset=0,negativeCandidateTotal=0,negativeCandidateLimit=50;
 let negativeCandidateItems=[],negativeCandidateSelection=new Map();
 let negativeCandidateFilterKey='';
 function setNegativeStatus(id,message){const target=document.getElementById(id);target.hidden=!message;target.textContent=message||'';}
-function currentNegativeActor(){return document.getElementById('negativePoolActor').value.trim();}
 function updatePoolSelection(){document.getElementById('removeSelectedNegatives').disabled=negativePoolSelection.size===0;}
 function updateCandidateSelection(){const count=negativeCandidateSelection.size;document.getElementById('negativeCandidateSelected').textContent='已选 '+fmtCount(count)+' 张';const button=document.getElementById('confirmAddNegativeCandidates');button.textContent='确认添加（'+fmtCount(count)+' 张）';button.disabled=count===0;}
+function changeNegativePoolPageSize(value){const size=Number(value);if(![20,50,100].includes(size))return;negativePoolLimit=size;negativePoolOffset=0;negativePoolSelection.clear();updatePoolSelection();loadNegativePool(0);}
+function changeNegativeCandidatePageSize(value){const size=Number(value);if(![20,50,100].includes(size))return;negativeCandidateLimit=size;negativeCandidateOffset=0;negativeCandidateSelection.clear();updateCandidateSelection();loadNegativeCandidates(0);}
 function openNegativePool(){document.getElementById('negativePoolModal').hidden=false;document.body.style.overflow='hidden';loadNegativePoolSummary();loadNegativePool(0);}
 function closeNegativePool(){document.getElementById('negativeCandidatesModal').hidden=true;document.getElementById('negativePoolModal').hidden=true;document.body.style.overflow='';negativePoolSelection.clear();updatePoolSelection();}
 async function loadNegativePoolSummary(){try{const data=await platformFetch('/api/det-fish/negative-pool/summary');document.getElementById('negativeCount').textContent=fmtCount(data.active_count);document.getElementById('negativePoolDetail').textContent='池内记录 '+fmtCount(data.active_count)+' · 已移除 '+fmtCount(data.removed_count)+' · 不等同于冻结入训数';}catch(error){document.getElementById('negativeCount').textContent='—';document.getElementById('negativePoolDetail').textContent='负样本池状态不可读取：'+platformError(error);}}
@@ -197,7 +201,7 @@ function renderNegativePoolRows(){
     const source=row.source_dataset_version||row.source_provider||row.source_kind||'—';
     const status=row.source_human_override==='no_fish'?'原始人工无鱼标签':(row.source_machine_status||row.source_status||'—');
     const eligibility=row.eligible_for_future_build?'可进入未来构建候选':('当前不可入候选：'+(row.eligibility_blockers||[]).join('；'));
-    return '<article class="negative-item"><input type="checkbox" '+(active?'':'disabled')+' '+(checked?'checked':'')+' aria-label="选择 '+esc(row.file_name)+'" onchange="togglePoolRow('+Number(row.entry_id)+',this.checked)"><a href="'+esc(row.original_url)+'" target="_blank" rel="noopener"><img src="'+esc(row.thumbnail_url)+'" alt="原图缩略图"></a><div class="negative-item-meta"><strong>'+esc(row.image_id)+' · '+esc(row.file_name)+'</strong><small>批次 '+esc(row.batch_id)+' · 来源 '+esc(source)+'<br>原始无鱼状态 '+esc(status)+' · 操作人 '+esc(row.added_by)+' · 加入 '+esc(fmtDate(row.added_at))+'<br>'+esc(eligibility)+'<br>原图 SHA-256 '+esc(row.source_image_sha256||'待数据集构建重新核验')+'</small></div><div class="negative-item-actions">'+(active?'<button class="button danger" type="button" onclick="removePoolEntries(['+Number(row.entry_id)+'])">移除池成员</button>':'<button class="button" type="button" onclick="reAddPoolEntry('+Number(row.entry_id)+')">重新加入</button>')+'</div></article>';
+    return '<article class="negative-item"><input type="checkbox" '+(active?'':'disabled')+' '+(checked?'checked':'')+' aria-label="选择 '+esc(row.file_name)+'" onchange="togglePoolRow('+Number(row.entry_id)+',this.checked)"><a href="'+esc(row.original_url)+'" target="_blank" rel="noopener"><img src="'+esc(row.thumbnail_url)+'" alt="原图缩略图"></a><div class="negative-item-meta"><strong>'+esc(row.image_id)+' · '+esc(row.file_name)+'</strong><small>批次 '+esc(row.batch_id)+' · 来源 '+esc(source)+'<br>原始无鱼状态 '+esc(status)+' · 操作来源 '+esc(row.added_by||'det-fish-console-ui')+' · 加入 '+esc(fmtDate(row.added_at))+'<br>'+esc(eligibility)+'<br>原图 SHA-256 '+esc(row.source_image_sha256||'待数据集构建重新核验')+'</small></div><div class="negative-item-actions">'+(active?'<button class="button danger" type="button" onclick="removePoolEntries(['+Number(row.entry_id)+'])">移除池成员</button>':'<button class="button" type="button" onclick="reAddPoolEntry('+Number(row.entry_id)+')">重新加入</button>')+'</div></article>';
   }).join('')+'</div>';}
   const start=negativePoolTotal?negativePoolOffset+1:0,end=Math.min(negativePoolOffset+items.length,negativePoolTotal);document.getElementById('negativePoolPageLabel').textContent=start+'–'+end+' / '+negativePoolTotal+' 条';
   document.getElementById('selectAllPoolRows').checked=items.length>0&&items.filter(row=>row.state==='ACTIVE').every(row=>negativePoolSelection.has(Number(row.entry_id)));updatePoolSelection();
@@ -207,26 +211,25 @@ function selectCurrentPoolPage(checked){negativePoolPageItems.filter(row=>row.st
 function pageNegativePool(direction){const next=negativePoolOffset+direction*negativePoolLimit;if(next<0||next>=negativePoolTotal)return;loadNegativePool(next);}
 async function removeSelectedPoolRows(){await removePoolEntries(Array.from(negativePoolSelection));}
 async function removePoolEntries(entryIds){
-  const actor=currentNegativeActor();if(!actor){setNegativeStatus('negativePoolStatus','请填写操作人后再移除。');return;}
   if(!entryIds.length)return;setNegativeStatus('negativePoolStatus','正在从 DET_FISH 池移除成员（保留原图与原始审核记录）…');
-  try{const result=await platformFetch('/api/det-fish/negative-pool/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({entry_ids:entryIds,actor})});negativePoolSelection.clear();setNegativeStatus('negativePoolStatus','已移除 '+result.removed.length+' 条；已移除状态 '+result.already_removed.length+' 条；未找到 '+result.missing.length+' 条。');await loadNegativePoolSummary();await loadNegativePool(negativePoolOffset);}
+  try{const result=await platformFetch('/api/det-fish/negative-pool/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({entry_ids:entryIds})});negativePoolSelection.clear();setNegativeStatus('negativePoolStatus','已移除 '+result.removed.length+' 条；已移除状态 '+result.already_removed.length+' 条；未找到 '+result.missing.length+' 条。');await loadNegativePoolSummary();await loadNegativePool(negativePoolOffset);}
   catch(error){setNegativeStatus('negativePoolStatus','移除失败：'+platformError(error));}
 }
 async function reAddPoolEntry(entryId){
-  const actor=currentNegativeActor();if(!actor){setNegativeStatus('negativePoolStatus','请填写操作人后再重新加入。');return;}
   const row=negativePoolPageItems.find(item=>Number(item.entry_id)===entryId);if(!row)return;
   if(!window.confirm('将此完整场景图片重新加入 DET_FISH 无鱼池？本操作会记录为一次新的人工确认。'))return;
   const sourceKind=row.source_kind==='DET_DS_V0_1'?'DET_DS_V0_1':'PRESENCE_NO_FISH';
-  try{const result=await platformFetch('/api/det-fish/negative-pool/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_kind:sourceKind,actor,confirm_pending_as_no_fish:true,items:[{image_asset_id:row.image_asset_id,source_record_id:row.source_record_id}]})});
+  try{const result=await platformFetch('/api/det-fish/negative-pool/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_kind:sourceKind,confirm_pending_as_no_fish:true,items:[{image_asset_id:row.image_asset_id,source_record_id:row.source_record_id}]})});
     const message=result.added.length?'已重新加入并记录新操作。':(result.rejected[0]?.reason||'未加入。');setNegativeStatus('negativePoolStatus',message);await loadNegativePoolSummary();await loadNegativePool(negativePoolOffset);
   }catch(error){setNegativeStatus('negativePoolStatus','重新加入失败：'+platformError(error));}
 }
-function openNegativeCandidates(){negativeCandidateSelection.clear();negativeCandidateOffset=0;document.getElementById('negativeCandidatesModal').hidden=false;document.getElementById('negativeCandidateVerification').value='ALL';document.getElementById('confirmSelectedNoFish').checked=false;updateCandidateSelection();loadNegativeCandidates(0);}
+function openNegativeCandidates(){negativeCandidateSelection.clear();negativeCandidateOffset=0;document.getElementById('negativeCandidatesModal').hidden=false;document.getElementById('negativeCandidateVerification').value='ALL';document.body.style.overflow='hidden';updateCandidateSelection();loadNegativeCandidates(0);}
+function openHistoricalPendingCandidates(){negativeCandidateSelection.clear();negativeCandidateOffset=0;negativeCandidateFilterKey='';document.getElementById('negativeCandidatesModal').hidden=false;document.body.style.overflow='hidden';document.getElementById('negativeCandidateSource').value='DET_DS_V0_1';document.getElementById('negativeCandidateVerification').value='PENDING';updateCandidateSelection();loadNegativeCandidates(0);}
 function closeNegativeCandidates(){document.getElementById('negativeCandidatesModal').hidden=true;negativeCandidateSelection.clear();updateCandidateSelection();}
-function switchNegativeCandidateSource(){negativeCandidateSelection.clear();document.getElementById('confirmSelectedNoFish').checked=false;updateCandidateSelection();loadNegativeCandidates(0);}
+function switchNegativeCandidateSource(){negativeCandidateSelection.clear();updateCandidateSelection();loadNegativeCandidates(0);}
 async function loadNegativeCandidates(offset){
   negativeCandidateOffset=Math.max(0,offset);const sourceKind=document.getElementById('negativeCandidateSource').value;const batch=document.getElementById('negativeCandidateBatch').value.trim();const verification=document.getElementById('negativeCandidateVerification').value;
-  const filterKey=[sourceKind,batch,verification].join('|');if(negativeCandidateFilterKey&&negativeCandidateFilterKey!==filterKey){negativeCandidateSelection.clear();document.getElementById('confirmSelectedNoFish').checked=false;updateCandidateSelection();}negativeCandidateFilterKey=filterKey;
+  const filterKey=[sourceKind,batch,verification].join('|');if(negativeCandidateFilterKey&&negativeCandidateFilterKey!==filterKey){negativeCandidateSelection.clear();updateCandidateSelection();}negativeCandidateFilterKey=filterKey;
   const query=new URLSearchParams({source_kind:sourceKind,limit:String(negativeCandidateLimit),offset:String(negativeCandidateOffset),verification});if(batch)query.set('batch_id',batch);
   const target=document.getElementById('negativeCandidateRows');target.innerHTML='<div class="loading">正在读取现有无鱼候选…</div>';setNegativeStatus('negativeCandidateStatus','');
   try{const data=await platformFetch('/api/det-fish/negative-pool/candidates?'+query.toString());negativeCandidateTotal=data.total;negativeCandidateItems=data.items||[];renderNegativeCandidateRows();}
@@ -247,20 +250,18 @@ function toggleCandidateRow(id,checked){const row=negativeCandidateItems.find(it
 function selectCurrentCandidatePage(checked){negativeCandidateItems.filter(row=>row.eligible_to_add&&!row.already_added&&row.image_asset_id).forEach(row=>{const id=Number(row.image_asset_id);if(checked)negativeCandidateSelection.set(id,{image_asset_id:id,source_record_id:row.source_record_id});else negativeCandidateSelection.delete(id);});renderNegativeCandidateRows();}
 function pageNegativeCandidates(direction){const next=negativeCandidateOffset+direction*negativeCandidateLimit;if(next<0||next>=negativeCandidateTotal)return;loadNegativeCandidates(next);}
 async function addSelectedNegativeCandidates(){
-  const actor=currentNegativeActor();if(!actor){setNegativeStatus('negativeCandidateStatus','请先填写操作人。');return;}
-  if(!document.getElementById('confirmSelectedNoFish').checked){setNegativeStatus('negativeCandidateStatus','请逐张核验并勾选无鱼确认后再提交。');return;}
   const items=Array.from(negativeCandidateSelection.values());if(!items.length)return;
   const button=document.getElementById('confirmAddNegativeCandidates');button.disabled=true;setNegativeStatus('negativeCandidateStatus','正在核验原图 SHA 并加入 DET_FISH 专用池…');
-  try{const result=await platformFetch('/api/det-fish/negative-pool/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items,source_kind:document.getElementById('negativeCandidateSource').value,actor,confirm_pending_as_no_fish:true})});
-    negativeCandidateSelection.clear();document.getElementById('confirmSelectedNoFish').checked=false;updateCandidateSelection();const rejects=(result.rejected||[]).map(item=>item.image_asset_id+': '+item.reason).join('；');
+  try{const result=await platformFetch('/api/det-fish/negative-pool/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items,source_kind:document.getElementById('negativeCandidateSource').value,confirm_pending_as_no_fish:true})});
+    negativeCandidateSelection.clear();updateCandidateSelection();const rejects=(result.rejected||[]).map(item=>item.image_asset_id+': '+item.reason).join('；');
     setNegativeStatus('negativeCandidateStatus','成功新增 '+result.added.length+' 张；已存在 '+result.already_added.length+' 张；拒绝 '+result.rejected.length+' 张。'+(rejects?' 拒绝原因：'+rejects:''));await loadNegativePoolSummary();await loadNegativePool(0);await loadNegativeCandidates(negativeCandidateOffset);
   }catch(error){setNegativeStatus('negativeCandidateStatus','添加失败：'+platformError(error));}
   finally{updateCandidateSelection();}
 }
 async function loadHistoricalNegativeAudit(){
   const target=document.getElementById('historical154Audit');target.textContent='正在读取 DET_DS_v0.1 历史清单并核对每张原图字节…';
-  try{const data=await platformFetch('/api/det-fish/negative-pool/historical-v01-audit');target.textContent='历史 DET_DS_v0.1 无鱼记录：总数 '+fmtCount(data.historical_records_total)+' · 有效 '+fmtCount(data.valid_records)+' · 已加入 '+fmtCount(data.already_in_pool)+' · 待确认 '+fmtCount(data.pending_confirmation)+' · 重复 '+fmtCount(data.duplicate_records)+' · 缺失 '+fmtCount(data.missing_records)+' · 排除 '+fmtCount(data.excluded_records)+'。Manifest SHA-256 '+esc(data.source_artifact.manifest_sha256);}
-  catch(error){target.textContent='历史 DET_DS_v0.1 无鱼记录实时核查未完成：'+platformError(error)+'。当前未将历史数量视为已确认负样本。'}
+  try{const data=await platformFetch('/api/det-fish/negative-pool/historical-v01-audit');const pending=Number(data.pending_confirmation||0);target.innerHTML='历史 DET_DS_v0.1 无鱼记录：总数 '+fmtCount(data.historical_records_total)+' · 有效 '+fmtCount(data.valid_records)+' · 已加入 '+fmtCount(data.already_in_pool)+' · 待确认 '+fmtCount(pending)+' · 重复 '+fmtCount(data.duplicate_records)+' · 缺失 '+fmtCount(data.missing_records)+' · 排除 '+fmtCount(data.excluded_records)+'。Manifest SHA-256 '+esc(data.source_artifact.manifest_sha256)+(pending>0?' <button class="button" type="button" onclick="openHistoricalPendingCandidates()" style="margin-left:8px">查看待确认明细（'+fmtCount(pending)+'）</button>':'');}
+  catch(error){target.innerHTML='历史 DET_DS_v0.1 无鱼记录实时核查未完成：'+esc(platformError(error))+'。<button class="button" type="button" onclick="loadHistoricalNegativeAudit()" style="margin-left:8px">重试核查</button>';}
 }
 document.getElementById('detTrainingForm').addEventListener('submit',async function(event){
   event.preventDefault();const button=document.getElementById('startDetTraining');button.disabled=true;
