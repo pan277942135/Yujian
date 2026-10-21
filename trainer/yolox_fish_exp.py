@@ -50,7 +50,7 @@ class Exp(BaseExp):
             no_aug=no_aug,
             cache_img=cache_img,
         )
-        if self.dataset_version == "DET_DS_v0.2":
+        if self.dataset_version in {"DET_DS_v0.2", "DET_DS_v0.3"}:
             # YOLOX builds a MosaicDetection dataset and its DataLoader first. Workers
             # are created when iteration begins, so replacing this callable here
             # applies to both mosaic and non-mosaic samples without touching v0.1.
