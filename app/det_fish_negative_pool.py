@@ -30,13 +30,13 @@ class CandidateRef(BaseModel):
 class AddRequest(BaseModel):
     items: list[CandidateRef] = Field(min_length=1, max_length=100)
     source_kind: str = Field(pattern="^(PRESENCE_NO_FISH|DET_DS_V0_1)$")
-    actor: str = Field(min_length=1, max_length=256)
+    actor: str = Field(default="det-fish-console-ui", min_length=1, max_length=256)
     confirm_pending_as_no_fish: bool = False
 
 
 class RemoveRequest(BaseModel):
     entry_ids: list[int] = Field(min_length=1, max_length=100)
-    actor: str = Field(min_length=1, max_length=256)
+    actor: str = Field(default="det-fish-console-ui", min_length=1, max_length=256)
 
 
 def _json(value: str | None) -> dict[str, Any]:
@@ -391,9 +391,7 @@ def historical_v01_audit(db: Session = Depends(get_db)) -> dict[str, Any]:
 
 @router.post("/add")
 def add_members(payload: AddRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
-    actor = payload.actor.strip()
-    if not actor:
-        raise HTTPException(status_code=400, detail="操作人不能为空")
+    actor = payload.actor.strip() or "det-fish-console-ui"
     candidate_ids = [item.image_asset_id for item in payload.items]
     if len(set(candidate_ids)) != len(candidate_ids):
         raise HTTPException(status_code=400, detail="同一请求包含重复图片")
@@ -522,9 +520,7 @@ def add_members(payload: AddRequest, db: Session = Depends(get_db)) -> dict[str,
 
 @router.post("/remove")
 def remove_members(payload: RemoveRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
-    actor = payload.actor.strip()
-    if not actor:
-        raise HTTPException(status_code=400, detail="操作人不能为空")
+    actor = payload.actor.strip() or "det-fish-console-ui"
     if len(set(payload.entry_ids)) != len(payload.entry_ids):
         raise HTTPException(status_code=400, detail="同一请求包含重复负样本记录")
     removed, already_removed, missing = [], [], []
