@@ -94,7 +94,7 @@ gcloud run jobs deploy "$JOB_NAME" \
   --region "$REGION" \
   --image "$PINNED_IMAGE_URI" \
   --service-account "$RUNTIME_SA" \
-  --set-env-vars="GCS_BUCKET=${BUCKET},DETECTOR_DATASET_VERSION=${DATASET_VERSION},DETECTOR_DATASET_ROOT=${DATASET_ROOT},DETECTOR_MODEL_VERSION=${MODEL_VERSION},APP_GIT_COMMIT=${GIT_SHA},DETECTOR_TRAINER_IMAGE_DIGEST=${IMAGE_DIGEST},DETECTOR_EPOCHS=${DETECTOR_EPOCHS:-30},DETECTOR_BATCH_SIZE=${DETECTOR_BATCH_SIZE:-16},DETECTOR_SEED=${DETECTOR_SEED:-20261020},DETECTOR_EVAL_INTERVAL=${DETECTOR_EVAL_INTERVAL:-2}" \
+  --set-env-vars="GCS_BUCKET=${BUCKET},DETECTOR_DATASET_VERSION=${DATASET_VERSION},DETECTOR_DATASET_ROOT=${DATASET_ROOT},DETECTOR_MODEL_VERSION=${MODEL_VERSION},APP_GIT_COMMIT=${GIT_SHA},DETECTOR_TRAINER_IMAGE_DIGEST=${IMAGE_DIGEST},DETECTOR_TRAINER_IMAGE_URI=${PINNED_IMAGE_URI},DETECTOR_EPOCHS=${DETECTOR_EPOCHS:-30},DETECTOR_BATCH_SIZE=${DETECTOR_BATCH_SIZE:-16},DETECTOR_SEED=${DETECTOR_SEED:-20261020},DETECTOR_EVAL_INTERVAL=${DETECTOR_EVAL_INTERVAL:-2}" \
   --cpu=4 \
   --memory=16Gi \
   --gpu=1 \
@@ -143,6 +143,7 @@ checks = {
     "DETECTOR_DATASET_VERSION": env.get("DETECTOR_DATASET_VERSION") == expected_dataset,
     "DETECTOR_MODEL_VERSION": env.get("DETECTOR_MODEL_VERSION") == expected_model,
     "DETECTOR_TRAINER_IMAGE_DIGEST": env.get("DETECTOR_TRAINER_IMAGE_DIGEST") == expected_digest,
+    "DETECTOR_TRAINER_IMAGE_URI": env.get("DETECTOR_TRAINER_IMAGE_URI") == expected_image,
     "gpu_count": str(limits.get("nvidia.com/gpu") or "") == "1",
     "gpu_type": str(selector.get("run.googleapis.com/accelerator") or "").lower() == "nvidia-l4",
     "cpu": float(str(limits.get("cpu") or "0").removesuffix("m")) >= 4 if not str(limits.get("cpu") or "").endswith("m") else float(str(limits.get("cpu"))[:-1]) >= 4000,
