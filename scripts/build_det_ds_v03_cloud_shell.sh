@@ -32,7 +32,7 @@ git show-ref --verify --quiet "${PR_REF}" || {
   exit 2
 }
 [[ "$(git rev-parse "${PR_REF}")" == "${GIT_SHA}" ]] || {
-  echo "HEAD does not match the fetched PR #166 head ref; refusing to build stale or unrelated code." >&2
+  echo "HEAD does not match the fetched v0.3 split-fix branch ref; refusing to build stale or unrelated code." >&2
   exit 2
 }
 [[ -z "$(git status --porcelain --untracked-files=normal)" ]] || {
