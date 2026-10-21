@@ -409,6 +409,7 @@ def main() -> None:
         "dataset_version": dataset_version,
         "git_commit": app_git_commit,
         "trainer_image_digest": os.environ.get("DETECTOR_TRAINER_IMAGE_DIGEST", "").strip() or None,
+        "trainer_image_uri": os.environ.get("DETECTOR_TRAINER_IMAGE_URI", "").strip() or None,
         "dataset_archive_sha256": sha256_file(archive),
         "dataset_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
         "training": {
