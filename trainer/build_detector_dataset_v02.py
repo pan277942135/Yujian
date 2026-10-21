@@ -1,4 +1,4 @@
-"""Build the reviewed DET_DS_v0.2 detector dataset from complete source scenes.
+"""Build the reviewed detector dataset version selected by DETECTOR_DATASET_VERSION.
 
 This is deliberately separate from ``build_detector_dataset`` (the legacy
 Google Vision pseudo-label builder) and ``build_reviewed_datasets`` (the crop
@@ -1222,7 +1222,7 @@ def _build_report(data: dict[str, Any], manifest_rows: list[dict[str, Any]], arc
         "archive_sha256": archive_sha256,
         "source_record_errors": data.get("source_record_errors") or [],
         "source_scope": "approved ImageAsset + training_eligible + accepted BatchCropReview; full-scene ImageAsset.gcs_uri; no crops and no Google Vision labels",
-        "split_method": "deterministic connected components of exact source SHA and ImageAsset.group_id (batch_id conservative fallback), 80/10/10 target",
+        "split_method": "deterministic class-aware connected components of exact source SHA and ImageAsset.group_id; ImageAsset.id fallback when group_id is absent; 80/10/10 target",
         "materialization_policy": "EXIF-transposed RGB complete scenes; original PNGs are retained as lossless PNG and other formats are stored as high-quality JPEG quality=95; source-byte SHA remains separately recorded",
         "held_out_sha256": sorted(_HELD_OUT_SHA256),
     }
