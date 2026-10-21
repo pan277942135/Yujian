@@ -203,8 +203,8 @@ def _validate_detector_job(job: dict[str, Any]) -> list[str]:
         for item in container.get("env") or []
         if isinstance(item, dict)
     }
-    if env.get("DETECTOR_DATASET_VERSION") != "DET_DS_v0.2":
-        blockers.append("训练 Job 未显式配置 DETECTOR_DATASET_VERSION=DET_DS_v0.2；禁止使用 v0.1 Job 配置启动")
+    if env.get("DETECTOR_DATASET_VERSION") != DATASET_VERSION:
+        blockers.append(f"训练 Job 未显式配置 DETECTOR_DATASET_VERSION={DATASET_VERSION}；禁止使用其他数据集版本启动")
     if env.get("DETECTOR_MODEL_VERSION") != "DET_FISH_v0.2":
         blockers.append("训练 Job 未显式配置 DETECTOR_MODEL_VERSION=DET_FISH_v0.2")
     build_sha = env.get("APP_GIT_COMMIT", "").strip()
@@ -416,7 +416,7 @@ def det_fish_training_status(db: Session = Depends(get_db)) -> dict[str, Any]:
                 "accepted_images": int(pool.get("count") or 0),
                 "accepted_bbox": int(pool.get("accepted_bbox_pool_count") or 0),
                 "source": pool.get("source"),
-                "note": "Accepted Pool 记录数不代表已进入 DET_DS_v0.2 冻结训练集",
+                "note": f"Accepted Pool 记录数不代表已进入 {DATASET_VERSION} 冻结训练集",
             },
             "accepted_pool_reconciliation": accepted_pool_reconciliation,
             "dataset": {
@@ -469,11 +469,11 @@ def det_fish_training_start(payload: DetectorTrainingStart, db: Session = Depend
             report, manifest_bytes, archive_sha256, _archive_exists, _manifest_verified = _dataset_artifacts(bucket)
             gate = _dataset_gate(report, manifest_bytes, archive_sha256)
         except Exception as exc:
-            raise HTTPException(status_code=503, detail="无法验证 DET_DS_v0.2 冻结数据集") from exc
+            raise HTTPException(status_code=503, detail=f"无法验证 {DATASET_VERSION} 冻结数据集") from exc
         if not gate["ready"]:
             raise HTTPException(
                 status_code=409,
-                detail={"message": "DET_DS_v0.2 尚未通过逐图数据与哈希门禁，已阻止启动 GPU 任务。", "blockers": gate["blockers"]},
+                detail={"message": f"{DATASET_VERSION} 尚未通过逐图数据与哈希门禁，已阻止启动 GPU 任务。", "blockers": gate["blockers"]},
             )
 
         existing_model = _model_summary(bucket, MODEL_VERSION)
