@@ -56,7 +56,9 @@ def download_gcs(bucket_name: str, object_name: str, target: Path) -> None:
 
 def upload_gcs(bucket_name: str, object_name: str, source: Path, content_type: str | None = None) -> str:
     blob = storage.Client().bucket(bucket_name).blob(object_name)
-    blob.upload_from_filename(str(source), content_type=content_type)
+    # Final detector artifacts are create-only: concurrent executions or retries
+    # must never overwrite a published model version.
+    blob.upload_from_filename(str(source), content_type=content_type, if_generation_match=0)
     return f"gs://{bucket_name}/{object_name}"
 
 
