@@ -73,12 +73,11 @@ if ! gcloud artifacts repositories describe "$AR_REPOSITORY" --project "$PROJECT
     --description="YuJian YOLOX detector training images"
 fi
 
-IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPOSITORY}/detector-trainer:${GIT_SHA}"
+IMAGE_TAG="${GIT_SHA}-$(date -u +%Y%m%d-%H%M%S)"
+IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPOSITORY}/detector-trainer:${IMAGE_TAG}"
 
-log "Building/reusing detector trainer image ${IMAGE_URI}"
-if ! gcloud artifacts docker images describe "$IMAGE_URI" --project "$PROJECT_ID" >/dev/null 2>&1; then
-  gcloud builds submit . --project "$PROJECT_ID" --config infra/cloudbuild.detector.yaml --substitutions="_IMAGE_URI=${IMAGE_URI}"
-fi
+log "Building a fresh trainer image from exact source SHA ${GIT_SHA}"
+gcloud builds submit . --project "$PROJECT_ID" --config infra/cloudbuild.detector.yaml --substitutions="_IMAGE_URI=${IMAGE_URI}"
 
 IMAGE_DIGEST="$(gcloud artifacts docker images describe "$IMAGE_URI" --project "$PROJECT_ID" --format='value(image_summary.digest)')"
 if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
