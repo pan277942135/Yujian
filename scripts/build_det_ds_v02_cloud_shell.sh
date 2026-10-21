@@ -14,8 +14,8 @@ GIT_SHA="$(git rev-parse HEAD)"
 SHORT_SHA="${GIT_SHA:0:8}"
 PR_REF="${DETECTOR_DATASET_PR_REF:-refs/remotes/origin/pr-166-live}"
 JOB_NAME="${DETECTOR_DATASET_BUILDER_JOB_NAME:-yujian-detector-dataset-v02-${SHORT_SHA}}"
-BUILD_NONCE="$(date -u +%Y%m%dT%H%M%S)-${RANDOM}"
-IMAGE_NAME="accepted-pool-dataset-builder-${GIT_SHA}-${BUILD_NONCE}"
+BUILD_NONCE="$(date -u +%Y%m%dt%H%M%S)-${RANDOM}"
+IMAGE_NAME="accepted-pool-dataset-builder-${SHORT_SHA}-${BUILD_NONCE}"
 IMAGE_URI="${ARTIFACT_REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPOSITORY}/${IMAGE_NAME}"
 
 if [[ ! -f trainer/build_detector_dataset_v02.py || ! -f trainer/detector_dataset_gate.py ]]; then
