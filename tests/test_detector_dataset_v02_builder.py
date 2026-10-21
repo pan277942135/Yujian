@@ -3,6 +3,7 @@ import io
 import json
 import tarfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
@@ -76,6 +77,35 @@ def fixture_records():
         "accepted_pool_metadata_summary": {"source": "synthetic fixture"},
     }
     return records, sources
+
+
+def test_source_group_fallback_uses_asset_id_not_import_batch():
+    first = SimpleNamespace(id=101, group_id=None, batch_id="bulk-import-20261007")
+    second = SimpleNamespace(id=102, group_id=None, batch_id="bulk-import-20261007")
+
+    assert builder._source_group(first) == ("asset:101", "ImageAsset.id_fallback")
+    assert builder._source_group(second) == ("asset:102", "ImageAsset.id_fallback")
+    assert builder._source_group(first) != builder._source_group(second)
+
+
+def test_stable_split_balances_positive_and_negative_classes_without_splitting_groups():
+    groups = {f"component-{index}": {f"sha-{index}"} for index in range(1000)}
+    fish_presence = {f"sha-{index}": index < 800 for index in range(1000)}
+
+    assignments = builder._stable_split(groups, fish_presence)
+
+    for fish_present, total in ((True, 800), (False, 200)):
+        counts = {
+            split: sum(
+                1 for component, split_value in assignments.items()
+                if split_value == split
+                and fish_presence[next(iter(groups[component]))] is fish_present
+            )
+            for split in ("train", "val", "test")
+        }
+        assert abs(counts["train"] / total - 0.80) <= 0.03, counts
+        assert abs(counts["val"] / total - 0.10) <= 0.03, counts
+        assert abs(counts["test"] / total - 0.10) <= 0.03, counts
 
 
 def test_builder_freezes_full_scenes_with_provenance_and_deterministic_archive(tmp_path: Path):
