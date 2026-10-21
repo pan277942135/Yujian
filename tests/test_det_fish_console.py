@@ -106,3 +106,28 @@ def test_upload_rejects_nonimage_bytes_and_mime_mismatch():
     with pytest.raises(HTTPException) as mismatch:
         asyncio.run(_read_test_image(_upload(_png_bytes(), "image/jpeg")))
     assert "MIME" in mismatch.value.detail
+
+
+def test_cloud_run_detector_job_accepts_exact_v03_pair(monkeypatch):
+    monkeypatch.setattr(console, "DATASET_VERSION", "DET_DS_v0.3")
+    monkeypatch.setattr(console, "MODEL_VERSION", "DET_FISH_v0.3")
+    job = {
+        "template": {
+            "template": {
+                "containers": [{
+                    "image": "asia-southeast1-docker.pkg.dev/project/repo/detector-trainer@sha256:" + "c" * 64,
+                    "env": [
+                        {"name": "DETECTOR_DATASET_VERSION", "value": "DET_DS_v0.3"},
+                        {"name": "DETECTOR_MODEL_VERSION", "value": "DET_FISH_v0.3"},
+                        {"name": "APP_GIT_COMMIT", "value": "d" * 40},
+                    ],
+                    "resources": {"limits": {"cpu": "4", "memory": "16Gi", "nvidia.com/gpu": "1"}},
+                }],
+                "serviceAccount": "detector@project.iam.gserviceaccount.com",
+                "nodeSelector": {"run.googleapis.com/accelerator": "nvidia-l4"},
+                "maxRetries": 0,
+                "gpuZonalRedundancyDisabled": True,
+            }
+        }
+    }
+    assert console._validate_detector_job(job) == []
