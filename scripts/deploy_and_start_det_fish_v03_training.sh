@@ -161,15 +161,20 @@ gcloud run jobs execute "${JOB_NAME}" \
   --region="${GPU_REGION}" \
   --quiet
 
-EXECUTION="$(gcloud run jobs executions list \
-  --job="${JOB_NAME}" \
-  --project="${PROJECT_ID}" \
-  --region="${GPU_REGION}" \
-  --limit=1 \
-  --sort-by='~metadata.creationTimestamp' \
-  --format='value(metadata.name)')"
+EXECUTION=""
+for attempt in $(seq 1 10); do
+  EXECUTION="$(gcloud run jobs executions list \
+    --job="${JOB_NAME}" \
+    --project="${PROJECT_ID}" \
+    --region="${GPU_REGION}" \
+    --limit=1 \
+    --sort-by='~metadata.creationTimestamp' \
+    --format='value(metadata.name)')"
+  [[ -n "${EXECUTION}" ]] && break
+  sleep 3
+done
 if [[ -z "${EXECUTION}" ]]; then
-  echo "BLOCKED: Cloud Run did not return a discoverable execution ID." >&2
+  echo "BLOCKED: Cloud Run did not return a discoverable execution ID after 30 seconds." >&2
   exit 4
 fi
 
