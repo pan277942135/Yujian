@@ -232,7 +232,13 @@ def _validate_detector_job(job: dict[str, Any]) -> list[str]:
     memory = str(limits.get("memory") or "")
     memory_ok = memory.lower() in {"16gi", "17g", "16384mi"} or bool(re.fullmatch(r"(?:1[6-9]|[2-9][0-9])Gi", memory, re.I))
     node_selector = task.get("nodeSelector") or {}
-    accelerator = str(node_selector.get("run.googleapis.com/accelerator") or "").lower()
+    # Cloud Run v2 REST exposes NodeSelector.accelerator; the v1 YAML key
+    # run.googleapis.com/accelerator is retained as a compatibility fallback.
+    accelerator = str(
+        node_selector.get("accelerator")
+        or node_selector.get("run.googleapis.com/accelerator")
+        or ""
+    ).lower()
     gpu_count = str(limits.get("nvidia.com/gpu") or "")
     if gpu_count != "1":
         blockers.append("训练 Job 未配置 1 张 NVIDIA GPU")
