@@ -45,6 +45,28 @@ if [[ -n "${FINAL_MODEL_OBJECTS}" ]]; then
 fi
 
 echo ""
+echo "========== Check for an existing active trainer execution before deployments =========="
+gcloud run jobs executions list \
+  --job="${JOB_NAME}" --project="${PROJECT_ID}" --region="${GPU_REGION}" \
+  --limit=100 --format=json > /tmp/det_fish_v03_executions_initial.json
+python3 - /tmp/det_fish_v03_executions_initial.json <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    value = json.load(f)
+items = value if isinstance(value, list) else value.get("executions", []) if isinstance(value, dict) else []
+active = []
+for item in items:
+    status = item.get("status") or {}
+    if not status.get("completionTime"):
+        active.append(item.get("metadata", {}).get("name") or item.get("name") or "<unnamed>")
+if active:
+    raise SystemExit("BLOCKED: active or queued DET_FISH executions already exist: " + ", ".join(active))
+print("PASS: no active or queued execution")
+PY
+
+echo ""
 echo "========== Deploy console with v0.3 training target =========="
 PROJECT_ID="${PROJECT_ID}" \
 REGION="${CONSOLE_REGION}" \
