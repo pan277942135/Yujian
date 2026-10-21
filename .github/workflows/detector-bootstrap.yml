@@ -1,53 +1,39 @@
-name: Detector Bootstrap
+name: Detector Bootstrap - DET_DS_v0.3
 
 on:
   workflow_dispatch:
     inputs:
-      rebuild_dataset:
-        description: 'Explicitly rebuild frozen DET_DS_v0.1 before detector training'
-        required: false
-        default: false
+      start_gpu_training:
+        description: "Explicitly deploy the reviewed v0.3 trainer and start one GPU execution"
+        required: true
         type: boolean
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/detector-bootstrap.yml'
-      - 'config/recognition_pipeline_v1.json'
-      - 'trainer/build_detector_dataset.py'
-      - 'trainer/train_detector.py'
-      - 'trainer/yolox_fish_exp.py'
-      - 'Dockerfile.trainer'
-      - 'Dockerfile.detector'
-      - 'requirements-detector.txt'
-      - 'requirements-training.txt'
-      - 'infra/cloudbuild.detector.yaml'
-      - 'scripts/deploy_detector_dataset_job.sh'
-      - 'scripts/deploy_detector_training_gcp.sh'
+        default: false
 
 permissions:
   contents: read
   id-token: write
 
 concurrency:
-  group: yujian-detector-bootstrap
-  cancel-in-progress: true
+  group: yujian-detector-v03-training
+  cancel-in-progress: false
 
 env:
   PROJECT_ID: gemini-api-project-503706
   WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
   DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
   BUCKET: yujian-model-factory-571785698442
+  DATASET_VERSION: DET_DS_v0.3
+  MODEL_VERSION: DET_FISH_v0.3
   DATASET_REGION: asia-east1
   GPU_REGION: asia-southeast1
-  DETECTOR_DATASET_VERSION: DET_DS_v0.1
-  DETECTOR_MODEL_VERSION: DET_FISH_v0.1
 
 jobs:
-  prepare-dataset:
+  preflight-only:
+    if: ${{ inputs.start_gpu_training != true }}
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 45
     steps:
-      - name: Checkout
+      - name: Checkout exact selected ref
         uses: actions/checkout@v4
 
       - name: Authenticate to Google Cloud
@@ -61,76 +47,38 @@ jobs:
         uses: google-github-actions/setup-gcloud@v3.0.1
         with:
           project_id: ${{ env.PROJECT_ID }}
-          version: '>= 416.0.0'
+          version: ">= 416.0.0"
 
-      - name: Rebuild frozen detector dataset only when explicitly requested
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.rebuild_dataset == true }}
+      - name: Verify frozen v0.3 report, manifest, archive and split contract
         env:
-          REGION: ${{ env.DATASET_REGION }}
-          DETECTOR_DATASET_VERSION: ${{ env.DETECTOR_DATASET_VERSION }}
+          DETECTOR_DATASET_VERSION: ${{ env.DATASET_VERSION }}
         run: |
-          bash scripts/deploy_detector_dataset_job.sh
-          gcloud run jobs execute yujian-detector-dataset-builder \
-            --project "$PROJECT_ID" \
-            --region "$DATASET_REGION" \
-            --wait
-
-      - name: Reuse frozen DET_DS_v0.1
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.rebuild_dataset != true }}
-        run: echo "Reusing frozen ${DETECTOR_DATASET_VERSION}; dataset builder will not run."
-
-      - name: Validate frozen detector dataset gate
-        run: |
-          gcloud storage cp \
-            "gs://${BUCKET}/detector-datasets/${DETECTOR_DATASET_VERSION}/bootstrap_report.json" \
-            detector-bootstrap-report.json
-          python - <<'PY'
-          import json
-          p=json.load(open('detector-bootstrap-report.json', encoding='utf-8'))
-          train=(p.get('splits') or {}).get('train') or {}
-          val=(p.get('splits') or {}).get('val') or {}
-          test=(p.get('splits') or {}).get('test') or {}
-          train_boxes=int(train.get('annotations') or 0)
-          val_boxes=int(val.get('annotations') or 0)
-          train_images=int(train.get('images') or 0)
-          test_images=int(test.get('images') or 0)
-          no_fish_negatives=int(p.get('negatives') or 0)
-          if train_boxes < 30 or val_boxes < 3 or train_images < 40 or test_images < 1 or no_fish_negatives < 1:
-              raise SystemExit(
-                  'DETECTOR_DATASET_GATE_FAIL '
-                  f'train_images={train_images} train_boxes={train_boxes} val_boxes={val_boxes} '
-                  f'test_images={test_images} no_fish_negatives={no_fish_negatives}'
-              )
-          print(
-              'DETECTOR_DATASET_GATE_PASS '
-              f'train_images={train_images} train_boxes={train_boxes} val_boxes={val_boxes} '
-              f'test_images={test_images} no_fish_negatives={no_fish_negatives}'
-          )
+          set -euo pipefail
+          mkdir -p /tmp/det-ds-v03-preflight
+          gcloud storage cp "gs://${BUCKET}/detector-datasets/${DATASET_VERSION}/bootstrap_report.json" /tmp/det-ds-v03-preflight/bootstrap_report.json
+          gcloud storage cp "gs://${BUCKET}/detector-datasets/${DATASET_VERSION}/bootstrap_manifest.json" /tmp/det-ds-v03-preflight/bootstrap_manifest.json
+          ARCHIVE_SHA="$(gcloud storage cat "gs://${BUCKET}/detector-datasets/${DATASET_VERSION}/${DATASET_VERSION}.tar.gz" | sha256sum | awk '{print $1}')"
+          PYTHONPATH="$GITHUB_WORKSPACE" python - /tmp/det-ds-v03-preflight/bootstrap_report.json /tmp/det-ds-v03-preflight/bootstrap_manifest.json "$ARCHIVE_SHA" <<'PY'
+          import json, sys
+          from trainer.detector_dataset_gate import validate_v02_dataset
+          report=json.load(open(sys.argv[1], encoding="utf-8"))
+          manifest=open(sys.argv[2], "rb").read()
+          result=validate_v02_dataset(report, manifest, sys.argv[3])
+          if report.get("dataset_version") != "DET_DS_v0.3" or report.get("status") != "FROZEN_READY_FOR_TRAINING":
+              raise SystemExit("BLOCKED: unexpected dataset version or freeze status")
+          if not result.get("ready") or not result.get("counts_verified"):
+              print(json.dumps(result, ensure_ascii=False, indent=2))
+              raise SystemExit("BLOCKED: strict DET_DS_v0.3 gate failed")
+          print("DET_DS_V03_PREFLIGHT_PASS")
+          print(json.dumps({"counts":result["counts"],"negative_split_counts":result["negative_split_counts"],"manifest_sha256":report["manifest_sha256"],"archive_sha256":sys.argv[3]},ensure_ascii=False,indent=2))
           PY
 
-      - name: Dataset summary
-        if: always()
-        run: |
-          echo '### DET_DS_v0.1 frozen dataset' >> "$GITHUB_STEP_SUMMARY"
-          if [[ -f detector-bootstrap-report.json ]]; then
-            python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import json
-          p=json.load(open('detector-bootstrap-report.json'))
-          print('- Rebuild requested: **${{ github.event_name == 'workflow_dispatch' && inputs.rebuild_dataset == true }}**')
-          print(f"- Selected: **{p.get('selected',0)}**")
-          print(f"- Positives: **{p.get('positives',0)}**")
-          print(f"- No-fish negatives: **{p.get('negatives',0)}**")
-          for s,v in (p.get('splits') or {}).items():
-              print(f"- {s}: {v.get('images',0)} images / {v.get('annotations',0)} boxes")
-          PY
-          fi
-
-  train-detector:
-    needs: prepare-dataset
+  deploy-and-start:
+    if: ${{ inputs.start_gpu_training == true }}
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 60
     steps:
-      - name: Checkout
+      - name: Checkout exact selected ref
         uses: actions/checkout@v4
 
       - name: Authenticate to Google Cloud
@@ -144,96 +92,12 @@ jobs:
         uses: google-github-actions/setup-gcloud@v3.0.1
         with:
           project_id: ${{ env.PROJECT_ID }}
-          version: '>= 416.0.0'
+          version: ">= 416.0.0"
 
-      - name: Deploy YOLOX-Nano L4 training job
+      - name: Deploy exact v0.3 console and immutable trainer, then start GPU
         env:
+          CONFIRM_START_GPU: "YES"
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          BUCKET: ${{ env.BUCKET }}
           DETECTOR_GPU_REGION: ${{ env.GPU_REGION }}
-          DETECTOR_DATASET_VERSION: ${{ env.DETECTOR_DATASET_VERSION }}
-          DETECTOR_MODEL_VERSION: ${{ env.DETECTOR_MODEL_VERSION }}
-        run: bash scripts/deploy_detector_training_gcp.sh
-
-      - name: Train and export detector
-        id: execute_training
-        continue-on-error: true
-        run: |
-          gcloud run jobs execute yujian-detector-trainer \
-            --project "$PROJECT_ID" \
-            --region "$GPU_REGION" \
-            --wait
-
-      - name: Diagnose detector training execution
-        if: always()
-        env:
-          TRAINING_JOB_NAME: yujian-detector-trainer
-        run: |
-          set -o pipefail
-          EXECUTION="$(gcloud run jobs executions list \
-            --job="$TRAINING_JOB_NAME" \
-            --project "$PROJECT_ID" \
-            --region "$GPU_REGION" \
-            --limit=1 \
-            --sort-by='~metadata.creationTimestamp' \
-            --format='value(metadata.name)')"
-          test -n "$EXECUTION"
-          echo "Detector training execution: $EXECUTION"
-          gcloud run jobs executions describe "$EXECUTION" \
-            --project "$PROJECT_ID" \
-            --region "$GPU_REGION" \
-            --format=yaml
-          gcloud logging read \
-            "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"$TRAINING_JOB_NAME\"" \
-            --project "$PROJECT_ID" \
-            --limit=200 \
-            --freshness=2h \
-            --format='value(timestamp,severity,textPayload,jsonPayload.message)' || true
-
-      - name: Read detector training failure diagnostic
-        if: steps.execute_training.outcome == 'failure'
-        run: |
-          gcloud storage cat \
-            "gs://${BUCKET}/models/${DETECTOR_MODEL_VERSION}/training_failure.json" || true
-
-      - name: Fail when detector training execution failed
-        if: steps.execute_training.outcome == 'failure'
-        run: exit 1
-
-      - name: Verify DET_FISH_v0.1 artifacts
-        run: |
-          MODEL_PREFIX="gs://${BUCKET}/models/${DETECTOR_MODEL_VERSION}"
-          gcloud storage ls "$MODEL_PREFIX/fish_detector_yolox_nano_v0_1.onnx"
-          gcloud storage ls "$MODEL_PREFIX/detector_metadata.json"
-          gcloud storage cp "$MODEL_PREFIX/detector_metadata.json" detector_metadata.json
-          python - <<'PY'
-          import json
-          p=json.load(open('detector_metadata.json'))
-          assert p['model_version']=='DET_FISH_v0.1'
-          assert p['model_family']=='YOLOX_NANO'
-          assert p['dataset_version']=='DET_DS_v0.1'
-          assert p['onnx']['output_shape'][-1] == 6
-          assert int(p['training']['epochs_completed']) == int(p['training']['epochs']) == 30
-          assert p['training']['ap50'] >= 0.0
-          assert p['training']['ap50_95'] >= 0.0
-          assert len(p['onnx_sha256']) == 64
-          print('DET_FISH_ARTIFACT_GATE_PASS', p['onnx_sha256'], p['onnx_bytes'], p['training']['ap50'], p['training']['ap50_95'])
-          PY
-
-      - name: Training summary
-        if: always()
-        run: |
-          echo '### DET_FISH_v0.1' >> "$GITHUB_STEP_SUMMARY"
-          if [[ -f detector_metadata.json ]]; then
-            python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import json
-          p=json.load(open('detector_metadata.json'))
-          t=p.get('training') or {}
-          print(f"- Model: **{p.get('model_version')}** / {p.get('model_family')}")
-          print(f"- Dataset: **{p.get('dataset_version')}**")
-          print(f"- Epochs: **{t.get('epochs_completed')} / {t.get('epochs')}**")
-          print(f"- AP50: **{t.get('ap50')}**")
-          print(f"- AP50:95: **{t.get('ap50_95')}**")
-          print(f"- ONNX bytes: **{p.get('onnx_bytes')}**")
-          print(f"- ONNX SHA256: `{p.get('onnx_sha256')}`")
-          print(f"- Output: `{p.get('onnx',{}).get('output_shape')}`")
-          PY
-          fi
+        run: bash scripts/deploy_and_start_det_fish_v03_training.sh
