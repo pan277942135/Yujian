@@ -23,7 +23,7 @@ if [[ ! -f trainer/build_detector_dataset_v02.py || ! -f trainer/detector_datase
   exit 2
 fi
 if [[ ! "${GIT_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
-  echo "A full Git SHA is required; run from the reviewed PR #166 commit." >&2
+  echo "A full Git SHA is required; run from the reviewed v0.3 split-fix branch." >&2
   exit 2
 fi
 command -v gcloud >/dev/null 2>&1 || { echo "gcloud is required in Cloud Shell." >&2; exit 2; }
