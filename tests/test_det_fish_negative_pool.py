@@ -8,6 +8,17 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base
 from app.det_fish_negative_pool import AddRequest, CandidateRef, RemoveRequest, add_members, candidates, list_pool, remove_members, summary
+
+
+def test_operator_name_is_optional_for_negative_pool_actions():
+    add_request = AddRequest(
+        items=[CandidateRef(image_asset_id=1, source_record_id="legacy-1")],
+        source_kind="DET_DS_V0_1",
+        confirm_pending_as_no_fish=True,
+    )
+    remove_request = RemoveRequest(entry_ids=[1])
+    assert add_request.actor == "det-fish-console-ui"
+    assert remove_request.actor == "det-fish-console-ui"
 from app.models import Batch, DetectorNegativePoolEntry, DetectorNegativePoolEvent, ImageAsset, ReviewEvent
 from app.platform import models as _platform_models  # registers related platform tables on the shared metadata
 from app.presence import FishPresenceResult
