@@ -46,6 +46,7 @@ TRAINING_JOB_NAME = os.getenv("DETECTOR_TRAINING_JOB_NAME", "yujian-detector-tra
 # project is deliberately environment-only: a historical project fallback could
 # direct an otherwise valid request to the wrong account.
 GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", os.getenv("GOOGLE_CLOUD_PROJECT", "")).strip()
+CONSOLE_GIT_COMMIT = os.getenv("APP_GIT_COMMIT", "").strip()
 GPU_REGION = os.getenv("DETECTOR_GPU_REGION", "asia-southeast1").strip()
 MAX_TEST_IMAGE_BYTES = 25 * 1024 * 1024
 MAX_TEST_IMAGE_PIXELS = 40_000_000
@@ -224,6 +225,13 @@ def _validate_detector_job(job: dict[str, Any]) -> list[str]:
         blockers.append("训练 Job 缺少构建代码提交 SHA，无法核对训练镜像来源")
     elif not re.fullmatch(r"[0-9a-fA-F]{40}", build_sha):
         blockers.append("训练 Job 的 APP_GIT_COMMIT 不是完整 Git SHA")
+    if not re.fullmatch(r"[0-9a-f]{40}", CONSOLE_GIT_COMMIT):
+        blockers.append("控制台缺少完整 APP_GIT_COMMIT，无法核验精确源码版本")
+    elif build_sha != CONSOLE_GIT_COMMIT:
+        blockers.append("训练镜像源码 SHA 与控制台源码 SHA 不一致")
+    digest_match = re.search(r"@sha256:([0-9a-f]{64})$", image)
+    if digest_match and env.get("DETECTOR_TRAINER_IMAGE_DIGEST") != "sha256:" + digest_match.group(1):
+        blockers.append("训练 Job 的 DETECTOR_TRAINER_IMAGE_DIGEST 与镜像 URI digest 不一致")
     if "@sha256:" not in image:
         blockers.append("训练 Job 镜像未固定为 Artifact Registry digest；禁止使用可变标签启动训练")
     elif not re.search(r"@sha256:[0-9a-f]{64}$", image):
