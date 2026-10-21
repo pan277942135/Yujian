@@ -37,9 +37,10 @@ echo "Project: ${PROJECT_ID}"
 echo ""
 echo "========== Ensure target model version has no published final artifacts =========="
 MODEL_OBJECTS="$(gcloud storage ls --recursive "gs://${BUCKET}/models/")"
-if grep -Fq "/models/${MODEL_VERSION}/" <<<"${MODEL_OBJECTS}"; then
-  echo "BLOCKED: ${MODEL_VERSION} already has objects. Refusing to overwrite immutable model artifacts." >&2
-  grep -F "/models/${MODEL_VERSION}/" <<<"${MODEL_OBJECTS}" >&2
+FINAL_MODEL_OBJECTS="$(grep -E "/models/${MODEL_VERSION}/(detector_metadata\\.json|fish_detector_yolox_nano_v0_1\\.onnx|best_ckpt\\.pth|recognition_pipeline_v1\\.json)$" <<<"${MODEL_OBJECTS}" || true)"
+if [[ -n "${FINAL_MODEL_OBJECTS}" ]]; then
+  echo "BLOCKED: ${MODEL_VERSION} already has final model artifacts. Refusing to overwrite an immutable model version." >&2
+  printf "%s\\n" "${FINAL_MODEL_OBJECTS}" >&2
   exit 3
 fi
 
