@@ -100,6 +100,10 @@ def test_pool_membership_is_idempotent_audited_and_does_not_mutate_source(monkey
                                   verification="HUMAN", db=db)
     assert listed_candidate["total"] == 1
     assert listed_candidate["items"][0]["human_confirmation_status"] == "已人工加入 DET_FISH 池"
+    pending_after_add = candidates(source_kind="PRESENCE_NO_FISH", limit=25, offset=0, batch_id=None,
+                                   verification="PENDING", db=db)
+    assert pending_after_add["total"] == 0
+    assert pending_after_add["items"] == []
     entry = db.scalar(select(DetectorNegativePoolEntry))
     events = db.scalars(select(DetectorNegativePoolEvent).where(DetectorNegativePoolEvent.pool_entry_id == entry.id)).all()
     assert entry.source_image_sha256 == hashlib.sha256(FakeStorageClient.data).hexdigest()
