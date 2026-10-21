@@ -89,7 +89,7 @@ def main() -> None:
             'BUILD_SA_RESOURCE="${BUILD_SA_RESOURCE:-projects/${PROJECT_ID}/serviceAccounts/${BUILD_SA}}"',
             "--source .",
             '--build-service-account "$BUILD_SA_RESOURCE"',
-            'DEPLOY_ENV_VARS="APP_GIT_COMMIT=${GIT_SHA}"',
+            'DEPLOY_ENV_VARS="APP_GIT_COMMIT=${GIT_SHA},DETECTOR_DATASET_VERSION=${DETECTOR_DATASET_VERSION:-DET_DS_v0.3}"',
             'CLOSURE_WRITE_FENCE="${CLOSURE_WRITE_FENCE:-false}"',
             'HISTORICAL_DUPLICATE_CLOSURE_WRITE_FENCE=${CLOSURE_WRITE_FENCE}',
             'FEEDBACK_INGEST_KEY="$(python -c',
