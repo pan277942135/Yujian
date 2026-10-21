@@ -80,7 +80,7 @@ def write_failure_diagnostic(error: BaseException) -> None:
     diagnostic = {
         "status": "DET_FISH_TRAINING_FAIL",
         "model_version": model_version,
-        "dataset_version": os.environ.get("DETECTOR_DATASET_VERSION", "DET_DS_v0.2"),
+        "dataset_version": os.environ.get("DETECTOR_DATASET_VERSION", "unknown"),
         "git_commit": os.environ.get("APP_GIT_COMMIT", "unknown"),
         "error_type": type(error).__name__,
         "error": str(error),
