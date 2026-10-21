@@ -83,9 +83,6 @@ def _source_group(image: Any) -> tuple[str, str]:
     group = str(getattr(image, "group_id", None) or "").strip()
     if group:
         return f"group:{group}", "ImageAsset.group_id"
-    batch = str(getattr(image, "batch_id", None) or "").strip()
-    if not batch:
-        raise ValueError("missing source group and batch id")
     # batch_id identifies an ingestion/import batch, not necessarily a capture
     # session. Grouping every asset in that batch can join hundreds of unrelated
     # scenes and strand most negatives in validation/test. Use a stable per-asset
