@@ -2,6 +2,7 @@ import asyncio
 import io
 
 import pytest
+import app.det_fish_console as console
 from app.det_fish_console import (
     ALLOWED_MODEL_VERSIONS,
     _dataset_gate,
@@ -27,7 +28,7 @@ def test_execution_status_distinguishes_running_and_failed():
 
 
 def test_only_supported_detector_versions_can_be_selected():
-    assert ALLOWED_MODEL_VERSIONS == {"DET_FISH_v0.1", "DET_FISH_v0.2"}
+    assert ALLOWED_MODEL_VERSIONS == {"DET_FISH_v0.1", "DET_FISH_v0.2", "DET_FISH_v0.3"}
 
 
 def test_cloud_run_detector_job_must_match_l4_worker_contract():
