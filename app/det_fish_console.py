@@ -39,7 +39,7 @@ MODEL_VERSION = os.getenv(
     {
         "DET_DS_v0.2": "DET_FISH_v0.2",
         "DET_DS_v0.3": "DET_FISH_v0.3",
-    }.get(DATASET_VERSION, ""),
+    }.get(DATASET_VERSION, "DET_FISH_v0.2"),
 ).strip()
 TRAINING_JOB_NAME = os.getenv("DETECTOR_TRAINING_JOB_NAME", "yujian-detector-trainer").strip()
 # The region default mirrors scripts/deploy_detector_training_gcp.sh. The GCP
