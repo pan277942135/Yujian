@@ -21,7 +21,7 @@ env:
   PROJECT_NUMBER: '571785698442'
   REGION: asia-east1
   SERVICE: yujian-model-factory-console
-  TARGET_SHA: 257abd2280574098eb3a81a24624f5a62d2fc913
+  TARGET_SHA: ${{ github.sha }}
   TAG: det-fish-pr166
   WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
   DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
@@ -37,7 +37,7 @@ jobs:
       - name: Checkout the exact approved PR #166 commit
         uses: actions/checkout@v4
         with:
-          ref: 257abd2280574098eb3a81a24624f5a62d2fc913
+          ref: ${{ env.TARGET_SHA }}
           fetch-depth: 1
 
       - name: Confirm checkout provenance (no application tests)
