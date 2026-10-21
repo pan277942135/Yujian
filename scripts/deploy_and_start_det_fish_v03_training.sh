@@ -45,7 +45,7 @@ if [[ -n "${FINAL_MODEL_OBJECTS}" ]]; then
 fi
 
 echo ""
-echo "========== Check for an existing active trainer execution before deployments =========="
+echo "========== Check existing trainer executions before deployments =========="
 gcloud run jobs executions list \
   --job="${JOB_NAME}" --project="${PROJECT_ID}" --region="${GPU_REGION}" \
   --limit=100 --format=json > /tmp/det_fish_v03_executions_initial.json
@@ -65,6 +65,16 @@ if active:
     raise SystemExit("BLOCKED: active or queued DET_FISH executions already exist: " + ", ".join(active))
 print("PASS: no active or queued execution")
 PY
+
+echo ""
+echo "========== Build and deploy immutable GPU trainer =========="
+PROJECT_ID="${PROJECT_ID}" \
+DETECTOR_GPU_REGION="${GPU_REGION}" \
+BUCKET="${BUCKET}" \
+DETECTOR_DATASET_VERSION="${DATASET_VERSION}" \
+DETECTOR_MODEL_VERSION="${MODEL_VERSION}" \
+DETECTOR_TRAINING_JOB_NAME="${JOB_NAME}" \
+bash scripts/deploy_detector_training_gcp.sh
 
 echo ""
 echo "========== Deploy console with v0.3 training target =========="
@@ -112,17 +122,7 @@ print("CONSOLE_V03_CONFIG_PASS", json.dumps(expected))
 PY
 
 echo ""
-echo "========== Build and deploy immutable GPU trainer =========="
-PROJECT_ID="${PROJECT_ID}" \
-DETECTOR_GPU_REGION="${GPU_REGION}" \
-BUCKET="${BUCKET}" \
-DETECTOR_DATASET_VERSION="${DATASET_VERSION}" \
-DETECTOR_MODEL_VERSION="${MODEL_VERSION}" \
-DETECTOR_TRAINING_JOB_NAME="${JOB_NAME}" \
-bash scripts/deploy_detector_training_gcp.sh
-
-echo ""
-echo "========== Refuse duplicate active executions =========="
+echo "========== Recheck no concurrent execution before GPU launch =========="
 gcloud run jobs executions list \
   --job="${JOB_NAME}" --project="${PROJECT_ID}" --region="${GPU_REGION}" \
   --limit=100 --format=json > /tmp/det_fish_v03_executions_before.json
