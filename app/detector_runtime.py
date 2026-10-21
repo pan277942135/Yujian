@@ -194,7 +194,7 @@ def load_detector() -> DetectorModel:
 @lru_cache(maxsize=2)
 def load_detector_for_version(model_version: str) -> DetectorModel:
     """Load one explicitly selected detector version for the read-only test console."""
-    if model_version not in {"DET_FISH_v0.1", "DET_FISH_v0.2"}:
+    if model_version not in {"DET_FISH_v0.1", "DET_FISH_v0.2", "DET_FISH_v0.3"}:
         raise DetectorRuntimeError(f"unsupported detector model version: {model_version}")
     if model_version == DETECTOR_MODEL_VERSION:
         return load_detector()
