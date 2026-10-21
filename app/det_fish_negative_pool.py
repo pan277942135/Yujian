@@ -17,6 +17,7 @@ from app.db import get_db
 from app.factory import get_bucket_name
 from app.models import BatchCropReview, DetectorNegativePoolEntry, DetectorNegativePoolEvent, ImageAsset, ReviewEvent
 from app.presence import FishPresenceResult
+from trainer.detector_dataset_gate import DATASET_VERSION
 
 router = APIRouter(prefix="/api/det-fish/negative-pool", tags=["det-fish-negative-pool"])
 LEGACY_PREFIX = "detector-datasets/DET_DS_v0.1"
@@ -210,7 +211,7 @@ def summary(db: Session = Depends(get_db)) -> dict[str, Any]:
     removed_count = int(db.scalar(select(func.count(DetectorNegativePoolEntry.id)).where(DetectorNegativePoolEntry.state == "REMOVED")) or 0)
     return {"active_count": active_count, "removed_count": removed_count,
             "count_semantics": "DET_FISH-specific active membership rows; same query as the list",
-            "dataset_version": "DET_DS_v0.2", "frozen_dataset_count_is_separate": True}
+            "dataset_version": DATASET_VERSION, "frozen_dataset_count_is_separate": True}
 
 
 @router.get("")
