@@ -1,4 +1,4 @@
-"""Strict, offline-checkable gate for the reviewed DET_DS_v0.2 artifact.
+"""Strict, offline-checkable gate for the configured reviewed detector dataset version.
 
 This module is intentionally stdlib-only so the console and GPU worker can use
 the same dataset contract without importing either runtime's heavy dependencies.
