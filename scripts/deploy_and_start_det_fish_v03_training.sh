@@ -37,8 +37,18 @@ gcloud config set project "${PROJECT_ID}" >/dev/null
 
 echo ""
 echo "========== Ensure target model version has no published final artifacts =========="
-MODEL_OBJECTS="$(gcloud storage ls --recursive "gs://${BUCKET}/models/")"
-FINAL_MODEL_OBJECTS="$(grep -E "/models/${MODEL_VERSION}/(detector_metadata\\.json|fish_detector_yolox_nano_v0_1\\.onnx|best_ckpt\\.pth|recognition_pipeline_v1\\.json)$" <<<"${MODEL_OBJECTS}" || true)"
+MODEL_OBJECTS_FILE="/tmp/det_fish_v03_model_objects.txt"
+MODEL_OBJECTS_ERROR="/tmp/det_fish_v03_model_objects.err"
+if gcloud storage ls --recursive "gs://${BUCKET}/models/${MODEL_VERSION}/" >"${MODEL_OBJECTS_FILE}" 2>"${MODEL_OBJECTS_ERROR}"; then
+  :
+elif grep -qi "matched no objects" "${MODEL_OBJECTS_ERROR}"; then
+  : # New model prefix is absent; continue after the successful bucket query.
+else
+  cat "${MODEL_OBJECTS_ERROR}" >&2
+  echo "BLOCKED: cannot verify whether ${MODEL_VERSION} already has published artifacts." >&2
+  exit 3
+fi
+FINAL_MODEL_OBJECTS="$(grep -E "/models/${MODEL_VERSION}/(detector_metadata\\.json|fish_detector_yolox_nano_v0_1\\.onnx|best_ckpt\\.pth|recognition_pipeline_v1\\.json)$" "${MODEL_OBJECTS_FILE}" || true)"
 if [[ -n "${FINAL_MODEL_OBJECTS}" ]]; then
   echo "BLOCKED: ${MODEL_VERSION} already has final model artifacts. Refusing to overwrite an immutable model version." >&2
   printf "%s\\n" "${FINAL_MODEL_OBJECTS}" >&2
