@@ -10,6 +10,8 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    env:
+      ORT_DISABLE_TELEMETRY: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
