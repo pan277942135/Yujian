@@ -244,6 +244,7 @@ def main() -> None:
                     assert max(geometry[key] for key in ("leftError", "topError", "widthError", "heightError")) <= 4, geometry
                     desktop.wait_for_function("document.querySelector('#catchResultPanel')?.dataset.revealState === 'complete'", timeout=7000)
                     assert desktop.locator("#catchSpeciesName").inner_text() == "草鱼"
+                    assert desktop.locator("#catchResultEmpty").is_hidden(), "successful result must hide the empty-state placeholder"
                     assert desktop.locator("#catchProcessingPhoto").get_attribute("src") == desktop.locator("#catchResultPhoto").get_attribute("src")
                     assert desktop.locator("#catchResultPanel").get_attribute("data-business-state") == "ready"
                     elapsed = desktop.evaluate("performance.now() - window._catchUiSmokeStartedAt")
@@ -266,6 +267,7 @@ def main() -> None:
                     mobile.wait_for_function("document.querySelector('#catchResultPanel')?.dataset.revealState === 'complete'", timeout=9000)
                     assert mobile.locator("#catchResultPhoto").evaluate("image => [image.naturalWidth, image.naturalHeight]") == list(dimensions)
                     assert mobile.locator("#catchSpeciesName").inner_text() == "草鱼"
+                    assert mobile.locator("#catchResultEmpty").is_hidden(), "mobile successful result must hide the empty-state placeholder"
                     assert_no_horizontal_overflow(mobile, "mobile-390-result")
                     mobile.screenshot(path=str(ARTIFACTS / f"mobile-result-{photo_name}-ui-simulation.png"), full_page=True)
                     print("PASS mobile 390x844; portrait photo and result form fit without horizontal overflow; UI_SIMULATION_ONLY")

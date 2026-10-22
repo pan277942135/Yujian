@@ -117,8 +117,8 @@
 | G3 SAM ViT-B 生产资格 | `BLOCKED` | 无生产权重与授权参考 Mask 评测集，无分割质量报告 |
 | G4 15 帧时序静态契约 | `CONTRACT_PASS`（代码常量检查） | Processing 8 帧 + RR09 7 帧；总时长 3650ms；R0.5=100ms、R1=200ms |
 | G5 结果保存路径 | `IMPLEMENTED`，未做云端写入测试 | 仅显式保存后使用 App Bearer API；没有登录凭据或 GCS 写入验证 |
-| G6 Chromium / 多真实照片视觉验收 | `PENDING PR CI` | 新增 CI Chromium harness 使用有来源的公开照片和明确模拟 API，覆盖 1440px、390px、320px、照片身份、R0.5 几何中点、3650ms 揭晓和错误不成功；本地无 Chromium，PR CI 尚未执行；真实推理与线上预览仍未验证 |
-| G7 Draft PR CI | 待本地检查后执行 | PR 尚未创建 |
+| G6 Chromium / 多尺寸静态 UI 验收 | `DESIGN_MANAGER_PREVIEW_PASS`（仅模拟 UI） | CI run [39752785877](https://github.com/pan277942135/Yujian/actions/runs/39752785877) 的 Chromium job 通过：1440×1000 桌面、390×844 手机、320×480 窄屏；结果态、照片选择、失败不揭晓均使用显式 `UI_SIMULATION_ONLY` 响应。人工复核桌面与手机结果截图，确认成功结果不再残留空态占位。截图与 `render-capabilities.json` 在 PR CI artifact `catch-recognition-chromium-ui-simulation-39752785877`；该证据不代表真实模型调用或生产推理通过 |
+| G7 Draft PR CI | `PASS`（当前代码提交） | 独立 Draft PR [#177](https://github.com/pan277942135/Yujian/pull/177) 已创建且未合并；run [39752785877](https://github.com/pan277942135/Yujian/actions/runs/39752785877) 的 `validate` 与 `det-fish-display-chromium` 两个 job 均通过，包含全量生产流水线测试与 UI-only Chromium harness |
 | G8 动态方案可执行性 | `DESIGNED` | 见第 6 节；WebGL/Canvas 性能尚未测，不能声称选型已验证 |
 
 ### 明确未运行
@@ -127,5 +127,7 @@
 - `DYNAMIC_DEMO_NOT_RUN`：没有自动播放 Demo，页面的 CSS 环境光不代表动态原型。
 - `LIVE_REAL_PHOTO_INFERENCE_NOT_RUN`：没有将私有或未授权照片发送到线上服务。
 - `PUBLIC_PREVIEW_NOT_RUN`：没有覆盖或部署生产 Pages。
+
+本次截图复核发现结果空态的显式 `display:grid` 会覆盖浏览器对 `hidden` 属性的默认隐藏规则；页面局部 CSS 已补充 `[hidden]` 规则。修复后的成功结果桌面和手机截图均确认占位区域隐藏。此修复只改变静态页面显示，不改变识别业务状态。
 
 正式状态只能为 `PARTIAL`，不得输出 `AI_CATCH_RECOGNITION_WEB_READY_FOR_REVIEW`，直至 Admission、真实部署推理、SAM 资格及浏览器门禁解决。
