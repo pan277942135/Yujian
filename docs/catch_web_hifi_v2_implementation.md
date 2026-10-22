@@ -38,7 +38,7 @@ Task: `YUJIAN_AI_CATCH_RECOGNITION_WEB_FOUNDATION_AND_ARCHITECTURE_V2`
 | G11 | FIXED | Same `PhotoSession` source and one moving PhotoStage contain both image and optical overlays; true 100ms R0.5 geometry is sampled. |
 | G12 | PARTIAL_MASK_QUALIFICATION_BLOCKED | HIGH-only timing/name reveal is implemented. Gold-to-glyph path is deliberately absent without trusted fish mask geometry. |
 | G13 | FIXED | Three navigable page stages and five visual journey nodes, driven by actual session/result state rather than a progress clock. |
-| G14 | IMPLEMENTED_AWAITING_UPDATED_CHROMIUM_CI | Nine candidate viewports and mobile stage/strip assertions are in `smoke_catch_recognition_chromium.py`; updated exact-SHA run is required. |
+| G14 | PASS_UI_SIMULATION_ONLY | Chromium run `39808178529` on app-code parent `af61e3e` passed all nine viewports, R0.5 geometry, P7/R5, High/Medium/Low/recovery, slow response, Reduce Motion and cancel/reselect. This fixture is UI simulation only; no real-photo inference or visual acceptance. |
 | G15 | FIXED | Catch-recognition menu fish and empty-result mark use SVG; no emoji is used for those product icons. |
 | G16 | FIXED | The reveal entry remains guarded by a real HIGH response; MEDIUM/LOW and recovery use their existing direct states. |
 | G17 | BLOCKED_AUTHORITY_CONFLICT | Existing 0.45/0.12 versus 0.55 references are recorded; no threshold was changed. |
@@ -47,6 +47,6 @@ Task: `YUJIAN_AI_CATCH_RECOGNITION_WEB_FOUNDATION_AND_ARCHITECTURE_V2`
 ## Validation and release boundary
 
 - Local Node geometry/controller/SWOS tests, JavaScript syntax, Python compilation of touched modules/scripts, and `git diff --check` are required on the implementation SHA.
-- The local environment has a Playwright package but no Chromium executable or FastAPI installation; real template rendering and browser capture must be evidenced by the repository's exact-SHA CI job. A UI fixture remains explicitly `UI_SIMULATION_ONLY` and never counts as live inference.
-- Tagged-preview infrastructure PR #180 is the trusted main-path deployment route. In the B1 audit it was Draft/Open/Unmerged, had no review submissions, intentionally skipped infrastructure CI, and was pinned to B1 SHA `655c4af07a0244fcf29441b5652c48ca74f2e6a2`. The B2 source must be pinned there before any release; independent review/approval is still required. Do not merge #180 or run cloud deployment through another path to bypass it.
-- No new Cloud Run revision, preview URL, production traffic change, model inference, real-photo visual acceptance, or user visual signoff is claimed here. Updated B2 Chromium evidence and a separately reviewed preview pin to the final exact SHA remain necessary.
+- The local environment has a Playwright package but no Chromium executable or FastAPI installation; real template rendering and browser capture are evidenced by the repository's exact-source CI. Run `39808178529` passed at app-code parent `af61e3efc9ea8aa89e9f1e7f4a7c88764a797b3f`. A UI fixture remains explicitly `UI_SIMULATION_ONLY` and never counts as live inference.
+- Tagged-preview infrastructure PR #180 is the trusted main-path deployment route. Its B1 audit recorded a stale source pin; it is now being kept separate from product changes, and its source pin must match the final product SHA before any no-traffic deployment. Independent infrastructure review/approval remains required. Do not bypass this gate with another cloud-deploy path.
+- No new Cloud Run revision or product preview URL is claimed. Production default traffic is unchanged. No live model inference, real-photo visual acceptance, or user visual signoff is claimed. The exact-SHA no-traffic pin still requires independent infrastructure review/approval.

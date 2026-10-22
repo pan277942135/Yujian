@@ -27,7 +27,10 @@
   },
   "admission": {
     "status": "BLOCKED_MISSING_REGISTRY",
-    "missing": ["AGENTS.md", "CONTROL_PLANE_REGISTRY.yaml"]
+    "missing": [
+      "AGENTS.md",
+      "CONTROL_PLANE_REGISTRY.yaml"
+    ]
   },
   "contract_sources": [
     "design/pages/recognition/web/WEB_HIFI_CONTRACT_V2.md",
@@ -51,10 +54,45 @@
     "r05_relative": 100,
     "r05_global": 2900
   },
-  "processing_keyframes": [0, 350, 950, 1200, 1550, 2050, 2600, 2800],
-  "processing_water_relative_strength": [0, 10, 45, 75, 60, 35, 10, 0],
-  "processing_gold_relative_strength": [0, 0, 15, 45, 100, 100, 100, 100],
-  "rr09_keyframes": [0, 100, 200, 380, 550, 680, 850],
+  "processing_keyframes": [
+    0,
+    350,
+    950,
+    1200,
+    1550,
+    2050,
+    2600,
+    2800
+  ],
+  "processing_water_relative_strength": [
+    0,
+    10,
+    45,
+    75,
+    60,
+    35,
+    10,
+    0
+  ],
+  "processing_gold_relative_strength": [
+    0,
+    0,
+    15,
+    45,
+    100,
+    100,
+    100,
+    100
+  ],
+  "rr09_keyframes": [
+    0,
+    100,
+    200,
+    380,
+    550,
+    680,
+    850
+  ],
   "optical_layers": [
     "Photo Base",
     "Ambient Water",
@@ -70,7 +108,17 @@
     "none": "NO_SPATIAL_GOLD",
     "precise_outline_and_glyph_transfer": "NOT_IMPLEMENTED_UNQUALIFIED_MASK"
   },
-  "responsive_viewports": ["1440x1000", "1280x800", "1024x768", "768x1024", "480px", "430x932", "390x844", "360x640", "320x480"],
+  "responsive_viewports": [
+    "1440x1000",
+    "1280x800",
+    "1024x768",
+    "768x1024",
+    "480px",
+    "430x932",
+    "390x844",
+    "360x640",
+    "320x480"
+  ],
   "gap_status": {
     "G01": "FIXED",
     "G02": "FIXED_PIXEL_SOURCE_UNMEASURED",
@@ -82,10 +130,10 @@
     "G08": "FIXED",
     "G09": "PARTIAL_MASK_QUALIFICATION_BLOCKED",
     "G10": "FIXED_CANDIDATE_GEOMETRY",
-    "G11": "FIXED_CHROMIUM_CI_PENDING",
+    "G11": "FIXED_SHARED_PHOTO_GEOMETRY",
     "G12": "PARTIAL_MASK_QUALIFICATION_BLOCKED",
     "G13": "FIXED",
-    "G14": "IMPLEMENTED_UPDATED_CHROMIUM_CI_PENDING",
+    "G14": "PASS_UI_SIMULATION_ONLY",
     "G15": "FIXED",
     "G16": "FIXED",
     "G17": "BLOCKED_AUTHORITY_CONFLICT",
@@ -97,7 +145,7 @@
     "audit_baseline_source_sha": "655c4af07a0244fcf29441b5652c48ca74f2e6a2",
     "infra_reviews_at_b1_audit": 0,
     "infra_ci_at_b1_audit": "SKIPPED_NOT_PASS",
-    "b2_source_sha_pin": "REQUIRED_BEFORE_RELEASE",
+    "b2_source_sha_pin": "MUST_MATCH_FINAL_PRODUCT_SHA",
     "no_traffic": "REQUIRED",
     "deployment_revision": null,
     "url": null
@@ -106,6 +154,13 @@
     "visual_source_comparison": "NOT_MEASURED_UNAPPROVED_SOURCE",
     "real_photo_visual_acceptance": "USER_PENDING",
     "real_model_inference": "NOT_RUN_BY_WORK",
-    "production_traffic": "UNCHANGED"
+    "production_traffic": "UNCHANGED",
+    "chromium_ui_simulation": {
+      "status": "PASS",
+      "workflow_run_id": 39808178529,
+      "tested_app_code_sha": "af61e3efc9ea8aa89e9f1e7f4a7c88764a797b3f",
+      "scope": "nine viewports; shared photo geometry midpoint; P7/R5; High/Medium/Low/recovery; slow response; Reduce Motion; cancel/reselect",
+      "real_photo_or_model_inference": "NOT_RUN"
+    }
   }
 }
