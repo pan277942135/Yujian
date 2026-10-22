@@ -3,7 +3,8 @@ from pathlib import Path
 import re
 
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
+import asyncio
+from httpx import ASGITransport, AsyncClient
 from starlette.requests import Request
 from jinja2 import Environment, FileSystemLoader
 import pytest
@@ -48,17 +49,19 @@ def test_console_auth_return_cookie_refresh_and_api_protection(monkeypatch):
     route='/platform/model/catch-recognition'
     app.add_api_route(route,lambda:{'shell':'product'})
     app.add_api_route('/api/product/catch-recognition/infer',lambda:{'ok':True},methods=['POST'])
-    client=TestClient(app)
-    redirect=client.get(route,follow_redirects=False)
-    assert redirect.status_code==303
-    assert 'next=%2Fplatform%2Fmodel%2Fcatch-recognition' in redirect.headers['location']
-    assert client.post('/api/product/catch-recognition/infer').status_code==401
-    login=client.get(redirect.headers['location'])
-    assert "name='next' value='/platform/model/catch-recognition'" in login.text
-    response=client.post('/login',data={'access_key':'offline-test-password','next':route},follow_redirects=False)
-    assert response.status_code==303 and response.headers['location']==route
-    assert 'HttpOnly' in response.headers['set-cookie']
-    assert client.get(route).status_code==200
-    assert client.get(route).status_code==200
-    assert client.post('/api/product/catch-recognition/infer').status_code==200
-    assert client.post('/login',data={'access_key':'offline-test-password','next':'//example.com'},follow_redirects=False).headers['location']=='/'
+    async def check():
+        async with AsyncClient(transport=ASGITransport(app=app),base_url='http://testserver') as client:
+            redirect=await client.get(route,follow_redirects=False)
+            assert redirect.status_code==303
+            assert 'next=%2Fplatform%2Fmodel%2Fcatch-recognition' in redirect.headers['location']
+            assert (await client.post('/api/product/catch-recognition/infer')).status_code==401
+            login=await client.get(redirect.headers['location'])
+            assert "name='next' value='/platform/model/catch-recognition'" in login.text
+            response=await client.post('/login',data={'access_key':'offline-test-password','next':route},follow_redirects=False)
+            assert response.status_code==303 and response.headers['location']==route
+            assert 'HttpOnly' in response.headers['set-cookie']
+            assert (await client.get(route)).status_code==200
+            assert (await client.get(route)).status_code==200
+            assert (await client.post('/api/product/catch-recognition/infer')).status_code==200
+            assert (await client.post('/login',data={'access_key':'offline-test-password','next':'//example.com'},follow_redirects=False)).headers['location']=='/'
+    asyncio.run(check())
