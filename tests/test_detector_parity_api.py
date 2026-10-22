@@ -1,5 +1,6 @@
 from io import BytesIO
 import asyncio
+import base64
 
 from fastapi import UploadFile
 from PIL import Image
@@ -40,6 +41,46 @@ def test_detector_parity_upload_field_is_image():
     schema_ref = request_body["content"]["multipart/form-data"]["schema"]["$ref"]
     schema = app.openapi()["components"]["schemas"][schema_ref.rsplit("/", 1)[-1]]
     assert "image" in schema["properties"]
+
+
+def test_all_detector_boxes_are_red_and_one_step_thicker():
+    red = (220, 38, 38)
+    for size in ((1000, 600), (2500, 600)):
+        source = Image.new("RGB", size, (20, 30, 40))
+        detections = (
+            Detection(0.91, BBox(0.1, 0.2, 0.4, 0.8)),
+            Detection(0.76, BBox(0.55, 0.2, 0.9, 0.8)),
+        )
+        data_url = detector_parity_api._overlay(source, detections, detections[0])
+        result = Image.open(BytesIO(base64.b64decode(data_url.split(",", 1)[1])))
+        expected_width = max(4, source.width // 500 + 1)
+
+        for detection in detections:
+            x1, y1, _, _ = detector_parity_api._pixel_box(detection.box, source.width, source.height)
+            for offset in range(expected_width):
+                assert result.getpixel((x1 + 80, y1 + offset)) == red
+            assert result.getpixel((x1 + 80, y1 + expected_width)) == (20, 30, 40)
+
+        assert (245, 158, 11) not in {color for _, color in result.getcolors(result.width * result.height) or []}
+
+
+def test_det_fish_test_previews_preserve_image_ratio_and_collapse_on_narrow_screens():
+    from pathlib import Path
+
+    template = Path("app/templates/platform/det_fish_test.html").read_text(encoding="utf-8")
+
+    assert 'class="form-grid det-fish-test-grid"' in template
+    assert template.count("bbox-preview det-fish-image-preview") == 2
+    assert "overlay.src=data.overlay_data_url;" in template
+    assert ".det-fish-image-preview { aspect-ratio: auto;" in template
+    assert "max-width: 100%;" in template
+    assert "max-height: 70vh;" in template
+    assert "object-fit: contain;" in template
+    assert "width: auto;" in template
+    assert "height: auto;" in template
+    assert ".det-fish-image-preview img[hidden] { display: none; }" in template
+    assert "@media (max-width: 780px)" in template
+    assert "grid-template-columns: minmax(0, 1fr);" in template
 
 
 def _png(image: Image.Image) -> bytes:

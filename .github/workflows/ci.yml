@@ -114,3 +114,40 @@ jobs:
         run: test -f Dockerfile.trainer && test -f requirements-training.txt && test -f infra/cloudbuild.trainer.yaml
       - name: Validate inference runtime image configuration
         run: grep -q 'torch==2.7.1' Dockerfile && grep -q 'torchvision==0.22.1' Dockerfile && grep -q -- '--memory=2Gi' scripts/deploy_console_gcp.sh
+
+  det-fish-display-chromium:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install application and Chromium harness dependencies
+        run: python -m pip install -r requirements.txt playwright
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Download and verify public catch photo fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/det-fish-display"
+          curl -fL --retry 3 --retry-delay 2 -o "$RUNNER_TEMP/det-fish-display/landscape.jpg" \
+            'https://commons.wikimedia.org/wiki/Special:Redirect/file/Fish_caught_with_a_rod_in_Gambia.jpg'
+          curl -fL --retry 3 --retry-delay 2 -o "$RUNNER_TEMP/det-fish-display/portrait.jpg" \
+            'https://commons.wikimedia.org/wiki/Special:Redirect/file/Portrait_of_man_on_boat_holding_a_caught_fish_%28AM_81857-1%29.jpg'
+          echo '6117d964dd10ee8f3f38d82b78441c7e03a2402cbfd623e6d05d9d2d75685581  '"$RUNNER_TEMP/det-fish-display/landscape.jpg" | sha256sum -c -
+          echo 'd806491e4711a58aa242c8ef3feb6fcc0e9b13c56c5db5e7808203134b3c1ffa  '"$RUNNER_TEMP/det-fish-display/portrait.jpg" | sha256sum -c -
+      - name: Run desktop and narrow-screen DET_FISH display smoke
+        env:
+          ORT_DISABLE_TELEMETRY: '1'
+          DET_FISH_LANDSCAPE_PHOTO: ${{ runner.temp }}/det-fish-display/landscape.jpg
+          DET_FISH_PORTRAIT_PHOTO: ${{ runner.temp }}/det-fish-display/portrait.jpg
+        run: python scripts/smoke_det_fish_display_chromium.py
+      - name: Upload Chromium screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: det-fish-display-chromium-${{ github.run_id }}
+          path: test-results/det-fish-display/*.png
+          if-no-files-found: warn

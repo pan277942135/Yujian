@@ -62,9 +62,8 @@ def _overlay(source: Image.Image, detections: tuple[Any, ...], primary: Any | No
     draw = ImageDraw.Draw(image)
     for detection in detections:
         box = _pixel_box(detection.box, image.width, image.height)
-        is_primary = primary is detection
-        color = "#dc2626" if is_primary else "#f59e0b"
-        draw.rectangle(box, outline=color, width=max(3, image.width // 500))
+        color = "#dc2626"
+        draw.rectangle(box, outline=color, width=max(4, image.width // 500 + 1))
         draw.text((box[0] + 6, box[1] + 6), f"{detection.confidence:.4f}", fill=color)
     output = io.BytesIO()
     image.save(output, format="PNG", optimize=True)
