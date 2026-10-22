@@ -341,7 +341,9 @@ def main() -> None:
                     slow.locator("#catchStartButton").click()
                     slow.wait_for_timeout(3000)
                     assert slow.locator("#catchSpeciesName").inner_text()==""
-                    assert slow.locator("#catchResultEmpty").is_visible()
+                    assert slow.locator("#catchRecognitionApp").get_attribute("data-active-stage")=="processing"
+                    assert slow.locator("#catchProcessingPanel").is_visible()
+                    assert slow.locator("#catchResultPanel").is_hidden()
                     slow.wait_for_function("document.querySelector('#catchResultPanel').dataset.revealState==='complete'",timeout=4000)
                     assert slow.locator(".catch-transition-photo").count()==0
                     print("PASS slow response and Reduce Motion; no premature name; UI_SIMULATION_ONLY")
