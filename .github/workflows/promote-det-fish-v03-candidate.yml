@@ -1,0 +1,120 @@
+name: Promote validated DET_FISH v0.3 candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: yujian-det-fish-v03-promotion
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: gemini-api-project-503706
+  REGION: asia-east1
+  SERVICE: yujian-model-factory-console
+  TARGET_SHA: a70ea589a122082fae2946d6ecc2fea5144b845e
+  TARGET_REVISION: yujian-model-factory-console-00338-liy
+  CANDIDATE_URL: https://det-fish-pr166---yujian-model-factory-console-6254hdioya-de.a.run.app
+  WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+  DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+
+jobs:
+  promote-validated-candidate:
+    if: github.repository == 'pan277942135/Yujian' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Authenticate to Google Cloud with GitHub OIDC/WIF
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          version: '>= 416.0.0'
+
+      - name: Verify the already-tested candidate and promote its exact revision
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          curl --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 30 -fsS \
+            "$CANDIDATE_URL/health/deploy" > "$RUNNER_TEMP/candidate-health.json"
+          python3 - "$RUNNER_TEMP/candidate-health.json" "$TARGET_SHA" "$TARGET_REVISION" <<'PY'
+          import json
+          import sys
+
+          payload = json.load(open(sys.argv[1], encoding="utf-8"))
+          expected_sha, expected_revision = sys.argv[2:]
+          assert payload.get("status") == "ok", payload
+          assert payload.get("git_commit") == expected_sha, payload
+          assert payload.get("revision") == expected_revision, payload
+          print("CANDIDATE_PROVENANCE_PASS", payload)
+          PY
+
+          gcloud run revisions describe "$TARGET_REVISION" \
+            --project "$PROJECT_ID" --region "$REGION" --format=json > "$RUNNER_TEMP/candidate-revision.json"
+          python3 - "$RUNNER_TEMP/candidate-revision.json" "$TARGET_SHA" <<'PY'
+          import json
+          import sys
+
+          payload = json.load(open(sys.argv[1], encoding="utf-8"))
+          spec = (payload.get("spec") or {}).get("containers") or []
+          assert spec, "candidate revision has no container"
+          env = {str(row.get("name")): str(row.get("value") or "") for row in spec[0].get("env") or []}
+          assert env.get("APP_GIT_COMMIT") == sys.argv[2], env.get("APP_GIT_COMMIT")
+          image = str(spec[0].get("image") or "")
+          assert "@sha256:" in image, image
+          print(f"CANDIDATE_IMAGE={image}")
+          with open(__import__("os").environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## DET_FISH v0.3 candidate promotion\n")
+              summary.write(f"- Source SHA: `{env['APP_GIT_COMMIT']}`\n")
+              summary.write(f"- Revision: `{payload.get('metadata', {}).get('name')}`\n")
+              summary.write(f"- Immutable image: `{image}`\n")
+          PY
+
+          gcloud run services update-traffic "$SERVICE" \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --to-revisions="${TARGET_REVISION}=100" --quiet
+
+          gcloud run services describe "$SERVICE" \
+            --project "$PROJECT_ID" --region "$REGION" --format=json > "$RUNNER_TEMP/promoted-service.json"
+          SERVICE_URL="$(python3 - "$RUNNER_TEMP/promoted-service.json" "$TARGET_REVISION" <<'PY'
+          import json
+          import sys
+
+          payload = json.load(open(sys.argv[1], encoding="utf-8"))
+          revision = sys.argv[2]
+          traffic = payload.get("status", {}).get("traffic") or []
+          percent = sum(int(row.get("percent") or 0) for row in traffic if row.get("revisionName") == revision)
+          total = sum(int(row.get("percent") or 0) for row in traffic)
+          assert percent == 100 and total == 100, traffic
+          print(payload["status"]["url"])
+          PY
+          )"
+
+          curl --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 30 -fsS \
+            "$SERVICE_URL/health/deploy" > "$RUNNER_TEMP/promoted-health.json"
+          python3 - "$RUNNER_TEMP/promoted-health.json" "$TARGET_SHA" "$TARGET_REVISION" "$SERVICE_URL" <<'PY'
+          import json
+          import os
+          import sys
+
+          payload = json.load(open(sys.argv[1], encoding="utf-8"))
+          expected_sha, expected_revision, service_url = sys.argv[2:]
+          assert payload.get("status") == "ok", payload
+          assert payload.get("git_commit") == expected_sha, payload
+          assert payload.get("revision") == expected_revision, payload
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(f"- Stable URL: {service_url}\n")
+              summary.write("- Stable health provenance: passed\n")
+              summary.write("- Production traffic: 100% to the tested candidate\n")
+          print("PROMOTED_STABLE_HEALTH_PASS", payload)
+          PY
