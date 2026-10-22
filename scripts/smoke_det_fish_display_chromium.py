@@ -7,6 +7,7 @@ from io import BytesIO
 import os
 from pathlib import Path
 import socket
+import sys
 import threading
 import time
 
@@ -17,11 +18,14 @@ from PIL import Image, ImageOps
 from playwright.sync_api import sync_playwright
 import uvicorn
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from app.detector_parity_api import _normalized_xywh, _overlay, _pixel_box
 from app.recognition_pipeline import BBox, Detection
 
 
-ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = ROOT / "test-results" / "det-fish-display"
 
 app = FastAPI(docs_url=None, openapi_url=None)
@@ -75,15 +79,16 @@ async def simulated_detection(image: UploadFile = File(...), model_version: str 
         for index, detection in enumerate(detections)
     ]
     overlay_data_url = _overlay(source, detections, detections[0])
+    width, height = source.size
     source.close()
     return {
         "model_version": "UI_SIMULATION_ONLY (not a model inference)",
         "onnx_sha256": None,
         "input": {
-            "oriented_width": source.width,
-            "oriented_height": source.height,
-            "width": source.width,
-            "height": source.height,
+            "oriented_width": width,
+            "oriented_height": height,
+            "width": width,
+            "height": height,
         },
         "model_input": {
             "width": 416,
