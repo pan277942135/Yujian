@@ -91,7 +91,7 @@ jobs:
         env:
           REGISTRY_DB_URL: 'sqlite:///:memory:'
         run: |
-          python -m pytest -q tests/test_catch_recognition_product.py tests/test_platform_shell.py tests/test_catch_product_shell_v2.py tests/test_production_recognition_pipeline.py tests/test_offline_network_fence.py
+          python -m pytest -q tests/test_catch_recognition_product.py tests/test_platform_shell.py tests/test_catch_product_shell_v2.py tests/test_production_recognition_pipeline.py tests/test_offline_network_fence.py tests/test_health_provenance.py
           echo 'Full suite NOT_RUN: unresolved metadata-access review; this is B1 targeted validation only.' >> "$GITHUB_STEP_SUMMARY"
       - name: Run UAT deploy config smoke test
         env:

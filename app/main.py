@@ -310,7 +310,13 @@ def apply_review_filters(stmt, status=None, batch_id=None, species=None, q=None)
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": app.version}
+    return {
+        "status": "ok",
+        "version": app.version,
+        "git_commit": os.getenv("APP_GIT_COMMIT", "unknown"),
+        "revision": os.getenv("K_REVISION", "unknown"),
+        "service": os.getenv("K_SERVICE", "unknown"),
+    }
 
 
 @app.get("/", response_class=HTMLResponse)
