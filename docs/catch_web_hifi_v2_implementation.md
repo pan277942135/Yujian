@@ -23,6 +23,8 @@ Task: `YUJIAN_AI_CATCH_RECOGNITION_WEB_FOUNDATION_AND_ARCHITECTURE_V2`
 
 ## G01–G18 status against current PR #177 source
 
+This is the refreshed Work B mapping after re-reading the main-adopted V2 authority against current product code. It supersedes the Work A historical audit snapshot that named PR #177 HEAD `655c4af`; the current `Yujian_App/main` is `3ccabae787c69acdf86be7f19e4c262f903c4671`, and the latest implementation evidence is linked from PR #177.
+
 | Gap | Status | Implementation evidence / remaining condition |
 |---|---|---|
 | G01 | FIXED | `base.html` page-scoped `product_shell`; product header and return route retained. |
