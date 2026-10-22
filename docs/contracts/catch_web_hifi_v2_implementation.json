@@ -4,11 +4,20 @@
   "work_a": {
     "repository": "pan277942135/Yujian_App",
     "pr": 190,
-    "sha": "33e781e2fb2374138b14713b41fb91f5f528bf83",
+    "sha": "d43db392784d29bb18898292511737e118add4cf",
     "authority_status": "VISUAL_CONTRACT_DEFINED",
     "main_adopted": false,
     "pixel_source_approval": "NOT_TRACED",
     "publication_permission": "NOT_CONFIRMED"
+  },
+  "live_adoption_audit": {
+    "checked_date": "2026-10-22",
+    "yujian_app_main_sha": "ad8bf1ba61e42a34d1fdd91de47fa386e25f11ef",
+    "pr190_state": "DRAFT_OPEN_UNMERGED",
+    "pr186_state": "DRAFT_OPEN_UNMERGED",
+    "pr187_state": "DRAFT_OPEN_UNMERGED",
+    "cited_contract_paths_present_on_main": false,
+    "pr190_contract_adoption_label_conflicts_with_live_state": true
   },
   "admission": {
     "status": "BLOCKED_MISSING_REGISTRY",

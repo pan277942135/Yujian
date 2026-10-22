@@ -951,6 +951,7 @@
   }));
 
   core.renderJourney(app, state);
+  updateStageNav(app.dataset.activeStage || "upload");
   setCapturedAtNow();
   clearTasks();
   loadSpeciesCatalog();
