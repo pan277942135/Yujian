@@ -55,7 +55,7 @@ jobs:
           '
           {
             echo "## PR #177 tagged-preview source"
-            echo "- Source SHA: `$TARGET_SHA`"
+            echo "- Source SHA: $TARGET_SHA"
             echo "- PR: #$PR_NUMBER (open, same repository, exact HEAD)"
             echo "- Deployment: fixed Cloud Run service, --no-traffic, fixed tag"
             echo "- User-uploaded photos and real inference: not exercised by workflow"
