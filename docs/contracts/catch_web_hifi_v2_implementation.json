@@ -6,18 +6,24 @@
     "pr": 190,
     "sha": "d43db392784d29bb18898292511737e118add4cf",
     "authority_status": "VISUAL_CONTRACT_DEFINED",
-    "main_adopted": false,
+    "main_adopted": true,
+    "main_adoption_scope": "DESIGN_CONTRACT_ONLY",
     "pixel_source_approval": "NOT_TRACED",
     "publication_permission": "NOT_CONFIRMED"
   },
   "live_adoption_audit": {
     "checked_date": "2026-10-22",
-    "yujian_app_main_sha": "ad8bf1ba61e42a34d1fdd91de47fa386e25f11ef",
-    "pr190_state": "DRAFT_OPEN_UNMERGED",
+    "yujian_app_main_sha": "e83124a3a1d5ce189b884e0e1d696597c6f3a237",
+    "yujian_app_main_tree_sha": "7824ef331bfb9d90316fd2295c796cdb24f6493f",
+    "pr190_state": "MERGED",
     "pr186_state": "DRAFT_OPEN_UNMERGED",
     "pr187_state": "DRAFT_OPEN_UNMERGED",
-    "cited_contract_paths_present_on_main": false,
-    "pr190_contract_adoption_label_conflicts_with_live_state": true
+    "pr190_merge_tree_matches_main": true,
+    "cited_contract_paths_present_on_main": true,
+    "adoption_scope": "DESIGN_CONTRACT_ONLY",
+    "pr190_contract_adoption_label_conflicts_with_live_state": false,
+    "pixel_frozen_source": "NOT_CONFIRMED",
+    "runtime_visual_verified": false
   },
   "admission": {
     "status": "BLOCKED_MISSING_REGISTRY",

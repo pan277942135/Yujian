@@ -677,6 +677,10 @@
           const waitRemaining = Math.max(0, PROCESSING_MS - elapsed);
           if (waitRemaining) await delay(waitRemaining);
           if (requestSequence !== state.requestSequence) return;
+          // Lock the deterministic 2800ms contract sample even when RAF cadence
+          // lands just before P7; the photo and all attached overlays then move
+          // together through the shared R0/R0.5/R1 transform.
+          swosRenderer.renderAt(PROCESSING_MS);
           swosRenderer.stop(false);
           const revealStart = performance.now();
           setBadge(nodes.processingBadge, "识别完成", "success");
