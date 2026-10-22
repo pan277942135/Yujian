@@ -4,19 +4,23 @@
   core.renderJourney = (root,state,visual="") => {
     root.dataset.stage=state.phase;
     const steps=[...root.querySelectorAll("[data-journey-step]")];
-    let active=-1;
-    if (state.photo) active=0;
-    if (state.phase==="PROCESSING") active=1;
-    if (visual==="handoff") active=3;
-    if (state.phase==="RESULT") active=4;
+    const hasPhoto=Boolean(state.photo), hasResult=Boolean(state.inference);
+    const high=state.inference?.result_state==="RESULT_HIGH";
+    const rows=[
+      !hasPhoto?{state:"pending",label:"等待照片"}:{state:state.busy?"active":"done",label:state.busy?"正在读取照片":"照片已就绪"},
+      state.busy?{state:"active",label:"光影随识别时间推进"}:hasResult?{state:"done",label:"真实推理已返回"}:{state:"pending",label:"等待真实识别"},
+      state.photo?.mask?.status==="TRUSTED_MASK_THREE_LAYERS"?{state:state.busy?"active":"done",label:"可信鱼体几何已验证"}:state.bbox?{state:"unavailable",label:"仅有检测框 · 不绘制轮廓"}:{state:"unavailable",label:"等待真实鱼体几何"},
+      state.transitionState==="active"||visual==="handoff"?{state:"active",label:"同源照片正在接续"}:state.transitionState==="done"?{state:"done",label:"照片已进入结果 Hero"}:{state:"pending",label:"等待照片接续"},
+      state.revealState==="active"?{state:"active",label:"真实中文名称揭晓中"}:state.revealState==="done"||(!high&&hasResult)?{state:"done",label:high?"真实结果已揭晓":"真实识别结果已返回"}:state.phase==="ERROR"?{state:"error",label:"识别未完成"}:{state:"pending",label:"等待真实分类结果"},
+    ];
     steps.forEach((node,index)=>{
-      // No SWOS or trusted fish mask is implemented in B1. Never claim these effects ran.
-      const unavailable=index===1||index===2;
-      const failed=state.phase==="ERROR" && index===4;
-      const status=failed?"error":unavailable?"unavailable":(index===active?"active":(index<active?"done":"pending"));
-      node.dataset.state=status;
-      node.querySelector("[data-journey-status]").textContent=failed?"识别未完成":unavailable?"视觉效果待接入":status==="active"?"当前阶段":status==="done"?"已完成":"等待开始";
-      if (index===active) node.setAttribute("aria-current","step"); else node.removeAttribute("aria-current");
+      const row=rows[index];node.dataset.state=row.state;
+      node.querySelector("[data-journey-status]").textContent=row.label;
+      if(row.state==="active")node.setAttribute("aria-current","step");else node.removeAttribute("aria-current");
+      const image=node.querySelector("[data-journey-photo]");
+      const placeholder=node.querySelector(".journey-placeholder");
+      if(image&&state.photo?.url){image.src=state.photo.url;image.hidden=false;if(placeholder)placeholder.hidden=true;}
+      else if(image){image.removeAttribute("src");image.hidden=true;if(placeholder)placeholder.hidden=false;}
     });
   };
 })();

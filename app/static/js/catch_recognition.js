@@ -23,7 +23,7 @@
   const state = new core.RecognitionController();
 
   const nodes = {
-    status: $("catchLiveStatus"), grid: $("catchStageGrid"), input: $("catchFileInput"),
+    status: $("catchLiveStatus"), grid: $("catchStageGrid"), input: $("catchFileInput"), photoStage: $("catchPhotoStage"),
     drop: $("catchDrop"), start: $("catchStartButton"), clear: $("catchClearButton"),
     uploadPreview: $("catchUploadPreview"), uploadPhoto: $("catchUploadPhoto"),
     fileMeta: $("catchFileMeta"), fileName: $("catchFileName"), fileSize: $("catchFileSize"),
@@ -34,7 +34,7 @@
     dimensions: $("catchPhotoDimensions"), taskList: $("catchTaskList"), diagnostic: $("catchDiagnostic"),
     bbox: $("catchBBoxOverlay"), regionGlow: $("catchRegionGlow"), resultBadge: $("catchResultBadge"),
     resultEmpty: $("catchResultEmpty"), resultContent: $("catchResultContent"), resultMedia: $("catchResultMedia"),
-    resultPhoto: $("catchResultPhoto"), speciesLabel: $("catchSpeciesLabel"), speciesName: $("catchSpeciesName"),
+    resultPhoto: $("catchResultPhoto"), resultBackdrop: $("catchResultBackdrop"), speciesLabel: $("catchSpeciesLabel"), speciesName: $("catchSpeciesName"),
     confidence: $("catchConfidence"), candidates: $("catchCandidates"), speciesSelect: $("catchSpeciesSelect"),
     saveHint: $("catchSaveHint"), saveButton: $("catchSaveButton"), memoryButton: $("catchMemoryButton"),
     timingNote: $("catchTimingNote"), loginBackdrop: $("catchLoginBackdrop"), loginForm: $("catchLoginForm"),
@@ -47,6 +47,9 @@
     crop: ["crop"],
     classifier: ["classifier"],
   };
+  const swosRenderer = core.createSwosRenderer({
+    media: nodes.processingMedia, host: $("catchPhotoEffects"), focus: nodes.regionGlow,
+  });
 
   function setStatus(message, kind = "") {
     nodes.status.textContent = message;
@@ -65,19 +68,24 @@
     return new Promise((resolve) => window.setTimeout(resolve, Math.max(0, ms)));
   }
 
-  function updateStageNav(activeStage, completed = []) {
-    state.phase = activeStage === "upload" && !state.file ? "IDLE" : activeStage.toUpperCase();
+  function updateStageNav(activeStage, completed = null) {
+    const finished = completed || (state.inference ? ["upload", "processing"] : state.busy ? ["upload"] : []);
+    app.dataset.activeStage = activeStage;
     core.renderJourney(app, state);
     document.querySelectorAll("[data-stage-step]").forEach((node) => {
       const stage = node.getAttribute("data-stage-step");
       node.classList.toggle("active", stage === activeStage);
       if (stage === activeStage) node.setAttribute("aria-current", "step"); else node.removeAttribute("aria-current");
-      node.classList.toggle("done", completed.includes(stage));
+      node.classList.toggle("done", finished.includes(stage));
+      node.disabled = stage === "processing" ? !state.file : stage === "result" ? !(state.inference || state.phase === "ERROR") : false;
     });
     document.querySelectorAll(".catch-panel[data-stage]").forEach((panel) => {
       const stage = panel.getAttribute("data-stage");
       panel.classList.toggle("is-active", stage === activeStage);
-      panel.classList.toggle("is-ready", completed.includes(stage));
+      panel.classList.toggle("is-ready", finished.includes(stage));
+      const mobile = window.matchMedia("(max-width: 767px)").matches;
+      const handoffSource = stage === "processing" && nodes.grid.classList.contains("handoff");
+      panel.hidden = mobile && stage !== activeStage && !handoffSource;
     });
   }
 
@@ -127,7 +135,7 @@
     nodes.resultContent.classList.remove("visible");
     nodes.resultContent.hidden = true;
     nodes.resultEmpty.hidden = false;
-    nodes.resultEmpty.innerHTML = '<div><span class="catch-empty-icon" aria-hidden="true">◇</span><strong>结果会显示在这里</strong><br>识别状态由真实模型响应决定。</div>';
+    nodes.resultEmpty.innerHTML = '<div><span class="catch-empty-icon" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M4 17c5-7 12-10 21-7l5 7-5 7C16 27 9 24 4 17Zm20-1h.1M9 12 5 8m4 14-4 4" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg></span><strong>结果会显示在这里</strong><br>识别状态由真实模型响应决定。</div>';
     nodes.resultPhoto.hidden = true;
     nodes.resultBadge.textContent = "等待识别";
     nodes.resultBadge.className = "status-tag status-neutral";
@@ -139,14 +147,21 @@
     nodes.confidence.className = "catch-confidence";
     nodes.candidates.hidden = true;
     nodes.candidates.replaceChildren();
+    nodes.bbox.classList.remove("visible");
+    swosRenderer.stop();
     nodes.speciesSelect.innerHTML = '<option value="">等待真实识别结果</option>';
     nodes.speciesSelect.disabled = true;
     nodes.saveButton.disabled = true;
     nodes.memoryButton.disabled = true;
     nodes.timingNote.textContent = "名义 Processing 2800ms + RR09 850ms = 3650ms；真实识别较慢时等待真实结果，不提前揭晓。";
     nodes.resultPanel.dataset.businessState = "idle";
+    nodes.resultPanel.removeAttribute("data-result-state");
     nodes.resultPanel.classList.remove("revealing");
+    state.transitionState = "idle";
+    state.revealState = "idle";
     state.inference = null;
+    state.bbox = null;
+    if (state.photo) { state.photo.bbox = null; state.photo.result = null; }
     state.saved = false;
     state.selectedByUser = false;
     $("catchLength").value = "";
@@ -166,6 +181,9 @@
     [nodes.uploadPhoto, nodes.processingPhoto, nodes.resultPhoto].forEach((image) => {
       image.src = url;
     });
+    nodes.resultBackdrop.src = url;
+    nodes.resultBackdrop.hidden = false;
+    nodes.photoStage.hidden = false;
     nodes.processingPhoto.hidden = false;
     nodes.processingEmpty.hidden = true;
     nodes.resultPhoto.hidden = false;
@@ -188,8 +206,12 @@
     nodes.clear.disabled = true;
     nodes.processingPhoto.removeAttribute("src");
     nodes.processingPhoto.hidden = true;
+    nodes.photoStage.hidden = true;
     nodes.processingEmpty.hidden = false;
     nodes.resultPhoto.removeAttribute("src");
+    nodes.resultBackdrop.removeAttribute("src");
+    nodes.resultBackdrop.hidden = true;
+    swosRenderer.stop();
     state.bbox = null;
     nodes.regionGlow.classList.remove("visible");
     nodes.bbox.classList.remove("visible");
@@ -402,6 +424,9 @@
     nodes.confidence.className = "catch-confidence recovery";
     setBadge(nodes.resultBadge, badge, tone);
     nodes.resultPanel.dataset.businessState = "recovery";
+    nodes.resultPanel.dataset.resultState = result.result_state;
+    state.revealState = "error";
+    state.transitionState = "idle";
     nodes.saveHint.textContent = result.guidance || "请重新选择照片后重试。";
     nodes.speciesSelect.innerHTML = '<option value="">此状态不能保存鱼获</option>';
     nodes.speciesSelect.disabled = true;
@@ -412,6 +437,7 @@
 
   function showRecognitionOutcome(result) {
     const resultState = result.result_state;
+    nodes.resultPanel.dataset.resultState = resultState.replace("RESULT_", "");
     if (["ERROR_NO_FISH", "ERROR_IMAGE_QUALITY", "TECHNICAL_FAILURE"].includes(resultState)) {
       showRecovery(result);
       return;
@@ -460,11 +486,10 @@
     const geometry = state.photo.processingGeometry;
     if (!geometry) return;
     const parent = nodes.processingMedia.getBoundingClientRect();
-    const effects = $("catchPhotoEffects");
-    effects.style.left = `${geometry.rect.left - parent.left}px`;
-    effects.style.top = `${geometry.rect.top - parent.top}px`;
-    effects.style.width = `${geometry.rect.width}px`;
-    effects.style.height = `${geometry.rect.height}px`;
+    nodes.photoStage.style.left = `${geometry.rect.left - parent.left}px`;
+    nodes.photoStage.style.top = `${geometry.rect.top - parent.top}px`;
+    nodes.photoStage.style.width = `${geometry.rect.width}px`;
+    nodes.photoStage.style.height = `${geometry.rect.height}px`;
   }
 
   function mapBboxToElement(image, overlay, bbox) {
@@ -504,14 +529,23 @@
 
   async function transitionSharedPhoto(eventStart, requestSequence) {
     nodes.grid.classList.add("handoff");
+    state.transitionState = "active";
+    updateStageNav("result");
     core.renderJourney(app, state, "handoff");
+    nodes.resultPanel.dataset.rr09Frame = "R0";
     await core.transitionPhoto({
-      photo: state.photo, image: nodes.processingPhoto, targetImage: nodes.resultPhoto,
+      photo: state.photo, image: nodes.photoStage, targetImage: nodes.resultPhoto,
       source: nodes.processingMedia, target: nodes.resultMedia, eventStart,
       duration: RR09_FRAMES[2].at, isCurrent: () => state.current(requestSequence),
       onCleanup: (cleanup) => { state.cancelTransition = cleanup; },
+      onFrame: ({frame}) => { nodes.resultPanel.dataset.rr09Frame = frame; },
     });
-    if (state.current(requestSequence)) nodes.grid.classList.remove("handoff");
+    if (state.current(requestSequence)) {
+      nodes.grid.classList.remove("handoff");
+      state.transitionState = "done";
+      updateStageNav("result");
+      core.renderJourney(app, state);
+    }
   }
 
   async function revealHighResult(result, eventStart, requestSequence) {
@@ -522,6 +556,9 @@
     nodes.resultPhoto.src = state.objectUrl;
     nodes.resultPanel.dataset.businessState = "revealing";
     nodes.resultPanel.classList.add("revealing");
+    nodes.resultPanel.dataset.resultState = "HIGH";
+    state.revealState = "active";
+    core.renderJourney(app, state);
     const top1 = result.classifier?.top1;
     nodes.speciesName.textContent = isChineseName(top1?.species) ? top1.species : "";
     nodes.speciesName.style.visibility = "hidden";
@@ -533,18 +570,25 @@
     if (!state.current(requestSequence)) return;
     await revealAt(RR09_FRAMES[3].at); // R2 380ms; no precise transfer without qualified SAM.
     if (!state.current(requestSequence)) return;
-    nodes.resultPanel.dataset.revealState = "gold-transfer-unavailable";
+    nodes.resultPanel.dataset.rr09Frame = "R2";
+    nodes.resultPanel.dataset.revealState = state.photo.mask.status === "TRUSTED_MASK_THREE_LAYERS" ? "qualified-mask-transfer" : "gold-transfer-unavailable";
     await revealAt(RR09_FRAMES[4].at); // R3 550ms; keep the name hidden without a trusted glyph trace.
     if (!state.current(requestSequence)) return;
+    nodes.resultPanel.dataset.rr09Frame = "R3";
     await revealAt(RR09_FRAMES[5].at); // R4 680ms: real Chinese name becomes readable.
     if (!state.current(requestSequence)) return;
+    nodes.resultPanel.dataset.rr09Frame = "R4";
     nodes.speciesName.style.visibility = "visible";
     await revealAt(RR09_FRAMES[6].at); // R5 850ms: static page, no looping effect.
     if (!state.current(requestSequence)) return;
+    nodes.resultPanel.dataset.rr09Frame = "R5";
     nodes.resultPanel.dataset.businessState = "ready";
     nodes.resultPanel.dataset.revealState = "complete";
+    state.revealState = "done";
     nodes.resultPanel.classList.remove("revealing");
     nodes.grid.classList.remove("handoff");
+    updateStageNav("result");
+    core.renderJourney(app, state);
   }
 
   async function showNonHighResult(result) {
@@ -554,6 +598,11 @@
     nodes.resultPhoto.src = state.objectUrl;
     nodes.resultPhoto.hidden = false;
     nodes.resultPanel.dataset.businessState = "ready";
+    nodes.resultPanel.dataset.resultState = result.result_state.replace("RESULT_", "");
+    state.transitionState = "idle";
+    state.revealState = "done";
+    swosRenderer.stop();
+    core.renderJourney(app, state);
   }
 
   async function requestRecognition() {
@@ -575,11 +624,18 @@
     setInProgressTasks();
     setStatus("识别请求已发送。处理结果未就绪前不会显示鱼种名称或成功状态。", "success");
     const requestStartedAt = performance.now();
+    swosRenderer.start(requestStartedAt, {
+      processingFrames: PROCESSING_FRAMES,
+      waterStrength: [0, 10, 45, 75, 60, 35, 10, 0],
+      goldStrength: [0, 0, 15, 45, 100, 100, 100, 100],
+    });
     const timeout = window.setTimeout(() => controller.abort("request-timeout"), 120_000);
     try {
       const payload = await core.infer(app.dataset.api, state.file, controller.signal, `web_${state.photo.id}_${requestSequence}`);
       if (!state.accept(payload, requestSequence)) return;
       state.inference = payload;
+      state.phase = "RESULT";
+      swosRenderer.setGeometry(state.bbox);
       const elapsed = performance.now() - requestStartedAt;
       nodes.dimensions.textContent = `${payload.input?.width || "—"} × ${payload.input?.height || "—"} · ${payload.input?.format || "—"}`;
       renderDiagnostics(payload);
@@ -588,6 +644,9 @@
       setBadge(nodes.uploadBadge, "原图已校验", "success");
       nodes.businessMessage.textContent = `识别已返回结果 · ${payload.timing?.total_ms ?? "—"} ms`;
       if (payload.result_state.startsWith("ERROR_") || payload.result_state === "TECHNICAL_FAILURE") {
+        state.phase = "ERROR";
+        state.revealState = "error";
+        swosRenderer.stop();
         nodes.processingPanel.dataset.businessState = "recovery";
         nodes.resultPanel.dataset.businessState = "recovery";
         setBadge(nodes.processingBadge, "真实结果需恢复", "review");
@@ -595,11 +654,13 @@
         nodes.resultPhoto.src = state.objectUrl;
         nodes.resultPhoto.hidden = false;
         updateStageNav("result", ["upload", "processing"]);
-        state.phase = "ERROR";
         setStatus(`${payload.message || "本次识别未完成"} ${payload.guidance || ""}`.trim(), "error");
       } else {
         const chineseTop1 = isChineseName(payload.classifier?.top1?.species);
         if (payload.result_state === "RESULT_HIGH" && !chineseTop1) {
+          state.phase = "ERROR";
+          state.revealState = "error";
+          swosRenderer.stop();
           showRecognitionOutcome({
             ...payload, result_state: "ERROR_IMAGE_QUALITY",
             message: "模型没有返回可用的中文鱼种名称",
@@ -616,6 +677,7 @@
           const waitRemaining = Math.max(0, PROCESSING_MS - elapsed);
           if (waitRemaining) await delay(waitRemaining);
           if (requestSequence !== state.requestSequence) return;
+          swosRenderer.stop(false);
           const revealStart = performance.now();
           setBadge(nodes.processingBadge, "识别完成", "success");
           setBadge(nodes.resultBadge, "正在呈现结果", "running");
@@ -636,6 +698,7 @@
       }
     } catch (error) {
       if (requestSequence !== state.requestSequence) return;
+      swosRenderer.stop();
       state.busy = false;
       if (error?.name === "AbortError" || controller.signal.aborted) {
         state.phase = "CANCELLED";
@@ -648,6 +711,8 @@
         setStatus(timeoutAbort ? "识别请求超过 120 秒仍未响应。请检查服务状态后重试。" : "本次请求已取消；旧响应不会覆盖当前照片。", "error");
       } else {
         state.phase = "ERROR";
+        state.revealState = "error";
+        state.transitionState = "idle";
         core.renderJourney(app, state);
         const requestRef = error?.requestId ? ` · 请求 ${error.requestId}` : "";
         nodes.processingPanel.dataset.businessState = "failed";
@@ -669,9 +734,9 @@
       window.clearTimeout(timeout);
       if (requestSequence === state.requestSequence) {
         updatePhotoGeometry();
-        core.renderJourney(app, state);
         state.busy = false;
         state.controller = null;
+        core.renderJourney(app, state);
         $("catchCancelButton").hidden = true;
         nodes.start.disabled = !state.file;
         nodes.input.disabled = false;
@@ -836,11 +901,12 @@
     hidePreviousOutcome();
     nodes.processingMedia.classList.remove("processing");
     nodes.grid.classList.remove("handoff");
+    swosRenderer.stop();
     nodes.start.disabled = !state.file;
     nodes.input.disabled = false;
     $("catchCancelButton").hidden = true;
-    updateStageNav("upload");
     state.phase = "CANCELLED";
+    updateStageNav("upload");
     core.renderJourney(app, state);
     setBadge(nodes.processingBadge, "已取消", "neutral");
     nodes.processingPanel.dataset.businessState = "cancelled";
@@ -877,7 +943,12 @@
     const check = $("catchShowBBox");
     const bbox = state.inference?.detector?.detections?.[0]?.bbox;
     if (check?.checked && bbox) mapBboxToElement(nodes.processingPhoto, nodes.bbox, bbox);
+    updateStageNav(app.dataset.activeStage || "upload");
   });
+
+  document.querySelectorAll("[data-stage-step]").forEach((node) => node.addEventListener("click", () => {
+    if (!node.disabled && !state.busy && !nodes.grid.classList.contains("handoff")) updateStageNav(node.dataset.stageStep);
+  }));
 
   core.renderJourney(app, state);
   setCapturedAtNow();

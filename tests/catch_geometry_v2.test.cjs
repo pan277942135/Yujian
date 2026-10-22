@@ -4,7 +4,7 @@ const fs=require('node:fs');
 const vm=require('node:vm');
 const context={window:{},crypto:require('node:crypto').webcrypto,URL:{createObjectURL:()=> 'blob:fixture',revokeObjectURL:()=>{}},AbortController};
 vm.createContext(context);
-for(const name of ['photo-session','recognition-controller'])vm.runInContext(fs.readFileSync(`app/static/js/catch/${name}.js`,'utf8'),context);
+for(const name of ['photo-session','recognition-controller','stage-view','swos-renderer'])vm.runInContext(fs.readFileSync(`app/static/js/catch/${name}.js`,'utf8'),context);
 const {PhotoViewport:g,RecognitionController}=context.window.YujianCatch;
 test('contain geometry preserves portrait, landscape and narrow source edges',()=>{
  for(const [w,h] of [[800,600],[600,900],[100,1200]]){
@@ -27,4 +27,23 @@ test('one controller invalidates cancelled requests and ignores late response',(
  assert.equal(c.accept({result_state:'RESULT_HIGH'},first.sequence),false);
  assert.equal(c.accept({result_state:'RESULT_LOW'},second.sequence),true);
  assert.equal(c.photo.result.result_state,'RESULT_LOW');assert.equal(c.photo.width,800);
+});
+test('SWOS samples the frozen 8-point curves and keeps perceptual strength separate from CSS alpha',()=>{
+ const frames=[{id:'P0',at:0},{id:'P1',at:350},{id:'P2',at:950},{id:'P3',at:1200},{id:'P4',at:1550},{id:'P5',at:2050},{id:'P6',at:2600},{id:'P7',at:2800}];
+ const water=[0,10,45,75,60,35,10,0],gold=[0,0,15,45,100,100,100,100],t=context.window.YujianCatch.SWOSTimeline;
+ assert.equal(frames.length,8);assert.equal(t.sampleCurve(frames,water,0),0);assert.equal(t.sampleCurve(frames,water,1200),75);assert.equal(t.sampleCurve(frames,water,2800),0);
+ assert.equal(t.sampleCurve(frames,gold,1550),100);assert.equal(t.sampleCurve(frames,gold,2800),100);
+ assert.equal(t.frameAt(frames,1000),'P2');
+ const paint=t.paintForStrength(75,100);
+ assert.ok(Number(paint.caustic)>0&&Number(paint.caustic)<0.75);
+ assert.ok(Number(paint.focus)>0&&Number(paint.focus)<0.25);
+ assert.notEqual(Number(paint.caustic),0.75);assert.notEqual(Number(paint.focus),1);
+});
+test('journey remains explicit about unavailable segmentation during processing',()=>{
+ const makeStep=()=>({dataset:{},attrs:{},status:{textContent:''},image:{src:'',hidden:true,removeAttribute(){}},placeholder:{hidden:false},querySelector(selector){return selector==='[data-journey-status]'?this.status:selector==='.journey-placeholder'?this.placeholder:this.image;},setAttribute(key,value){this.attrs[key]=value;},removeAttribute(key){delete this.attrs[key];}});
+ const steps=Array.from({length:5},makeStep),root={dataset:{},querySelectorAll:()=>steps};
+ const state={phase:'PROCESSING',photo:{url:'blob:private-local',bbox:{x1:.1,y1:.2,x2:.9,y2:.8},mask:{status:'UNAVAILABLE'}},bbox:{x1:.1,y1:.2,x2:.9,y2:.8},busy:true,inference:null,transitionState:'idle',revealState:'idle'};
+ context.window.YujianCatch.renderJourney(root,state);
+ assert.equal(steps[1].dataset.state,'active');assert.equal(steps[2].dataset.state,'unavailable');
+ assert.match(steps[2].status.textContent,/不绘制轮廓/);assert.equal(steps[2].image.src,state.photo.url);
 });

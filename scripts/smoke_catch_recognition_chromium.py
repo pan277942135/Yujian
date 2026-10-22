@@ -197,7 +197,14 @@ def main() -> None:
                     assert_no_horizontal_overflow(check,f"{width}x{height}")
                     assert check.locator('[data-component="ProcessJourney"] li').count()==5
                     assert not check.locator('[data-component="AdvancedDiagnostics"]').evaluate("n=>n.open")
-                    assert check.locator('#catchResultEmpty').is_visible()
+                    assert check.locator('[data-stage-step]').count()==3
+                    if width < 768:
+                        assert check.locator('#catchUploadPanel').is_visible()
+                        assert check.locator('#catchProcessingPanel').is_hidden()
+                        assert check.locator('#catchResultPanel').is_hidden()
+                        assert check.locator('.catch-journey ol').evaluate("n=>n.scrollWidth>n.clientWidth")
+                    else:
+                        assert check.locator('#catchResultEmpty').is_visible()
                     check.screenshot(path=str(ARTIFACTS/f"shell-{width}x{height}-UI_SIMULATION_ONLY.png"),full_page=True)
                     assert not errors,errors
                     check.close()
@@ -231,12 +238,15 @@ def main() -> None:
                     assert timeline["totalMs"] == 3650
                     assert [row["id"] for row in timeline["processingFrames"]] == ["P0", "P1", "P2", "P3", "P4", "P5", "P6", "P7"]
                     assert [row["at"] for row in timeline["rr09Frames"]] == [0, 100, 200, 380, 550, 680, 850]
+                    assert desktop.locator('#catchPhotoStage [data-optical-layer]').count()==7
                     assert desktop.locator(".catch-grid").evaluate("node => getComputedStyle(node).gridTemplateColumns.split(' ').length") == 3
                     assert_no_horizontal_overflow(desktop, "desktop-1440")
                     photo_name, photo_path, dimensions = photos[0]
                     desktop.locator("#catchFileInput").set_input_files(str(photo_path))
                     desktop.locator("#catchUploadPhoto").evaluate("image => image.decode()")
                     assert desktop.locator("#catchUploadPhoto").evaluate("image => [image.naturalWidth, image.naturalHeight]") == list(dimensions)
+                    assert not desktop.locator("#catchTabProcessing").is_disabled()
+                    assert desktop.locator("#catchTabResult").is_disabled()
                     desktop.screenshot(path=str(ARTIFACTS / "desktop-photo-selected-ui-simulation.png"), full_page=True)
                     desktop.evaluate("window._catchUiSmokeStartedAt = performance.now()")
                     desktop.locator("#catchStartButton").click()
@@ -264,6 +274,11 @@ def main() -> None:
                     assert 0.42 <= geometry["progress"] <= 0.58, geometry
                     assert max(geometry[key] for key in ("leftError", "topError", "widthError", "heightError")) <= 4, geometry
                     desktop.wait_for_function("document.querySelector('#catchResultPanel')?.dataset.revealState === 'complete'", timeout=7000)
+                    assert desktop.locator('#catchProcessingMedia').get_attribute('data-swos-frame')=='P7'
+                    assert desktop.locator('#catchProcessingMedia').get_attribute('data-relative-water-strength')=='0'
+                    assert desktop.locator('#catchProcessingMedia').get_attribute('data-relative-fish-gold-strength')=='100'
+                    assert desktop.locator('#catchResultPanel').get_attribute('data-rr09-frame')=='R5'
+                    assert not desktop.locator('#catchTabResult').is_disabled()
                     assert desktop.locator("#catchSpeciesName").inner_text() == "草鱼"
                     assert desktop.locator("#catchResultEmpty").is_hidden(), "successful result must hide the empty-state placeholder"
                     assert desktop.locator("#catchProcessingPhoto").get_attribute("src") == desktop.locator("#catchResultPhoto").get_attribute("src")

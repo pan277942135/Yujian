@@ -3,24 +3,24 @@
 {% set product_shell = true %}
 {% block head %}<link rel="stylesheet" href="/static/css/catch_recognition.css?v=foundation-v2">{% endblock %}
 {% block content %}
-<div class="catch-page" id="catchRecognitionApp" data-component="RecognitionWorkspace" data-stage="IDLE" data-visual-contract="PR190_CANDIDATE_NOT_ADOPTED" data-api="{{ catch_api_url|default('/api/product/catch-recognition/infer') }}" data-ui-simulation="{{ 'true' if ui_simulation else 'false' }}">
+<div class="catch-page" id="catchRecognitionApp" data-component="RecognitionWorkspace" data-stage="IDLE" data-visual-contract="PR190_V2_CANDIDATE_NOT_ADOPTED" data-api="{{ catch_api_url|default('/api/product/catch-recognition/infer') }}" data-ui-simulation="{{ 'true' if ui_simulation else 'false' }}">
   {% if ui_simulation %}<div class="catch-notice" role="note" style="border-color:#e8b7ae;background:#fff1ee;color:#913d34"><strong>UI_SIMULATION_ONLY</strong><span>仅用于 Chromium 排版与交互验收；此页面没有调用生产模型，也不代表真实识别结果。</span></div>{% endif %}
   <div class="page-heading"><div><h1>AI渔获识别</h1><p>上传真实鱼获照片，查看当前生产模型返回的识别结果。</p></div></div>
   <p class="catch-intro">留住真实鱼获，发现它的名字。</p>
   <div class="catch-notice"><span aria-hidden="true">◈</span><div><strong>照片处理说明</strong> 识别请求仅用于本次推理；推理接口不写入图片存储。点击“保存本次鱼获”后，照片才会上传到你的鱼获记录。当前没有登记公开使用许可的示例照片。</div></div>
-  <div data-component="StageNavigation" class="catch-stages" aria-label="识别流程">
-    <div class="catch-stage-step active" data-stage-step="upload"><span class="num">1</span><span>上传照片</span></div>
-    <div class="catch-stage-step" data-stage-step="processing"><span class="num">2</span><span>AI 核心识别</span></div>
-    <div class="catch-stage-step" data-stage-step="result"><span class="num">3</span><span>识别结果</span></div>
-  </div>
+  <nav data-component="StageNavigation" class="catch-stages" aria-label="识别流程">
+    <button class="catch-stage-step active" id="catchTabUpload" type="button" aria-current="step" aria-controls="catchUploadPanel" data-stage-step="upload"><span class="num">1</span><span>上传照片</span></button>
+    <button class="catch-stage-step" id="catchTabProcessing" type="button" aria-controls="catchProcessingPanel" data-stage-step="processing" disabled><span class="num">2</span><span>AI 核心识别</span></button>
+    <button class="catch-stage-step" id="catchTabResult" type="button" aria-controls="catchResultPanel" data-stage-step="result" disabled><span class="num">3</span><span>识别结果</span></button>
+  </nav>
   <div class="catch-live-status" id="catchLiveStatus" role="status" aria-live="polite">选择一张包含鱼获的真实照片开始识别。</div>
   <div class="catch-grid" id="catchStageGrid">
-    <section class="catch-panel is-active" data-component="UploadStage" data-stage="upload" aria-labelledby="catchUploadHeading">
+    <section class="catch-panel is-active" id="catchUploadPanel" data-component="UploadStage" data-stage="upload" aria-labelledby="catchUploadHeading">
       <div class="catch-panel-head"><div><span class="catch-panel-kicker">01 · PHOTO INPUT</span><h2 id="catchUploadHeading">上传照片</h2><p>支持 JPEG、PNG、WEBP，单张不超过 15 MB</p></div><span class="status-tag status-neutral" id="catchUploadBadge">待上传</span></div>
       <div class="catch-panel-body">
         <label class="catch-drop" id="catchDrop" for="catchFileInput">
           <input class="catch-file" id="catchFileInput" type="file" accept="image/jpeg,image/png,image/webp" aria-label="选择鱼获照片">
-          <span><span class="catch-drop-icon" aria-hidden="true">＋</span><strong>拖入照片，或选择文件</strong><small>只接受可解码的真实图片文件<br>识别前可随时重新选择</small></span>
+          <span><svg class="catch-drop-icon" viewBox="0 0 48 48" aria-hidden="true"><path d="M24 33V10m0 0-8 8m8-8 8 8M9 29v8a4 4 0 0 0 4 4h22a4 4 0 0 0 4-4v-8" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/></svg><strong>拖入照片，或选择文件</strong><small>只接受可解码的真实图片文件<br>识别前可随时重新选择</small></span>
         </label>
         <div class="catch-upload-preview" id="catchUploadPreview"><img id="catchUploadPhoto" alt="已选择的鱼获照片"></div>
         <div class="catch-file-meta" id="catchFileMeta" hidden><strong id="catchFileName">—</strong><span id="catchFileSize">—</span></div>
@@ -29,14 +29,16 @@
       </div>
     </section>
 
-    <section class="catch-panel" data-component="ProcessingStage" data-stage="processing" data-business-state="idle" aria-labelledby="catchProcessingHeading">
+    <section class="catch-panel" id="catchProcessingPanel" data-component="ProcessingStage" data-stage="processing" data-business-state="idle" aria-labelledby="catchProcessingHeading">
       <div class="catch-panel-head"><div><span class="catch-panel-kicker">02 · LIVE RECOGNITION</span><h2 id="catchProcessingHeading">AI 核心识别</h2><p>从水光中，逐步发现鱼获</p></div><span class="status-tag status-neutral" id="catchProcessingBadge">等待照片</span></div>
       <div class="catch-panel-body">
-        <div class="catch-media" id="catchProcessingMedia">
+        <div class="catch-media" id="catchProcessingMedia" data-swos-state="idle">
+          <div class="catch-photo-stage" id="catchPhotoStage" hidden>
           <img id="catchProcessingPhoto" data-optical-layer="photo-base" alt="正在识别的原始鱼获照片" hidden>
           <div class="catch-media-empty" id="catchProcessingEmpty">照片将在这里呈现<br>识别期间请稍候</div>
           <div id="catchPhotoEffects" class="catch-photo-effects" data-component="OpticalHost" data-mask-state="UNAVAILABLE" aria-hidden="true">
-          {% for layer in ['ambient-water','caustic-field','ripple-field','peripheral-refraction','fish-focus','residual-gold-trace'] %}<div data-optical-layer="{{ layer }}"></div>{% endfor %}</div><div class="catch-region-glow" id="catchRegionGlow" aria-hidden="true"></div><div class="catch-bbox" id="catchBBoxOverlay" aria-hidden="true"></div>
+          {% for layer in ['ambient-water','caustic-field','ripple-field','peripheral-refraction','residual-gold-trace'] %}<div data-optical-layer="{{ layer }}"></div>{% endfor %}<div data-optical-layer="fish-focus" class="catch-region-glow" id="catchRegionGlow"></div><div class="catch-bbox" id="catchBBoxOverlay"></div></div>
+          </div>
         </div>
         <div class="catch-media-caption"><span>原始照片 · 保留完整画面</span><strong id="catchPhotoDimensions">—</strong></div>
         <button class="catch-button" id="catchCancelButton" type="button" hidden>取消本次识别</button>
@@ -55,9 +57,9 @@
     <section class="catch-panel" id="catchResultPanel" data-component="ResultStage" data-stage="result" data-business-state="idle" aria-labelledby="catchResultHeading">
       <div class="catch-panel-head"><div><span class="catch-panel-kicker">03 · RECOGNITION RESULT</span><h2 id="catchResultHeading">识别结果</h2><p>仅在真实分类结果就绪后显示</p></div><span class="status-tag status-neutral" id="catchResultBadge">等待识别</span></div>
       <div class="catch-panel-body">
-        <div class="catch-empty-state" id="catchResultEmpty"><div><span class="catch-empty-icon" aria-hidden="true">◇</span><strong>结果会显示在这里</strong><br>识别状态由真实模型响应决定。</div></div>
+        <div class="catch-empty-state" id="catchResultEmpty"><div><span class="catch-empty-icon" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M4 17c5-7 12-10 21-7l5 7-5 7C16 27 9 24 4 17Zm20-1h.1M9 12 5 8m4 14-4 4" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg></span><strong>结果会显示在这里</strong><br>识别状态由真实模型响应决定。</div></div>
         <div class="catch-result-content" id="catchResultContent">
-          <div class="catch-media catch-result-media" id="catchResultMedia"><img id="catchResultPhoto" alt="识别结果对应的原始鱼获照片" hidden></div>
+          <div class="catch-media catch-result-media" id="catchResultMedia"><img class="catch-result-backdrop" id="catchResultBackdrop" alt="" aria-hidden="true" hidden><img id="catchResultPhoto" alt="识别结果对应的原始鱼获照片" hidden></div>
           <div class="catch-result-head"><div class="catch-species-block"><span class="catch-species-label" id="catchSpeciesLabel">识别鱼种</span><span class="catch-species-name" id="catchSpeciesName"></span></div><span class="catch-confidence" id="catchConfidence"></span></div>
           <div class="catch-candidates" id="catchCandidates" hidden></div>
           <form class="catch-form" id="catchRecordForm">
@@ -93,5 +95,5 @@
 {% endblock %}
 
 {% block scripts %}
-{% for module in ['photo-session','recognition-api','recognition-controller','stage-view','photo-transition'] %}<script src="/static/js/catch/{{ module }}.js?v=foundation-v2"></script>{% endfor %}
-<script src="/static/js/catch_recognition.js?v=foundation-v2"></script>{% endblock %}
+{% for module in ['photo-session','recognition-api','recognition-controller','stage-view','photo-transition','swos-renderer'] %}<script src="/static/js/catch/{{ module }}.js?v=web-hifi-v2"></script>{% endfor %}
+<script src="/static/js/catch_recognition.js?v=web-hifi-v2"></script>{% endblock %}
