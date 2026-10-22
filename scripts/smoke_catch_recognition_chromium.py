@@ -363,7 +363,8 @@ def main() -> None:
                     # Cancel during the transition itself, then choose another photo.
                     cancelled.locator("#catchStartButton").click()
                     cancelled.wait_for_function("!!document.querySelector('.catch-transition-photo')",timeout=7000)
-                    cancelled.locator("#catchClearButton").click(force=True)
+                    cancelled.locator("#catchCancelButton").click()
+                    assert cancelled.locator("#catchRecognitionApp").get_attribute("data-stage")=="CANCELLED"
                     cancelled.locator("#catchFileInput").set_input_files(str(photos[1][1]))
                     cancelled.wait_for_timeout(1200)
                     assert cancelled.locator("#catchSpeciesName").inner_text()==""
