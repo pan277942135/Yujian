@@ -30,6 +30,7 @@ YOLOX_LETTERBOX_FILL = 114
 ANDROID_MAX_SOURCE_DIMENSION = 2048
 ORIENTATION_RETRY_POLICY_VERSION = "DETECTOR_ORIENTATION_RETRY_v2"
 DETECTOR_ORIENTATIONS = ("ORIGINAL", "CW90", "CCW90")
+MODEL_DATASET_VERSION_CONTRACTS = {"DET_FISH_v0.3": "DET_DS_v0.3"}
 
 
 class DetectorRuntimeError(RuntimeError):
@@ -144,6 +145,12 @@ def _load_detector_version(model_version: str) -> DetectorModel:
         raise DetectorRuntimeError(
             f"detector model version mismatch: expected {model_version}, got {metadata.get('model_version')}"
         )
+    expected_dataset_version = MODEL_DATASET_VERSION_CONTRACTS.get(model_version)
+    if expected_dataset_version and metadata.get("dataset_version") != expected_dataset_version:
+        raise DetectorRuntimeError(
+            f"detector dataset version mismatch for {model_version}: "
+            f"expected {expected_dataset_version}, got {metadata.get('dataset_version')}"
+        )
     if metadata.get("model_family") != "YOLOX_NANO":
         raise DetectorRuntimeError("fish detector must be YOLOX_NANO")
     actual_sha = hashlib.sha256(onnx_bytes).hexdigest()
@@ -194,7 +201,7 @@ def load_detector() -> DetectorModel:
 @lru_cache(maxsize=2)
 def load_detector_for_version(model_version: str) -> DetectorModel:
     """Load one explicitly selected detector version for the read-only test console."""
-    if model_version not in {"DET_FISH_v0.1", "DET_FISH_v0.2"}:
+    if model_version not in {"DET_FISH_v0.1", "DET_FISH_v0.2", "DET_FISH_v0.3"}:
         raise DetectorRuntimeError(f"unsupported detector model version: {model_version}")
     if model_version == DETECTOR_MODEL_VERSION:
         return load_detector()

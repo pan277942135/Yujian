@@ -7,14 +7,18 @@ from PIL import Image
 from types import SimpleNamespace
 
 from app.detector_runtime import (
+    DetectorRuntimeError,
+    _artifact_uri,
     _prepare_yolox_input,
     decode_yolox_candidates,
     decode_yolox_output,
     detect,
     map_box_to_original,
     normalize_android_source,
+    load_detector_for_version,
 )
 from app.recognition_pipeline import BBox, Detection
+import app.detector_runtime as detector_runtime
 
 
 def test_yolox_preprocess_is_bgr_top_left_letterbox_with_114_padding():
@@ -28,6 +32,77 @@ def test_yolox_preprocess_is_bgr_top_left_letterbox_with_114_padding():
     # First source pixel is RGB(10, 20, 30), so the detector receives BGR(30, 20, 10).
     assert tensor[0, :, 0, 0].tolist() == [30.0, 20.0, 10.0]
     assert tensor[0, :, 300, 0].tolist() == [114.0, 114.0, 114.0]
+
+
+def test_explicit_v03_uses_its_versioned_gcs_path_not_production_override(monkeypatch):
+    monkeypatch.setenv("GCS_BUCKET", "yujian-model-factory-571785698442")
+    monkeypatch.setenv("DETECTOR_ONNX_URI", "gs://prod-bucket/production/custom.onnx")
+    monkeypatch.setattr(detector_runtime, "DETECTOR_MODEL_VERSION", "DET_FISH_v0.1")
+
+    assert _artifact_uri("DET_FISH_v0.3") == (
+        "gs://yujian-model-factory-571785698442/models/DET_FISH_v0.3/"
+        "fish_detector_yolox_nano_v0_1.onnx"
+    )
+
+
+def test_explicit_v03_inference_uses_requested_model_without_production_fallback(monkeypatch):
+    requested = []
+
+    class FakeSession:
+        def run(self, _outputs, _feeds):
+            return [np.zeros((1, 1, 6), dtype=np.float32)]
+
+    model = SimpleNamespace(
+        model_version="DET_FISH_v0.3",
+        onnx_sha256="d" * 64,
+        input_size=416,
+        input_name="images",
+        session=FakeSession(),
+    )
+
+    def load_selected(version):
+        requested.append(version)
+        return model
+
+    monkeypatch.setattr(detector_runtime, "DETECTOR_MODEL_VERSION", "DET_FISH_v0.1")
+    monkeypatch.setattr(detector_runtime, "load_detector_for_version", load_selected)
+    image = Image.new("RGB", (100, 200), (10, 20, 30))
+    run = detect(image, model_version="DET_FISH_v0.3")
+
+    assert requested == ["DET_FISH_v0.3"]
+    assert run.model_version == "DET_FISH_v0.3"
+    assert run.onnx_sha256 == "d" * 64
+
+
+def test_v03_loader_rejects_metadata_for_a_different_dataset(monkeypatch):
+    import hashlib
+    import json
+    import sys
+
+    model_bytes = b"test-onnx-model"
+    contract = {"detector": {"input_size": 416}}
+    metadata = {
+        "model_version": "DET_FISH_v0.3",
+        "dataset_version": "DET_DS_v0.2",
+        "model_family": "YOLOX_NANO",
+        "onnx_sha256": hashlib.sha256(model_bytes).hexdigest(),
+        "onnx_bytes": len(model_bytes),
+        "onnx": {"input_shape": [1, 3, 416, 416]},
+    }
+    uri = "gs://test-bucket/models/DET_FISH_v0.3/fish_detector_yolox_nano_v0_1.onnx"
+    downloads = {
+        uri: model_bytes,
+        "gs://test-bucket/models/DET_FISH_v0.3/detector_metadata.json": json.dumps(metadata).encode(),
+        "gs://test-bucket/models/DET_FISH_v0.3/recognition_pipeline_v1.json": json.dumps(contract).encode(),
+    }
+    monkeypatch.setattr(detector_runtime, "_artifact_uri", lambda _version: uri)
+    monkeypatch.setattr(detector_runtime, "_download_bytes", lambda _client, artifact: downloads[artifact])
+    monkeypatch.setattr(detector_runtime.storage, "Client", lambda: object())
+    monkeypatch.setattr(detector_runtime, "load_contract", lambda: contract)
+    monkeypatch.setitem(sys.modules, "onnxruntime", SimpleNamespace())
+
+    with pytest.raises(DetectorRuntimeError, match="dataset version mismatch"):
+        detector_runtime._load_detector_version("DET_FISH_v0.3")
 
 
 def test_android_source_normalization_applies_max_dimension_before_detector():
