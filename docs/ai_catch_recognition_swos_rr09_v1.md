@@ -19,13 +19,19 @@
 
 阶段 0 与本功能必须保持独立。此 PR 不复制 App 中的 SWOS/RR09 合同，不修改历史 RR09 V2，也不将未采纳提案声明为生产权威。
 
+## 1.1 视觉与照片素材来源
+
+- Library 中可读取到 `渔见高科技识别界面展示.png` 和 `渔见鱼获识别六屏展示.png`。两项都标记为模型生成图；仅用于内部方向参考，未复制进仓库或作为可发布产品照片。
+- 用户指定的 `208758.jpg` 未在可访问 Library 搜到，仓库也无该文件；本次未获得该图的 SHA 实测、裁切验证或线上推理结果。
+- 最新 `main` 新增的 Chromium display fixture 有 CC BY-SA 3.0 / CC BY 4.0 来源记录。本 PR 的新增浏览器 smoke 只在 CI 下载并临时缩放这些公开照片，截图明确贴有 `UI_SIMULATION_ONLY`，不将模拟模型结果当成真实识别。
+
 ## 2. 当前已接线行为
 
 ### Web 页面
 
 - 新页面：`/platform/model/catch-recognition`，按现行 `PLATFORM_PAGES` 注册，沿用 Platform V1 外壳和导航。
 - 页面明确说明本次识别不保存照片；只有用户点击保存并完成鱼获账户认证后，才调用既有 catch 图片上传和保存接口。
-- 没有随仓库发布的示例鱼获照片，因为已检查素材未找到可核验的公开使用授权。未上传或复制 `208758.jpg`、私有截图或模型测试照片。
+- 产品页面不打包示例照片。最新 `main` 中的两张 CC 授权照片只用于隔离的 Chromium 显示测试，不被注册为产品样例或默认推理输入。未上传或复制 `208758.jpg`、私有截图或模型测试照片。
 - 原图浏览、推理、真实检测框调试开关和结果照片复用浏览器本地同一 Blob URL。精确鱼体轮廓保持关闭。
 - 识别结果从实际 `/api/product/catch-recognition/infer` 响应更新。MEDIUM / LOW 需要人工选择目录鱼种；无鱼、质量问题或技术错误不播放成功揭晓。
 - “继续记录记忆”保持禁用，因为仓库没有已登记的 Web 记忆目标页面。
@@ -106,12 +112,12 @@
 | Gate | 当前状态 | 依据 |
 |---|---|---|
 | G0 产品 Control Plane Admission | `BLOCKED` | 本仓库无已登记 Admission；App #186/#187 尚未采纳；不能互借 App 候选分支 PASS |
-| G1 Web 页面 / 导航接线 | `IMPLEMENTED`，待浏览器预览 | 页面注册、侧栏入口和单页真实推理工作区已加入 |
+| G1 高保真复用 | `PARTIAL` | 页面已挂入 Platform V1 并保留上传、识别、结果表单结构；仓库内没有冻结产品 Hi-Fi 权威，Library 图片为模型生成方向图，App #186/#187 仍未采纳，不能声称像素级高保真或合同已对齐 |
 | G2 真实在线模型推理 | `BLOCKED` | 已有推理流水线被代码复用，但最新 PR #176 报告 UAT `Failed to fetch` / Revision SHA 不一致，本次没有真实服务响应 |
 | G3 SAM ViT-B 生产资格 | `BLOCKED` | 无生产权重与授权参考 Mask 评测集，无分割质量报告 |
 | G4 15 帧时序静态契约 | `CONTRACT_PASS`（代码常量检查） | Processing 8 帧 + RR09 7 帧；总时长 3650ms；R0.5=100ms、R1=200ms |
 | G5 结果保存路径 | `IMPLEMENTED`，未做云端写入测试 | 仅显式保存后使用 App Bearer API；没有登录凭据或 GCS 写入验证 |
-| G6 Chromium / 多真实照片视觉验收 | `NOT_RUN` | 没有公开许可测试照，本次也未部署 PR preview；无 Chromium 截图/录屏证据 |
+| G6 Chromium / 多真实照片视觉验收 | `PENDING PR CI` | 新增 CI Chromium harness 使用有来源的公开照片和明确模拟 API，覆盖 1440px、390px、320px、照片身份、R0.5 几何中点、3650ms 揭晓和错误不成功；本地无 Chromium，PR CI 尚未执行；真实推理与线上预览仍未验证 |
 | G7 Draft PR CI | 待本地检查后执行 | PR 尚未创建 |
 | G8 动态方案可执行性 | `DESIGNED` | 见第 6 节；WebGL/Canvas 性能尚未测，不能声称选型已验证 |
 

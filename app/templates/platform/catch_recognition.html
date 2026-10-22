@@ -81,7 +81,8 @@
 {% endblock %}
 
 {% block content %}
-<div class="catch-page" id="catchRecognitionApp" data-api="/api/product/catch-recognition/infer">
+<div class="catch-page" id="catchRecognitionApp" data-api="{{ catch_api_url|default('/api/product/catch-recognition/infer') }}" data-ui-simulation="{{ 'true' if ui_simulation else 'false' }}">
+  {% if ui_simulation %}<div class="catch-notice" role="note" style="border-color:#e8b7ae;background:#fff1ee;color:#913d34"><strong>UI_SIMULATION_ONLY</strong><span>仅用于 Chromium 排版与交互验收；此页面没有调用生产模型，也不代表真实识别结果。</span></div>{% endif %}
   <div class="page-heading"><div><h1>AI渔获识别</h1><p>上传真实鱼获照片，查看当前生产模型返回的识别结果。</p></div><div class="page-actions"><a class="button" href="/platform/model/registry">查看生产模型</a></div></div>
   <p class="catch-intro">从真实照片开始，依次完成鱼体定位、质量检查、标准 Crop 和鱼种分类。处理较慢时会继续等待实际结果，不用动画时间代替识别状态。</p>
   <div class="catch-notice"><span aria-hidden="true">◈</span><div><strong>照片处理说明</strong> 识别请求仅用于本次推理；推理接口不写入图片存储。点击“保存本次鱼获”后，照片才会上传到你的鱼获记录。当前没有登记公开使用许可的示例照片。</div></div>
@@ -102,7 +103,7 @@
         <div class="catch-upload-preview" id="catchUploadPreview"><img id="catchUploadPhoto" alt="已选择的鱼获照片"></div>
         <div class="catch-file-meta" id="catchFileMeta" hidden><strong id="catchFileName">—</strong><span id="catchFileSize">—</span></div>
         <div class="catch-upload-actions"><button class="catch-button primary" id="catchStartButton" type="button" disabled>开始识别</button><button class="catch-button" id="catchClearButton" type="button" disabled>清除照片</button></div>
-        <div class="catch-example-note">示例照片暂不可用：现有素材没有可核验的公开使用授权。上传自己的照片即可继续。</div>
+        <div class="catch-example-note">产品示例照片暂未登记。仓库内带授权记录的照片仅供隔离的浏览器测试，不会作为产品样例上传。你可以选择自己的照片继续。</div>
       </div>
     </section>
 
@@ -127,7 +128,7 @@
       </div>
     </section>
 
-    <section class="catch-panel" data-stage="result" data-business-state="idle" aria-labelledby="catchResultHeading">
+    <section class="catch-panel" id="catchResultPanel" data-stage="result" data-business-state="idle" aria-labelledby="catchResultHeading">
       <div class="catch-panel-head"><div><span class="catch-panel-kicker">03 · RECOGNITION RESULT</span><h2 id="catchResultHeading">识别结果</h2><p>仅在真实分类结果就绪后显示</p></div><span class="status-tag status-neutral" id="catchResultBadge">等待识别</span></div>
       <div class="catch-panel-body">
         <div class="catch-empty-state" id="catchResultEmpty"><div><span class="catch-empty-icon" aria-hidden="true">🐟</span><strong>结果会显示在这里</strong><br>识别状态由真实模型响应决定。</div></div>

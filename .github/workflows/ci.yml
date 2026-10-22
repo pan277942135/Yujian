@@ -144,10 +144,24 @@ jobs:
           DET_FISH_LANDSCAPE_PHOTO: ${{ runner.temp }}/det-fish-display/landscape.jpg
           DET_FISH_PORTRAIT_PHOTO: ${{ runner.temp }}/det-fish-display/portrait.jpg
         run: python scripts/smoke_det_fish_display_chromium.py
+      - name: Run AI catch recognition Chromium UI simulation only
+        env:
+          DET_FISH_LANDSCAPE_PHOTO: ${{ runner.temp }}/det-fish-display/landscape.jpg
+          DET_FISH_PORTRAIT_PHOTO: ${{ runner.temp }}/det-fish-display/portrait.jpg
+        run: python scripts/smoke_catch_recognition_chromium.py
       - name: Upload Chromium screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: det-fish-display-chromium-${{ github.run_id }}
           path: test-results/det-fish-display/*.png
+          if-no-files-found: warn
+      - name: Upload catch recognition UI simulation screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: catch-recognition-chromium-ui-simulation-${{ github.run_id }}
+          path: |
+            test-results/catch-recognition-chromium/*.png
+            test-results/catch-recognition-chromium/render-capabilities.json
           if-no-files-found: warn
