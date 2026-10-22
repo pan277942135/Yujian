@@ -23,7 +23,7 @@ env:
   SERVICE: yujian-model-factory-console
   PR_NUMBER: '177'
   TARGET_SHA: 7da5c1100d981cfe88317b39b5b95713bdba91d7
-  TAG: catch-recognition-pr177
+  TAG: catch-pr177
   WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
   DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
   BUILD_SERVICE_ACCOUNT: projects/gemini-api-project-503706/serviceAccounts/571785698442-compute@developer.gserviceaccount.com
@@ -135,7 +135,7 @@ jobs:
                 for t in traffic if t.get("percent",0)>0]
           before=json.load(open(sys.argv[2]))
           assert sorted(live,key=lambda x:x["revision"] or "")==before, "default traffic changed"
-          tagged=next((t for t in traffic if t.get("tag")=="catch-recognition-pr177"),None)
+          tagged=next((t for t in traffic if t.get("tag")=="catch-pr177"),None)
           assert tagged and tagged.get("url") and tagged.get("revisionName"), "missing tagged URL/revision"
           assert tagged.get("percent",0)==0, "preview unexpectedly receives default traffic"
           import os
