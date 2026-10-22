@@ -22,7 +22,8 @@ env:
   REGION: asia-east1
   SERVICE: yujian-model-factory-console
   PR_NUMBER: '177'
-  TARGET_SHA: 7da5c1100d981cfe88317b39b5b95713bdba91d7
+  EXPECTED_BRANCH: feat/ai-catch-recognition-web-swos-rr09-v1
+  TARGET_SHA: c42333569124f1ed075b565e955e7bbc4151cc1f
   TAG: catch-pr177
   WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
   DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
@@ -50,9 +51,26 @@ jobs:
           assert pr["state"] == "open" and pr["merged_at"] is None, "PR must be open/unmerged"
           assert pr["base"]["ref"] == "main", "PR base changed"
           assert pr["head"]["repo"]["full_name"] == repository, "cross-repository PR is forbidden"
+          assert pr["head"]["ref"] == os.environ["EXPECTED_BRANCH"], "unexpected source branch"
           assert pr["head"]["sha"] == expected, "PR HEAD changed; stop and re-approve"
           print("Exact PR HEAD verified:", expected)
           '
+          # Read exact-source CI before allowing the existing main-only cloud authentication.
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${TARGET_SHA}&event=pull_request&per_page=100" > "$RUNNER_TEMP/source-ci.json"
+          python3 - "$RUNNER_TEMP/source-ci.json" <<'PYCODE'
+          import json,os,sys
+          runs=json.load(open(sys.argv[1])).get("workflow_runs",[])
+          candidates=[r for r in runs if r.get("head_sha")==os.environ["TARGET_SHA"]
+                      and r.get("head_repository",{}).get("full_name")==os.environ["GITHUB_REPOSITORY"]
+                      and r.get("head_branch")==os.environ["EXPECTED_BRANCH"]
+                      and r.get("path")==".github/workflows/ci.yml"]
+          assert candidates, "No exact-source PR CI exists"
+          latest=max(candidates,key=lambda r:r["id"])
+          assert latest["status"]=="completed" and latest["conclusion"]=="success", "Latest exact-source necessary CI has not passed"
+          with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as f:
+              f.write("- Exact-source CI: "+latest["html_url"]+"\n")
+              f.write("- Scope: B1 targeted checks and Chromium UI simulation; full-suite metadata review remains BLOCKED\n")
+          PYCODE
           {
             echo "## PR #177 tagged-preview source"
             echo "- Source SHA: $TARGET_SHA"
