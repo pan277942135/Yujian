@@ -1,7 +1,7 @@
 # PR177 B1 preview source promotion
 
 Base main: 1d01231477645f5b888b8815c5602576dac90c61.
-Approved candidate source: c42333569124f1ed075b565e955e7bbc4151cc1f (PR177, same repository, expected branch).
+Approved candidate source: 655c4af07a0244fcf29441b5652c48ca74f2e6a2 (PR177, same repository, expected branch).
 
 This infrastructure-only change updates the existing fixed SHA, verifies the expected branch, and requires the latest exact-source ci.yml PR run to succeed before the existing main-only cloud authentication. It preserves the service, WIF/provider/service-account boundaries, catch-pr177 tag, --no-traffic, default traffic equality check and health SHA/Revision verification.
 
