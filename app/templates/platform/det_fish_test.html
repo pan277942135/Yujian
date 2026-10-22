@@ -51,6 +51,7 @@
 {% block scripts %}
 <script>
 let detTestPreviewUrl=null;
+let detTestOverlayPreviewUrl=null;
 let detTestModels=[];
 function detTestReady(){return Boolean(document.getElementById('detTestModel').value&&document.getElementById('detTestFile').files&&document.getElementById('detTestFile').files[0]);}
 function updateDetTestButton(){document.getElementById('detTestRun').disabled=!detTestReady();}
@@ -80,13 +81,19 @@ document.getElementById('detTestFile').addEventListener('change',function(){
 function fmtDetNumber(value,digits){return value==null?'—':Number(value).toFixed(digits===undefined?4:digits);}
 function renderDetTestResult(data){
   const detector=data.detector||{},input=data.input||{},modelInput=data.model_input||{},detections=detector.detections||[];
-  const overlay=document.getElementById('detTestOverlay');overlay.src=data.overlay_data_url;overlay.hidden=false;document.getElementById('detTestOverlayEmpty').hidden=true;
+  const overlay=document.getElementById('detTestOverlay');if(detTestOverlayPreviewUrl)URL.revokeObjectURL(detTestOverlayPreviewUrl);detTestOverlayPreviewUrl=detTestDataUrlToObjectUrl(data.overlay_data_url);overlay.src=detTestOverlayPreviewUrl;overlay.hidden=false;document.getElementById('detTestOverlayEmpty').hidden=true;
   document.getElementById('detTestResultMeta').textContent=data.model_version+' · 原图 '+input.oriented_width+'×'+input.oriented_height+' · 检测源图 '+input.width+'×'+input.height+' · 模型输入 '+(modelInput.width||'—')+'×'+(modelInput.height||'—')+' · '+fmtDetNumber(detector.latency_ms,1)+' ms';
   document.getElementById('detTestSummary').innerHTML='<div class="stat-grid" style="margin-top:14px"><div class="stat"><strong>'+esc(detector.assessment||'—')+'</strong><span>检测门禁</span></div><div class="stat"><strong>'+esc(detections.length)+'</strong><span>BBox 数量</span></div><div class="stat"><strong>'+esc(detector.confidence==null?'—':fmtDetNumber(detector.confidence,4))+'</strong><span>主框置信度</span></div></div><div class="muted" style="font-size:12px;margin-top:10px">模型张量：'+esc(JSON.stringify(modelInput.shape||null))+' · '+esc(modelInput.dtype||'—')+' '+esc(modelInput.layout||'')+' · Letterbox 内容 '+esc(modelInput.resized_content_width||'—')+'×'+esc(modelInput.resized_content_height||'—')+' · 填充值 '+esc(modelInput.letterbox_fill==null?'—':modelInput.letterbox_fill)+'</div><div class="muted" style="font-size:12px;margin-top:6px;word-break:break-all">ONNX SHA-256：'+esc(data.onnx_sha256||'—')+'</div><div class="muted" style="font-size:12px;margin-top:5px">主框像素坐标：'+esc(JSON.stringify(detector.bbox_pixel||null))+' · 归一化 XYWH：'+esc(JSON.stringify(detector.bbox_normalized_xywh||null))+'</div>';
   if(!detections.length){document.getElementById('detTestBoxes').innerHTML='<div class="empty">没有检测到满足生产门槛的 BBox。该结果不代表图片中绝对没有鱼。</div>';}
   else{document.getElementById('detTestBoxes').innerHTML='<div class="table-wrap"><table class="data-table"><thead><tr><th>Rank</th><th>Confidence</th><th>原图像素 BBox [x1,y1,x2,y2]</th><th>推理栅格 BBox</th><th>归一化 BBox [x,y,w,h]</th><th>面积占比</th></tr></thead><tbody>'+detections.map(row=>'<tr><td>'+esc(row.rank)+'</td><td>'+esc(fmtDetNumber(row.confidence,6))+'</td><td><code>'+esc(JSON.stringify(row.bbox_pixel))+'</code></td><td><code>'+esc(JSON.stringify(row.bbox_pixel_input))+'</code></td><td><code>'+esc(JSON.stringify(row.bbox_normalized_xywh))+'</code></td><td>'+esc(fmtDetNumber(row.bbox_area_ratio*100,2))+'%</td></tr>').join('')+'</tbody></table></div>';}
   const attempts=detector.attempts||[];
   document.getElementById('detTestTrace').innerHTML='<div class="stat-grid">'+attempts.map(row=>'<div class="stat"><strong>'+esc(row.orientation_attempt)+'</strong><span>'+esc(row.quality_status)+' / '+esc(row.quality_level)+'</span><span>'+esc(row.detection_count)+' boxes · Top '+esc(fmtDetNumber(row.top_confidence,4))+'</span></div>').join('')+'</div><div class="notice" style="margin-top:12px">最终选择：'+esc(detector.selected_orientation||'—')+' · '+esc(detector.selection_reason||'—')+'<br>判断原因：'+esc(detector.reason||'—')+'</div>';
+}
+function detTestDataUrlToObjectUrl(dataUrl){
+  const comma=dataUrl.indexOf(',');if(comma<0)throw new Error('检测结果图片格式无效');
+  const metadata=dataUrl.slice(5,comma);if(!metadata.startsWith('image/')||!metadata.endsWith(';base64'))throw new Error('检测结果图片格式无效');
+  const bytes=Uint8Array.from(atob(dataUrl.slice(comma+1)),character=>character.charCodeAt(0));
+  return URL.createObjectURL(new Blob([bytes],{type:metadata.slice(0,metadata.indexOf(';'))}));
 }
 document.getElementById('detTestRun').addEventListener('click',async function(){
   const file=document.getElementById('detTestFile').files[0];if(!file)return;

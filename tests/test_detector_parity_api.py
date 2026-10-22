@@ -71,6 +71,8 @@ def test_det_fish_test_previews_preserve_image_ratio_and_collapse_on_narrow_scre
 
     assert 'class="form-grid det-fish-test-grid"' in template
     assert template.count("bbox-preview det-fish-image-preview") == 2
+    assert "detTestDataUrlToObjectUrl(data.overlay_data_url)" in template
+    assert "URL.revokeObjectURL(detTestOverlayPreviewUrl)" in template
     assert ".det-fish-image-preview { aspect-ratio: auto;" in template
     assert "max-width: 100%;" in template
     assert "max-height: 70vh;" in template
