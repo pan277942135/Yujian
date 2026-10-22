@@ -79,6 +79,7 @@ def test_det_fish_test_previews_preserve_image_ratio_and_collapse_on_narrow_scre
     assert "object-fit: contain;" in template
     assert "width: auto;" in template
     assert "height: auto;" in template
+    assert ".det-fish-image-preview img[hidden] { display: none; }" in template
     assert "@media (max-width: 780px)" in template
     assert "grid-template-columns: minmax(0, 1fr);" in template
 
