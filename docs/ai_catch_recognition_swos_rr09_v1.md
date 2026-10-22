@@ -118,7 +118,7 @@
 | G4 15 帧时序静态契约 | `CONTRACT_PASS`（代码常量检查） | Processing 8 帧 + RR09 7 帧；总时长 3650ms；R0.5=100ms、R1=200ms |
 | G5 结果保存路径 | `IMPLEMENTED`，未做云端写入测试 | 仅显式保存后使用 App Bearer API；没有登录凭据或 GCS 写入验证 |
 | G6 Chromium / 多尺寸静态 UI 验收 | `DESIGN_MANAGER_PREVIEW_PASS`（仅模拟 UI） | CI run [39752785877](https://github.com/pan277942135/Yujian/actions/runs/39752785877) 的 Chromium job 通过：1440×1000 桌面、390×844 手机、320×480 窄屏；结果态、照片选择、失败不揭晓均使用显式 `UI_SIMULATION_ONLY` 响应。人工复核桌面与手机结果截图，确认成功结果不再残留空态占位。截图与 `render-capabilities.json` 在 PR CI artifact `catch-recognition-chromium-ui-simulation-39752785877`；该证据不代表真实模型调用或生产推理通过 |
-| G7 Draft PR CI | `PASS`（当前代码提交） | 独立 Draft PR [#177](https://github.com/pan277942135/Yujian/pull/177) 已创建且未合并；run [39752785877](https://github.com/pan277942135/Yujian/actions/runs/39752785877) 的 `validate` 与 `det-fish-display-chromium` 两个 job 均通过，包含全量生产流水线测试与 UI-only Chromium harness |
+| G7 Draft PR CI | `PASS`（最新功能代码及 Chromium 断言） | 独立 Draft PR [#177](https://github.com/pan277942135/Yujian/pull/177) 已创建且未合并；最新验证 run [39753400134](https://github.com/pan277942135/Yujian/actions/runs/39753400134) 的 `validate` 与 `det-fish-display-chromium` 两个 job 均通过，包含全量生产流水线测试和成功结果空态回归断言。截图人工复核见前一视觉工件 run [39752785877](https://github.com/pan277942135/Yujian/actions/runs/39752785877) |
 | G8 动态方案可执行性 | `DESIGNED` | 见第 6 节；WebGL/Canvas 性能尚未测，不能声称选型已验证 |
 
 ### 明确未运行
