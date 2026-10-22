@@ -1,0 +1,178 @@
+name: AI Catch Recognition PR177 Tagged Preview
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/catch-recognition-pr177-no-traffic-deploy.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+  id-token: write
+
+concurrency:
+  group: yujian-catch-recognition-pr177-no-traffic
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: gemini-api-project-503706
+  REGION: asia-east1
+  SERVICE: yujian-model-factory-console
+  PR_NUMBER: '177'
+  TARGET_SHA: 7da5c1100d981cfe88317b39b5b95713bdba91d7
+  TAG: catch-recognition-pr177
+  WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+  DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+  BUILD_SERVICE_ACCOUNT: projects/gemini-api-project-503706/serviceAccounts/571785698442-compute@developer.gserviceaccount.com
+  RUNTIME_SERVICE_ACCOUNT: yujian-model-factory@gemini-api-project-503706.iam.gserviceaccount.com
+
+jobs:
+  preflight:
+    if: github.repository == 'pan277942135/Yujian' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify exact approved same-repository PR HEAD
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          PR_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
+          printf '%s' "$PR_JSON" | python3 -c '
+          import json, os, sys
+          pr=json.load(sys.stdin)
+          expected=os.environ["TARGET_SHA"]
+          repository=os.environ["GITHUB_REPOSITORY"]
+          assert pr["state"] == "open" and pr["merged_at"] is None, "PR must be open/unmerged"
+          assert pr["base"]["ref"] == "main", "PR base changed"
+          assert pr["head"]["repo"]["full_name"] == repository, "cross-repository PR is forbidden"
+          assert pr["head"]["sha"] == expected, "PR HEAD changed; stop and re-approve"
+          print("Exact PR HEAD verified:", expected)
+          '
+          {
+            echo "## PR #177 tagged-preview source"
+            echo "- Source SHA: `$TARGET_SHA`"
+            echo "- PR: #$PR_NUMBER (open, same repository, exact HEAD)"
+            echo "- Deployment: fixed Cloud Run service, --no-traffic, fixed tag"
+            echo "- User-uploaded photos and real inference: not exercised by workflow"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact approved PR source SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify source SHA and credential exclusion
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          grep -Fqx 'gha-creds-*.json' .gcloudignore
+          grep -Fqx 'gha-creds-*.json' .gitignore
+          test -f app/catch_recognition_api.py
+          test -f app/templates/platform/catch_recognition.html
+          test -f app/static/js/catch_recognition.js
+          echo "Exact source and build-context credential exclusions verified"
+
+      - name: Authenticate to GCP (existing main-only WIF)
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          version: '>= 416.0.0'
+
+      - name: Snapshot default traffic and deploy fixed tagged no-traffic revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > "$RUNNER_TEMP/before.json"
+          python3 - "$RUNNER_TEMP/before.json" "$RUNNER_TEMP/default-traffic.json" <<'PY'
+          import json,sys
+          d=json.load(open(sys.argv[1]))
+          traffic=[{"revision":t.get("revisionName"),"percent":t.get("percent",0)}
+                   for t in d.get("status",{}).get("traffic",[]) if t.get("percent",0)>0]
+          json.dump(sorted(traffic,key=lambda x:x["revision"] or ""),open(sys.argv[2],"w"))
+          PY
+
+          gcloud run deploy "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --source . \
+            --build-service-account "$BUILD_SERVICE_ACCOUNT" \
+            --service-account "$RUNTIME_SERVICE_ACCOUNT" \
+            --cpu 1 \
+            --memory 4Gi \
+            --timeout=1200s \
+            --no-cpu-throttling \
+            --update-env-vars="APP_GIT_COMMIT=$TARGET_SHA" \
+            --no-traffic \
+            --tag "$TAG" \
+            --quiet
+
+          gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > "$RUNNER_TEMP/after.json"
+          python3 - "$RUNNER_TEMP/after.json" "$RUNNER_TEMP/default-traffic.json" <<'PY'
+          import json,sys
+          d=json.load(open(sys.argv[1]))
+          traffic=d.get("status",{}).get("traffic",[])
+          live=[{"revision":t.get("revisionName"),"percent":t.get("percent",0)}
+                for t in traffic if t.get("percent",0)>0]
+          before=json.load(open(sys.argv[2]))
+          assert sorted(live,key=lambda x:x["revision"] or "")==before, "default traffic changed"
+          tagged=next((t for t in traffic if t.get("tag")=="catch-recognition-pr177"),None)
+          assert tagged and tagged.get("url") and tagged.get("revisionName"), "missing tagged URL/revision"
+          assert tagged.get("percent",0)==0, "preview unexpectedly receives default traffic"
+          import os
+          with open(os.environ["GITHUB_ENV"],"a") as f:
+              f.write("PREVIEW_URL="+tagged["url"]+"\n")
+              f.write("PREVIEW_REVISION="+tagged["revisionName"]+"\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as f:
+              f.write("## No-traffic deployment\n")
+              f.write("- Preview URL: "+tagged["url"]+"/platform/model/catch-recognition\n")
+              f.write("- Revision: `"+tagged["revisionName"]+"`\n")
+              f.write("- Source SHA: `"+os.environ["TARGET_SHA"]+"`\n")
+              f.write("- Existing default traffic: unchanged\n")
+          PY
+
+      - name: No-image route and revision smoke (no private photos)
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS --retry 4 --retry-all-errors --retry-delay 3 --max-time 30 "$PREVIEW_URL/health/deploy" > "$RUNNER_TEMP/deploy.json"
+          python3 - "$RUNNER_TEMP/deploy.json" <<'PY'
+          import json,os,sys
+          d=json.load(open(sys.argv[1]))
+          assert d.get("status")=="ok", d.get("status")
+          assert d.get("git_commit")==os.environ["TARGET_SHA"], "health SHA mismatch"
+          assert d.get("revision")==os.environ["PREVIEW_REVISION"], "revision mismatch"
+          PY
+          LOGIN="$(curl --max-time 30 -sS -o /dev/null -w '%{http_code}' "$PREVIEW_URL/login")"
+          test "$LOGIN" = 200
+          PAGE="$(curl --max-time 30 -sS -o /dev/null -w '%{http_code}' "$PREVIEW_URL/platform/model/catch-recognition")"
+          if [[ "$PAGE" != "303" && "$PAGE" != "200" ]]; then
+            echo "Preview route returned unexpected HTTP $PAGE" >&2
+            exit 1
+          fi
+          {
+            echo "## No-image smoke"
+            echo "- /health/deploy exact SHA and revision: PASS"
+            echo "- /login HTTP 200: PASS"
+            echo "- Page unauthenticated status: HTTP $PAGE (200 or expected login redirect)"
+            echo "- Authenticated page, photo upload, live model inference: NOT_RUN"
+          } >> "$GITHUB_STEP_SUMMARY"
