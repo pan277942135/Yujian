@@ -228,13 +228,15 @@ def main() -> None:
                           const source = document.querySelector('#catchProcessingMedia').getBoundingClientRect();
                           const target = document.querySelector('#catchResultMedia').getBoundingClientRect();
                           const moving = document.querySelector('.catch-transition-photo').getBoundingClientRect();
-                          const midpoint = value => (value[0] + value[1]) / 2;
+                          const progress = Number(document.querySelector('.catch-transition-photo').dataset.progress);
+                          const atProgress = (from, to) => from + (to - from) * progress;
                           return {
-                            progress: Number(document.querySelector('.catch-transition-photo').dataset.progress),
-                            leftError: Math.abs(moving.left - midpoint([source.left, target.left])),
-                            topError: Math.abs(moving.top - midpoint([source.top, target.top])),
-                            widthError: Math.abs(moving.width - midpoint([source.width, target.width])),
-                            heightError: Math.abs(moving.height - midpoint([source.height, target.height])),
+                            progress,
+                            elapsedMs: progress * 200,
+                            leftError: Math.abs(moving.left - atProgress(source.left, target.left)),
+                            topError: Math.abs(moving.top - atProgress(source.top, target.top)),
+                            widthError: Math.abs(moving.width - atProgress(source.width, target.width)),
+                            heightError: Math.abs(moving.height - atProgress(source.height, target.height)),
                           };
                         }"""
                     )
