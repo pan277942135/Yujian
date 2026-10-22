@@ -267,20 +267,20 @@ SERVICE_JSON="$(gcloud run services describe "$SERVICE" \
   --region "$REGION" \
   --format=json)"
 
-SERVICE_URL="$(printf '%s' "$SERVICE_JSON" | python -c 'import json,sys; print(json.load(sys.stdin)["status"]["url"])')"
 REVISION="$(printf '%s' "$SERVICE_JSON" | python -c 'import json,sys; print(json.load(sys.stdin)["status"]["latestReadyRevisionName"])')"
-DEPLOYED_SHA="$(printf '%s' "$SERVICE_JSON" | python -c '
-import json,sys
-d=json.load(sys.stdin)
-containers=((d.get("spec") or {}).get("template") or {}).get("spec",{}).get("containers") or []
-env=(containers[0].get("env") if containers else []) or []
-print(next((x.get("value","") for x in env if x.get("name")=="APP_GIT_COMMIT"), ""))
-')"
-
-if [[ "$DEPLOYED_SHA" != "$GIT_SHA" ]]; then
-  echo "Cloud Run service template SHA mismatch: expected ${GIT_SHA}, got ${DEPLOYED_SHA:-<empty>}" >&2
-  exit 1
-fi
+# Service status.url follows default traffic, which may deliberately exclude the
+# new zero-traffic candidate. Verify the revision itself and resolve its tag URL.
+TARGET_DIR="$(mktemp -d)"
+trap 'rm -rf "$TARGET_DIR"' EXIT
+printf '%s' "$SERVICE_JSON" > "$TARGET_DIR/service.json"
+gcloud run revisions describe "$REVISION" --project "$PROJECT_ID" --region "$REGION" --format=json > "$TARGET_DIR/revision.json"
+python3 scripts/cloud_run_deploy_target.py \
+  --service-json "$TARGET_DIR/service.json" \
+  --revision-json "$TARGET_DIR/revision.json" \
+  --expected-sha "$GIT_SHA" > "$TARGET_DIR/target.json"
+SERVICE_URL="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["service_url"])' "$TARGET_DIR/target.json")"
+DEPLOYED_SHA="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["git_commit"])' "$TARGET_DIR/target.json")"
+printf 'Resolved exact revision smoke URL: %s\n' "$SERVICE_URL"
 
 log "Online basic health smoke"
 BASIC_HEALTH="$(curl --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 30 -fsS "${SERVICE_URL}/health")"

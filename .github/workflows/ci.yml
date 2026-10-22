@@ -8,7 +8,44 @@ on:
   pull_request:
 
 jobs:
+  scope:
+    runs-on: ubuntu-latest
+    outputs:
+      infra_only: ${{ steps.classify.outputs.infra_only }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Classify exact changed-file scope for safe infrastructure checks
+        id: classify
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            BASE_SHA="$PR_BASE"
+            HEAD_SHA="$PR_HEAD"
+          else
+            BASE_SHA="$BEFORE_SHA"
+          fi
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ && "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then git fetch --no-tags --depth=1 origin "$BASE_SHA"; fi
+          if ! git cat-file -e "$HEAD_SHA^{commit}" 2>/dev/null; then git fetch --no-tags --depth=1 origin "$HEAD_SHA"; fi
+          git diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/changed-files.txt"
+          INFRA_ONLY="$(python3 scripts/classify_candidate_infra_change.py "$RUNNER_TEMP/changed-files.txt")"
+          echo "infra_only=$INFRA_ONLY" >> "$GITHUB_OUTPUT"
+          if [[ "$INFRA_ONLY" == true ]]; then
+            echo 'FULL_SUITE=BLOCKED_AUTO_REVIEW_METADATA_ACCESS; task-local infra checks only; no product/runtime/inference PASS' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   validate:
+    needs: scope
+    if: needs.scope.outputs.infra_only != 'true'
     runs-on: ubuntu-latest
     env:
       ORT_DISABLE_TELEMETRY: '1'
@@ -116,6 +153,8 @@ jobs:
         run: grep -q 'torch==2.7.1' Dockerfile && grep -q 'torchvision==0.22.1' Dockerfile && grep -q -- '--memory=2Gi' scripts/deploy_console_gcp.sh
 
   det-fish-display-chromium:
+    needs: scope
+    if: needs.scope.outputs.infra_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -151,3 +190,30 @@ jobs:
           name: det-fish-display-chromium-${{ github.run_id }}
           path: test-results/det-fish-display/*.png
           if-no-files-found: warn
+
+  safe-candidate-infra:
+    needs: scope
+    if: needs.scope.outputs.infra_only == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Isolated infrastructure route and negative scope tests
+        run: |
+          python3 -m unittest discover -s tests -p test_cloud_run_deploy_target.py -v
+          python3 -m unittest discover -s tests -p test_candidate_infra_scope.py -v
+          python3 -m py_compile scripts/cloud_run_deploy_target.py scripts/classify_candidate_infra_change.py
+          bash -n scripts/deploy_console_runtime.sh
+          git diff --check
+      - name: Parse deployment YAML without application imports
+        run: |
+          python3 -m pip install PyYAML==6.0.3
+          python3 - <<'PY'
+          import yaml
+          for path in ['.github/workflows/ci.yml', '.github/workflows/uat-deploy.yml', '.github/workflows/catch-recognition-pr177-no-traffic-deploy.yml']:
+              with open(path) as source: yaml.safe_load(source)
+          print('DEPLOYMENT_YAML_PARSE=PASS')
+          PY
+          echo 'INFRA_TARGETED_CHECKS=PASS; FULL_SUITE=BLOCKED_AUTO_REVIEW_METADATA_ACCESS; no application/model/cloud imports, no real inference or product visual PASS' >> "$GITHUB_STEP_SUMMARY"

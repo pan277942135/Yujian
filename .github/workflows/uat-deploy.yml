@@ -61,6 +61,7 @@ jobs:
           WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
           WORKFLOW_HEAD_MESSAGE: ${{ github.event.workflow_run.head_commit.message }}
           DISPATCH_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -78,6 +79,28 @@ jobs:
           else
             DEPLOY_SHA="$DISPATCH_SHA"
             CI_OK=true
+          fi
+
+          # Infrastructure-only source/pin changes must use their dedicated
+          # zero-traffic workflow. Commit-message markers are insufficient for
+          # squash/merge commits whose generated subject can omit the marker.
+          if [[ "$EVENT_NAME" == "workflow_run" && "$CI_OK" == "true" ]]; then
+            CHANGED_FILES="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${DEPLOY_SHA}" --jq '.files[].filename')"
+            if [[ -z "$CHANGED_FILES" ]]; then
+              echo "Cannot classify deploy scope: missing commit file list" >&2
+              exit 1
+            fi
+            PRODUCT_CHANGE=false
+            while IFS= read -r FILE; do
+              case "$FILE" in
+                docs/*|.github/workflows/ci.yml|.github/workflows/catch-recognition-pr177-no-traffic-deploy.yml|scripts/deploy_console_runtime.sh|scripts/cloud_run_deploy_target.py|scripts/classify_candidate_infra_change.py|tests/test_candidate_infra_scope.py|tests/test_cloud_run_deploy_target.py|.github/workflows/uat-deploy.yml) ;;
+                *) PRODUCT_CHANGE=true ;;
+              esac
+            done <<< "$CHANGED_FILES"
+            if [[ "$PRODUCT_CHANGE" == "false" ]]; then
+              CI_OK=false
+              echo "Infrastructure-only commit: normal UAT deploy is not applicable; use the existing approved tagged preview workflow."
+            fi
           fi
 
           SHOULD_DEPLOY=false

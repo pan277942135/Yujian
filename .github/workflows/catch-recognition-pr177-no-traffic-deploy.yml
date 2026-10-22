@@ -23,7 +23,7 @@ env:
   SERVICE: yujian-model-factory-console
   PR_NUMBER: '177'
   EXPECTED_BRANCH: feat/ai-catch-recognition-web-swos-rr09-v1
-  TARGET_SHA: cb9e3780afb5e2904e3dfe5148210a4ccc3747b4
+  TARGET_SHA: 32b9463887c6620b32a3dfdd986eccc6ff4a569b
   TAG: catch-pr177
   WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
   DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
@@ -172,6 +172,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          curl -fsS --retry 4 --retry-all-errors --retry-delay 3 --max-time 30 "$PREVIEW_URL/health" > "$RUNNER_TEMP/basic-health.json"
+          python3 - "$RUNNER_TEMP/basic-health.json" <<'PY'
+          import json,os,sys
+          d=json.load(open(sys.argv[1]))
+          assert d.get("status")=="ok", d.get("status")
+          assert d.get("git_commit")==os.environ["TARGET_SHA"], "basic health SHA mismatch"
+          assert d.get("revision")==os.environ["PREVIEW_REVISION"], "basic health revision mismatch"
+          PY
           curl -fsS --retry 4 --retry-all-errors --retry-delay 3 --max-time 30 "$PREVIEW_URL/health/deploy" > "$RUNNER_TEMP/deploy.json"
           python3 - "$RUNNER_TEMP/deploy.json" <<'PY'
           import json,os,sys
@@ -189,7 +197,7 @@ jobs:
           fi
           {
             echo "## No-image smoke"
-            echo "- /health/deploy exact SHA and revision: PASS"
+            echo "- /health and /health/deploy exact SHA and revision: PASS"
             echo "- /login HTTP 200: PASS"
             echo "- Page unauthenticated status: HTTP $PAGE (200 or expected login redirect)"
             echo "- Authenticated page, photo upload, live model inference: NOT_RUN"
