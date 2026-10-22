@@ -19,20 +19,8 @@
   if (!app) return;
 
   const $ = (id) => document.getElementById(id);
-  const state = {
-    file: null,
-    objectUrl: null,
-    inference: null,
-    controller: null,
-    requestSequence: 0,
-    busy: false,
-    saved: false,
-    appToken: null,
-    species: [],
-    selectedByUser: false,
-    saveInProgress: false,
-    bbox: null,
-  };
+  const core = window.YujianCatch;
+  const state = new core.RecognitionController();
 
   const nodes = {
     status: $("catchLiveStatus"), grid: $("catchStageGrid"), input: $("catchFileInput"),
@@ -78,9 +66,12 @@
   }
 
   function updateStageNav(activeStage, completed = []) {
+    state.phase = activeStage === "upload" && !state.file ? "IDLE" : activeStage.toUpperCase();
+    core.renderJourney(app, state);
     document.querySelectorAll("[data-stage-step]").forEach((node) => {
       const stage = node.getAttribute("data-stage-step");
       node.classList.toggle("active", stage === activeStage);
+      if (stage === activeStage) node.setAttribute("aria-current", "step"); else node.removeAttribute("aria-current");
       node.classList.toggle("done", completed.includes(stage));
     });
     document.querySelectorAll(".catch-panel[data-stage]").forEach((panel) => {
@@ -136,11 +127,14 @@
     nodes.resultContent.classList.remove("visible");
     nodes.resultContent.hidden = true;
     nodes.resultEmpty.hidden = false;
-    nodes.resultEmpty.innerHTML = '<div><span class="catch-empty-icon" aria-hidden="true">🐟</span><strong>结果会显示在这里</strong><br>识别状态由真实模型响应决定。</div>';
+    nodes.resultEmpty.innerHTML = '<div><span class="catch-empty-icon" aria-hidden="true">◇</span><strong>结果会显示在这里</strong><br>识别状态由真实模型响应决定。</div>';
     nodes.resultPhoto.hidden = true;
     nodes.resultBadge.textContent = "等待识别";
     nodes.resultBadge.className = "status-tag status-neutral";
     nodes.speciesName.textContent = "";
+    nodes.speciesName.style.visibility = "visible";
+    delete nodes.resultPanel.dataset.revealState;
+    nodes.saveButton.textContent = "保存本次鱼获";
     nodes.confidence.textContent = "";
     nodes.confidence.className = "catch-confidence";
     nodes.candidates.hidden = true;
@@ -178,11 +172,12 @@
   }
 
   function clearSelectedPhoto({keepStatus = false} = {}) {
-    state.requestSequence += 1;
-    state.controller?.abort();
-    state.controller = null;
-    state.busy = false;
-    if (state.objectUrl) URL.revokeObjectURL(state.objectUrl);
+    if (state.saveInProgress) { setStatus("鱼获正在保存，请稍候再更换照片。"); return; }
+    state.invalidate();
+    nodes.input.disabled = false;
+    nodes.grid.classList.remove("handoff");
+    $("catchCancelButton").hidden = true;
+    closeLogin();
     state.objectUrl = null;
     state.file = null;
     nodes.input.value = "";
@@ -213,7 +208,9 @@
 
   async function chooseFile(file) {
     if (!file) return;
+    if (state.saveInProgress) { setStatus("鱼获正在保存，请稍候再更换照片。"); return; }
     clearSelectedPhoto({keepStatus: true});
+    const selectionSequence = state.requestSequence;
     if (file.size <= 0) {
       setStatus("这张照片为空，请重新选择。", "error");
       return;
@@ -230,7 +227,8 @@
     let imageWidth = 0;
     let imageHeight = 0;
     try {
-      decoded = await createImageBitmap(file);
+      decoded = await createImageBitmap(file, {imageOrientation: "from-image"});
+      if (!state.current(selectionSequence)) { decoded.close(); return; }
       imageWidth = decoded.width;
       imageHeight = decoded.height;
       if (imageWidth * imageHeight > 40_000_000) {
@@ -240,11 +238,13 @@
       }
       decoded.close();
     } catch (_error) {
+      if (!state.current(selectionSequence)) return;
       setStatus("无法解码这张照片。请选择有效的 JPEG、PNG 或 WEBP 文件。", "error");
       return;
     }
-    state.file = file;
-    state.objectUrl = URL.createObjectURL(file);
+    if (!state.current(selectionSequence)) return;
+    state.select(file, imageWidth, imageHeight);
+    app.dataset.sessionId = state.photo.id;
     nodes.uploadPhoto.src = state.objectUrl;
     nodes.uploadPreview.classList.add("visible");
     nodes.fileMeta.hidden = false;
@@ -253,6 +253,7 @@
     nodes.start.disabled = false;
     nodes.clear.disabled = false;
     setPhotoUrl(state.objectUrl);
+    nodes.processingPhoto.decode().then(updatePhotoGeometry).catch(() => {});
     nodes.dimensions.textContent = `${imageWidth || "原图"} × ${imageHeight || "待校验"}`;
     setBadge(nodes.uploadBadge, "已选择照片", "success");
     setBadge(nodes.processingBadge, "待开始", "neutral");
@@ -452,40 +453,43 @@
     nodes.timingNote.textContent = `请求 ${result.request_id} · Detector ${result.detector?.model_version || "—"} · Classifier ${result.classifier?.model_version || "—"} · 总耗时 ${result.timing?.total_ms ?? "—"} ms。SAM 轮廓未启用。`;
   }
 
+  function updatePhotoGeometry() {
+    if (!state.photo || document.querySelector('[data-component="TransitionHost"]')) return;
+    state.photo.processingGeometry = state.photo.geometry(nodes.processingMedia.getBoundingClientRect());
+    state.photo.resultGeometry = state.photo.geometry(nodes.resultMedia.getBoundingClientRect());
+    const geometry = state.photo.processingGeometry;
+    if (!geometry) return;
+    const parent = nodes.processingMedia.getBoundingClientRect();
+    const effects = $("catchPhotoEffects");
+    effects.style.left = `${geometry.rect.left - parent.left}px`;
+    effects.style.top = `${geometry.rect.top - parent.top}px`;
+    effects.style.width = `${geometry.rect.width}px`;
+    effects.style.height = `${geometry.rect.height}px`;
+  }
+
   function mapBboxToElement(image, overlay, bbox) {
-    const frame = image.getBoundingClientRect();
-    const parentFrame = overlay.offsetParent?.getBoundingClientRect() || frame;
-    const naturalWidth = image.naturalWidth;
-    const naturalHeight = image.naturalHeight;
-    if (!frame.width || !frame.height || !naturalWidth || !naturalHeight || !bbox) return;
-    const scale = Math.min(frame.width / naturalWidth, frame.height / naturalHeight);
-    const drawWidth = naturalWidth * scale;
-    const drawHeight = naturalHeight * scale;
-    const offsetX = frame.left + (frame.width - drawWidth) / 2;
-    const offsetY = frame.top + (frame.height - drawHeight) / 2;
-    const x1 = Number(bbox.x1 ?? bbox.x);
-    const y1 = Number(bbox.y1 ?? bbox.y);
-    const x2 = Number(bbox.x2 ?? (x1 + Number(bbox.width)));
-    const y2 = Number(bbox.y2 ?? (y1 + Number(bbox.height)));
-    if (![x1, y1, x2, y2].every(Number.isFinite)) return;
-    overlay.style.left = `${offsetX - parentFrame.left + x1 * drawWidth}px`;
-    overlay.style.top = `${offsetY - parentFrame.top + y1 * drawHeight}px`;
-    overlay.style.width = `${Math.max(0, (x2 - x1) * drawWidth)}px`;
-    overlay.style.height = `${Math.max(0, (y2 - y1) * drawHeight)}px`;
+    const geometry = state.photo?.geometry(image.getBoundingClientRect());
+    const rect = core.PhotoViewport.mapBox(bbox, geometry);
+    if (!rect) { overlay.classList.remove("visible"); return; }
+    const parent = overlay.offsetParent.getBoundingClientRect();
+    for (const key of ["left", "top", "width", "height"]) {
+      overlay.style[key] = `${rect[key] - (key === "left" ? parent.left : key === "top" ? parent.top : 0)}px`;
+    }
     overlay.classList.add("visible");
   }
 
   function drawBBoxIfRequested(result) {
     const first = result.detector?.detections?.[0]?.bbox;
     if (!first) return;
-    state.bbox = first;
+    state.bbox = core.PhotoViewport.validBox(first);
+    if (!state.bbox) return;
     const details = document.querySelector(".catch-detail");
     const checkbox = document.getElementById("catchShowBBox");
     if (!checkbox) {
       const label = document.createElement("label");
       label.className = "catch-media-caption";
       label.innerHTML = '<span><input id="catchShowBBox" type="checkbox"> 验收时显示真实 BBox（非鱼体轮廓）</span>';
-      nodes.processingMedia.parentElement.appendChild(label);
+      details.appendChild(label);
       const input = $("catchShowBBox");
       input?.addEventListener("change", () => {
         if (input.checked && state.bbox) mapBboxToElement(nodes.processingPhoto, nodes.bbox, state.bbox);
@@ -498,46 +502,19 @@
     if (details) details.dataset.bboxAvailable = "true";
   }
 
-  async function transitionSharedPhoto(eventStart) {
-    if (isReducedMotion()) return;
-    const sourceRect = nodes.processingMedia.getBoundingClientRect();
-    const targetRect = nodes.resultMedia.getBoundingClientRect();
-    if (!sourceRect.width || !targetRect.width) return;
-    const transition = document.createElement("div");
-    transition.className = "catch-transition-photo";
-    transition.style.left = `${sourceRect.left}px`;
-    transition.style.top = `${sourceRect.top}px`;
-    transition.style.width = `${sourceRect.width}px`;
-    transition.style.height = `${sourceRect.height}px`;
-    const image = document.createElement("img");
-    image.src = state.objectUrl;
-    image.alt = "同一张照片正在进入识别结果 Hero";
-    transition.appendChild(image);
-    document.body.appendChild(transition);
-    nodes.resultPanel.classList.add("revealing");
+  async function transitionSharedPhoto(eventStart, requestSequence) {
     nodes.grid.classList.add("handoff");
-    // Interpolate the containing rectangle itself. Scaling a screenshot with
-    // non-uniform transform axes would stretch the fish and cause a crop jump
-    // when the destination <img> becomes visible.
-    await new Promise((resolve) => {
-      const paint = (now) => {
-        const progress = Math.max(0, Math.min(1, (now - eventStart) / RR09_FRAMES[2].at));
-        const lerp = (from, to) => from + (to - from) * progress;
-        transition.dataset.progress = progress.toFixed(3);
-        transition.style.left = `${lerp(sourceRect.left, targetRect.left)}px`;
-        transition.style.top = `${lerp(sourceRect.top, targetRect.top)}px`;
-        transition.style.width = `${lerp(sourceRect.width, targetRect.width)}px`;
-        transition.style.height = `${lerp(sourceRect.height, targetRect.height)}px`;
-        if (progress < 1) requestAnimationFrame(paint);
-        else resolve();
-      };
-      requestAnimationFrame(paint);
+    core.renderJourney(app, state, "handoff");
+    await core.transitionPhoto({
+      photo: state.photo, image: nodes.processingPhoto, targetImage: nodes.resultPhoto,
+      source: nodes.processingMedia, target: nodes.resultMedia, eventStart,
+      duration: RR09_FRAMES[2].at, isCurrent: () => state.current(requestSequence),
+      onCleanup: (cleanup) => { state.cancelTransition = cleanup; },
     });
-    transition.remove();
-    nodes.grid.classList.remove("handoff");
+    if (state.current(requestSequence)) nodes.grid.classList.remove("handoff");
   }
 
-  async function revealHighResult(result, eventStart) {
+  async function revealHighResult(result, eventStart, requestSequence) {
     nodes.resultContent.hidden = false;
     nodes.resultEmpty.hidden = true;
     nodes.resultContent.classList.add("visible");
@@ -552,13 +529,18 @@
     nodes.confidence.textContent = `${(Number(top1.confidence) * 100).toFixed(1)}%`;
     nodes.confidence.className = "catch-confidence";
     const revealAt = async (target) => delay(Math.max(0, eventStart + target - performance.now()));
-    await transitionSharedPhoto(eventStart); // R0 → R0.5 → R1, measured from live DOM rectangles.
+    await transitionSharedPhoto(eventStart, requestSequence); // R0 → R0.5 → R1, measured from live DOM rectangles.
+    if (!state.current(requestSequence)) return;
     await revealAt(RR09_FRAMES[3].at); // R2 380ms; no precise transfer without qualified SAM.
+    if (!state.current(requestSequence)) return;
     nodes.resultPanel.dataset.revealState = "gold-transfer-unavailable";
     await revealAt(RR09_FRAMES[4].at); // R3 550ms; keep the name hidden without a trusted glyph trace.
+    if (!state.current(requestSequence)) return;
     await revealAt(RR09_FRAMES[5].at); // R4 680ms: real Chinese name becomes readable.
+    if (!state.current(requestSequence)) return;
     nodes.speciesName.style.visibility = "visible";
     await revealAt(RR09_FRAMES[6].at); // R5 850ms: static page, no looping effect.
+    if (!state.current(requestSequence)) return;
     nodes.resultPanel.dataset.businessState = "ready";
     nodes.resultPanel.dataset.revealState = "complete";
     nodes.resultPanel.classList.remove("revealing");
@@ -576,11 +558,8 @@
 
   async function requestRecognition() {
     if (!state.file || state.busy) return;
-    state.requestSequence += 1;
-    const requestSequence = state.requestSequence;
-    state.controller?.abort();
-    state.controller = new AbortController();
-    state.busy = true;
+    const {sequence: requestSequence, controller} = state.begin();
+    $("catchCancelButton").hidden = false;
     hidePreviousOutcome();
     clearTasks();
     nodes.processingPanel.dataset.businessState = "processing";
@@ -589,41 +568,25 @@
     setBadge(nodes.uploadBadge, "照片已就绪", "success");
     setBadge(nodes.processingBadge, "正在识别", "running");
     setBadge(nodes.resultBadge, "等待真实结果", "neutral");
-    nodes.businessMessage.textContent = "正在等待真实推理响应；阶段耗时将在服务返回后显示";
+    nodes.businessMessage.textContent = "正在识别你的鱼获，请稍候";
     nodes.start.disabled = true;
-    nodes.input.disabled = true;
+    nodes.input.disabled = false;
     updateStageNav("processing", ["upload"]);
     setInProgressTasks();
     setStatus("识别请求已发送。处理结果未就绪前不会显示鱼种名称或成功状态。", "success");
     const requestStartedAt = performance.now();
-    const form = new FormData();
-    form.append("file", state.file, state.file.name || "catch-photo");
-    const timeout = window.setTimeout(() => state.controller?.abort("request-timeout"), 120_000);
+    const timeout = window.setTimeout(() => controller.abort("request-timeout"), 120_000);
     try {
-      const response = await fetch(app.dataset.api, {
-        method: "POST", body: form, credentials: "same-origin", signal: state.controller.signal,
-        headers: {"X-Request-ID": `web_${Date.now().toString(36)}_${requestSequence}`},
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (requestSequence !== state.requestSequence) return;
-      if (!response.ok) {
-        const detail = payload.detail || {};
-        const code = typeof detail === "object" ? detail.code : null;
-        const message = typeof detail === "object" ? detail.message : detail;
-        const error = new Error(message || `识别请求失败（HTTP ${response.status}）`);
-        error.code = code || `HTTP_${response.status}`;
-        error.requestId = detail.request_id;
-        throw error;
-      }
+      const payload = await core.infer(app.dataset.api, state.file, controller.signal, `web_${state.photo.id}_${requestSequence}`);
+      if (!state.accept(payload, requestSequence)) return;
       state.inference = payload;
-      state.busy = false;
       const elapsed = performance.now() - requestStartedAt;
       nodes.dimensions.textContent = `${payload.input?.width || "—"} × ${payload.input?.height || "—"} · ${payload.input?.format || "—"}`;
       renderDiagnostics(payload);
       updateResultTasks(payload);
       drawBBoxIfRequested(payload);
       setBadge(nodes.uploadBadge, "原图已校验", "success");
-      nodes.businessMessage.textContent = `${payload.detector?.model_version || "Detector"} 已返回结果 · ${payload.timing?.total_ms ?? "—"} ms`;
+      nodes.businessMessage.textContent = `识别已返回结果 · ${payload.timing?.total_ms ?? "—"} ms`;
       if (payload.result_state.startsWith("ERROR_") || payload.result_state === "TECHNICAL_FAILURE") {
         nodes.processingPanel.dataset.businessState = "recovery";
         nodes.resultPanel.dataset.businessState = "recovery";
@@ -632,6 +595,7 @@
         nodes.resultPhoto.src = state.objectUrl;
         nodes.resultPhoto.hidden = false;
         updateStageNav("result", ["upload", "processing"]);
+        state.phase = "ERROR";
         setStatus(`${payload.message || "本次识别未完成"} ${payload.guidance || ""}`.trim(), "error");
       } else {
         const chineseTop1 = isChineseName(payload.classifier?.top1?.species);
@@ -656,10 +620,11 @@
           setBadge(nodes.processingBadge, "识别完成", "success");
           setBadge(nodes.resultBadge, "正在呈现结果", "running");
           updateStageNav("result", ["upload", "processing"]);
-          await revealHighResult(payload, revealStart);
+          await revealHighResult(payload, revealStart, requestSequence);
+          if (state.current(requestSequence)) { populateSpecies(payload, payload.result_state); updateSaveAvailability(); }
           if (requestSequence !== state.requestSequence) return;
           setBadge(nodes.resultBadge, "高置信度", "success");
-          setStatus(`识别完成：${payload.classifier.top1.species} · ${payload.timing?.total_ms ?? "—"} ms。鱼体精准轮廓未启用。`, "success");
+          setStatus(`识别完成：${payload.classifier.top1.species} · ${payload.timing?.total_ms ?? "—"} ms。`, "success");
         } else {
           // MEDIUM and LOW have a real prediction, but require user selection;
           // they enter the frozen result form without the HIGH success reveal.
@@ -672,14 +637,18 @@
     } catch (error) {
       if (requestSequence !== state.requestSequence) return;
       state.busy = false;
-      if (error?.name === "AbortError") {
-        const timeoutAbort = error?.message === "request-timeout" || state.controller?.signal.reason === "request-timeout";
+      if (error?.name === "AbortError" || controller.signal.aborted) {
+        state.phase = "CANCELLED";
+        core.renderJourney(app, state);
+        const timeoutAbort = error?.message === "request-timeout" || controller.signal.reason === "request-timeout";
         nodes.processingPanel.dataset.businessState = "idle";
         nodes.resultPanel.dataset.businessState = "idle";
         setBadge(nodes.processingBadge, timeoutAbort ? "请求超时" : "已取消", "failed");
         nodes.businessMessage.textContent = timeoutAbort ? "没有收到真实结果，可重新尝试" : "已停止等待本次响应";
         setStatus(timeoutAbort ? "识别请求超过 120 秒仍未响应。请检查服务状态后重试。" : "本次请求已取消；旧响应不会覆盖当前照片。", "error");
       } else {
+        state.phase = "ERROR";
+        core.renderJourney(app, state);
         const requestRef = error?.requestId ? ` · 请求 ${error.requestId}` : "";
         nodes.processingPanel.dataset.businessState = "failed";
         nodes.resultPanel.dataset.businessState = "failed";
@@ -699,8 +668,11 @@
     } finally {
       window.clearTimeout(timeout);
       if (requestSequence === state.requestSequence) {
+        updatePhotoGeometry();
+        core.renderJourney(app, state);
         state.busy = false;
         state.controller = null;
+        $("catchCancelButton").hidden = true;
         nodes.start.disabled = !state.file;
         nodes.input.disabled = false;
         nodes.processingMedia.classList.remove("processing");
@@ -737,6 +709,7 @@
   }
 
   async function loginUser(formData) {
+    const loginSequence = state.requestSequence;
     const username = String(formData.get("username") || "").trim();
     const password = String(formData.get("password") || "");
     nodes.loginSubmit.disabled = true;
@@ -752,7 +725,7 @@
       state.appToken = payload.access_token;
       closeLogin();
       updateSaveAvailability();
-      await saveCatch();
+      if (state.current(loginSequence)) await saveCatch();
     } catch (error) {
       nodes.loginError.textContent = error.message || "账户验证未完成。";
     } finally {
@@ -854,6 +827,25 @@
     }
   }
 
+  $("catchCancelButton").addEventListener("click", () => {
+    state.requestSequence += 1;
+    state.controller?.abort();
+    state.cancelTransition?.();
+    state.controller = null;
+    state.busy = false;
+    hidePreviousOutcome();
+    nodes.processingMedia.classList.remove("processing");
+    nodes.grid.classList.remove("handoff");
+    nodes.start.disabled = !state.file;
+    nodes.input.disabled = false;
+    $("catchCancelButton").hidden = true;
+    updateStageNav("upload");
+    state.phase = "CANCELLED";
+    core.renderJourney(app, state);
+    setBadge(nodes.processingBadge, "已取消", "neutral");
+    nodes.processingPanel.dataset.businessState = "cancelled";
+    setStatus("本次识别已取消，可重新开始。旧响应不会覆盖当前照片。");
+  });
   nodes.input.addEventListener("change", () => chooseFile(nodes.input.files?.[0]));
   nodes.start.addEventListener("click", requestRecognition);
   nodes.clear.addEventListener("click", () => clearSelectedPhoto());
@@ -877,12 +869,17 @@
   nodes.loginBackdrop.addEventListener("click", (event) => {
     if (event.target === nodes.loginBackdrop) closeLogin();
   });
+  const photoResize = new ResizeObserver(updatePhotoGeometry);
+  photoResize.observe(nodes.processingMedia);
+  photoResize.observe(nodes.resultMedia);
   window.addEventListener("resize", () => {
+    updatePhotoGeometry();
     const check = $("catchShowBBox");
     const bbox = state.inference?.detector?.detections?.[0]?.bbox;
     if (check?.checked && bbox) mapBboxToElement(nodes.processingPhoto, nodes.bbox, bbox);
   });
 
+  core.renderJourney(app, state);
   setCapturedAtNow();
   clearTasks();
   loadSpeciesCatalog();

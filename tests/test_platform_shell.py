@@ -20,5 +20,9 @@ def test_platform_shell_templates_compile_and_render_without_legacy_nav_injectio
         template = templates.env.get_template(page.template)
         rendered = template.render(request=_request(page.path), page=page, page_title=page.title, platform_pages=PLATFORM_PAGES)
         assert page.title in rendered
-        assert 'class="platform-sidebar"' in rendered
+        if page.path == "/platform/model/catch-recognition":
+            assert 'data-component="ProductShell"' in rendered
+            assert 'class="platform-sidebar"' not in rendered
+        else:
+            assert 'class="platform-sidebar"' in rendered
         assert 'class="app-nav"' not in rendered

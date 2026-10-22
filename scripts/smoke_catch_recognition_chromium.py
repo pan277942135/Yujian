@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -22,6 +23,9 @@ import uvicorn
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from scripts.offline_test_guard import install
+install()
 
 from app.platform.routes.pages import PLATFORM_PAGES, templates
 
@@ -78,12 +82,18 @@ async def simulated_catch_inference(file: UploadFile = File(...)):
     except OSError as exc:
         raise HTTPException(status_code=400, detail={"code": "UI_SIMULATION_ONLY_INVALID", "message": "测试图片无法解码"}) from exc
 
+    if "simulate-slow" in (file.filename or ""):
+        await asyncio.sleep(4)
+    result_state = next((value for name,value in {
+        "simulate-medium":"RESULT_MEDIUM", "simulate-low":"RESULT_LOW",
+        "simulate-nofish":"ERROR_NO_FISH", "simulate-quality":"ERROR_IMAGE_QUALITY",
+    }.items() if name in (file.filename or "")), "RESULT_HIGH")
     bbox = {"x1": 0.14, "y1": 0.18, "x2": 0.86, "y2": 0.84}
     return JSONResponse(
         {
             "request_id": "SIMULATED-UI-ONLY",
             "pipeline_version": "UI_SIMULATION_ONLY",
-            "result_state": "RESULT_HIGH",
+            "result_state": result_state,
             "input": {"width": width, "height": height, "format": image_format},
             "status": "UI_SIMULATION_ONLY",
             "status_wire": "success",
@@ -153,16 +163,10 @@ def start_server() -> tuple[uvicorn.Server, threading.Thread, str]:
 
 
 def prepare_photos() -> tuple[tuple[str, Path, tuple[int, int]], ...]:
-    landscape_source = Path(os.environ["DET_FISH_LANDSCAPE_PHOTO"])
-    portrait_source = Path(os.environ["DET_FISH_PORTRAIT_PHOTO"])
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
-    for existing in ARTIFACTS.glob("*.png"):
-        existing.unlink()
-
-    with Image.open(landscape_source) as uploaded:
-        landscape = ImageOps.exif_transpose(uploaded).convert("RGB").resize((800, 600), Image.Resampling.LANCZOS)
-    with Image.open(portrait_source) as uploaded:
-        portrait = ImageOps.exif_transpose(uploaded).convert("RGB").resize((600, 817), Image.Resampling.LANCZOS)
+    # Generated color grids only: no user/real fish photos and no production inference.
+    landscape = Image.new("RGB", (800, 600), (75, 125, 115))
+    portrait = Image.new("RGB", (600, 817), (145, 130, 100))
     paths = []
     for name, image in (("landscape", landscape), ("portrait", portrait)):
         path = ARTIFACTS / f"{name}.jpg"
@@ -184,12 +188,27 @@ def main() -> None:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch()
             try:
+                # Layout-only matrix: no photo selection required.
+                for width,height in [(1440,1000),(1280,800),(1024,768),(768,1024),(480,900),(430,932),(390,844),(360,640),(320,480)]:
+                    check=browser.new_page(viewport={"width":width,"height":height})
+                    errors=[]
+                    check.on("pageerror",lambda error: errors.append(str(error)))
+                    check.goto(url,wait_until="networkidle")
+                    assert_no_horizontal_overflow(check,f"{width}x{height}")
+                    assert check.locator('[data-component="ProcessJourney"] li').count()==5
+                    assert not check.locator('[data-component="AdvancedDiagnostics"]').evaluate("n=>n.open")
+                    assert check.locator('#catchResultEmpty').is_visible()
+                    check.screenshot(path=str(ARTIFACTS/f"shell-{width}x{height}-UI_SIMULATION_ONLY.png"),full_page=True)
+                    assert not errors,errors
+                    check.close()
+                    print(f"PASS B1 shell {width}x{height}; UI_SIMULATION_ONLY")
                 desktop = browser.new_page(viewport={"width": 1440, "height": 1000}, device_scale_factor=1)
                 try:
                     desktop.goto(url, wait_until="networkidle")
                     assert desktop.locator("#catchRecognitionApp[data-ui-simulation='true']").count() == 1
                     assert desktop.get_by_text("UI_SIMULATION_ONLY", exact=False).count() >= 1
-                    assert desktop.locator('.nav-link[href="/platform/model/catch-recognition"]').count() == 1
+                    assert desktop.locator(".platform-sidebar").count() == 0
+                    assert desktop.locator('[data-component="ProductShell"]').count() == 1
                     capabilities = desktop.evaluate(
                         """() => {
                           const twoD = document.createElement('canvas').getContext('2d');
@@ -225,8 +244,10 @@ def main() -> None:
                     desktop.wait_for_function("Math.abs(Number(document.querySelector('.catch-transition-photo')?.dataset.progress || 0) - 0.5) < 0.08", timeout=1500)
                     geometry = desktop.evaluate(
                         """() => {
-                          const source = document.querySelector('#catchProcessingMedia').getBoundingClientRect();
-                          const target = document.querySelector('#catchResultMedia').getBoundingClientRect();
+                          const g=window.YujianCatch.PhotoViewport;
+                          const img=document.querySelector('#catchProcessingPhoto');
+                          const source = g.viewport(img.naturalWidth,img.naturalHeight,document.querySelector('#catchProcessingMedia').getBoundingClientRect()).rect;
+                          const target = g.viewport(img.naturalWidth,img.naturalHeight,document.querySelector('#catchResultMedia').getBoundingClientRect()).rect;
                           const moving = document.querySelector('.catch-transition-photo').getBoundingClientRect();
                           const progress = Number(document.querySelector('.catch-transition-photo').dataset.progress);
                           const atProgress = (from, to) => from + (to - from) * progress;
@@ -282,6 +303,60 @@ def main() -> None:
                     print("PASS narrow 320x480; no horizontal overflow; UI_SIMULATION_ONLY")
                 finally:
                     narrow.close()
+
+                for filename,expected in [("medium","RESULT_MEDIUM"),("low","RESULT_LOW"),("nofish","ERROR_NO_FISH"),("quality","ERROR_IMAGE_QUALITY")]:
+                    recovery=browser.new_page(viewport={"width":390,"height":844})
+                    try:
+                        recovery.goto(url,wait_until="networkidle")
+                        recovery.locator("#catchFileInput").set_input_files({"name":f"simulate-{filename}.jpg","mimeType":"image/jpeg","buffer":photos[0][1].read_bytes()})
+                        recovery.locator("#catchStartButton").click()
+                        recovery.wait_for_function("document.querySelector('#catchResultContent').classList.contains('visible')")
+                        assert recovery.locator("#catchResultPanel").get_attribute("data-reveal-state")!="complete"
+                        assert recovery.locator("#catchSaveButton").is_disabled()
+                        if filename in ("medium","low"):
+                            recovery.locator("#catchSpeciesSelect").select_option("grass_carp")
+                            assert recovery.locator("#catchSaveButton").is_enabled()
+                        print(f"PASS {expected}; no HIGH reveal; explicit confirmation required; UI_SIMULATION_ONLY")
+                    finally:
+                        recovery.close()
+                slow=browser.new_page(viewport={"width":390,"height":844},reduced_motion="reduce")
+                try:
+                    slow.goto(url,wait_until="networkidle")
+                    slow.locator("#catchFileInput").set_input_files({"name":"simulate-slow.jpg","mimeType":"image/jpeg","buffer":photos[0][1].read_bytes()})
+                    slow.locator("#catchStartButton").click()
+                    slow.wait_for_timeout(3000)
+                    assert slow.locator("#catchSpeciesName").inner_text()==""
+                    assert slow.locator("#catchResultEmpty").is_visible()
+                    slow.wait_for_function("document.querySelector('#catchResultPanel').dataset.revealState==='complete'",timeout=4000)
+                    assert slow.locator(".catch-transition-photo").count()==0
+                    print("PASS slow response and Reduce Motion; no premature name; UI_SIMULATION_ONLY")
+                finally:
+                    slow.close()
+
+                cancelled = browser.new_page(viewport={"width":390,"height":844})
+                try:
+                    cancelled.goto(url,wait_until="networkidle")
+                    cancelled.locator("#catchFileInput").set_input_files(str(photos[0][1]))
+                    cancelled.locator("#catchStartButton").click()
+                    cancelled.locator("#catchCancelButton").click()
+                    cancelled.wait_for_timeout(3800)
+                    assert cancelled.locator("#catchSpeciesName").inner_text()==""
+                    assert cancelled.locator(".catch-transition-photo").count()==0
+                    assert cancelled.locator("#catchRecognitionApp").get_attribute("data-stage")=="CANCELLED"
+                    # Cancel during the transition itself, then choose another photo.
+                    cancelled.locator("#catchStartButton").click()
+                    cancelled.wait_for_function("!!document.querySelector('.catch-transition-photo')",timeout=7000)
+                    cancelled.locator("#catchClearButton").click(force=True)
+                    cancelled.locator("#catchFileInput").set_input_files(str(photos[1][1]))
+                    cancelled.wait_for_timeout(1200)
+                    assert cancelled.locator("#catchSpeciesName").inner_text()==""
+                    assert cancelled.locator(".catch-transition-photo").count()==0
+                    assert cancelled.locator("#catchProcessingMedia #catchProcessingPhoto").count()==1
+                    assert cancelled.locator("#catchUploadPhoto").evaluate("n=>n.naturalWidth")==photos[1][2][0]
+                    assert cancelled.locator("#catchStartButton").is_enabled()
+                    print("PASS cancel/clear during reveal and photo replacement; no stale result; UI_SIMULATION_ONLY")
+                finally:
+                    cancelled.close()
 
                 failed = browser.new_page(viewport={"width": 390, "height": 844}, device_scale_factor=1)
                 try:

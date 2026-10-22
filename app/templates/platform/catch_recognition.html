@@ -1,100 +1,21 @@
 {% extends "platform/base.html" %}
 
-{% block head %}
-<style>
-  .catch-page{--catch-ink:#213733;--catch-muted:#71827c;--catch-line:#dce7e1;--catch-green:#245d50;--catch-gold:#bc8c40;--catch-water:#7caaa2;color:var(--catch-ink)}
-  .catch-intro{margin:-8px 0 18px;max-width:900px;color:#61746e;line-height:1.65;font-size:14px}
-  .catch-notice{display:flex;gap:10px;align-items:flex-start;margin:0 0 16px;padding:11px 14px;border:1px solid #dbe7df;border-radius:12px;background:#f6faf7;color:#516b61;font-size:12px;line-height:1.55}
-  .catch-notice strong{color:#31564b}
-  .catch-stages{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0 0 14px}
-  .catch-stage-step{position:relative;display:flex;align-items:center;gap:9px;padding:10px 12px;border:1px solid #e0e8e3;border-radius:11px;background:rgba(255,255,255,.68);color:#71827c;font-size:12px;font-weight:750}
-  .catch-stage-step .num{display:grid;place-items:center;width:23px;height:23px;flex:0 0 23px;border-radius:50%;background:#e8efeb;color:#567368;font-size:11px}
-  .catch-stage-step.active{border-color:#a5c8b9;background:#f3faf5;color:#245d50}.catch-stage-step.active .num{background:#245d50;color:#fff}
-  .catch-stage-step.done{color:#456d5d}.catch-stage-step.done .num{background:#dfefe5;color:#2d7554}
-  .catch-live-status{min-height:22px;margin:0 0 10px;color:#61746e;font-size:12px;line-height:1.5}
-  .catch-live-status.error{color:#9e433c}.catch-live-status.success{color:#286548}
-  .catch-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:stretch;gap:13px}
-  .catch-panel{min-width:0;display:flex;flex-direction:column;overflow:hidden;border:1px solid rgba(205,221,213,.92);border-radius:17px;background:rgba(255,255,255,.92);box-shadow:0 8px 24px rgba(39,75,65,.045);transition:border-color .2s,box-shadow .2s,background .2s}
-  .catch-panel.is-active{border-color:#a9cbbd;box-shadow:0 10px 28px rgba(35,91,75,.09)}
-  .catch-panel.is-ready{border-color:#d2e1d8;background:#fcfefc}
-  .catch-panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:9px;padding:16px 16px 11px}
-  .catch-panel-kicker{display:block;color:#9a7b48;font-size:10px;font-weight:850;letter-spacing:.12em;text-transform:uppercase}
-  .catch-panel-head h2{margin:4px 0 0;font-size:17px;letter-spacing:-.02em}.catch-panel-head p{margin:5px 0 0;color:var(--catch-muted);font-size:11px;line-height:1.45}
-  .catch-panel-body{display:flex;flex:1;flex-direction:column;padding:0 16px 16px;min-height:0}
-  .catch-drop{display:grid;place-items:center;min-height:186px;margin:2px 0 11px;padding:18px;border:1px dashed #bfd4ca;border-radius:13px;background:linear-gradient(145deg,#f6faf7,#eef6f2);text-align:center;transition:background .18s,border-color .18s;cursor:pointer}
-  .catch-drop.drag-over{border-color:#488873;background:#e7f3ed}.catch-drop[aria-disabled="true"]{opacity:.55;pointer-events:none}
-  .catch-drop-icon{display:grid;place-items:center;width:42px;height:42px;margin:0 auto 9px;border-radius:15px;background:#dcece4;color:#386a59;font-size:21px}
-  .catch-drop strong{display:block;font-size:13px}.catch-drop small{display:block;margin-top:5px;color:#82918b;font-size:11px;line-height:1.5}
-  .catch-file{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-  .catch-upload-preview{position:relative;display:none;overflow:hidden;margin:2px 0 10px;aspect-ratio:1.45;border:1px solid #e2ebe6;border-radius:12px;background:#e9f0ec}
-  .catch-upload-preview.visible{display:grid;place-items:center}.catch-upload-preview img{display:block;width:100%;height:100%;object-fit:contain}
-  .catch-file-meta{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 10px;padding:8px 10px;border-radius:9px;background:#f7faf8;color:#71827c;font-size:11px}
-  .catch-file-meta strong{overflow:hidden;color:#3b5b4f;text-overflow:ellipsis;white-space:nowrap}
-  .catch-example-note{margin-top:auto;padding:11px 12px;border-radius:10px;background:#fbf8f0;color:#83704b;font-size:11px;line-height:1.5}
-  .catch-button{min-height:42px;border:1px solid #c8d8d0;border-radius:10px;background:#fff;color:#34584c;padding:9px 13px;font-size:12px;font-weight:800;cursor:pointer;transition:transform .15s,background .15s,border-color .15s}
-  .catch-button:hover:not(:disabled){transform:translateY(-1px);border-color:#8eb2a3;background:#f8fcfa}.catch-button:focus-visible{outline:3px solid rgba(57,131,107,.25);outline-offset:2px}
-  .catch-button:disabled{opacity:.48;cursor:not-allowed}.catch-button.primary{background:#245d50;border-color:#245d50;color:#fff}.catch-button.primary:hover:not(:disabled){background:#1b5145}.catch-button.gold{background:#fbf5e9;border-color:#e4d2aa;color:#765b2b}
-  .catch-upload-actions{display:flex;gap:8px;flex-wrap:wrap}.catch-upload-actions .catch-button{flex:1}
-  .catch-media{position:relative;display:grid;place-items:center;overflow:hidden;aspect-ratio:1.42;border-radius:12px;background:linear-gradient(145deg,#e8f0ed,#dce8e4 48%,#f3f1e9);isolation:isolate}
-  .catch-media img{position:relative;z-index:1;display:block;width:100%;height:100%;object-fit:contain;background:transparent}
-  .catch-media-empty{position:absolute;inset:0;display:grid;place-items:center;padding:22px;text-align:center;color:#82938c;font-size:12px;line-height:1.55}
-  .catch-water{position:absolute;z-index:2;inset:-12%;pointer-events:none;opacity:0;background:radial-gradient(ellipse 28% 17% at 45% 88%,rgba(218,205,149,.45),transparent 72%),radial-gradient(ellipse 34% 22% at 57% 69%,rgba(116,175,164,.26),transparent 74%),radial-gradient(ellipse 22% 18% at 37% 52%,rgba(239,230,194,.27),transparent 76%),radial-gradient(ellipse 34% 23% at 66% 35%,rgba(126,177,169,.16),transparent 76%);mix-blend-mode:screen;filter:blur(10px);transform:scale(1.02)}
-  .catch-media.processing .catch-water{animation:catch-water-rise 2800ms linear forwards}
-  @keyframes catch-water-rise{0%{opacity:0;transform:translateY(12%) scale(.96)}12.5%{opacity:.07}33.93%{opacity:.18;transform:translateY(4%) scale(1.02)}42.86%{opacity:.27;transform:translateY(0) scale(1.04)}55.36%{opacity:.22;transform:translateY(-2%) scale(1.05)}73.21%{opacity:.13;transform:translateY(-5%) scale(1.06)}92.86%{opacity:.04;transform:translateY(-9%) scale(1.08)}100%{opacity:0;transform:translateY(-11%) scale(1.08)}}
-  .catch-region-glow{position:absolute;z-index:3;display:none;pointer-events:none;border-radius:40%;background:radial-gradient(ellipse at center,rgba(246,203,103,.27),rgba(212,162,67,.12) 45%,transparent 78%);filter:blur(10px)}
-  .catch-region-glow.visible{display:block}
-  .catch-bbox{position:absolute;z-index:4;display:none;border:1px dashed rgba(199,146,59,.85);pointer-events:none}
-  .catch-bbox.visible{display:block}
-  .catch-media-caption{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px;color:#7b8b85;font-size:10px;line-height:1.45}
-  .catch-media-caption strong{color:#49665a;font-size:10px}
-  .catch-processing-state{display:flex;align-items:center;gap:8px;margin:12px 0 10px;color:#526a60;font-size:12px;font-weight:750}
-  .catch-pulse{width:8px;height:8px;border-radius:50%;background:#b98b42;box-shadow:0 0 0 4px rgba(185,139,66,.12)}
-  .catch-panel[data-business-state="processing"] .catch-pulse{animation:catch-pulse 1.2s ease-in-out infinite alternate}
-  @keyframes catch-pulse{to{opacity:.35;box-shadow:0 0 0 7px rgba(185,139,66,.04)}}
-  .catch-task-list{display:grid;gap:6px;margin:0;padding:10px 0 0;list-style:none;border-top:1px solid #e7eeea}
-  .catch-task{display:flex;align-items:center;gap:8px;color:#8b9993;font-size:10px;line-height:1.35}
-  .catch-task .dot{width:6px;height:6px;border-radius:50%;background:#cbd8d2;flex:0 0 6px}.catch-task.done{color:#4a6e5d}.catch-task.done .dot{background:#4b9272}.catch-task.failed{color:#9e433c}.catch-task.failed .dot{background:#c36a60}.catch-task.running{color:#755e35}.catch-task.running .dot{background:#bd9149}
-  .catch-detail{margin-top:11px;border-top:1px solid #e7eeea;padding-top:9px}.catch-detail summary{color:#60766d;font-size:11px;font-weight:750;cursor:pointer}.catch-detail pre{max-height:180px;overflow:auto;margin:8px 0 0;padding:9px;border-radius:8px;background:#f6f9f7;color:#546860;font:10px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-word}
-  .catch-result-media{aspect-ratio:1.53;border-radius:12px;background:linear-gradient(145deg,#e8f0ed,#dae8e2 58%,#f2efe3);transition:background .2s}
-  .catch-result-content{display:none}.catch-result-content.visible{display:block;animation:catch-result-in .24s ease-out both}
-  @keyframes catch-result-in{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
-  .catch-result-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin:13px 0 12px}
-  .catch-species-block{min-width:0}.catch-species-label{display:block;color:#899891;font-size:10px;font-weight:750;letter-spacing:.05em}.catch-species-name{display:block;min-height:30px;margin-top:4px;color:#23473c;font-size:22px;font-weight:850;line-height:1.25;letter-spacing:-.03em;overflow-wrap:anywhere}
-  .catch-confidence{flex:0 0 auto;padding:5px 8px;border-radius:999px;background:#eaf4ed;color:#317151;font-size:10px;font-weight:850}.catch-confidence.medium{background:#fff4df;color:#8b6625}.catch-confidence.low{background:#fff0ed;color:#9a443d}.catch-confidence.recovery{background:#eef2f0;color:#60726c}
-  .catch-candidates{display:grid;gap:6px;margin:0 0 12px}.catch-candidate{display:flex;justify-content:space-between;gap:8px;padding:8px 9px;border:1px solid #e0e9e4;border-radius:9px;background:#fbfdfc;font-size:11px;color:#567066}.catch-candidate strong{color:#314f43}.catch-candidate small{color:#83928c}
-  .catch-form{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:11px}.catch-field{display:grid;gap:5px;min-width:0}.catch-field.full{grid-column:1/-1}.catch-field label{color:#6d7e77;font-size:10px;font-weight:750}.catch-field input,.catch-field textarea,.catch-field select{width:100%;min-width:0;border:1px solid #d7e3dc;border-radius:8px;background:#fff;color:#2f4e42;padding:8px 9px;font-size:11px}.catch-field input{min-height:36px}.catch-field textarea{min-height:56px;resize:vertical}.catch-field input:focus,.catch-field textarea:focus,.catch-field select:focus{outline:2px solid rgba(69,131,110,.22);border-color:#8db3a1}.catch-form-hint{grid-column:1/-1;margin:-1px 0 0;color:#7d8d86;font-size:10px;line-height:1.45}
-  .catch-cta-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:auto;padding-top:12px}.catch-cta-row .catch-button{min-width:0;font-size:11px}.catch-cta-note{grid-column:1/-1;margin:0;color:#87948e;font-size:10px;line-height:1.45}
-  .catch-empty-state{display:grid;place-items:center;min-height:250px;padding:20px;border:1px dashed #d2dfd8;border-radius:12px;background:#fbfdfc;text-align:center;color:#7d8d86;font-size:12px;line-height:1.6}
-  .catch-page [hidden]{display:none!important}
-  .catch-empty-icon{display:grid;place-items:center;width:42px;height:42px;margin:0 auto 9px;border-radius:50%;background:#eef4f0;color:#69847a;font-size:19px}
-  .catch-modal-backdrop{position:fixed;inset:0;z-index:100;display:none;place-items:center;padding:18px;background:rgba(13,35,30,.42)}.catch-modal-backdrop.open{display:grid}
-  .catch-modal{width:min(420px,100%);padding:20px;border:1px solid #dce7e0;border-radius:16px;background:#fff;box-shadow:0 24px 70px rgba(14,38,31,.24)}
-  .catch-modal h2{margin:0;font-size:18px}.catch-modal p{margin:7px 0 14px;color:#72827c;font-size:12px;line-height:1.55}.catch-modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}.catch-login-error{min-height:17px;color:#9c443d;font-size:11px}
-  .catch-transition-photo{position:fixed;z-index:90;pointer-events:none;overflow:hidden;border-radius:12px;will-change:left,top,width,height;box-shadow:0 16px 40px rgba(25,55,45,.16)}.catch-transition-photo img{display:block;width:100%;height:100%;object-fit:contain}
-  .catch-grid.handoff .catch-panel[data-stage="result"]{border-color:#a5c8b9;background:#fbfdfb}.catch-grid.handoff .catch-panel[data-stage="processing"] .catch-water{opacity:0!important;animation:none!important}
-  .catch-panel[data-stage="result"].revealing .catch-result-media{background:linear-gradient(145deg,#f2f5f1,#e5ece6 58%,#f6f1e4)}
-  .catch-rr09-note{margin:10px 0 0;color:#87948e;font-size:10px;line-height:1.5}
-  @media(prefers-reduced-motion:reduce){.catch-page *, .catch-page *::before, .catch-page *::after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.01ms!important}}
-  @media(max-width:1320px){.catch-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.catch-panel[data-stage="result"]{grid-column:1/-1}.catch-result-media{aspect-ratio:1.7}.catch-result-content{max-width:760px}}
-  @media(max-width:980px){.catch-grid{grid-template-columns:1fr}.catch-panel[data-stage="result"]{grid-column:auto}.catch-result-content{max-width:none}.catch-media,.catch-result-media{aspect-ratio:1.45}}
-  @media(max-width:520px){.catch-intro{font-size:13px}.catch-stages{gap:5px}.catch-stage-step{padding:9px 7px;font-size:10px;gap:6px}.catch-stage-step .num{width:20px;height:20px;flex-basis:20px}.catch-panel-head{padding:14px 13px 10px}.catch-panel-body{padding:0 13px 13px}.catch-form{gap:8px}.catch-species-name{font-size:20px}.catch-cta-row{gap:6px}.catch-cta-row .catch-button{padding:8px 7px;font-size:10px}}
-</style>
-{% endblock %}
-
+{% set product_shell = true %}
+{% block head %}<link rel="stylesheet" href="/static/css/catch_recognition.css?v=foundation-v2">{% endblock %}
 {% block content %}
-<div class="catch-page" id="catchRecognitionApp" data-api="{{ catch_api_url|default('/api/product/catch-recognition/infer') }}" data-ui-simulation="{{ 'true' if ui_simulation else 'false' }}">
+<div class="catch-page" id="catchRecognitionApp" data-component="RecognitionWorkspace" data-stage="IDLE" data-visual-contract="PR190_CANDIDATE_NOT_ADOPTED" data-api="{{ catch_api_url|default('/api/product/catch-recognition/infer') }}" data-ui-simulation="{{ 'true' if ui_simulation else 'false' }}">
   {% if ui_simulation %}<div class="catch-notice" role="note" style="border-color:#e8b7ae;background:#fff1ee;color:#913d34"><strong>UI_SIMULATION_ONLY</strong><span>仅用于 Chromium 排版与交互验收；此页面没有调用生产模型，也不代表真实识别结果。</span></div>{% endif %}
-  <div class="page-heading"><div><h1>AI渔获识别</h1><p>上传真实鱼获照片，查看当前生产模型返回的识别结果。</p></div><div class="page-actions"><a class="button" href="/platform/model/registry">查看生产模型</a></div></div>
-  <p class="catch-intro">从真实照片开始，依次完成鱼体定位、质量检查、标准 Crop 和鱼种分类。处理较慢时会继续等待实际结果，不用动画时间代替识别状态。</p>
+  <div class="page-heading"><div><h1>AI渔获识别</h1><p>上传真实鱼获照片，查看当前生产模型返回的识别结果。</p></div></div>
+  <p class="catch-intro">留住真实鱼获，发现它的名字。</p>
   <div class="catch-notice"><span aria-hidden="true">◈</span><div><strong>照片处理说明</strong> 识别请求仅用于本次推理；推理接口不写入图片存储。点击“保存本次鱼获”后，照片才会上传到你的鱼获记录。当前没有登记公开使用许可的示例照片。</div></div>
-  <div class="catch-stages" aria-label="识别流程">
+  <div data-component="StageNavigation" class="catch-stages" aria-label="识别流程">
     <div class="catch-stage-step active" data-stage-step="upload"><span class="num">1</span><span>上传照片</span></div>
     <div class="catch-stage-step" data-stage-step="processing"><span class="num">2</span><span>AI 核心识别</span></div>
     <div class="catch-stage-step" data-stage-step="result"><span class="num">3</span><span>识别结果</span></div>
   </div>
   <div class="catch-live-status" id="catchLiveStatus" role="status" aria-live="polite">选择一张包含鱼获的真实照片开始识别。</div>
   <div class="catch-grid" id="catchStageGrid">
-    <section class="catch-panel is-active" data-stage="upload" aria-labelledby="catchUploadHeading">
+    <section class="catch-panel is-active" data-component="UploadStage" data-stage="upload" aria-labelledby="catchUploadHeading">
       <div class="catch-panel-head"><div><span class="catch-panel-kicker">01 · PHOTO INPUT</span><h2 id="catchUploadHeading">上传照片</h2><p>支持 JPEG、PNG、WEBP，单张不超过 15 MB</p></div><span class="status-tag status-neutral" id="catchUploadBadge">待上传</span></div>
       <div class="catch-panel-body">
         <label class="catch-drop" id="catchDrop" for="catchFileInput">
@@ -104,35 +25,37 @@
         <div class="catch-upload-preview" id="catchUploadPreview"><img id="catchUploadPhoto" alt="已选择的鱼获照片"></div>
         <div class="catch-file-meta" id="catchFileMeta" hidden><strong id="catchFileName">—</strong><span id="catchFileSize">—</span></div>
         <div class="catch-upload-actions"><button class="catch-button primary" id="catchStartButton" type="button" disabled>开始识别</button><button class="catch-button" id="catchClearButton" type="button" disabled>清除照片</button></div>
-        <div class="catch-example-note">产品示例照片暂未登记。仓库内带授权记录的照片仅供隔离的浏览器测试，不会作为产品样例上传。你可以选择自己的照片继续。</div>
+
       </div>
     </section>
 
-    <section class="catch-panel" data-stage="processing" data-business-state="idle" aria-labelledby="catchProcessingHeading">
-      <div class="catch-panel-head"><div><span class="catch-panel-kicker">02 · LIVE RECOGNITION</span><h2 id="catchProcessingHeading">AI 核心识别</h2><p>Detector → 质量门 → Crop → Classifier</p></div><span class="status-tag status-neutral" id="catchProcessingBadge">等待照片</span></div>
+    <section class="catch-panel" data-component="ProcessingStage" data-stage="processing" data-business-state="idle" aria-labelledby="catchProcessingHeading">
+      <div class="catch-panel-head"><div><span class="catch-panel-kicker">02 · LIVE RECOGNITION</span><h2 id="catchProcessingHeading">AI 核心识别</h2><p>从水光中，逐步发现鱼获</p></div><span class="status-tag status-neutral" id="catchProcessingBadge">等待照片</span></div>
       <div class="catch-panel-body">
         <div class="catch-media" id="catchProcessingMedia">
-          <img id="catchProcessingPhoto" alt="正在识别的原始鱼获照片" hidden>
-          <div class="catch-media-empty" id="catchProcessingEmpty">真实照片将在这里保持原样<br>光效只表示视觉进程，不代表模型已成功</div>
-          <div class="catch-water" aria-hidden="true"></div><div class="catch-region-glow" id="catchRegionGlow" aria-hidden="true"></div><div class="catch-bbox" id="catchBBoxOverlay" aria-hidden="true"></div>
+          <img id="catchProcessingPhoto" data-optical-layer="photo-base" alt="正在识别的原始鱼获照片" hidden>
+          <div class="catch-media-empty" id="catchProcessingEmpty">照片将在这里呈现<br>识别期间请稍候</div>
+          <div id="catchPhotoEffects" class="catch-photo-effects" data-component="OpticalHost" data-mask-state="UNAVAILABLE" aria-hidden="true">
+          {% for layer in ['ambient-water','caustic-field','ripple-field','peripheral-refraction','fish-focus','residual-gold-trace'] %}<div data-optical-layer="{{ layer }}"></div>{% endfor %}</div><div class="catch-region-glow" id="catchRegionGlow" aria-hidden="true"></div><div class="catch-bbox" id="catchBBoxOverlay" aria-hidden="true"></div>
         </div>
-        <div class="catch-media-caption"><span>同源原图 · EXIF 方向校正后推理</span><strong id="catchPhotoDimensions">—</strong></div>
+        <div class="catch-media-caption"><span>原始照片 · 保留完整画面</span><strong id="catchPhotoDimensions">—</strong></div>
+        <button class="catch-button" id="catchCancelButton" type="button" hidden>取消本次识别</button>
         <div class="catch-processing-state"><span class="catch-pulse" aria-hidden="true"></span><span id="catchBusinessMessage">等待真实推理</span></div>
-        <ul class="catch-task-list" id="catchTaskList" aria-label="识别阶段状态">
+        <details class="catch-detail" data-component="AdvancedDiagnostics"><summary>高级识别诊断</summary><ul class="catch-task-list" id="catchTaskList" aria-label="识别阶段状态">
           <li class="catch-task" data-task="input_validation"><span class="dot"></span><span>图片校验与方向归一化</span></li>
           <li class="catch-task" data-task="detector"><span class="dot"></span><span>鱼体定位与检测质量门</span></li>
           <li class="catch-task" data-task="crop"><span class="dot"></span><span>标准 Crop</span></li>
           <li class="catch-task" data-task="classifier"><span class="dot"></span><span>鱼种分类</span></li>
           <li class="catch-task" data-task="segmentation"><span class="dot"></span><span>SAM 轮廓增强 · 未通过真实照片评测，当前不绘制精准轮廓</span></li>
         </ul>
-        <details class="catch-detail"><summary>识别详情（模型、BBox、耗时）</summary><pre id="catchDiagnostic">尚无推理数据。</pre></details>
+        <pre id="catchDiagnostic">尚无推理数据。</pre></details>
       </div>
     </section>
 
-    <section class="catch-panel" id="catchResultPanel" data-stage="result" data-business-state="idle" aria-labelledby="catchResultHeading">
+    <section class="catch-panel" id="catchResultPanel" data-component="ResultStage" data-stage="result" data-business-state="idle" aria-labelledby="catchResultHeading">
       <div class="catch-panel-head"><div><span class="catch-panel-kicker">03 · RECOGNITION RESULT</span><h2 id="catchResultHeading">识别结果</h2><p>仅在真实分类结果就绪后显示</p></div><span class="status-tag status-neutral" id="catchResultBadge">等待识别</span></div>
       <div class="catch-panel-body">
-        <div class="catch-empty-state" id="catchResultEmpty"><div><span class="catch-empty-icon" aria-hidden="true">🐟</span><strong>结果会显示在这里</strong><br>识别状态由真实模型响应决定。</div></div>
+        <div class="catch-empty-state" id="catchResultEmpty"><div><span class="catch-empty-icon" aria-hidden="true">◇</span><strong>结果会显示在这里</strong><br>识别状态由真实模型响应决定。</div></div>
         <div class="catch-result-content" id="catchResultContent">
           <div class="catch-media catch-result-media" id="catchResultMedia"><img id="catchResultPhoto" alt="识别结果对应的原始鱼获照片" hidden></div>
           <div class="catch-result-head"><div class="catch-species-block"><span class="catch-species-label" id="catchSpeciesLabel">识别鱼种</span><span class="catch-species-name" id="catchSpeciesName"></span></div><span class="catch-confidence" id="catchConfidence"></span></div>
@@ -147,11 +70,13 @@
             <div class="catch-field full"><label for="catchSpeciesSelect">鱼种确认</label><select id="catchSpeciesSelect" required disabled><option value="">等待真实识别结果</option></select></div>
             <div class="catch-cta-row"><button class="catch-button primary" id="catchSaveButton" type="button" disabled>保存本次鱼获</button><button class="catch-button gold" id="catchMemoryButton" type="button" disabled aria-describedby="catchMemoryNote">继续记录记忆</button><p class="catch-cta-note" id="catchMemoryNote">Web 记忆详情路由尚未登记；此入口暂不可操作。</p></div>
           </form>
-          <p class="catch-rr09-note" id="catchTimingNote">名义 Processing 2800ms + RR09 850ms = 3650ms；真实识别较慢时等待真实结果，不提前揭晓。</p>
+          <p class="catch-rr09-note" id="catchTimingNote" hidden>名义 Processing 2800ms + RR09 850ms = 3650ms；真实识别较慢时等待真实结果，不提前揭晓。</p>
         </div>
       </div>
     </section>
   </div>
+  {% include "platform/catch_recognition_journey.html" %}
+  <footer class="catch-product-footer" data-component="ProductFooter">渔见 AI · 从一张照片，记录一次相遇</footer>
 </div>
 
 <div class="catch-modal-backdrop" id="catchLoginBackdrop" role="presentation">
@@ -167,4 +92,6 @@
 </div>
 {% endblock %}
 
-{% block scripts %}<script src="/static/js/catch_recognition.js?v=catch-recognition-swos-v1"></script>{% endblock %}
+{% block scripts %}
+{% for module in ['photo-session','recognition-api','recognition-controller','stage-view','photo-transition'] %}<script src="/static/js/catch/{{ module }}.js?v=foundation-v2"></script>{% endfor %}
+<script src="/static/js/catch_recognition.js?v=foundation-v2"></script>{% endblock %}

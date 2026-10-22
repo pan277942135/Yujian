@@ -1,0 +1,68 @@
+{
+  "task_id": "YUJIAN_AI_CATCH_RECOGNITION_WEB_FOUNDATION_AND_ARCHITECTURE_V2",
+  "work_a_pr": 190,
+  "work_a_sha": "33e781e2fb2374138b14713b41fb91f5f528bf83",
+  "main_adopted": false,
+  "runtime_visual_verified": false,
+  "references": [
+    {
+      "repository": "pan277942135/Yujian_App",
+      "sha": "33e781e2fb2374138b14713b41fb91f5f528bf83",
+      "path": "design/pages/recognition/web/contracts/Responsive_Rules_V2.json",
+      "status": "DRAFT_DEPENDENT_ON_PR_186_AND_187"
+    },
+    {
+      "repository": "pan277942135/Yujian_App",
+      "sha": "33e781e2fb2374138b14713b41fb91f5f528bf83",
+      "path": "design/pages/recognition/web/contracts/Visual_Tokens_V2.json",
+      "status": "DRAFT_DEPENDENT_ON_PR_186_AND_187"
+    },
+    {
+      "repository": "pan277942135/Yujian_App",
+      "sha": "33e781e2fb2374138b14713b41fb91f5f528bf83",
+      "path": "design/pages/recognition/web/contracts/Component_Geometry_V2.json",
+      "status": "DRAFT_DEPENDENT_ON_PR_186_AND_187"
+    },
+    {
+      "repository": "pan277942135/Yujian_App",
+      "sha": "33e781e2fb2374138b14713b41fb91f5f528bf83",
+      "path": "design/pages/recognition/web/contracts/Authority_References_V2.json",
+      "status": "DRAFT_DEPENDENT_ON_PR_186_AND_187"
+    }
+  ],
+  "implemented": [
+    "ProductShell",
+    "ProductHeader",
+    "StageNavigation",
+    "UploadStage",
+    "ProcessingStage",
+    "ResultStage",
+    "ProcessJourney",
+    "AdvancedDiagnostics",
+    "RecognitionController",
+    "PhotoViewport",
+    "TransitionHost"
+  ],
+  "pending": [
+    "Final optical renderer",
+    "Frozen visual adoption",
+    "Source image pixel measurement",
+    "Active-stage mobile focus",
+    "Result safe crop/background policy"
+  ],
+  "timing": {
+    "processing_ms": 2800,
+    "rr09_ms": 850,
+    "r05_ms": 100
+  },
+  "thresholds": "EXISTING_BACKEND_UNCHANGED_0.45_0.12_VS_LEGACY_0.55_UNRESOLVED",
+  "states_preserved": [
+    "HIGH",
+    "MEDIUM",
+    "LOW",
+    "NO_FISH",
+    "IMAGE_QUALITY",
+    "TECHNICAL_FAILURE"
+  ],
+  "full_suite_status": "BLOCKED_AUTO_REVIEW_METADATA_ACCESS_NOT_RERUN"
+}
