@@ -146,6 +146,7 @@ def start_server() -> tuple[uvicorn.Server, threading.Thread, str]:
 def verify_image(page, image_id: str, preview_selector: str, expected_size: tuple[int, int]) -> None:
     image = page.locator(f"#{image_id}")
     preview = page.locator(preview_selector)
+    image.evaluate("img => img.decode()")
     dimensions = image.evaluate("img => [img.naturalWidth, img.naturalHeight]")
     assert tuple(dimensions) == expected_size, (image_id, dimensions, expected_size)
     image_box = image.bounding_box()
@@ -206,7 +207,7 @@ def main() -> None:
                         page = browser.new_page(viewport={"width": width, "height": height}, device_scale_factor=1)
                         try:
                             page.goto(url, wait_until="networkidle")
-                            page.locator("#detTestModel option[value='UI_SIMULATION_ONLY']").wait_for()
+                            page.locator("#detTestModel option[value='UI_SIMULATION_ONLY']").wait_for(state="attached")
                             page.locator("#detTestFile").set_input_files(str(photo_path))
                             page.locator("#detTestOriginal").wait_for(state="visible")
                             verify_image(page, "detTestOriginal", ".det-fish-test-grid .panel:first-child .det-fish-image-preview", dimensions)
