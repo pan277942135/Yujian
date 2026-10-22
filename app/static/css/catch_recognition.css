@@ -131,7 +131,7 @@
 .catch-product-title{color:#0B2D4B;font-size:16px;font-weight:600}
 .catch-platform-return{color:#245D50;font-size:14px}
 .catch-page{--catch-ink:#0B2D4B;--catch-muted-reference:#748897;--catch-muted:#637480;--catch-line:#DCE7E1;--catch-green:#245D50;--catch-gold:#D6A541;--catch-water:#7CAAA2;position:relative;color:var(--catch-ink)}
-.catch-page::before{content:"";position:absolute;inset:-24px -7vw auto;height:460px;z-index:-1;pointer-events:none;background:radial-gradient(ellipse at 18% 7%,rgba(124,170,162,.13),transparent 54%),radial-gradient(ellipse at 84% 20%,rgba(214,165,65,.08),transparent 42%)}
+.catch-page::before{content:"";position:absolute;inset:-24px 0 auto;height:460px;z-index:-1;pointer-events:none;background:radial-gradient(ellipse at 18% 7%,rgba(124,170,162,.13),transparent 54%),radial-gradient(ellipse at 84% 20%,rgba(214,165,65,.08),transparent 42%)}
 .catch-page .page-heading h1{font-size:28px;font-weight:500;line-height:34px;letter-spacing:0}
 .catch-page .page-heading p,.catch-intro{font-size:16px;line-height:24px;color:#637985}
 .catch-intro{margin-top:-8px;margin-bottom:20px}
