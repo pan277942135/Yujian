@@ -1,26 +1,29 @@
 {% extends "platform/base.html" %}
 {% set product_shell = true %}
-{% block head %}<link rel="stylesheet" href="/static/css/swos_preview.css">{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/css/swos_preview.css?v=real-model-sam-v1">{% endblock %}
 {% block content %}
 <main class="swos-workbench" id="swosWorkbench">
-  <header><h1>SWOS · 可播放动效验收</h1><p>本地照片视觉 Fixture。不会上传图片或调用识别模型；“鱼种名称”仅用于检查中文笔画。</p></header>
+  <header><h1>SWOS · 可播放动效验收</h1><p>选择照片只保存在当前浏览器。点击“真实识别并播放”后，照片才发送到同源识别服务；推理不保存照片。Fixture 模式只检查时间线，不代表识别结果。</p></header>
   <div class="swos-layout">
     <section class="swos-stage" aria-label="动画画布"><canvas id="swosCanvas" aria-label="照片和光学效果"></canvas><div class="swos-empty" id="swosEmpty">选择本地照片后播放完整 3650ms 动效</div></section>
     <aside class="swos-controls" aria-label="验收控制台">
-      <label>本地真实照片 <input id="swosPhoto" type="file" accept="image/jpeg,image/png,image/webp"></label>
-      <label>中文标题 Fixture <input id="swosName" value="鱼种名称" maxlength="16" aria-label="测试中文标题"></label>
+      <label>本地照片（选择不上传） <input id="swosPhoto" type="file" accept="image/jpeg,image/png,image/webp"></label>
+      <button id="swosInfer" type="button" disabled>真实识别并播放</button>
+      <output id="swosRunStatus" role="status" aria-live="polite">尚未调用识别服务。</output>
+      <label>测试标题 Fixture <input id="swosName" value="鱼种名称" maxlength="16" aria-label="测试中文标题 Fixture"></label>
       <div class="swos-row"><button id="swosPlay">播放</button><button id="swosRestart">重播</button><button id="swosPrev">上一帧</button><button id="swosNext">下一帧</button></div>
       <label>时间轴 <input id="swosSeek" type="range" min="0" max="3650" step="1" value="0"><output id="swosTime">P0 · 0ms</output></label>
       <label>速度 <select id="swosRate"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option></select></label>
       <label>视口 <select id="swosViewport"><option value="360,640">360 × 640</option><option value="390,844">390 × 844</option><option value="430,932">430 × 932</option><option value="480,800">480 × 800</option><option value="768,1024">768 × 1024</option><option value="1024,768">1024 × 768</option><option value="1280,800">1280 × 800</option><option value="1440,1000">1440 × 1000</option><option value="320,480">320 × 480</option><option value="free">自由宽高</option></select></label>
       <div class="swos-row"><label>宽 <input id="swosWidth" type="number" min="240" max="2000" value="360"></label><label>高 <input id="swosHeight" type="number" min="320" max="2000" value="640"></label></div>
-      <div class="swos-row"><label><input id="swosWater" type="checkbox" checked>水光</label><label><input id="swosFish" type="checkbox" disabled title="本地照片没有可信鱼体 Mask">鱼体金光（缺少可信 Mask）</label><label><input id="swosCompare" type="checkbox">原图对照</label></div>
+      <div class="swos-row"><label><input id="swosWater" type="checkbox" checked>水面光场</label><label><input id="swosRegion" type="checkbox" disabled title="真实检测尚未返回 BBox">BBox 柔光</label><label><input id="swosFish" type="checkbox" disabled title="真实 SAM Mask 尚未返回">SAM REVIEW_PROXY</label><label><input id="swosCompare" type="checkbox">原图对照</label></div>
+      <div class="swos-row"><label><input id="swosCore" type="checkbox" checked>Core</label><label><input id="swosSoft" type="checkbox" checked>Soft Glow</label><label><input id="swosHalo" type="checkbox" checked>Halo</label><label><input id="swosTransfer" type="checkbox" checked>金光转移</label><label><input id="swosTextMask" type="checkbox" checked>中文笔画遮罩</label></div>
       <label><input id="swosReduce" type="checkbox">Reduce Motion</label>
       <div id="swosKeys" class="swos-keys" aria-label="15 个关键帧"></div>
-      <div class="swos-row"><button id="swosExport">导出当前帧 PNG</button><button id="swosRecord">录制播放 WebM</button></div>
+      <div class="swos-row"><button id="swosExport">导出当前帧 PNG</button><button id="swosExportTrace">导出运行参数 JSON</button><button id="swosRecord">录制播放 WebM</button></div>
       <pre id="swosInfo" aria-live="polite"></pre>
     </aside>
   </div>
 </main>
 {% endblock %}
-{% block scripts %}<script src="/static/js/catch/swos-preview.js"></script>{% endblock %}
+{% block scripts %}<script src="/static/js/catch/photo-session.js?v=real-model-sam-v1"></script><script src="/static/js/catch/recognition-api.js?v=real-model-sam-v1"></script><script src="/static/js/catch/swos-preview.js?v=real-model-sam-v1"></script>{% endblock %}

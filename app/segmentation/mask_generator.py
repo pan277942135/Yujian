@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import tempfile
@@ -74,6 +75,29 @@ def initialize_segmentation_model() -> bool:
     except Exception:
         logger.exception("Segmentation unavailable: SAM checkpoint load failed")
         return False
+
+
+@lru_cache(maxsize=1)
+def segmentation_checkpoint_provenance() -> dict[str, str | int]:
+    """Return the identity of the checkpoint currently configured for SAM.
+
+    This intentionally resolves the checkpoint only when the candidate SAM
+    path has actually run.  It does not make application startup depend on the
+    optional model or probe external metadata services.
+    """
+    checkpoint = _checkpoint_path()
+    digest = hashlib.sha256()
+    size = 0
+    with checkpoint.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            size += len(chunk)
+            digest.update(chunk)
+    model_type = os.getenv("SEGMENTATION_MODEL_TYPE", "vit_b").strip().lower()
+    return {
+        "model_version": f"SAM_{model_type.upper()}",
+        "checkpoint_sha256": digest.hexdigest(),
+        "checkpoint_bytes": size,
+    }
 
 def generate_mask(image: Image.Image, bbox: BBox) -> np.ndarray:
     predictor = _load_predictor()

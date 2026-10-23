@@ -62,10 +62,10 @@ async function loadModels(){
     const available=detTestModels.filter(item=>item.available);
     select.innerHTML=available.map(item=>'<option value="'+esc(item.model_version)+'">'+esc(item.model_version)+(item.is_configured_production_version?' · 当前配置版本':'')+'</option>').join('');
     if(!available.length){select.innerHTML='<option value="">暂无可测试模型</option>';}
-    const chosen=available.find(item=>item.is_configured_production_version)||available[0];
+    const chosen=available.find(item=>item.model_version===data.default_model_version)||available.find(item=>item.is_configured_production_version)||available[0];
     if(chosen)select.value=chosen.model_version;
     const unavailable=detTestModels.filter(item=>!item.available).map(item=>item.model_version+'：'+item.reason).join('；');
-    document.getElementById('detTestModelMeta').textContent=chosen?(chosen.dataset_version+' · '+(chosen.onnx_sha256?'SHA-256 '+chosen.onnx_sha256:'SHA 尚不可用')):(unavailable||'暂无模型产物');
+    document.getElementById('detTestModelMeta').textContent=chosen?(chosen.dataset_version+' · '+(chosen.onnx_sha256?'SHA-256 '+chosen.onnx_sha256:'SHA 尚不可用')+' · '+(chosen.model_version===data.default_model_version?'默认最新可用测试候选':'当前测试选择')):(unavailable||'暂无模型产物');
     if(unavailable){document.getElementById('detTestNotice').innerHTML='<div class="notice warning">不可用模型：'+esc(unavailable)+'</div>';}
   }catch(error){select.innerHTML='<option value="">模型列表读取失败</option>';document.getElementById('detTestNotice').innerHTML='<div class="error-state">'+esc(platformError(error))+'</div>';}
   updateDetTestButton();

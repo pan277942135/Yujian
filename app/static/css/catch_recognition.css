@@ -175,6 +175,10 @@
 .catch-photo-effects [data-optical-layer="peripheral-refraction"]{mix-blend-mode:screen;background:radial-gradient(ellipse 112% 74% at 50% 100%,transparent 42%,rgba(121,174,165,.22) 69%,rgba(217,184,115,.10) 81%,transparent 100%);filter:blur(5px)}
 .catch-photo-effects [data-optical-layer="fish-focus"]{inset:auto;display:block;border-radius:48%;background:radial-gradient(ellipse at center,rgba(242,201,110,.34),rgba(214,165,65,.19) 47%,rgba(214,165,65,.04) 73%,transparent 100%);filter:blur(12px);mix-blend-mode:screen;pointer-events:none}
 .catch-photo-effects [data-optical-layer="residual-gold-trace"]{visibility:hidden}
+#catchMaskCanvas{position:absolute;z-index:3;inset:0;width:100%;height:100%;pointer-events:none}
+#catchWaterGLCanvas,#catchWater2DCanvas{position:absolute;z-index:2;inset:0;width:100%;height:100%;pointer-events:none}
+.catch-sam-review-control{display:flex;align-items:center;gap:8px;margin-top:10px;color:#7a5b2a;font-size:12px;font-weight:750}
+.catch-sam-review-note{margin:6px 0 0;padding:8px 10px;border-radius:8px;background:#fff8e9;color:#795d31;font-size:11px;line-height:1.5}
 .catch-media-caption{color:#637985}
 .catch-bbox{border:1px dashed rgba(214,165,65,.9);border-radius:2px}
 .catch-result-media{position:relative;aspect-ratio:322/210;border-radius:12px;background:#E9EFEC;overflow:hidden}

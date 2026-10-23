@@ -37,15 +37,17 @@ def main():
             browser=pw.chromium.launch()
             try:
                 page=browser.new_page(viewport={'width':1440,'height':1000})
-                errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
+                errors=[];requests=[];page.on('pageerror',lambda error:errors.append(str(error)))
+                page.on('request',lambda request:requests.append(request.url) if request.method=='POST' else None)
                 page.goto(f'http://127.0.0.1:{port}/swos-preview',wait_until='networkidle')
                 page.locator('#swosPhoto').set_input_files(source)
                 page.locator('#swosEmpty').wait_for(state='hidden')
                 records=[]
                 for id,at in [('P0',0),('P1',350),('P2',950),('P3',1200),('P4',1550),('P5',2050),('P6',2600),('P7',2800),('R0',2800),('R0.5',2900),('R1',3000),('R2',3180),('R3',3350),('R4',3480),('R5',3650)]:
-                    page.locator('#swosSeek').evaluate('(n,v)=>{n.value=v;n.dispatchEvent(new Event("input",{bubbles:true}))}',str(at))
+                    page.get_by_role('button',name=id,exact=True).click()
                     trace=json.loads(page.locator('#swosInfo').inner_text())
-                    assert trace['elapsed_ms']==at and trace['mask_trust']=='NONE'
+                    assert trace['elapsed_ms']==at and trace['frame']==id and trace['mask_trust']=='TEST_FIXTURE'
+                    assert trace['fixture_only'] is True
                     page.locator('#swosCanvas').screenshot(path=str(OUT/f'{id.replace(".","_")}-{at}.png'))
                     records.append({'key':id,'at':at,'photo_rect':trace['photo_rect'],'outer_rect':trace['outer_rect']})
                 assert records[7]['photo_rect']==records[8]['photo_rect']
@@ -61,6 +63,8 @@ def main():
                     ambient_pixel_delta=sum(ImageStat.Stat(difference).mean)/3
                     assert ambient_pixel_delta>2.5, f'ambient optical field imperceptible: {ambient_pixel_delta:.2f}'
                 assert not page.locator('#swosFish').is_enabled()
+                assert page.locator('#swosInfer').is_enabled()
+                assert not requests, f'choosing a local photo unexpectedly sent a request: {requests}'
                 for w,h in [(1440,1000),(1280,800),(1024,768),(768,1024),(480,800),(430,932),(390,844),(360,640),(320,480)]:
                     page.locator('#swosWidth').fill(str(w));page.locator('#swosHeight').fill(str(h));page.locator('#swosHeight').dispatch_event('change')
                     page.locator('#swosSeek').evaluate('(n)=>{n.value=2900;n.dispatchEvent(new Event("input",{bubbles:true}))}')
@@ -68,7 +72,7 @@ def main():
                     assert trace['photo_rect']['w']>0 and trace['photo_rect']['h']>0
                     page.locator('#swosCanvas').screenshot(path=str(OUT/f'viewport-{w}x{h}.png'))
                 assert not errors,errors
-                (OUT/'trace.json').write_text(json.dumps({'source':'verified public fixture; visual test only','frames':records,'ambient_pixel_delta_P3':ambient_pixel_delta,'mask_trust':'NONE','browser':browser.version,'errors':errors},ensure_ascii=False,indent=2))
+                (OUT/'trace.json').write_text(json.dumps({'source':'verified public fixture; visual test only','frames':records,'ambient_pixel_delta_P3':ambient_pixel_delta,'mask_trust':'TEST_FIXTURE','real_inference_requested':False,'browser':browser.version,'errors':errors},ensure_ascii=False,indent=2))
                 page.close()
             finally:browser.close()
     finally:server.should_exit=True;thread.join(timeout=5)

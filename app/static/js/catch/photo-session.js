@@ -30,13 +30,35 @@
       this.url = URL.createObjectURL(file); this.width = width; this.height = height;
       this.aspectRatio = width / height; this.orientation = "BROWSER_EXIF_NORMALIZED";
       this.processingGeometry = null; this.resultGeometry = null; this.bbox = null;
-      this.mask = {status:"UNAVAILABLE",value:null}; this.result = null;
+      this.sourceSha256 = null; this.mask = {status:"NONE",value:null}; this.result = null;
     }
     geometry(frame, fit = "contain") { return viewport(this.width,this.height,frame,fit); }
     accept(result) {
       this.result = result;
-      this.bbox = validBox(result.detector?.detections?.[0]?.bbox);
-      // Optional masks remain unavailable until a separately admitted qualification.
+      this.sourceSha256 = result.input?.source_sha256 || null;
+      this.bbox = validBox(result.detector?.quality_gate?.primary_bbox || result.detector?.detections?.[0]?.bbox);
+      const trust = result.segmentation?.geometry_trust_state;
+      const mask = result.segmentation?.mask;
+      const sameSource = Boolean(this.sourceSha256 && result.segmentation?.source_image_sha256 === this.sourceSha256
+        && mask?.source_image_sha256 === this.sourceSha256);
+      const sameDimensions = mask?.width === this.width && mask?.height === this.height;
+      const sameBox = validBox(result.segmentation?.bbox) && this.bbox
+        && ["x1","y1","x2","y2"].every((key) => Math.abs(result.segmentation.bbox[key] - this.bbox[key]) < 0.00001);
+      if (trust === "REVIEW_PROXY" && mask?.data_base64 && sameSource && sameDimensions && sameBox) {
+        this.mask = {
+          status:"REVIEW_PROXY",
+          value:`data:image/png;base64,${mask.data_base64}`,
+          sha256:mask.sha256,
+          sourceSha256:this.sourceSha256,
+          width:mask.width,
+          height:mask.height,
+          centroid:mask.centroid,
+          renderAllowed:result.segmentation.quality?.status !== "INVALID" && mask.render_allowed_in_review_mode === true,
+          quality:result.segmentation.quality,
+        };
+      } else {
+        this.mask = {status:this.bbox ? "BBOX_ONLY" : "NONE",value:null};
+      }
     }
     dispose() { URL.revokeObjectURL(this.url); }
   }
