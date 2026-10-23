@@ -69,9 +69,9 @@
       float b=sin((p.y+warp*.13)*7.1-t*.38);
       float lattice=abs(a*b);
       float cells=1.0-smoothstep(.12,.63,lattice);
-      float patch=smoothstep(.22,.78,low+warp*.2);
+      float causticPatch=smoothstep(.22,.78,low+warp*.2);
       float upward=smoothstep(.02,.92,1.0-uv.y);
-      float caustic=cells*patch*(.42+.58*upward);
+      float caustic=cells*causticPatch*(.42+.58*upward);
       float alpha=clamp(caustic*u_strength*.34,0.0,.24);
       vec3 color=mix(vec3(.57,.78,.72),vec3(1.0,.84,.57),smoothstep(.56,.9,warp));
       out_color=vec4(color,alpha);
@@ -80,7 +80,7 @@
   function compileShader(gl,type,source,onError){
     const shader=gl.createShader(type);gl.shaderSource(shader,source);gl.compileShader(shader);
     if(!gl.getShaderParameter(shader,gl.COMPILE_STATUS)){
-      const diagnostic=(gl.getShaderInfoLog(shader)||"NO_SHADER_INFO_LOG").replace(/\\s+/g," ").trim().slice(0,160);
+      const diagnostic=(gl.getShaderInfoLog(shader)||"NO_SHADER_INFO_LOG").replace(/\s+/g," ").trim().slice(0,160);
       onError?.(diagnostic);gl.deleteShader(shader);return null;
     }
     return shader;

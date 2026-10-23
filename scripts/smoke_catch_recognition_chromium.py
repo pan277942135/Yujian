@@ -395,10 +395,7 @@ def main() -> None:
                     assert water_runtime["frame"]=="P3" and water_runtime["water_strength"]>0,water_runtime
                     assert water_runtime["backend"] in ("WEBGL2","CANVAS2D"),water_runtime
                     assert water_runtime["draw_backend"]==water_runtime["backend"] and water_runtime["draw_count"]>0,water_runtime
-                    if water_runtime["backend"]=="WEBGL2":
-                        assert water_runtime["webgl_canvas_hidden"] is False and water_runtime["canvas2d_hidden"] is True,water_runtime
-                        assert water_runtime["fallback_reason"] is None,water_runtime
-                    else:
+                    if water_runtime["backend"]=="CANVAS2D":
                         assert water_runtime["webgl_canvas_hidden"] is True and water_runtime["canvas2d_hidden"] is False,water_runtime
                         assert water_runtime["fallback_reason"],water_runtime
                         water_runtime["fallback_visual_note"]="Canvas2D radial caustics and ripple bands are active; shader refraction is unavailable. No pixel parity is implied."
@@ -411,6 +408,9 @@ def main() -> None:
                     water_runtime["run_id"]=os.environ.get("GITHUB_RUN_ID")
                     (ARTIFACTS/"product-water-render-runtime-ui-simulation.json").write_text(json.dumps(water_runtime,ensure_ascii=False,indent=2),encoding="utf-8")
                     desktop.locator("#catchProcessingMedia").screenshot(path=str(ARTIFACTS/"product-P3-water-render-runtime-ui-simulation.png"))
+                    assert water_runtime["backend"]=="WEBGL2",water_runtime
+                    assert water_runtime["webgl_canvas_hidden"] is False and water_runtime["canvas2d_hidden"] is True,water_runtime
+                    assert water_runtime["fallback_reason"] is None,water_runtime
                     desktop.wait_for_function("document.querySelector('.catch-transition-photo')?.dataset.progress !== undefined", timeout=8000)
                     desktop.wait_for_function("Math.abs(Number(document.querySelector('.catch-transition-photo')?.dataset.progress || 0) - 0.5) < 0.08", timeout=1500)
                     geometry = desktop.evaluate(
