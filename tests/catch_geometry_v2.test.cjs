@@ -62,6 +62,12 @@ test('SWOS exposes the complete 3650ms clock and blocks gold for an unqualified 
  assert.ok(Number(focus.style.opacity)>0);
  assert.equal(focus.dataset.geometryTrust,'BBOX_ONLY_SOFT_REGION');
  assert.equal(nodes[6].style.opacity,'0');
+ const p7=renderer.renderAt(2800);
+ assert.equal(p7.frame,'P7');
+ assert.equal(p7.waterStrength,0);
+ assert.equal(p7.goldStrength,100);
+ assert.equal(media.dataset.relativeWaterStrength,'0');
+ assert.equal(media.dataset.relativeFishGoldStrength,'100');
  renderer.startReveal(0,{revealFrames:[{id:'R0',at:0},{id:'R5',at:850}],revealWaterStrength:[0,0],revealGoldStrength:[0,100]},{resultState:'RESULT_HIGH',maskTrust:'BBOX_ONLY'});
  assert.equal(media.dataset.swosPhase,'RESULT_REVEAL');
  assert.equal(focus.dataset.geometryTrust,'BBOX_ONLY_SOFT_REGION');

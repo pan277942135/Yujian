@@ -398,9 +398,9 @@ def main() -> None:
                     assert 0.42 <= geometry["progress"] <= 0.58, geometry
                     assert max(geometry[key] for key in ("leftError", "topError", "widthError", "heightError")) <= 4, geometry
                     desktop.wait_for_function("document.querySelector('#catchResultPanel')?.dataset.revealState === 'complete'", timeout=7000)
-                    assert desktop.locator('#catchProcessingMedia').get_attribute('data-swos-frame')=='P7'
+                    assert desktop.locator('#catchProcessingMedia').get_attribute('data-swos-frame')=='R5'
                     assert desktop.locator('#catchProcessingMedia').get_attribute('data-relative-water-strength')=='0'
-                    assert desktop.locator('#catchProcessingMedia').get_attribute('data-relative-fish-gold-strength')=='100'
+                    assert desktop.locator('#catchProcessingMedia').get_attribute('data-relative-fish-gold-strength')=='0'
                     assert desktop.locator('#catchResultPanel').get_attribute('data-rr09-frame')=='R5'
                     assert not desktop.locator('#catchTabResult').is_disabled()
                     assert desktop.locator("#catchSpeciesName").inner_text() == "草鱼"
