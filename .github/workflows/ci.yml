@@ -180,6 +180,6 @@ jobs:
           name: catch-recognition-chromium-ui-simulation-${{ github.run_id }}
           path: |
             test-results/catch-recognition-chromium/*.png
-            test-results/catch-recognition-chromium/render-capabilities.json
+            test-results/catch-recognition-chromium/*.json
             test-results/swos-preview-chromium/*
           if-no-files-found: warn

@@ -33,7 +33,7 @@
       caustic:(0.24*Math.pow(water,0.78)).toFixed(3),
       ripple:(0.09*Math.pow(water,0.7)).toFixed(3),
       refraction:(0.13*Math.sqrt(water)).toFixed(3),
-      focus:(0.15*Math.pow(gold,0.8)).toFixed(3),
+      focus:(0.24*Math.pow(gold,0.8)).toFixed(3),
     };
   }
 
