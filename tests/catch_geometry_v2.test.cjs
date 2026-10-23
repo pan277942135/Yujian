@@ -47,8 +47,11 @@ test('SWOS exposes the complete 3650ms clock and blocks gold for an unqualified 
  const host={querySelectorAll:()=>nodes};
  const media={dataset:{}};const focus={style:{},dataset:{},removeAttribute(){}};
  const renderer=context.window.YujianCatch.createSwosRenderer({media,host,focus,getReducedMotion:()=>true});
- renderer.start(0,{processingFrames:[{id:'P0',at:0},{id:'P7',at:2800}],waterStrength:[0,0],goldStrength:[0,100]});
+ renderer.start(0,{processingFrames:[{id:'P0',at:0},{id:'P7',at:2800}],waterStrength:[0,75],goldStrength:[0,100]});
  renderer.setGeometry({x1:.1,y1:.2,x2:.8,y2:.9});
+ renderer.renderAt(1550);
+ assert.ok(Number(focus.style.opacity)>0);
+ assert.equal(focus.dataset.geometryTrust,'BBOX_ONLY_SOFT_REGION');
  renderer.startReveal(0,{revealFrames:[{id:'R0',at:0},{id:'R5',at:850}],revealWaterStrength:[0,0],revealGoldStrength:[0,100]},{resultState:'RESULT_HIGH',maskTrust:'BBOX_ONLY'});
  assert.equal(media.dataset.swosPhase,'RESULT_REVEAL');
  assert.equal(focus.dataset.geometryTrust,'BBOX_ONLY_SOFT_REGION');

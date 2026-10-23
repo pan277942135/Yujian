@@ -143,7 +143,11 @@
       const waterStrength=sampleCurve(frames,water,elapsedMs);
       const goldStrength=sampleCurve(frames,gold,elapsedMs);
       const goldAllowed=mode==="reveal"&&resultState==="RESULT_HIGH"&&maskTrust==="TRUSTED_MASK";
-      const visual=paintForStrength(waterStrength,goldAllowed?goldStrength:0);
+      // BBox-only processing focus is a restrained spatial cue, not a gold
+      // reveal. Keep it visible for the safe fallback while reserving gold
+      // pixels for the trusted-mask result path.
+      const focusStrength=bbox?(goldAllowed?goldStrength:waterStrength):0;
+      const visual=paintForStrength(waterStrength,focusStrength);
       const frame=frameAt(frames,elapsedMs);
       media.dataset.swosFrame=frame;
       media.dataset.swosPhase=mode==="reveal"?"RESULT_REVEAL":"PROCESSING";
