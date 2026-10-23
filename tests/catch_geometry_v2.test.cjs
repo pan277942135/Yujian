@@ -52,7 +52,10 @@ test('SWOS exposes the complete 3650ms clock and blocks gold for an unqualified 
  const host={querySelectorAll:()=>nodes};
  const media={dataset:{}};const focus={style:{},dataset:{},removeAttribute(){}};
  const renderer=context.window.YujianCatch.createSwosRenderer({media,host,focus,getReducedMotion:()=>true});
- renderer.start(0,{processingFrames:[{id:'P0',at:0},{id:'P7',at:2800}],waterStrength:[0,75],goldStrength:[0,100]});
+ renderer.start(0,{
+  processingFrames:[{id:'P0',at:0},{id:'P1',at:350},{id:'P2',at:950},{id:'P3',at:1200},{id:'P4',at:1550},{id:'P5',at:2050},{id:'P6',at:2600},{id:'P7',at:2800}],
+  waterStrength:[0,10,45,75,60,35,10,0],goldStrength:[0,0,15,45,100,100,100,100],
+ });
  renderer.setGeometry({x1:.1,y1:.2,x2:.8,y2:.9});
  renderer.renderAt(1550);
  assert.equal(focus.style.opacity,t.paintForStrength(60,t.bboxFallbackFocusStrength(60)).focus);
