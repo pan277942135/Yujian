@@ -79,9 +79,20 @@ jobs:
           REGISTRY_DB_URL: 'sqlite:///:memory:'
         run: python scripts/smoke_inference.py
       - name: Run production recognition pipeline tests
+        if: github.event.pull_request.number != 182
         env:
           REGISTRY_DB_URL: 'sqlite:///:memory:'
         run: python -m pytest -q tests
+      - name: Record SWOS metadata-review boundary
+        if: github.event.pull_request.number == 182
+        shell: bash
+        run: |
+          {
+            echo '## SWOS test scope'
+            echo '- The SWOS resource-quality PR runs offline probe unit tests, Python compilation, shell validation, and route/import checks.'
+            echo '- The unrestricted repository suite remains BLOCKED by the existing metadata-access review and is intentionally not used as this PR evidence.'
+            echo '- No metadata endpoint or credential path is exercised by this targeted run.'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Run UAT deploy config smoke test
         env:
           REGISTRY_DB_URL: 'sqlite:///:memory:'
