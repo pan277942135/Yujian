@@ -25,6 +25,12 @@
 
   // Contract strengths are perceptual relative values, never CSS alpha. These
   // bounded curves translate them into a restrained, layered browser treatment.
+  // BBox fallback follows the water-focus curve (0–75), while paintForStrength
+  // accepts focus on a 0–100 scale. Preserve that contract without inflating CSS alpha.
+  function bboxFallbackFocusStrength(waterStrength){
+    return Math.max(0,Math.min(100,(Number(waterStrength)||0)*(100/75)));
+  }
+
   function paintForStrength(waterStrength,goldStrength){
     const water=Math.max(0,Math.min(1,waterStrength/75));
     const gold=Math.max(0,Math.min(1,goldStrength/100));
@@ -146,7 +152,7 @@
       // BBox-only processing focus is a restrained spatial cue, not a gold
       // reveal. Keep it visible for the safe fallback while reserving gold
       // pixels for the trusted-mask result path.
-      const focusStrength=bbox?(goldAllowed?goldStrength:waterStrength):0;
+      const focusStrength=bbox?(goldAllowed?goldStrength:bboxFallbackFocusStrength(waterStrength)):0;
       const visual=paintForStrength(waterStrength,focusStrength);
       const frame=frameAt(frames,elapsedMs);
       media.dataset.swosFrame=frame;
@@ -252,6 +258,6 @@
     });
   }
 
-  core.SWOSTimeline=Object.freeze({sampleCurve,frameAt,paintForStrength,processingMs:PROCESSING_MS,revealMs:REVEAL_MS,totalMs:TOTAL_MS});
+  core.SWOSTimeline=Object.freeze({sampleCurve,frameAt,paintForStrength,bboxFallbackFocusStrength,processingMs:PROCESSING_MS,revealMs:REVEAL_MS,totalMs:TOTAL_MS});
   core.createSwosRenderer=createSwosRenderer;
 })();

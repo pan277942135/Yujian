@@ -245,6 +245,8 @@ def main() -> None:
                     desktop.locator("#catchFileInput").set_input_files(str(photo_path))
                     desktop.locator("#catchUploadPhoto").evaluate("image => image.decode()")
                     assert desktop.locator("#catchUploadPhoto").evaluate("image => [image.naturalWidth, image.naturalHeight]") == list(dimensions)
+                    desktop.locator("#catchProcessingPhoto").evaluate("image => image.decode()")
+                    assert desktop.locator("#catchProcessingPhoto").evaluate("image => [image.naturalWidth, image.naturalHeight]") == list(dimensions)
                     assert not desktop.locator("#catchTabProcessing").is_disabled()
                     assert desktop.locator("#catchTabResult").is_disabled()
                     bbox_probe = desktop.evaluate(
@@ -253,8 +255,13 @@ def main() -> None:
                           const stage=document.querySelector('#catchPhotoStage');
                           const host=document.querySelector('#catchPhotoEffects');
                           const focus=document.querySelector('#catchRegionGlow');
-                          Object.assign(stage.style,{position:'relative',inset:'auto',width:'640px',height:'400px'});
-                          Object.assign(media.style,{width:'640px',height:'400px',aspectRatio:'auto'});
+                          const sourcePhoto=document.querySelector('#catchProcessingPhoto');
+                          const sourceDimensions=[sourcePhoto?.naturalWidth||0,sourcePhoto?.naturalHeight||0];
+                          if(!sourcePhoto?.complete||sourceDimensions.some(value=>value<=0))throw new Error('processing photo is not fully decoded');
+                          const stageWidth=640;
+                          const stageHeight=Math.max(1,Math.round(stageWidth*sourceDimensions[1]/sourceDimensions[0]));
+                          Object.assign(stage.style,{position:'relative',inset:'auto',width:`${stageWidth}px`,height:`${stageHeight}px`});
+                          Object.assign(media.style,{width:`${stageWidth}px`,height:`${stageHeight}px`,aspectRatio:'auto'});
                           Object.assign(host.style,{position:'absolute',inset:'0',width:'100%',height:'100%'});
                           const renderer=window.YujianCatch.createSwosRenderer({
                             media,host,focus,photoStage:stage,
@@ -278,6 +285,9 @@ def main() -> None:
                             geometryTrust:focus.dataset.geometryTrust,
                             maskTrust:media.dataset.maskTrust,
                             bboxOutlineDisplay:getComputedStyle(document.querySelector('#catchBBoxOverlay')).display,
+                            source_photo_loaded:sourcePhoto.complete&&sourcePhoto.naturalWidth>0,
+                            sourceDimensions,
+                            stageRect:stage.getBoundingClientRect().toJSON(),
                             mediaRect:media.getBoundingClientRect().toJSON(),
                             focusRect:focus.getBoundingClientRect().toJSON(),
                           };
@@ -289,6 +299,11 @@ def main() -> None:
                     assert bbox_probe["frame"] == "P4"
                     assert bbox_probe["geometryTrust"] == "NONE_NO_SPATIAL_FOCUS"
                     assert bbox_probe["maskTrust"] == "NONE"
+                    assert bbox_probe["source_photo_loaded"] is True
+                    assert bbox_probe["sourceDimensions"] == list(dimensions)
+                    source_ratio=dimensions[0]/dimensions[1]
+                    assert abs(bbox_probe["stageRect"]["width"]/bbox_probe["stageRect"]["height"]-source_ratio) < 0.005, bbox_probe
+                    assert abs(bbox_probe["mediaRect"]["width"]/bbox_probe["mediaRect"]["height"]-source_ratio) < 0.005, bbox_probe
                     desktop.locator("#catchProcessingMedia").screenshot(path=str(ARTIFACTS / "product-renderer-no-geometry-baseline-TEST_FIXTURE.png"))
                     bbox_focus = desktop.evaluate(
                         """() => {

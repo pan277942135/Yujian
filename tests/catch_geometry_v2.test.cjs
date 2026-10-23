@@ -34,6 +34,11 @@ test('SWOS samples the frozen 8-point curves and keeps perceptual strength separ
  assert.equal(frames.length,8);assert.equal(t.sampleCurve(frames,water,0),0);assert.equal(t.sampleCurve(frames,water,1200),75);assert.equal(t.sampleCurve(frames,water,2800),0);
  assert.equal(t.sampleCurve(frames,gold,1550),100);assert.equal(t.sampleCurve(frames,gold,2800),100);
  assert.equal(t.frameAt(frames,1000),'P2');
+ const p4FallbackFocus=t.bboxFallbackFocusStrength(60);
+ assert.equal(t.bboxFallbackFocusStrength(0),0);
+ assert.equal(p4FallbackFocus,80);
+ assert.equal(t.bboxFallbackFocusStrength(75),100);
+ assert.equal(t.paintForStrength(60,p4FallbackFocus).focus,'0.201');
  const paint=t.paintForStrength(75,100);
  assert.ok(Number(paint.caustic)>0&&Number(paint.caustic)<0.75);
  assert.ok(Number(paint.focus)>0&&Number(paint.focus)<0.25);
@@ -50,8 +55,10 @@ test('SWOS exposes the complete 3650ms clock and blocks gold for an unqualified 
  renderer.start(0,{processingFrames:[{id:'P0',at:0},{id:'P7',at:2800}],waterStrength:[0,75],goldStrength:[0,100]});
  renderer.setGeometry({x1:.1,y1:.2,x2:.8,y2:.9});
  renderer.renderAt(1550);
+ assert.equal(focus.style.opacity,t.paintForStrength(60,t.bboxFallbackFocusStrength(60)).focus);
  assert.ok(Number(focus.style.opacity)>0);
  assert.equal(focus.dataset.geometryTrust,'BBOX_ONLY_SOFT_REGION');
+ assert.equal(nodes[6].style.opacity,'0');
  renderer.startReveal(0,{revealFrames:[{id:'R0',at:0},{id:'R5',at:850}],revealWaterStrength:[0,0],revealGoldStrength:[0,100]},{resultState:'RESULT_HIGH',maskTrust:'BBOX_ONLY'});
  assert.equal(media.dataset.swosPhase,'RESULT_REVEAL');
  assert.equal(focus.dataset.geometryTrust,'BBOX_ONLY_SOFT_REGION');
