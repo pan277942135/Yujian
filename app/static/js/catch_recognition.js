@@ -32,7 +32,10 @@
     processingPhoto: $("catchProcessingPhoto"), processingEmpty: $("catchProcessingEmpty"),
     processingBadge: $("catchProcessingBadge"), businessMessage: $("catchBusinessMessage"),
     dimensions: $("catchPhotoDimensions"), taskList: $("catchTaskList"), diagnostic: $("catchDiagnostic"),
-    bbox: $("catchBBoxOverlay"), regionGlow: $("catchRegionGlow"), resultBadge: $("catchResultBadge"),
+    bbox: $("catchBBoxOverlay"), regionGlow: $("catchRegionGlow"), maskCanvas: $("catchMaskCanvas"),
+    waterGLCanvas: $("catchWaterGLCanvas"), water2DCanvas: $("catchWater2DCanvas"),
+    samReviewControl: $("catchSamReviewControl"), samReviewToggle: $("catchSamReviewToggle"), samReviewNote: $("catchSamReviewNote"),
+    resultBadge: $("catchResultBadge"),
     resultEmpty: $("catchResultEmpty"), resultContent: $("catchResultContent"), resultMedia: $("catchResultMedia"),
     resultPhoto: $("catchResultPhoto"), resultBackdrop: $("catchResultBackdrop"), speciesLabel: $("catchSpeciesLabel"), speciesName: $("catchSpeciesName"),
     confidence: $("catchConfidence"), candidates: $("catchCandidates"), speciesSelect: $("catchSpeciesSelect"),
@@ -48,7 +51,8 @@
     classifier: ["classifier"],
   };
   const swosRenderer = core.createSwosRenderer({
-    media: nodes.processingMedia, host: $("catchPhotoEffects"), focus: nodes.regionGlow,
+    media: nodes.processingMedia, host: $("catchPhotoEffects"), focus: nodes.regionGlow, maskCanvas: nodes.maskCanvas,
+    waterGLCanvas: nodes.waterGLCanvas, water2DCanvas: nodes.water2DCanvas,
   });
 
   function setStatus(message, kind = "") {
@@ -148,6 +152,10 @@
     nodes.candidates.hidden = true;
     nodes.candidates.replaceChildren();
     nodes.bbox.classList.remove("visible");
+    nodes.samReviewToggle.checked = false;
+    nodes.samReviewToggle.disabled = true;
+    nodes.samReviewControl.hidden = true;
+    nodes.samReviewNote.hidden = true;
     swosRenderer.stop();
     nodes.speciesSelect.innerHTML = '<option value="">等待真实识别结果</option>';
     nodes.speciesSelect.disabled = true;
@@ -300,7 +308,29 @@
       crop: result.crop,
       classifier_version: result.classifier?.model_version,
       timings: result.timing,
-      segmentation: result.segmentation,
+      renderer: {
+        selected: nodes.processingMedia.dataset.swosRenderer || "STATIC_CSS",
+        frame_render_p95_ms: nodes.processingMedia.dataset.rendererFrameP95Ms || null,
+        raf_interval_p95_ms: nodes.processingMedia.dataset.rendererRafIntervalP95Ms || null,
+        dropped_frames: Number(nodes.processingMedia.dataset.droppedFrames || 0),
+        device_pixel_ratio: window.devicePixelRatio || 1,
+        viewport: {width: window.innerWidth, height: window.innerHeight},
+      },
+      segmentation: result.segmentation ? {
+        status: result.segmentation.status,
+        reason_code: result.segmentation.reason_code,
+        geometry_trust_state: result.segmentation.geometry_trust_state,
+        model_version: result.segmentation.model_version,
+        checkpoint_sha256: result.segmentation.checkpoint_sha256,
+        source_image_sha256: result.segmentation.source_image_sha256,
+        quality: result.segmentation.quality,
+        mask: result.segmentation.mask ? {
+          sha256: result.segmentation.mask.sha256,
+          width: result.segmentation.mask.width,
+          height: result.segmentation.mask.height,
+          source_image_sha256: result.segmentation.mask.source_image_sha256,
+        } : null,
+      } : null,
     };
     nodes.diagnostic.textContent = JSON.stringify(details, null, 2);
   }
@@ -309,7 +339,20 @@
     clearTasks();
     markTasksFromResult(result);
     const segmentation = nodes.taskList.querySelector('[data-task="segmentation"]');
-    if (segmentation) segmentation.classList.add("failed");
+    if (segmentation) {
+      const state = result.segmentation?.status;
+      const trust = result.segmentation?.geometry_trust_state || "NONE";
+      segmentation.classList.remove("failed", "done", "running");
+      if (state === "REVIEW_READY") {
+        segmentation.classList.add("done");
+        segmentation.querySelector("span:last-child").textContent = `SAM ${result.segmentation.model_version} · ${trust}（仅审查候选）· ${result.segmentation.quality?.status || "质量未测"}`;
+      } else if (trust === "BBOX_ONLY") {
+        segmentation.querySelector("span:last-child").textContent = `SAM 未提供可用 Mask · BBOX_ONLY · ${result.segmentation?.reason_code || "SAM 未启用"}`;
+      } else {
+        segmentation.classList.add("failed");
+        segmentation.querySelector("span:last-child").textContent = `鱼体空间聚焦已关闭 · NONE · ${result.segmentation?.reason_code || "无可信几何"}`;
+      }
+    }
   }
 
   function resultLabel(resultState) {
@@ -476,7 +519,9 @@
     }
     populateSpecies(result, resultState);
     updateSaveAvailability();
-    nodes.timingNote.textContent = `请求 ${result.request_id} · Detector ${result.detector?.model_version || "—"} · Classifier ${result.classifier?.model_version || "—"} · 总耗时 ${result.timing?.total_ms ?? "—"} ms。SAM 轮廓未启用。`;
+    const segmentation = result.segmentation || {};
+    const samSummary = `SAM ${segmentation.status || "未知"} · ${segmentation.geometry_trust_state || "NONE"}${segmentation.checkpoint_sha256 ? ` · checkpoint ${segmentation.checkpoint_sha256.slice(0,12)}` : ""}`;
+    nodes.timingNote.textContent = `请求 ${result.request_id} · Detector ${result.detector?.model_version || "—"} · Classifier ${result.classifier?.model_version || "—"} · SAM ${result.timing?.segmentation_ms ?? 0} ms · 总耗时 ${result.timing?.total_ms ?? "—"} ms。${samSummary}。`;
   }
 
   function updatePhotoGeometry() {
@@ -646,6 +691,12 @@
       state.inference = payload;
       state.phase = "RESULT";
       swosRenderer.setGeometry(state.bbox);
+      const reviewMask = state.photo?.mask?.status === "REVIEW_PROXY" && state.photo.mask.renderAllowed;
+      nodes.samReviewControl.hidden = !reviewMask;
+      nodes.samReviewNote.hidden = !reviewMask;
+      nodes.samReviewToggle.checked = false;
+      nodes.samReviewToggle.disabled = !reviewMask;
+      if (reviewMask) await swosRenderer.setMask(state.photo.mask);
       const elapsed = performance.now() - requestStartedAt;
       nodes.dimensions.textContent = `${payload.input?.width || "—"} × ${payload.input?.height || "—"} · ${payload.input?.format || "—"}`;
       renderDiagnostics(payload);
@@ -927,6 +978,7 @@
     setStatus("本次识别已取消，可重新开始。旧响应不会覆盖当前照片。");
   });
   nodes.input.addEventListener("change", () => chooseFile(nodes.input.files?.[0]));
+  nodes.samReviewToggle.addEventListener("change", () => swosRenderer.setMaskReviewEnabled(nodes.samReviewToggle.checked));
   nodes.start.addEventListener("click", requestRecognition);
   nodes.clear.addEventListener("click", () => clearSelectedPhoto());
   nodes.drop.addEventListener("dragover", (event) => { event.preventDefault(); nodes.drop.classList.add("drag-over"); });

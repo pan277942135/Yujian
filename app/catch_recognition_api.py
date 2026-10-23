@@ -7,19 +7,124 @@ not select a detector version, write image objects, or create training data.
 from __future__ import annotations
 
 import io
+import base64
+import hashlib
 import logging
+import os
+import time
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
-from PIL import Image, UnidentifiedImageError
+import numpy as np
+from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.inference_api import MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, _inspect_image, _predict_bytes
 from app.models import ModelVersion
-from app.segmentation.product_adapter import build_product_segmentation
+from app.recognition_pipeline import BBox
+from app.segmentation.quality_gate import SegmentationQuality
+
+
+def _sam_candidate_enabled() -> bool:
+    return os.getenv("CATCH_SWOS_SAM_CANDIDATE_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _bbox_from_result(result: dict) -> BBox | None:
+    raw = ((result.get("quality_gate") or {}).get("primary_bbox") or {})
+    try:
+        bbox = BBox(float(raw["x1"]), float(raw["y1"]), float(raw["x2"]), float(raw["y2"])).normalized()
+    except (KeyError, TypeError, ValueError):
+        return None
+    return bbox if bbox.width > 0 and bbox.height > 0 else None
+
+
+def _default_segmentation(result: dict, source_sha256: str | None = None) -> dict:
+    has_bbox = _bbox_from_result(result) is not None and bool(result.get("classification_ran"))
+    enabled = _sam_candidate_enabled()
+    return {
+        "status": "NOT_RUN" if enabled and has_bbox else ("DISABLED" if not enabled else "UNAVAILABLE"),
+        "reason_code": "SAM_CANDIDATE_NOT_RUN" if enabled and has_bbox else ("CANDIDATE_FLAG_OFF" if not enabled else "NO_ELIGIBLE_PRIMARY_BBOX"),
+        "geometry_trust_state": "BBOX_ONLY" if has_bbox else "NONE",
+        "model_version": None,
+        "checkpoint_sha256": None,
+        "quality": None,
+        "source_image_sha256": source_sha256,
+        "mask": None,
+    }
+
+
+def _run_same_request_sam(data: bytes, result: dict, source_sha256: str, request_id: str) -> tuple[dict, float]:
+    """Run the existing SAM service from this request's primary detector BBox.
+
+    The function never invokes the detector.  Candidate SAM is opt-in and any
+    failure degrades the geometry trust state while preserving recognition.
+    """
+    payload = _default_segmentation(result, source_sha256)
+    if not _sam_candidate_enabled() or not result.get("classification_ran"):
+        return payload, 0.0
+    bbox = _bbox_from_result(result)
+    if bbox is None:
+        return payload, 0.0
+
+    started = time.perf_counter()
+    try:
+        from app.segmentation.mask_generator import segmentation_checkpoint_provenance
+        from app.segmentation.service import generate_fish_cutout
+
+        with Image.open(io.BytesIO(data)) as source:
+            with ImageOps.exif_transpose(source).convert("RGB") as oriented:
+                segmentation = generate_fish_cutout(oriented, bbox)
+        provenance = segmentation_checkpoint_provenance()
+        mask = np.asarray(segmentation.mask, dtype=bool)
+        mask_image = Image.fromarray(mask.astype(np.uint8) * 255, mode="L")
+        encoded = io.BytesIO()
+        mask_image.save(encoded, format="PNG", optimize=True)
+        mask_png = encoded.getvalue()
+        ys, xs = np.nonzero(mask)
+        centroid = None
+        if len(xs):
+            centroid = {"x": round(float(xs.mean()) / max(1, segmentation.width - 1), 6),
+                        "y": round(float(ys.mean()) / max(1, segmentation.height - 1), 6)}
+        quality = segmentation.quality.value if hasattr(segmentation.quality, "value") else str(segmentation.quality)
+        mask_available = bool(mask.any())
+        payload = {
+            "status": "REVIEW_READY" if mask_available else "UNAVAILABLE",
+            "reason_code": segmentation.reason,
+            # The basic SAM heuristic is useful for review but is not a
+            # production qualification.  Keep the production gate closed.
+            "geometry_trust_state": "REVIEW_PROXY" if mask_available and quality != SegmentationQuality.INVALID.value else "BBOX_ONLY",
+            "model_version": provenance["model_version"],
+            "checkpoint_sha256": provenance["checkpoint_sha256"],
+            "checkpoint_bytes": provenance["checkpoint_bytes"],
+            "source_image_sha256": source_sha256,
+            "bbox": {"x1": bbox.x1, "y1": bbox.y1, "x2": bbox.x2, "y2": bbox.y2},
+            "quality": {
+                "status": quality,
+                "reason": segmentation.reason,
+                "mask_area_ratio": segmentation.mask_area_ratio,
+                "edge_ratio": segmentation.edge_ratio,
+                "connected_components": segmentation.connected_components,
+                "processing_ms": segmentation.processing_ms,
+            },
+            "mask": {
+                "encoding": "image/png; grayscale 0=background, 255=fish",
+                "data_base64": base64.b64encode(mask_png).decode("ascii"),
+                "sha256": hashlib.sha256(mask_png).hexdigest(),
+                "width": segmentation.width,
+                "height": segmentation.height,
+                "source_image_sha256": source_sha256,
+                "centroid": centroid,
+                "render_allowed_in_review_mode": mask_available and quality != SegmentationQuality.INVALID.value,
+            } if mask_available else None,
+        }
+        return payload, round((time.perf_counter() - started) * 1000.0, 1)
+    except Exception as exc:
+        logger.warning("product_sam_candidate_unavailable request_id=%s error_type=%s", request_id, type(exc).__name__)
+        payload.update({"status": "UNAVAILABLE", "reason_code": type(exc).__name__, "geometry_trust_state": "BBOX_ONLY", "model_version": None, "checkpoint_sha256": None, "quality": None, "source_image_sha256": source_sha256, "mask": None})
+        return payload, round((time.perf_counter() - started) * 1000.0, 1)
 
 
 logger = logging.getLogger(__name__)
@@ -86,7 +191,7 @@ def _active_classifier(db: Session) -> ModelVersion:
     return rows[0]
 
 
-def _response_payload(result: dict, request_id: str, *, segmentation: dict | None = None) -> dict:
+def _response_payload(result: dict, request_id: str, source_sha256: str | None = None) -> dict:
     detector = result.get("detector") or {}
     quality_gate = result.get("quality_gate") or {}
     crop = result.get("crop") or None
@@ -97,7 +202,7 @@ def _response_payload(result: dict, request_id: str, *, segmentation: dict | Non
         "request_id": request_id,
         "pipeline_version": result.get("pipeline_version"),
         "result_state": result_state_for_prediction(result),
-        "input": result.get("input") or {},
+        "input": {**(result.get("input") or {}), **({"source_sha256": source_sha256} if source_sha256 else {})},
         "status": result.get("status"),
         "status_wire": result.get("status_wire"),
         "message": result.get("message"),
@@ -129,19 +234,7 @@ def _response_payload(result: dict, request_id: str, *, segmentation: dict | Non
                 for stage in stages
             ],
         },
-        # The adapter never emits mask pixels.  It binds the optional result
-        # to this request's exact bytes and detector box, and keeps all SAM
-        # candidates review-only until independent qualification/sign-off.
-        "segmentation": segmentation
-        or {
-            "status": "NONE",
-            "reason_code": "SEGMENTATION_NOT_RUN",
-            "trust_state": "NONE",
-            "model_version": None,
-            "quality": None,
-            "mask": None,
-            "production_qualified": False,
-        },
+        "segmentation": _default_segmentation(result, source_sha256),
     }
 
 
@@ -184,18 +277,30 @@ def infer_catch_photo(
     db: Session = Depends(get_db),
 ):
     request_id = f"REC_{uuid4().hex}"
+    request_started = time.perf_counter()
     try:
         data, _meta = _read_product_image(file)
+        source_sha256 = hashlib.sha256(data).hexdigest()
         model = _active_classifier(db)
         result = _predict_bytes(db, model.model_version, data, include_intermediates=False)
-        segmentation = build_product_segmentation(data=data, result=result, session_id=request_id)
-        payload = _response_payload(result, request_id, segmentation=segmentation)
+        payload = _response_payload(result, request_id, source_sha256)
+        segmentation, segmentation_ms = _run_same_request_sam(data, result, source_sha256, request_id)
+        payload["segmentation"] = segmentation
+        payload["timing"]["segmentation_ms"] = segmentation_ms
+        payload["timing"]["total_ms"] = round((time.perf_counter() - request_started) * 1000.0, 1)
+        payload["timing"]["stages"].append({
+            "name": "segmentation",
+            "status": "SUCCESS" if segmentation.get("status") == "REVIEW_READY" else segmentation.get("status"),
+            "duration_ms": segmentation_ms,
+        })
         logger.info(
-            "product_recognition_complete request_id=%s detector=%s classifier=%s state=%s total_ms=%s",
+            "product_recognition_complete request_id=%s detector=%s classifier=%s state=%s sam=%s geometry_trust=%s total_ms=%s",
             request_id,
             payload["detector"].get("model_version"),
             payload["classifier"].get("model_version"),
             payload["result_state"],
+            segmentation.get("model_version") or segmentation.get("status"),
+            segmentation.get("geometry_trust_state"),
             payload["timing"].get("total_ms"),
         )
         return JSONResponse(payload, headers={"Cache-Control": "no-store"})
@@ -217,4 +322,4 @@ def infer_catch_photo(
         ) from exc
 
 
-__all__ = ["_active_classifier", "_response_payload", "_read_product_image", "result_state_for_prediction", "router"]
+__all__ = ["_active_classifier", "_response_payload", "_read_product_image", "_run_same_request_sam", "result_state_for_prediction", "router"]

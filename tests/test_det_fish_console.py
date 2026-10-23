@@ -131,6 +131,9 @@ def test_models_api_lists_v03_available_without_v02_artifacts(monkeypatch):
     assert models["DET_FISH_v0.3"]["available"] is True
     assert models["DET_FISH_v0.3"]["dataset_version"] == "DET_DS_v0.3"
     assert models["DET_FISH_v0.3"]["onnx_sha256"] == sha
+    assert payload["default_model_version"] == "DET_FISH_v0.3"
+    assert payload["default_model_reason"] == "LATEST_AVAILABLE_CANDIDATE"
+    assert models["DET_FISH_v0.3"]["is_configured_production_version"] is False
 
 
 @pytest.mark.parametrize(

@@ -1,7 +1,7 @@
 {% extends "platform/base.html" %}
 
 {% set product_shell = true %}
-{% block head %}<link rel="stylesheet" href="/static/css/catch_recognition.css?v=foundation-v2">{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/css/catch_recognition.css?v=swos-sam-review-v1">{% endblock %}
 {% block content %}
 <div class="catch-page" id="catchRecognitionApp" data-component="RecognitionWorkspace" data-stage="IDLE" data-visual-contract="PR190_V2_CANDIDATE_NOT_ADOPTED" data-api="{{ catch_api_url|default('/api/product/catch-recognition/infer') }}" data-ui-simulation="{{ 'true' if ui_simulation else 'false' }}">
   {% if ui_simulation %}<div class="catch-notice" role="note" style="border-color:#e8b7ae;background:#fff1ee;color:#913d34"><strong>UI_SIMULATION_ONLY</strong><span>仅用于 Chromium 排版与交互验收；此页面没有调用生产模型，也不代表真实识别结果。</span></div>{% endif %}
@@ -36,8 +36,8 @@
           <div class="catch-photo-stage" id="catchPhotoStage" hidden>
           <img id="catchProcessingPhoto" data-optical-layer="photo-base" alt="正在识别的原始鱼获照片" hidden>
           <div class="catch-media-empty" id="catchProcessingEmpty">照片将在这里呈现<br>识别期间请稍候</div>
-          <div id="catchPhotoEffects" class="catch-photo-effects" data-component="OpticalHost" data-mask-state="UNAVAILABLE" aria-hidden="true">
-          {% for layer in ['ambient-water','caustic-field','ripple-field','peripheral-refraction','residual-gold-trace'] %}<div data-optical-layer="{{ layer }}"></div>{% endfor %}<div data-optical-layer="fish-focus" class="catch-region-glow" id="catchRegionGlow"></div><div class="catch-bbox" id="catchBBoxOverlay"></div></div>
+          <div id="catchPhotoEffects" class="catch-photo-effects" data-component="OpticalHost" data-mask-state="NONE" aria-hidden="true">
+          {% for layer in ['ambient-water','caustic-field','ripple-field','peripheral-refraction','residual-gold-trace'] %}<div data-optical-layer="{{ layer }}"></div>{% endfor %}<div data-optical-layer="fish-focus" class="catch-region-glow" id="catchRegionGlow"></div><canvas id="catchWaterGLCanvas" aria-hidden="true"></canvas><canvas id="catchWater2DCanvas" aria-hidden="true" hidden></canvas><canvas id="catchMaskCanvas" aria-hidden="true"></canvas><div class="catch-bbox" id="catchBBoxOverlay"></div></div>
           </div>
         </div>
         <div class="catch-media-caption"><span>原始照片 · 保留完整画面</span><strong id="catchPhotoDimensions">—</strong></div>
@@ -48,8 +48,10 @@
           <li class="catch-task" data-task="detector"><span class="dot"></span><span>鱼体定位与检测质量门</span></li>
           <li class="catch-task" data-task="crop"><span class="dot"></span><span>标准 Crop</span></li>
           <li class="catch-task" data-task="classifier"><span class="dot"></span><span>鱼种分类</span></li>
-          <li class="catch-task" data-task="segmentation"><span class="dot"></span><span>SAM 轮廓增强 · 未通过真实照片评测，当前不绘制精准轮廓</span></li>
+          <li class="catch-task" data-task="segmentation"><span class="dot"></span><span>SAM 轮廓增强 · 尚无候选 Mask</span></li>
         </ul>
+        <label class="catch-sam-review-control" id="catchSamReviewControl" hidden><input id="catchSamReviewToggle" type="checkbox" disabled> 调试查看 SAM REVIEW_PROXY Mask</label>
+        <p class="catch-sam-review-note" id="catchSamReviewNote" hidden>REVIEW_PROXY 只用于目视审查。SAM 启发式 GOOD 不代表生产资格；生产 Mask 状态仍为 NOT_QUALIFIED。</p>
         <pre id="catchDiagnostic">尚无推理数据。</pre></details>
       </div>
     </section>
@@ -95,5 +97,5 @@
 {% endblock %}
 
 {% block scripts %}
-{% for module in ['photo-session','recognition-api','recognition-controller','stage-view','photo-transition','swos-renderer'] %}<script src="/static/js/catch/{{ module }}.js?v=web-hifi-v2"></script>{% endfor %}
-<script src="/static/js/catch_recognition.js?v=web-hifi-v2"></script>{% endblock %}
+{% for module in ['photo-session','recognition-api','recognition-controller','stage-view','photo-transition','swos-renderer'] %}<script src="/static/js/catch/{{ module }}.js?v=swos-sam-review-v1"></script>{% endfor %}
+<script src="/static/js/catch_recognition.js?v=swos-sam-review-v1"></script>{% endblock %}
