@@ -2,20 +2,18 @@
 
 ## Live pin checkpoint — 2026-10-23
 
-- Product PR #177: Draft/Open/Unmerged, HEAD `70fd30b17839f5874d87b78a2f6e44eadd3cdeec` (branch `feat/ai-catch-recognition-web-swos-rr09-v1`).
-- No pull-request CI run is visible yet for this exact SHA. The previous run [39978079329](https://github.com/pan277942135/Yujian/actions/runs/39978079329) was on `ae42f3edd7deb7da60d76649507adff04fa182bc`; its `validate` failed only because the deterministic DOM test double did not strip `data-` before mapping to `dataset`. Its Chromium job is still in progress and is not current-source evidence.
-- The latest test fixture now follows native DOM name mapping. The exact-source validation still must pass before any merge/deploy.
-- Workflow `TARGET_SHA` is re-pinned to `70fd30b17839f5874d87b78a2f6e44eadd3cdeec`. This PR remains preparation only; it requires exact-source CI and canonical cross-repository admission before the controlled main-only deployment.
-- PR #182 remains Open/Unmerged. No candidate deployment has run from this configuration; no current-source Revision is verified and default production traffic is unchanged.
+- Product PR #177: Draft/Open/Unmerged, HEAD `73b5070abea65186b1a31adf616f417064c2cedd` (branch `feat/ai-catch-recognition-web-swos-rr09-v1`).
+- Exact-source CI run [39979556132](https://github.com/pan277942135/Yujian/actions/runs/39979556132) is in progress; deployment gates remain closed.
+- Previous exact-source run [39978306782](https://github.com/pan277942135/Yujian/actions/runs/39978306782) passed both jobs on `70fd30b`, but only reported WebGL2 browser capability, not active product renderer draws. This pin adds actual backend/draw-count diagnostics and the Chromium assertion; it needs a new exact-source run.
+- Workflow `TARGET_SHA` is re-pinned to `73b5070abea65186b1a31adf616f417064c2cedd`. PR #182 is preparation only; exact-source CI, canonical cross-repository design audit, and PR #182 CI must pass before the controlled main-only deploy.
+- No candidate deployment has run from this configuration. PR #182 remains Open/Unmerged; no current-source Revision or health SHA is verified, and default production traffic is unchanged.
 
 ## Deployment controls
 
-The main-only workflow verifies the same-repository PR #177 is open/unmerged on its expected branch and that its live HEAD equals the pin. It also requires the latest exact-source `ci.yml` pull-request run to succeed. After the CI and design-contract admission gates pass, the controlled main workflow uses the `catch-pr177` tag and `--no-traffic`, snapshots default traffic before and after, enables `CATCH_SWOS_SAM_CANDIDATE_ENABLED=true` only on the candidate Revision, and checks `APP_GIT_COMMIT`, Revision, `/login`, and the product route. No manual deployment path is authorized.
+The main-only workflow verifies that PR #177 is same-repository, open/unmerged, on the expected branch, and exactly equal to the pin. It also requires the latest exact-source `ci.yml` pull-request run to succeed. After CI and design-contract admission gates pass, the controlled main workflow uses tag `catch-pr177` with `--no-traffic`, compares default traffic before and after, enables `CATCH_SWOS_SAM_CANDIDATE_ENABLED=true` only on the candidate Revision, and checks `APP_GIT_COMMIT`, Revision, `/login`, and the product route. No manual deployment path is authorized.
 
 ## Model and visual evidence boundaries
 
-The resource-quality extension runs the canonical 15-frame contract verifier and calls the real product same-request inference endpoint with four public, license-attributed, digest-pinned photo sources plus clearly labeled derived variants. It checks the inference input SHA, segmentation SHA, BBox and Mask against the same upload, then records detector/classifier/SAM provenance, latency and review-only Mask/overlay/cutout artifacts.
+The quality extension uses the real product same-request inference endpoint with four public, license-attributed, digest-pinned photos. It verifies source SHA/BBox/Mask consistency and records detector/classifier/SAM provenance, latency and review-only Mask/overlay/cutout artifacts.
 
-No deployed authenticated browser session, live inference, candidate Mask, or 15-frame real-photo visual acceptance has been verified. The SWOS renderer's `REVIEW_PROXY` fill is explicitly opted in and remains outside the trusted gold-mask path.
-
-Production Mask remains `NOT_QUALIFIED` pending reviewed ground-truth masks, boundary metrics, difficult-case review and explicit visual sign-off. Browser optical frame-time benchmarking remains separate from SAM/API latency. The broad test suite remains `BLOCKED` pending the existing metadata-access review. No default traffic has moved.
+No deployed authenticated browser session, live inference, candidate Mask, or real-photo 15-frame visual acceptance is verified. A `REVIEW_PROXY` fill is explicitly opted in and remains outside the trusted gold-mask path. Production Mask stays `NOT_QUALIFIED` pending reviewed ground truth, boundary metrics, difficult-case review and visual sign-off. The broad test suite remains `BLOCKED` pending metadata-access security review.
