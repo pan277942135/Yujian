@@ -78,6 +78,8 @@ def _candidate(result: FishSegmentationResult, binding: dict) -> dict:
             "connected_components": result.connected_components,
         },
         "processing_ms": result.processing_ms,
+        "mask_width": result.width,
+        "mask_height": result.height,
         "mask": None,
         "production_qualified": False,
         "source_binding": binding,
@@ -150,6 +152,18 @@ def build_product_segmentation(*, data: bytes, result: dict, session_id: str) ->
         return {
             "status": "TRUSTED_BBOX_ONLY",
             "reason_code": "SAM_RUNTIME_UNAVAILABLE",
+            "trust_state": "BBOX_ONLY",
+            "model_version": None,
+            "quality": None,
+            "mask": None,
+            "production_qualified": False,
+            "source_binding": binding,
+        }
+    if segmentation.width != image.width or segmentation.height != image.height:
+        logger.warning("product_segmentation_source_size_mismatch")
+        return {
+            "status": "TRUSTED_BBOX_ONLY",
+            "reason_code": "SAM_SOURCE_SIZE_MISMATCH",
             "trust_state": "BBOX_ONLY",
             "model_version": None,
             "quality": None,
