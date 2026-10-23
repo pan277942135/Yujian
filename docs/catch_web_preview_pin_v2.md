@@ -1,12 +1,15 @@
 # PR177 B2 no-traffic preview source promotion
 
-Base main: 1d01231477645f5b888b8815c5602576dac90c61.
-B2 candidate source: cb9e3780afb5e2904e3dfe5148210a4ccc3747b4 (PR177, same repository and expected branch; its workflow must pass the latest exact-source CI before cloud authentication).
+Base main: 3c79c00db68ace94d8f6a7dcb4105d0026a09323.
 
-This infrastructure-only change updates the existing fixed source SHA, verifies the expected branch, and requires the latest exact-source ci.yml PR run to succeed before the existing main-only cloud authentication. It preserves the service, WIF/provider/service-account boundaries, catch-pr177 tag, --no-traffic, default-traffic comparison and deployment SHA/Revision health checks.
+Current candidate source: 4de911dc497c150545d938b60b2694f3c4723e37 (PR #177, same repository and expected branch). Exact-source CI run: https://github.com/pan277942135/Yujian/actions/runs/39922218177.
 
-Source CI is limited to the safe targeted checks and Chromium UI simulation. It does not verify live model inference, real-photo accuracy, user visual acceptance, or the blocked full-suite metadata path. Full regression remains BLOCKED_AUTO_REVIEW_METADATA_ACCESS.
+The preview workflow is pinned to this exact candidate SHA. Before any no-traffic deployment, it verifies that PR #177 is still open/unmerged on the expected branch, that its live HEAD equals the pin, and that the latest exact-source ci.yml pull-request run has succeeded. A changed PR HEAD makes preflight fail closed; update the pin only after confirming the new exact-SHA CI.
 
-Infrastructure CI is intentionally skipped, not PASS, to avoid rerunning the unresolved full-suite metadata path in another environment. No cloud deployment command was executed by this update.
+The workflow preserves the existing main-only Workload Identity Federation provider/service-account boundaries, catch-pr177 tag, --no-traffic, default-traffic snapshot comparison, and deployment SHA/Revision health checks. The source is deployed only to a tagged no-traffic candidate revision; the existing default traffic must remain byte-for-byte equivalent before and after deployment.
 
-The task sections 2.3 and 11.2 require an independent infrastructure PR and approval before main merge. Do not merge automatically. Once independently approved, the existing main-path push can deploy only this pinned candidate, only after its latest necessary source CI succeeds, and only with --no-traffic. Product PR177 remains Draft/unmerged; production default traffic must remain unchanged.
+The resource-quality extension also runs the canonical SWOS static 15-frame contract verifier and probes the candidate SAM endpoint with four public, license-attributed, digest-pinned photo sources plus clearly labeled derived low-light/geometry variants. It records detector/SAM/end-to-end latency and uploads mask-overlay/cutout evidence. No private user photo is uploaded or committed.
+
+The quality probe deliberately reports Production Mask as NOT_QUALIFIED until reviewed ground-truth masks, boundary metrics, difficult-case analysis and explicit visual sign-off exist. The static contract verifier proves timing/geometry consistency only; it is not pixel-level browser acceptance. Browser optical frame-time benchmarking remains separate and must run against the actual playable SWOS renderer.
+
+Source CI currently covers safe targeted validation and Chromium UI simulation. It does not verify live production inference, real-photo accuracy or user visual acceptance. Full-suite metadata access review remains a separate unresolved gate. The preview must not change production default traffic, and product PR #177 remains Draft/unmerged.
