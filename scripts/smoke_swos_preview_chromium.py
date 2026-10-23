@@ -71,8 +71,24 @@ def main():
                     trace=json.loads(page.locator('#swosInfo').inner_text());assert trace['viewport_px']==[w,h]
                     assert trace['photo_rect']['w']>0 and trace['photo_rect']['h']>0
                     page.locator('#swosCanvas').screenshot(path=str(OUT/f'viewport-{w}x{h}.png'))
+                page.locator('#swosWidth').fill('1440');page.locator('#swosHeight').fill('1000');page.locator('#swosHeight').dispatch_event('change')
+                page.get_by_role('button',name='P4',exact=True).click()
+                page.locator('#swosCanvas').screenshot(path=str(OUT/'P4-repeat-a.png'))
+                page.get_by_role('button',name='P4',exact=True).click()
+                page.locator('#swosCanvas').screenshot(path=str(OUT/'P4-repeat-b.png'))
+                with Image.open(OUT/'P4-repeat-a.png') as first, Image.open(OUT/'P4-repeat-b.png') as second:
+                    repeat_delta=sum(ImageStat.Stat(ImageChops.difference(first.convert('RGB'),second.convert('RGB'))).mean)/3
+                    assert repeat_delta==0, f'same-time fixture frame is not deterministic: {repeat_delta:.4f}'
+                page.locator('#swosRate').select_option('1')
+                with page.expect_download(timeout=15000) as download_info:
+                    page.locator('#swosRecord').click()
+                recording=download_info.value
+                recording_path=OUT/'fixture-full-playback-3650ms.webm'
+                recording.save_as(str(recording_path))
+                assert recording_path.is_file() and recording_path.stat().st_size>10000
+                assert page.locator('#swosTime').inner_text()=='R5 · 3650ms'
                 assert not errors,errors
-                (OUT/'trace.json').write_text(json.dumps({'source':'verified public fixture; visual test only','frames':records,'ambient_pixel_delta_P3':ambient_pixel_delta,'mask_trust':'TEST_FIXTURE','real_inference_requested':False,'browser':browser.version,'errors':errors},ensure_ascii=False,indent=2))
+                (OUT/'trace.json').write_text(json.dumps({'source':'verified public fixture; visual test only','frames':records,'ambient_pixel_delta_P3':ambient_pixel_delta,'repeat_frame_delta_P4':repeat_delta,'full_playback':{'nominal_ms':3650,'final_state':page.locator('#swosTime').inner_text(),'recording':'fixture-full-playback-3650ms.webm','bytes':recording_path.stat().st_size},'mask_trust':'TEST_FIXTURE','real_inference_requested':False,'browser':browser.version,'errors':errors},ensure_ascii=False,indent=2))
                 page.close()
             finally:browser.close()
     finally:server.should_exit=True;thread.join(timeout=5)
