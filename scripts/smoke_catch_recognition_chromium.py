@@ -374,6 +374,40 @@ def main() -> None:
                     desktop.screenshot(path=str(ARTIFACTS / "desktop-photo-selected-ui-simulation.png"), full_page=True)
                     desktop.evaluate("window._catchUiSmokeStartedAt = performance.now()")
                     desktop.locator("#catchStartButton").click()
+                    desktop.wait_for_function("""() => {
+                      const media=document.querySelector('#catchProcessingMedia');
+                      return media?.dataset.swosFrame==='P3' && Number(media.dataset.swosWaterDrawCount||0)>0;
+                    }""",timeout=5000)
+                    water_runtime=desktop.evaluate("""() => {
+                      const media=document.querySelector('#catchProcessingMedia');
+                      return {
+                        source_sha: document.querySelector('[data-component="CatchRecognitionApp"]')?.dataset.sourceSha || null,
+                        frame: media.dataset.swosFrame,
+                        water_strength: Number(media.dataset.relativeWaterStrength||0),
+                        backend: media.dataset.swosRenderer || "NOT_REPORTED",
+                        draw_backend: media.dataset.swosWaterDrawBackend || "NOT_REPORTED",
+                        draw_count: Number(media.dataset.swosWaterDrawCount||0),
+                        fallback_reason: media.dataset.swosFallbackReason || null,
+                        webgl_canvas_hidden: document.querySelector('#catchWaterGLCanvas')?.hidden,
+                        canvas2d_hidden: document.querySelector('#catchWater2DCanvas')?.hidden,
+                      };
+                    }""")
+                    assert water_runtime["frame"]=="P3" and water_runtime["water_strength"]>0,water_runtime
+                    assert water_runtime["backend"] in ("WEBGL2","CANVAS2D"),water_runtime
+                    assert water_runtime["draw_backend"]==water_runtime["backend"] and water_runtime["draw_count"]>0,water_runtime
+                    if water_runtime["backend"]=="WEBGL2":
+                        assert water_runtime["webgl_canvas_hidden"] is False and water_runtime["canvas2d_hidden"] is True,water_runtime
+                        assert water_runtime["fallback_reason"] is None,water_runtime
+                    else:
+                        assert water_runtime["webgl_canvas_hidden"] is True and water_runtime["canvas2d_hidden"] is False,water_runtime
+                        assert water_runtime["fallback_reason"],water_runtime
+                        water_runtime["fallback_visual_note"]="Canvas2D radial caustics and ripple bands are active; shader refraction is unavailable. No pixel parity is implied."
+                    water_runtime["fixture_only"]=True
+                    water_runtime["real_inference_requested"]=False
+                    water_runtime["rendered_source_sha"]=os.environ.get("GITHUB_SHA")
+                    water_runtime["run_id"]=os.environ.get("GITHUB_RUN_ID")
+                    (ARTIFACTS/"product-water-render-runtime-ui-simulation.json").write_text(json.dumps(water_runtime,ensure_ascii=False,indent=2),encoding="utf-8")
+                    desktop.locator("#catchProcessingMedia").screenshot(path=str(ARTIFACTS/"product-P3-water-render-runtime-ui-simulation.png"))
                     desktop.wait_for_function("document.querySelector('.catch-transition-photo')?.dataset.progress !== undefined", timeout=8000)
                     desktop.wait_for_function("Math.abs(Number(document.querySelector('.catch-transition-photo')?.dataset.progress || 0) - 0.5) < 0.08", timeout=1500)
                     geometry = desktop.evaluate(
@@ -411,7 +445,7 @@ def main() -> None:
                     assert 3500 <= elapsed <= 3900, elapsed
                     assert_no_horizontal_overflow(desktop, "desktop-1440-result")
                     desktop.screenshot(path=str(ARTIFACTS / f"desktop-result-{photo_name}-ui-simulation.png"), full_page=True)
-                    print(f"PASS desktop 1440x1000; renderer capabilities={capabilities}; geometry midpoint={geometry}; nominal visual duration={elapsed:.1f}ms; result/data marked UI_SIMULATION_ONLY")
+                    print(f"PASS desktop 1440x1000; renderer capabilities={capabilities}; actual product water renderer={water_runtime}; geometry midpoint={geometry}; nominal visual duration={elapsed:.1f}ms; result/data marked UI_SIMULATION_ONLY")
                 finally:
                     desktop.close()
 

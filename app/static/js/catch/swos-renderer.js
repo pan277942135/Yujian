@@ -88,31 +88,35 @@
     let startAt=0,revealStartAt=0,raf=0,running=false,mode="idle",bbox=null;
     let resultState="",maskTrust="NONE",maskImage=null,maskTexture=null,reviewMaskTexture=null,maskStatus="NONE",maskLoadSequence=0,maskVisible=false,lastElapsed=0;
     const maskContext=maskCanvas?.getContext("2d",{willReadFrequently:true});
-    let gl=null,glProgram=null,glMode="STATIC_CSS",water2DContext=null,previousFrameAt=0,droppedFrames=0;
+    let gl=null,glProgram=null,glMode="STATIC_CSS",water2DContext=null,previousFrameAt=0,droppedFrames=0,webglFailureReason="WEBGL2_INIT_NOT_ATTEMPTED";
     const frameCosts=[],rafIntervals=[];
     const layers=new Map([...host.querySelectorAll("[data-optical-layer]")].map(node=>[node.dataset.opticalLayer,node]));
     function initWebGL(){
-      if(!waterGLCanvas)return false;
-      try{gl=waterGLCanvas.getContext("webgl2",{alpha:true,antialias:false,premultipliedAlpha:true});}catch(_error){gl=null;}
-      if(!gl)return false;
+      if(!waterGLCanvas){webglFailureReason="WEBGL2_CANVAS_MISSING";return false;}
+      try{gl=waterGLCanvas.getContext("webgl2",{alpha:true,antialias:false,premultipliedAlpha:true});}catch(_error){gl=null;webglFailureReason="WEBGL2_CONTEXT_EXCEPTION";}
+      if(!gl){if(!webglFailureReason||webglFailureReason==="WEBGL2_INIT_NOT_ATTEMPTED")webglFailureReason="WEBGL2_UNAVAILABLE";return false;}
       const vertex=compileShader(gl,gl.VERTEX_SHADER,VERTEX_SHADER),fragment=compileShader(gl,gl.FRAGMENT_SHADER,FRAGMENT_SHADER);
-      if(!vertex||!fragment){gl=null;return false;}
+      if(!vertex||!fragment){gl=null;webglFailureReason="WEBGL2_SHADER_COMPILE_FAILED";return false;}
       glProgram=gl.createProgram();gl.attachShader(glProgram,vertex);gl.attachShader(glProgram,fragment);gl.linkProgram(glProgram);
-      if(!gl.getProgramParameter(glProgram,gl.LINK_STATUS)){gl=null;glProgram=null;return false;}
+      if(!gl.getProgramParameter(glProgram,gl.LINK_STATUS)){gl=null;glProgram=null;webglFailureReason="WEBGL2_PROGRAM_LINK_FAILED";return false;}
       gl.bindVertexArray(gl.createVertexArray());gl.useProgram(glProgram);gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
-      waterGLCanvas.hidden=false;if(water2DCanvas)water2DCanvas.hidden=true;glMode="WEBGL2";media.dataset.swosRenderer=glMode;return true;
+      waterGLCanvas.hidden=false;if(water2DCanvas)water2DCanvas.hidden=true;glMode="WEBGL2";media.dataset.swosRenderer=glMode;delete media.dataset.swosFallbackReason;return true;
     }
     function initCanvas2D(){
-      if(!water2DCanvas)return false;
+      if(!water2DCanvas){media.dataset.swosRenderer="STATIC_CSS";media.dataset.swosFallbackReason=(webglFailureReason||"WEBGL2_UNAVAILABLE")+";CANVAS2D_CANVAS_MISSING";return false;}
       try{water2DContext=water2DCanvas.getContext("2d");}catch(_error){water2DContext=null;}
-      if(!water2DContext)return false;
-      water2DCanvas.hidden=false;if(waterGLCanvas)waterGLCanvas.hidden=true;glMode="CANVAS2D";media.dataset.swosRenderer=glMode;return true;
+      if(!water2DContext){media.dataset.swosRenderer="STATIC_CSS";media.dataset.swosFallbackReason=(webglFailureReason||"WEBGL2_UNAVAILABLE")+";CANVAS2D_CONTEXT_UNAVAILABLE";return false;}
+      water2DCanvas.hidden=false;if(waterGLCanvas)waterGLCanvas.hidden=true;glMode="CANVAS2D";media.dataset.swosRenderer=glMode;media.dataset.swosFallbackReason=webglFailureReason||"WEBGL2_UNAVAILABLE";return true;
     }
     function setWaterSize(canvas,context){
       if(!canvas||!context)return null;
       const dpr=Math.min(2,window.devicePixelRatio||1),width=Math.max(1,Math.round(canvas.clientWidth*dpr)),height=Math.max(1,Math.round(canvas.clientHeight*dpr));
       if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}
       return {width,height,dpr,cssWidth:width/dpr,cssHeight:height/dpr};
+    }
+    function recordWaterDraw(){
+      media.dataset.swosWaterDrawCount=String((Number(media.dataset.swosWaterDrawCount)||0)+1);
+      media.dataset.swosWaterDrawBackend=glMode;
     }
     function drawWaterCanvas(elapsedMs,strength){
       if(strength<=0){
@@ -122,9 +126,9 @@
       }
       if(glMode==="WEBGL2"&&gl&&glProgram&&waterGLCanvas){
         const size=setWaterSize(waterGLCanvas,gl);gl.viewport(0,0,size.width,size.height);gl.useProgram(glProgram);gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);
-        gl.uniform2f(gl.getUniformLocation(glProgram,"u_resolution"),size.width,size.height);gl.uniform1f(gl.getUniformLocation(glProgram,"u_time"),elapsedMs/1000);gl.uniform1f(gl.getUniformLocation(glProgram,"u_strength"),Math.max(0,Math.min(1,strength/75)));gl.drawArrays(gl.TRIANGLES,0,3);return;
+        gl.uniform2f(gl.getUniformLocation(glProgram,"u_resolution"),size.width,size.height);gl.uniform1f(gl.getUniformLocation(glProgram,"u_time"),elapsedMs/1000);gl.uniform1f(gl.getUniformLocation(glProgram,"u_strength"),Math.max(0,Math.min(1,strength/75)));gl.drawArrays(gl.TRIANGLES,0,3);recordWaterDraw();return;
       }
-      if(glMode!=="CANVAS2D"&&!initCanvas2D()){glMode="STATIC_CSS";media.dataset.swosRenderer=glMode;return;}
+      if(glMode!=="CANVAS2D"&&!initCanvas2D()){glMode="STATIC_CSS";media.dataset.swosRenderer=glMode;media.dataset.swosFallbackReason||="CANVAS2D_UNAVAILABLE";return;}
       const size=setWaterSize(water2DCanvas,water2DContext),ctx=water2DContext,w=size.cssWidth,h=size.cssHeight,v=Math.max(0,Math.min(1,strength/75)),t=elapsedMs/1000;
       ctx.setTransform(size.dpr,0,0,size.dpr,0,0);ctx.clearRect(0,0,w,h);ctx.globalCompositeOperation="screen";
       for(let i=0;i<18;i++){
@@ -138,10 +142,10 @@
         const gradient=ctx.createLinearGradient(cx-span,cy,cx+span,cy);gradient.addColorStop(0,"rgba(246,240,203,0)");gradient.addColorStop(.45,`rgba(250,245,216,${alpha})`);gradient.addColorStop(1,"rgba(246,240,203,0)");
         ctx.strokeStyle=gradient;ctx.lineWidth=[4,2.3,1.3][band];ctx.lineCap="round";ctx.shadowColor=`rgba(239,235,190,${alpha})`;ctx.shadowBlur=[6,3,1][band];ctx.beginPath();ctx.moveTo(cx-span,cy+bend);ctx.bezierCurveTo(cx-span*.2,cy-h*.018,cx+span*.4,cy+h*.015,cx+span,cy-bend);ctx.stroke();
       }
-      ctx.globalCompositeOperation="source-over";
+      ctx.globalCompositeOperation="source-over";recordWaterDraw();
     }
     if(!initWebGL())initCanvas2D();
-    waterGLCanvas?.addEventListener("webglcontextlost",event=>{event.preventDefault();gl=null;glProgram=null;if(!initCanvas2D()){glMode="STATIC_CSS";media.dataset.swosRenderer=glMode;}paint(lastElapsed);});
+    waterGLCanvas?.addEventListener("webglcontextlost",event=>{event.preventDefault();gl=null;glProgram=null;webglFailureReason="WEBGL2_CONTEXT_LOST";if(!initCanvas2D()){glMode="STATIC_CSS";media.dataset.swosRenderer=glMode;media.dataset.swosFallbackReason||="WEBGL2_CONTEXT_LOST;CANVAS2D_UNAVAILABLE";}paint(lastElapsed);});
     waterGLCanvas?.addEventListener("webglcontextrestored",()=>{if(initWebGL())paint(lastElapsed);});
     const paint=(elapsedMs)=>{
       const duration=mode==="reveal"?REVEAL_MS:PROCESSING_MS;
@@ -267,7 +271,7 @@
           if(maskContext){maskContext.clearRect(0,0,maskCanvas.width,maskCanvas.height);}
           maskLoadSequence++;maskImage=null;maskTexture=null;reviewMaskTexture=null;maskStatus="NONE";maskVisible=false;host.dataset.maskState="NONE";media.removeAttribute("data-mask-trust");
           media.removeAttribute("data-swos-frame");media.removeAttribute("data-relative-water-strength");
-          media.removeAttribute("data-relative-fish-gold-strength");media.dataset.swosOpticalState="IDLE";
+          media.removeAttribute("data-relative-fish-gold-strength");media.removeAttribute("data-swos-water-draw-count");media.removeAttribute("data-swos-water-draw-backend");media.dataset.swosOpticalState="IDLE";
           bbox=null;
         }
       },
