@@ -329,6 +329,13 @@ def main() -> None:
                         assert bbox_focus["soft_focus_roi_mean_pixel_delta"] >= 2.5, bbox_focus
                         assert bbox_focus["soft_focus_roi_max_pixel_delta"] >= 12, bbox_focus
                     (ARTIFACTS / "product-renderer-bbox-focus-TEST_FIXTURE.json").write_text(json.dumps(bbox_focus, ensure_ascii=False, indent=2), encoding="utf-8")
+                    print(
+                        "PASS BBOX soft-focus pixel delta; TEST_FIXTURE only; "
+                        f"trust={bbox_focus['maskTrust']}; "
+                        f"ROI mean={bbox_focus['soft_focus_roi_mean_pixel_delta']:.2f}; "
+                        f"ROI max={bbox_focus['soft_focus_roi_max_pixel_delta']:.0f}; "
+                        "precise outline=none"
+                    )
                     desktop.evaluate(
                         """() => {
                           window._swosBboxFocusFixtureRenderer.stop();
