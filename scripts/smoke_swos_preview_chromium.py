@@ -7,9 +7,10 @@ from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from playwright.sync_api import sync_playwright
 import uvicorn
-from app.platform.routes.pages import templates, PlatformPage, PLATFORM_PAGES
-
+import sys
 ROOT=Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path: sys.path.insert(0,str(ROOT))
+from app.platform.routes.pages import templates, PlatformPage, PLATFORM_PAGES
 OUT=ROOT/'test-results'/'swos-preview-chromium'
 PAGE=PlatformPage('/swos-preview','platform/swos_preview.html','SWOS 动效验收','模型工厂','本地视觉审查')
 app=FastAPI(docs_url=None,openapi_url=None)
