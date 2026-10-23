@@ -23,7 +23,7 @@ env:
   SERVICE: yujian-model-factory-console
   PR_NUMBER: '177'
   EXPECTED_BRANCH: feat/ai-catch-recognition-web-swos-rr09-v1
-  TARGET_SHA: 4de911dc497c150545d938b60b2694f3c4723e37
+  TARGET_SHA: 6da640859f063d7f42ee5432e6b35ecb162802ff
   TAG: catch-pr177
   WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
   DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
@@ -91,6 +91,28 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Checkout resource-quality harness from this main commit
+        uses: actions/checkout@v4
+        with:
+          repository: pan277942135/Yujian
+          ref: ${{ github.sha }}
+          path: swos-quality-harness
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout canonical SWOS design contracts
+        uses: actions/checkout@v4
+        with:
+          repository: pan277942135/Yujian_App
+          ref: main
+          path: swos-design-authority
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify formal 15-frame contract and shared-photo geometry
+        shell: bash
+        run: python3 swos-design-authority/scripts/verify_swos_static_visual_v1_1.py
+
       - name: Verify source SHA and credential exclusion
         shell: bash
         run: |
@@ -139,7 +161,7 @@ jobs:
             --memory 4Gi \
             --timeout=1200s \
             --no-cpu-throttling \
-            --update-env-vars="APP_GIT_COMMIT=$TARGET_SHA" \
+            --update-env-vars="APP_GIT_COMMIT=$TARGET_SHA,CATCH_SWOS_SAM_CANDIDATE_ENABLED=true" \
             --no-traffic \
             --tag "$TAG" \
             --quiet
@@ -194,3 +216,49 @@ jobs:
             echo "- Page unauthenticated status: HTTP $PAGE (200 or expected login redirect)"
             echo "- Authenticated page, photo upload, live model inference: NOT_RUN"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install SWOS photo quality probe dependency
+        shell: bash
+        run: python3 -m pip install --disable-pip-version-check "Pillow>=11.0.0"
+
+      - name: Probe same-request detector, classifier, and SAM masks on the no-traffic revision
+        id: swos_mask_probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/swos-mask-quality"
+          set +e
+          python3 swos-quality-harness/scripts/swos_mask_quality_probe.py \
+            --base-url "$PREVIEW_URL" \
+            --expected-sha "$TARGET_SHA" \
+            --expected-revision "$PREVIEW_REVISION" \
+            --manifest swos-quality-harness/tests/fixtures/swos_resource_quality/photo_manifest_v1.json \
+            --output-dir "$RUNNER_TEMP/swos-mask-quality"
+          probe_status=$?
+          set -e
+          python3 - "$RUNNER_TEMP/swos-mask-quality/report.json" "$probe_status" <<'PY'
+          import json, os, sys
+          report_path, probe_status = sys.argv[1], int(sys.argv[2])
+          try:
+              report = json.load(open(report_path, encoding="utf-8"))
+          except Exception as exc:
+              report = {"status": "BLOCKED_REPORT_MISSING", "error": str(exc)}
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## SWOS real-photo resource quality probe\n")
+              summary.write(f"- Probe status: {report.get('status')}\n")
+              summary.write(f"- Candidate SAM masks: {report.get('mask_candidate_count', 0)} / {report.get('case_count', 0)} cases\n")
+              summary.write(f"- Production Mask qualification: {report.get('production_mask_qualification', 'NOT_QUALIFIED')}\n")
+              summary.write(f"- Exact source SHA: {report.get('expected_source_sha', 'unavailable')}\n")
+              summary.write(f"- Candidate revision: {report.get('expected_revision', 'unavailable')}\n")
+              summary.write("- Static 15-frame contract: verified separately; pixel-level browser calibration remains pending\n")
+              summary.write("- Browser optical frame-time benchmark: NOT_RUN by this API probe\n")
+          PY
+          exit "$probe_status"
+
+      - name: Upload SWOS resource quality evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swos-resource-quality-${{ github.run_id }}
+          path: ${{ runner.temp }}/swos-mask-quality/**
+          if-no-files-found: warn

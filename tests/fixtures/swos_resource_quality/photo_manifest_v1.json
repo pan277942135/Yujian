@@ -1,0 +1,90 @@
+{
+  "schema_version": "1.0",
+  "purpose": "Public, license-attributed SWOS segmentation and photo-geometry quality probe. No source image binaries are committed.",
+  "privacy": "Only the public open-license fixtures below are uploaded to the no-traffic candidate revision. User/private photos are explicitly excluded.",
+  "sources": [
+    {
+      "id": "gambia_rod_landscape",
+      "filename": "landscape.jpg",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Fish_caught_with_a_rod_in_Gambia.jpg",
+      "download_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Fish_caught_with_a_rod_in_Gambia.jpg",
+      "attribution": "Peter van der Sluijs",
+      "license": "CC BY-SA 3.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
+      "expected_digest": {
+        "algorithm": "sha256",
+        "value": "6117d964dd10ee8f3f38d82b78441c7e03a2402cbfd623e6d05d9d2d75685581"
+      },
+      "intent": "landscape scene; baseline photo and derived dark/near-square geometry cases"
+    },
+    {
+      "id": "auckland_boat_portrait",
+      "filename": "portrait.jpg",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Portrait_of_man_on_boat_holding_a_caught_fish_(AM_81857-1).jpg",
+      "download_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Portrait_of_man_on_boat_holding_a_caught_fish_%28AM_81857-1%29.jpg",
+      "attribution": "Auckland Museum",
+      "license": "CC BY 4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "expected_digest": {
+        "algorithm": "sha256",
+        "value": "d806491e4711a58aa242c8ef3feb6fcc0e9b13c56c5db5e7808203134b3c1ffa"
+      },
+      "intent": "portrait scene; fish held against a boat/water background"
+    },
+    {
+      "id": "fish_catch_multi_scene",
+      "filename": "fish-catch.jpg",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Fish_catch.jpg",
+      "download_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Fish_catch.jpg",
+      "attribution": "Palasuora",
+      "license": "CC BY-SA 3.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
+      "expected_digest": {
+        "algorithm": "sha1",
+        "value": "90712de89f26db87b360ba28c6669d83eb9720fc"
+      },
+      "intent": "independent catch scene; hard-case/subject-count behavior"
+    },
+    {
+      "id": "catching_fish_sunset",
+      "filename": "catching-fish.jpg",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Catching_fish.jpg",
+      "download_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Catching_fish.jpg",
+      "attribution": "Samdani.srabon",
+      "license": "CC BY-SA 4.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+      "expected_digest": {
+        "algorithm": "sha1",
+        "value": "e5c83933f31fb6efb1b88fe14a186c6522d00c05"
+      },
+      "intent": "sunset/low-light fishing scene; difficult detection and low-light robustness"
+    }
+  ],
+  "derived_cases": [
+    {
+      "id": "gambia_dark",
+      "source_id": "gambia_rod_landscape",
+      "variant": "brightness_0_38",
+      "intent": "low-light robustness; derived fixture, not an independent scene"
+    },
+    {
+      "id": "gambia_near_square",
+      "source_id": "gambia_rod_landscape",
+      "variant": "contain_1200x1200",
+      "intent": "photo geometry/letterbox handling; derived fixture, not an independent scene"
+    },
+    {
+      "id": "auckland_low_resolution",
+      "source_id": "auckland_boat_portrait",
+      "variant": "max_edge_480",
+      "intent": "low-resolution robustness; derived fixture, not an independent scene"
+    },
+    {
+      "id": "sunset_dark",
+      "source_id": "catching_fish_sunset",
+      "variant": "brightness_0_55",
+      "intent": "additional low-light variant; derived fixture, not an independent scene"
+    }
+  ],
+  "qualification_rule": "SAM output and heuristic quality GOOD are candidate evidence only. Production Mask remains NOT_QUALIFIED until each required scenario has reviewed ground-truth segmentation, boundary metrics, hard-case review, and explicit visual sign-off."
+}
