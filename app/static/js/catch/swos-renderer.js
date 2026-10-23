@@ -32,7 +32,7 @@
       caustic:(0.24*Math.pow(water,0.78)).toFixed(3),
       ripple:(0.09*Math.pow(water,0.7)).toFixed(3),
       refraction:(0.13*Math.sqrt(water)).toFixed(3),
-      focus:(0.15*Math.pow(gold,0.8)).toFixed(3),
+      focus:(0.24*Math.pow(gold,0.8)).toFixed(3),
     };
   }
 
@@ -149,12 +149,10 @@
       }
       drawWaterCanvas(elapsedMs,waterStrength);
       if(bbox){
-        focus.classList.add("visible");
         focus.style.left=`${bbox.x1*100}%`;focus.style.top=`${bbox.y1*100}%`;
         focus.style.width=`${(bbox.x2-bbox.x1)*100}%`;focus.style.height=`${(bbox.y2-bbox.y1)*100}%`;
         focus.style.opacity=visual.focus;focus.dataset.geometryTrust="BBOX_ONLY_SOFT_REGION";
       }else{
-        focus.classList.remove("visible");
         focus.style.opacity="0";focus.dataset.geometryTrust="NONE_NO_SPATIAL_FOCUS";
       }
       paintMask(goldStrength);
@@ -219,7 +217,7 @@
         running=false;if(raf)cancelAnimationFrame(raf);raf=0;
         if(reset){
           for(const layer of layers.values())layer.style.opacity="0";
-          focus.classList.remove("visible");focus.style.opacity="0";focus.removeAttribute("data-geometry-trust");
+          focus.style.opacity="0";focus.removeAttribute("data-geometry-trust");
           if(maskContext){maskContext.clearRect(0,0,maskCanvas.width,maskCanvas.height);}
           maskImage=null;maskTexture=null;maskVisible=false;host.dataset.maskState="NONE";media.removeAttribute("data-mask-trust");
           media.removeAttribute("data-swos-frame");media.removeAttribute("data-relative-water-strength");
