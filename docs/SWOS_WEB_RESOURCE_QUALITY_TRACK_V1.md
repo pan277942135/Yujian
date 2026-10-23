@@ -2,13 +2,13 @@
 
 **Task ID:** YUJIAN_SWOS_WEB_RESOURCE_QUALITY_LINE_V1
 
-**State:** ACTIVE; evidence is collected on a no-traffic candidate revision only.
+**State:** ACTIVE; product source 054d2dae09ff73e85e4c91bbdc4b9134821e3891 has exact-source CI and Chromium smoke PASS; same-request production probe and candidate deployment remain pending.
 
 ## Four workstreams
 
-1. **Fish Mask:** reuse the existing SAM ViT-B segmentation endpoint. Collect actual detector bbox, SAM mask, transparent cutout, overlay, mask-quality heuristic and per-case latency. The endpoint is experimental; GOOD is not production certification. Production qualification remains blocked until reviewed ground-truth masks, boundary metrics, difficult-case review and explicit visual sign-off exist.
+1. **Fish Mask:** use the product /api/product/catch-recognition/infer response so detector bbox, classifier result and the SAM candidate Mask are bound to one upload SHA and one inference request. Collect the returned Mask, transparent cutout, overlay, heuristic metrics and per-case detector/classifier/SAM/end-to-end latency. The candidate remains REVIEW_PROXY; heuristic GOOD is not production certification. Production qualification remains blocked until reviewed ground-truth masks, boundary metrics, difficult-case review and explicit visual sign-off exist.
 2. **15-frame baseline:** run the canonical design repository's verify_swos_static_visual_v1_1.py against the main-adopted 15-frame contract on every preview run. This proves contract/timing/geometry consistency only. Pixel-level visual calibration is pending real browser frame captures from the playable SWOS renderer; static proxy frames must not be frozen or reported as browser acceptance.
-3. **Current-source preview:** resolve PR #177's live HEAD at run time, require the same-repository PR to remain open/unmerged on the expected branch, and require exact-SHA CI success. Deploy only that SHA to the existing catch-pr177 Cloud Run tag with --no-traffic. Verify default traffic is unchanged and /health/deploy reports the exact source SHA and Revision.
+3. **Current-source preview:** the pending configuration update pins PR #177 at 054d2dae09ff73e85e4c91bbdc4b9134821e3891, requires the same-repository PR to remain open/unmerged on the expected branch, and requires exact-SHA CI success. It enables the opt-in SAM candidate only on the existing catch-pr177 Cloud Run tag and deploys with --no-traffic. Verify default traffic is unchanged and /health/deploy reports the exact source SHA and Revision.
 4. **Multi-scene and performance probe:** use four public, license-attributed Wikimedia Commons sources with pinned source digests. Derived dark/near-square/low-resolution variants are labeled as derivatives, not independent scenes. Record detector latency, SAM latency, end-to-end request latency, geometry, mask heuristics, and mask/cutout overlays as run artifacts.
 
 ## Public fixture policy
@@ -27,4 +27,5 @@ The probe downloads fixtures at runtime; source photos are not committed to the 
 - The 3650ms nominal visual timeline is not an inference countdown.
 - Static frames, UI simulation, HTTP success, and heuristic GOOD masks do not prove high-fidelity visual acceptance.
 - Browser optical frame-time benchmarking must be performed against the actual playable renderer and reported separately from SAM/API latency.
+- Exact-source CI includes a public-fixture 3650ms browser preview smoke. It is fixture-only browser evidence, not the deployed authenticated browser run and not visual acceptance.
 

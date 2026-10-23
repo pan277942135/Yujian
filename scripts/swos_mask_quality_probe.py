@@ -54,14 +54,15 @@ def decode_data_url(value: str) -> bytes:
     return base64.b64decode(payload, validate=True)
 
 
-def build_multipart(image_bytes: bytes, filename: str) -> tuple[bytes, str]:
+def build_multipart(image_bytes: bytes, filename: str, field_name: str = "image") -> tuple[bytes, str]:
     boundary = "----YuJianSWOS" + hashlib.sha256(
         (filename + str(len(image_bytes)) + str(time.time_ns())).encode("utf-8")
     ).hexdigest()[:24]
     safe_name = filename.replace('"', "").replace("\r", "").replace("\n", "")
+    safe_field = field_name.replace('"', "").replace("\r", "").replace("\n", "")
     body = (
         f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="image"; filename="{safe_name}"\r\n'
+        f'Content-Disposition: form-data; name="{safe_field}"; filename="{safe_name}"\r\n'
         "Content-Type: image/jpeg\r\n\r\n"
     ).encode("utf-8") + image_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
     return body, f"multipart/form-data; boundary={boundary}"
@@ -184,60 +185,125 @@ def make_variants(spec: dict[str, Any], raw: bytes, work_dir: Path) -> list[dict
 
 
 def summarize_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Summarize the same-request product inference adapter response."""
     detector = payload.get("detector") or {}
+    gate = detector.get("quality_gate") or {}
+    detections = detector.get("detections") or []
+    primary = gate.get("primary_bbox") or ((detections[0].get("bbox") or {}) if detections else {})
     segmentation = payload.get("segmentation") or {}
-    runtime = payload.get("runtime") or {}
+    quality = segmentation.get("quality") or {}
+    mask = segmentation.get("mask") or {}
     source_input = payload.get("input") or {}
+    checkpoint_sha = segmentation.get("checkpoint_sha256")
+    mask_present = bool(mask.get("data_base64"))
+    mask_sha = mask.get("sha256")
+    mask_executed = bool(
+        mask_present
+        and segmentation.get("geometry_trust_state") == "REVIEW_PROXY"
+        and checkpoint_sha
+        and len(str(checkpoint_sha)) == 64
+        and mask_sha
+        and len(str(mask_sha)) == 64
+    )
+    primary_detection = next((item for item in detections if item.get("bbox") == primary), {})
     return {
-        "runtime": {
-            "service": runtime.get("service"),
-            "revision": runtime.get("revision"),
-            "commit": runtime.get("commit"),
-            "detector_model": runtime.get("detector_model"),
-            "segmentation_model": runtime.get("segmentation_model"),
-            "segmentation_checkpoint": runtime.get("segmentation_checkpoint"),
-        },
+        "result_state": payload.get("result_state"),
         "input": {
-            "image_id": source_input.get("image_id"),
-            "width": source_input.get("image_width"),
-            "height": source_input.get("image_height"),
-            "orientation": source_input.get("orientation"),
-            "upload_size_bytes": source_input.get("upload_size_bytes"),
+            "source_sha256": source_input.get("source_sha256"),
+            "width": source_input.get("width"),
+            "height": source_input.get("height"),
+            "format": source_input.get("format"),
+            "coordinate_space": detector.get("coordinate_space"),
         },
         "detector": {
-            "model": detector.get("model"),
-            "detections_count": detector.get("detections_count"),
-            "primary_detection_found": detector.get("primary_detection_found"),
-            "primary_confidence": detector.get("primary_confidence"),
-            "primary_bbox_pixels": detector.get("primary_bbox_pixels"),
-            "bbox_touches_image_edge": detector.get("bbox_touches_image_edge"),
-            "assessment": detector.get("assessment"),
-            "reason": detector.get("reason"),
-            "processing_ms": detector.get("detector_processing_ms"),
+            "model": detector.get("model_version"),
+            "onnx_sha256": detector.get("onnx_sha256"),
+            "detections_count": len(detections),
+            "primary_detection_found": bool(primary),
+            "primary_bbox": primary or None,
+            "quality_gate_status": gate.get("status"),
+            "primary_confidence": primary_detection.get("confidence"),
+            "processing_ms": detector.get("latency_ms"),
         },
-        "eligibility": payload.get("eligibility") or {},
+        "classifier": {
+            "model": (payload.get("classifier") or {}).get("model_version"),
+            "top1": (payload.get("classifier") or {}).get("top1"),
+            "result_state": payload.get("result_state"),
+        },
         "segmentation": {
-            "executed": bool(segmentation.get("executed")),
-            "model": segmentation.get("model"),
-            "quality": segmentation.get("quality"),
-            "quality_reason": segmentation.get("quality_reason"),
-            "mask_area_ratio": segmentation.get("mask_area_ratio"),
-            "edge_ratio": segmentation.get("edge_ratio"),
-            "connected_components": segmentation.get("connected_components"),
-            "mask_width": segmentation.get("mask_width"),
-            "mask_height": segmentation.get("mask_height"),
-            "processing_ms": segmentation.get("processing_ms"),
+            "executed": mask_executed,
+            "status": segmentation.get("status"),
+            "trust_state": segmentation.get("geometry_trust_state"),
+            "model": segmentation.get("model_version"),
+            "checkpoint_sha256": checkpoint_sha,
+            "quality": quality.get("status"),
+            "quality_reason": quality.get("reason"),
+            "mask_area_ratio": quality.get("mask_area_ratio"),
+            "edge_ratio": quality.get("edge_ratio"),
+            "connected_components": quality.get("connected_components"),
+            "mask_width": mask.get("width"),
+            "mask_height": mask.get("height"),
+            "mask_sha256": mask.get("sha256"),
+            "source_image_sha256": segmentation.get("source_image_sha256"),
+            "processing_ms": quality.get("processing_ms"),
         },
-        "hero_preview": payload.get("hero_preview") or {},
+        "timing": payload.get("timing") or {},
+        "mask_data_base64": mask.get("data_base64"),
     }
 
 
-def verify_runtime_binding(payload: dict[str, Any], expected_sha: str, expected_revision: str) -> None:
-    runtime = payload.get("runtime") or {}
-    if runtime.get("commit") != expected_sha:
-        raise ValueError(f"runtime source SHA mismatch: expected {expected_sha}, got {runtime.get('commit')}")
-    if runtime.get("revision") != expected_revision:
-        raise ValueError(f"runtime revision mismatch: expected {expected_revision}, got {runtime.get('revision')}")
+def verify_same_request_binding(payload: dict[str, Any], expected_upload_sha: str) -> None:
+    source_sha = ((payload.get("input") or {}).get("source_sha256"))
+    if source_sha != expected_upload_sha:
+        raise ValueError(f"inference source SHA mismatch: expected {expected_upload_sha}, got {source_sha}")
+    segmentation = payload.get("segmentation") or {}
+    mask = segmentation.get("mask") or {}
+    for label, actual in (
+        ("segmentation", segmentation.get("source_image_sha256")),
+        ("mask", mask.get("source_image_sha256")),
+    ):
+        if actual is not None and actual != source_sha:
+            raise ValueError(f"{label} source SHA differs from inference input")
+    primary = ((payload.get("detector") or {}).get("quality_gate") or {}).get("primary_bbox")
+    sam_bbox = segmentation.get("bbox")
+    if mask.get("data_base64"):
+        if not primary or not sam_bbox:
+            raise ValueError("Mask response is missing its same-request detector BBox")
+        if any(abs(float(primary[key]) - float(sam_bbox[key])) > 0.00001 for key in ("x1", "y1", "x2", "y2")):
+            raise ValueError("SAM BBox differs from the primary detector BBox")
+        source_input = payload.get("input") or {}
+        expected_dimensions = (source_input.get("width"), source_input.get("height"))
+        mask_dimensions = (mask.get("width"), mask.get("height"))
+        if all(value is not None for value in expected_dimensions) and mask_dimensions != expected_dimensions:
+            raise ValueError(f"Mask dimensions {mask_dimensions} differ from inference input {expected_dimensions}")
+
+
+def write_mask_artifacts(source_bytes: bytes, mask_png: bytes, output_dir: Path, name: str) -> dict[str, str]:
+    """Write review-only overlay, binary mask and cutout from the same source pixels."""
+    with Image.open(io.BytesIO(source_bytes)) as opened:
+        source = ImageOps.exif_transpose(opened).convert("RGBA")
+    with Image.open(io.BytesIO(mask_png)) as opened_mask:
+        mask = opened_mask.convert("L")
+    if source.size != mask.size:
+        raise ValueError(f"Mask/source dimensions differ: {mask.size} vs {source.size}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    mask_path = output_dir / f"{name}_sam_mask.png"
+    overlay_path = output_dir / f"{name}_mask_overlay.png"
+    cutout_path = output_dir / f"{name}_transparent_fish.png"
+    mask.save(mask_path, format="PNG", optimize=True)
+    gold = Image.new("RGBA", source.size, (255, 205, 103, 0))
+    gold.putalpha(mask.point(lambda value: int(value * 0.42)))
+    overlay = Image.alpha_composite(source, gold)
+    overlay.save(overlay_path, format="PNG", optimize=True)
+    cutout = source.copy()
+    cutout.putalpha(mask)
+    cutout.save(cutout_path, format="PNG", optimize=True)
+    source.close()
+    mask.close()
+    gold.close()
+    overlay.close()
+    cutout.close()
+    return {"mask": mask_path.name, "overlay": overlay_path.name, "cutout": cutout_path.name}
 
 
 def write_report(output_dir: Path, report: dict[str, Any], manifest: dict[str, Any]) -> None:
@@ -344,9 +410,9 @@ def main() -> int:
                 })
                 variants = make_variants(spec, raw, work_dir)
                 for variant in variants:
-                    body, content_type = build_multipart(variant["bytes"], variant["upload_filename"])
+                    body, content_type = build_multipart(variant["bytes"], variant["upload_filename"], field_name="file")
                     http_status, payload, elapsed_ms = request_json(
-                        base_url + "/api/debug/fish-segmentation",
+                        base_url + "/api/product/catch-recognition/infer",
                         data=body,
                         headers={"Content-Type": content_type},
                         timeout=180,
@@ -371,11 +437,23 @@ def main() -> int:
                         report["cases"].append(case)
                         continue
                     try:
-                        verify_runtime_binding(payload, args.expected_sha, args.expected_revision)
+                        verify_same_request_binding(payload, case["upload_sha256"])
                     except ValueError as exc:
-                        case["runtime_binding_error"] = str(exc)
+                        case["source_binding_error"] = str(exc)
                         transport_errors += 1
                     summary = summarize_payload(payload)
+                    summary["runtime"] = {
+                        "service": health.get("service"),
+                        "revision": args.expected_revision,
+                        "commit": args.expected_sha,
+                        "detector_model": summary["detector"]["model"],
+                        "segmentation_model": summary["segmentation"]["model"],
+                        "segmentation_checkpoint": summary["segmentation"]["checkpoint_sha256"],
+                    }
+                    summary["timing"] = {
+                        **summary["timing"],
+                        "round_trip_ms": elapsed_ms,
+                    }
                     case.update(summary)
                     case["upload_dimensions"] = [
                         summary["input"].get("width"), summary["input"].get("height")
@@ -383,18 +461,18 @@ def main() -> int:
                     case["status"] = (
                         "MASK_CANDIDATE"
                         if summary["segmentation"]["executed"]
-                        else "NO_PRIMARY_DETECTION_OR_MASK_NOT_EXECUTED"
+                        else ("BBOX_ONLY_NO_MASK" if summary["segmentation"]["trust_state"] == "BBOX_ONLY"
+                              else "NO_DETECTION_OR_MASK_NOT_EXECUTED")
                     )
-                    overlay_url = payload.get("mask_overlay")
-                    transparent_url = payload.get("transparent_fish")
-                    if overlay_url:
-                        overlay_path = output_dir / f"{variant['id']}_mask_overlay.png"
-                        overlay_path.write_bytes(decode_data_url(overlay_url))
-                        case["mask_overlay_artifact"] = overlay_path.name
-                    if transparent_url:
-                        cutout_path = output_dir / f"{variant['id']}_transparent_fish.png"
-                        cutout_path.write_bytes(decode_data_url(transparent_url))
-                        case["transparent_fish_artifact"] = cutout_path.name
+                    mask_data = summary.pop("mask_data_base64", None)
+                    case.pop("mask_data_base64", None)
+                    if summary["segmentation"]["executed"] and mask_data:
+                        mask_png = base64.b64decode(mask_data, validate=True)
+                        actual_mask_sha = digest_bytes(mask_png, "sha256")
+                        if actual_mask_sha != summary["segmentation"]["mask_sha256"]:
+                            raise ValueError("SAM mask bytes do not match the returned mask SHA-256")
+                        artifacts = write_mask_artifacts(variant["bytes"], mask_png, output_dir, variant["id"])
+                        case["segmentation"]["mask_artifacts"] = artifacts
                     report["cases"].append(case)
             except Exception as exc:
                 transport_errors += 1

@@ -23,7 +23,7 @@ env:
   SERVICE: yujian-model-factory-console
   PR_NUMBER: '177'
   EXPECTED_BRANCH: feat/ai-catch-recognition-web-swos-rr09-v1
-  TARGET_SHA: 4de911dc497c150545d938b60b2694f3c4723e37
+  TARGET_SHA: 054d2dae09ff73e85e4c91bbdc4b9134821e3891
   TAG: catch-pr177
   WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
   DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
@@ -161,7 +161,7 @@ jobs:
             --memory 4Gi \
             --timeout=1200s \
             --no-cpu-throttling \
-            --update-env-vars="APP_GIT_COMMIT=$TARGET_SHA" \
+            --update-env-vars="APP_GIT_COMMIT=$TARGET_SHA,CATCH_SWOS_SAM_CANDIDATE_ENABLED=true" \
             --no-traffic \
             --tag "$TAG" \
             --quiet
@@ -221,7 +221,7 @@ jobs:
         shell: bash
         run: python3 -m pip install --disable-pip-version-check "Pillow>=11.0.0"
 
-      - name: Probe real-photo SAM masks and per-case latency on the no-traffic revision
+      - name: Probe same-request detector, classifier, and SAM masks on the no-traffic revision
         id: swos_mask_probe
         shell: bash
         run: |
