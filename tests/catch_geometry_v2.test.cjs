@@ -2,7 +2,16 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const vm=require('node:vm');
-const context={window:{},crypto:require('node:crypto').webcrypto,performance:{now:()=>0},URL:{createObjectURL:()=> 'blob:fixture',revokeObjectURL:()=>{}},AbortController};
+const maskCanvasDraws=[],offscreenMaskCanvases=[];
+function createMaskCanvas(main=false){
+ const pixels=new Uint8ClampedArray([255,255,255,255,0,0,0,255,128,128,128,255,0,0,0,0]);
+ const ctx={globalAlpha:1,globalCompositeOperation:'source-over',filter:'none',setTransform(){},clearRect(){},save(){this.saved={globalAlpha:this.globalAlpha,globalCompositeOperation:this.globalCompositeOperation,filter:this.filter};},restore(){if(this.saved)Object.assign(this,this.saved);},drawImage(image){if(main)maskCanvasDraws.push({image,globalAlpha:this.globalAlpha,composite:this.globalCompositeOperation,filter:this.filter});},getImageData(){return {data:new Uint8ClampedArray(pixels)};},putImageData(image){this.painted=Array.from(image.data);}};
+ const canvas={width:2,height:2,clientWidth:2,clientHeight:2,getContext:()=>ctx,ctx};
+ if(!main)offscreenMaskCanvases.push(canvas);
+ return canvas;
+}
+const mainMaskCanvas=createMaskCanvas(true);
+const context={window:{},crypto:require('node:crypto').webcrypto,performance:{now:()=>0},URL:{createObjectURL:()=> 'blob:fixture',revokeObjectURL:()=>{}},AbortController,Image:class{async decode(){}set src(value){this._src=value;}get src(){return this._src;}},document:{createElement(name){assert.equal(name,'canvas');return createMaskCanvas(false);}}};
 vm.createContext(context);
 for(const name of ['photo-session','recognition-controller','stage-view','swos-renderer'])vm.runInContext(fs.readFileSync(`app/static/js/catch/${name}.js`,'utf8'),context);
 const {PhotoViewport:g,RecognitionController}=context.window.YujianCatch;
@@ -72,6 +81,34 @@ test('SWOS exposes the complete 3650ms clock and blocks gold for an unqualified 
  assert.equal(media.dataset.swosPhase,'RESULT_REVEAL');
  assert.equal(focus.dataset.geometryTrust,'BBOX_ONLY_SOFT_REGION');
  assert.equal(nodes[6].style.opacity,'0');
+});
+test('REVIEW_PROXY candidate paint is muted, opt-in, and unit-fixture-only (not SAM evidence)',async()=>{
+ maskCanvasDraws.length=0;offscreenMaskCanvases.length=0;
+ const layers=[];
+ const host={dataset:{},querySelectorAll:()=>layers};
+ const media={dataset:{},removeAttribute(name){delete this.dataset[name];}};
+ const focus={style:{},dataset:{},classList:{add(){},remove(){}},removeAttribute(){}};
+ const renderer=context.window.YujianCatch.createSwosRenderer({media,host,focus,maskCanvas:mainMaskCanvas,getReducedMotion:()=>true});
+ renderer.start(0,{processingFrames:[{id:'P0',at:0},{id:'P7',at:2800}],waterStrength:[0,0],goldStrength:[0,100]});
+ const loaded=await renderer.setMask({status:'REVIEW_PROXY',renderAllowed:true,value:'data:image/png;base64,TEST_FIXTURE_ONLY'});
+ assert.equal(loaded,true);
+ assert.equal(host.dataset.maskState,'REVIEW_PROXY');
+ assert.equal(media.dataset.maskTrust,'REVIEW_PROXY');
+ assert.equal(maskCanvasDraws.length,0,'candidate must stay hidden until explicit review opt-in');
+ renderer.setMaskReviewEnabled(true);
+ assert.equal(maskCanvasDraws.length,1,'explicit review opt-in paints the decoded candidate mask');
+ assert.equal(maskCanvasDraws[0].globalAlpha,0.34);
+ assert.equal(maskCanvasDraws[0].composite,'source-over');
+ assert.equal(maskCanvasDraws[0].filter,'none');
+ const painted=offscreenMaskCanvases[0].ctx.painted;
+ assert.deepEqual(painted.slice(0,4),[70,145,138,255]);
+ assert.deepEqual(painted.slice(4,8),[70,145,138,0]);
+ assert.deepEqual(painted.slice(8,12),[70,145,138,128]);
+ renderer.setMaskReviewEnabled(false);
+ assert.equal(maskCanvasDraws.length,1,'turning review off clears rather than redraws the mask');
+ renderer.stop();
+ assert.equal(host.dataset.maskState,'NONE');
+ assert.equal(media.dataset.maskTrust,undefined);
 });
 test('journey remains explicit about unavailable segmentation during processing',()=>{
  const makeStep=()=>({dataset:{},attrs:{},status:{textContent:''},image:{src:'',hidden:true,removeAttribute(){}},placeholder:{hidden:false},querySelector(selector){return selector==='[data-journey-status]'?this.status:selector==='.journey-placeholder'?this.placeholder:this.image;},setAttribute(key,value){this.attrs[key]=value;},removeAttribute(key){delete this.attrs[key];}});

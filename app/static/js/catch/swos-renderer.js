@@ -86,7 +86,7 @@
   function createSwosRenderer({media,host,focus,maskCanvas,waterGLCanvas,water2DCanvas,photoStage,getReducedMotion=()=>window.matchMedia?.("(prefers-reduced-motion: reduce)").matches===true}){
     let frames=[],water=[],gold=[],revealFrames=[],revealWater=[],revealGold=[];
     let startAt=0,revealStartAt=0,raf=0,running=false,mode="idle",bbox=null;
-    let resultState="",maskTrust="NONE",maskImage=null,maskTexture=null,maskVisible=false,lastElapsed=0;
+    let resultState="",maskTrust="NONE",maskImage=null,maskTexture=null,reviewMaskTexture=null,maskStatus="NONE",maskLoadSequence=0,maskVisible=false,lastElapsed=0;
     const maskContext=maskCanvas?.getContext("2d",{willReadFrequently:true});
     let gl=null,glProgram=null,glMode="STATIC_CSS",water2DContext=null,previousFrameAt=0,droppedFrames=0;
     const frameCosts=[],rafIntervals=[];
@@ -181,13 +181,28 @@
     function paintMask(goldStrength){
       if(!maskCanvas||!maskContext)return;
       const dpr=Math.min(2,window.devicePixelRatio||1),width=Math.max(1,Math.round(maskCanvas.clientWidth*dpr)),height=Math.max(1,Math.round(maskCanvas.clientHeight*dpr));
-      if(maskCanvas.width!==width||maskCanvas.height!==height){maskCanvas.width=width;maskCanvas.height=height;maskTexture=null;}
+      if(maskCanvas.width!==width||maskCanvas.height!==height){maskCanvas.width=width;maskCanvas.height=height;maskTexture=null;reviewMaskTexture=null;}
       maskContext.setTransform(dpr,0,0,dpr,0,0);maskContext.clearRect(0,0,width/dpr,height/dpr);
-      const trust=maskVisible&&maskImage;
+      const hasMask=Boolean(maskImage&&maskStatus!=="NONE");
       const fallbackTrust=bbox?"BBOX_ONLY":"NONE";
-      host.dataset.maskState=trust?"REVIEW_PROXY":fallbackTrust;
-      media.dataset.maskTrust=trust?"REVIEW_PROXY":fallbackTrust;
-      if(!trust||goldStrength<=0)return;
+      host.dataset.maskState=hasMask?maskStatus:fallbackTrust;
+      media.dataset.maskTrust=hasMask?maskStatus:fallbackTrust;
+      if(!maskVisible||!hasMask)return;
+      // REVIEW_PROXY is an actual candidate shape, never a qualified gold trace.
+      // Display it only after the explicit review toggle, using a restrained teal fill.
+      if(maskStatus==="REVIEW_PROXY"){
+        if(!reviewMaskTexture){
+          const source=document.createElement("canvas");source.width=width;source.height=height;
+          const sourceContext=source.getContext("2d",{willReadFrequently:true});sourceContext.drawImage(maskImage,0,0,width,height);
+          const pixels=sourceContext.getImageData(0,0,width,height),data=pixels.data;
+          for(let i=0;i<data.length;i+=4){const alpha=data[i];data[i]=70;data[i+1]=145;data[i+2]=138;data[i+3]=alpha;}
+          sourceContext.putImageData(pixels,0,0);reviewMaskTexture=source;
+        }
+        maskContext.save();maskContext.globalCompositeOperation="source-over";maskContext.filter="none";maskContext.globalAlpha=.34;
+        maskContext.drawImage(reviewMaskTexture,0,0,width/dpr,height/dpr);maskContext.restore();
+        return;
+      }
+      if(maskStatus!=="TRUSTED_MASK"||goldStrength<=0)return;
       if(!maskTexture){
         const source=document.createElement("canvas");source.width=width;source.height=height;
         const sourceContext=source.getContext("2d",{willReadFrequently:true});sourceContext.drawImage(maskImage,0,0,width,height);
@@ -235,20 +250,22 @@
         if(bbox&&running)paint(mode==="reveal"?Math.max(0,Math.min(REVEAL_MS,performance.now()-revealStartAt)):Math.max(0,Math.min(PROCESSING_MS,performance.now()-startAt)));
       },
       async setMask(mask){
-        maskVisible=false;maskImage=null;maskTexture=null;
+        const sequence=++maskLoadSequence;
+        maskVisible=false;maskImage=null;maskTexture=null;reviewMaskTexture=null;maskStatus="NONE";
         if(mask?.status!=="REVIEW_PROXY"||mask.renderAllowed!==true||!mask.value){paint(lastElapsed);return false;}
         const image=new Image();image.src=mask.value;
-        try{await image.decode();}catch(_error){paint(lastElapsed);return false;}
-        maskImage=image;paint(lastElapsed);return true;
+        try{await image.decode();}catch(_error){if(sequence===maskLoadSequence)paint(lastElapsed);return false;}
+        if(sequence!==maskLoadSequence)return false;
+        maskImage=image;maskStatus="REVIEW_PROXY";paint(lastElapsed);return true;
       },
-      setMaskReviewEnabled(enabled){maskVisible=Boolean(enabled&&maskImage);paint(lastElapsed);},
+      setMaskReviewEnabled(enabled){maskVisible=Boolean(enabled&&maskImage&&maskStatus==="REVIEW_PROXY");paint(lastElapsed);},
       stop(reset=true){
         running=false;if(raf)cancelAnimationFrame(raf);raf=0;
         if(reset){
           for(const layer of layers.values())layer.style.opacity="0";
           focus.classList?.remove("visible");focus.style.opacity="0";focus.removeAttribute("data-geometry-trust");
           if(maskContext){maskContext.clearRect(0,0,maskCanvas.width,maskCanvas.height);}
-          maskImage=null;maskTexture=null;maskVisible=false;host.dataset.maskState="NONE";media.removeAttribute("data-mask-trust");
+          maskLoadSequence++;maskImage=null;maskTexture=null;reviewMaskTexture=null;maskStatus="NONE";maskVisible=false;host.dataset.maskState="NONE";media.removeAttribute("data-mask-trust");
           media.removeAttribute("data-swos-frame");media.removeAttribute("data-relative-water-strength");
           media.removeAttribute("data-relative-fish-gold-strength");media.dataset.swosOpticalState="IDLE";
           bbox=null;
