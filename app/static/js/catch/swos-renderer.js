@@ -38,8 +38,8 @@
   function rendererMode(){
     try{
       const canvas=document.createElement("canvas");
-      if(canvas.getContext("webgl2"))return "WEBGL2_OPTICAL_LAYERS";
-      if(canvas.getContext("2d"))return "CANVAS2D_CACHED_OPTICAL_LAYERS";
+      if(canvas.getContext("webgl2"))return "WEBGL2_AVAILABLE_DOM_OPTICS";
+      if(canvas.getContext("2d"))return "CANVAS2D_AVAILABLE_DOM_OPTICS";
     }catch(_error){/* static sample is the safe final fallback */}
     return "STATIC_OPTICAL_SAMPLE";
   }
