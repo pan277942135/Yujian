@@ -247,6 +247,70 @@ def main() -> None:
                     assert desktop.locator("#catchUploadPhoto").evaluate("image => [image.naturalWidth, image.naturalHeight]") == list(dimensions)
                     assert not desktop.locator("#catchTabProcessing").is_disabled()
                     assert desktop.locator("#catchTabResult").is_disabled()
+                    bbox_focus = desktop.evaluate(
+                        """() => {
+                          const media=document.querySelector('#catchProcessingMedia');
+                          const stage=document.querySelector('#catchPhotoStage');
+                          const photo=document.querySelector('#catchProcessingPhoto');
+                          const host=document.querySelector('#catchPhotoEffects');
+                          const focus=document.querySelector('#catchRegionGlow');
+                          stage.hidden=false;
+                          Object.assign(stage.style,{position:'relative',inset:'auto',width:'640px',height:'400px'});
+                          Object.assign(media.style,{width:'640px',height:'400px',aspectRatio:'auto'});
+                          photo.src=document.querySelector('#catchUploadPhoto').src;
+                          photo.hidden=false;
+                          Object.assign(host.style,{position:'absolute',inset:'0',width:'100%',height:'100%'});
+                          const renderer=window.YujianCatch.createSwosRenderer({
+                            media,host,focus,photoStage:stage,
+                            maskCanvas:document.querySelector('#catchMaskCanvas'),
+                            waterGLCanvas:document.querySelector('#catchWaterGLCanvas'),
+                            water2DCanvas:document.querySelector('#catchWater2DCanvas'),
+                            getReducedMotion:()=>false,
+                          });
+                          renderer.setGeometry({x1:.3,y1:.25,x2:.7,y2:.72});
+                          renderer.start(performance.now(),{
+                            processingFrames:window.YUJIAN_CATCH_RECOGNITION_TIMELINE.processingFrames,
+                            waterStrength:[0,10,45,75,60,35,10,0],
+                            goldStrength:[0,0,15,45,100,100,100,100],
+                          });
+                          const frame=renderer.renderAt(1550);
+                          const result={
+                            fixture_only:true,
+                            frame:frame.frame,
+                            display:getComputedStyle(focus).display,
+                            visibleClass:focus.classList.contains('visible'),
+                            opacity:Number(getComputedStyle(focus).opacity),
+                            geometryTrust:focus.dataset.geometryTrust,
+                            maskTrust:media.dataset.maskTrust,
+                            bboxOutlineDisplay:getComputedStyle(document.querySelector('#catchBBoxOverlay')).display,
+                            rect:focus.getBoundingClientRect().toJSON(),
+                          };
+                          window._swosBboxFocusFixtureRenderer=renderer;
+                          return result;
+                        }"""
+                    )
+                    assert bbox_focus["fixture_only"] is True
+                    assert bbox_focus["frame"] == "P4"
+                    assert bbox_focus["display"] != "none" and bbox_focus["visibleClass"]
+                    assert bbox_focus["opacity"] > 0
+                    assert bbox_focus["geometryTrust"] == "BBOX_ONLY_SOFT_REGION"
+                    assert bbox_focus["maskTrust"] == "BBOX_ONLY"
+                    assert bbox_focus["bboxOutlineDisplay"] == "none", bbox_focus
+                    (ARTIFACTS / "product-renderer-bbox-focus-TEST_FIXTURE.json").write_text(json.dumps(bbox_focus, ensure_ascii=False, indent=2), encoding="utf-8")
+                    desktop.locator("#catchProcessingMedia").screenshot(path=str(ARTIFACTS / "product-renderer-bbox-soft-focus-TEST_FIXTURE.png"))
+                    desktop.evaluate(
+                        """() => {
+                          window._swosBboxFocusFixtureRenderer.stop();
+                          delete window._swosBboxFocusFixtureRenderer;
+                          const stage=document.querySelector('#catchPhotoStage');stage.hidden=true;
+                          const photo=document.querySelector('#catchProcessingPhoto');photo.removeAttribute('src');photo.hidden=true;
+                          for(const [node,props] of [
+                            [stage,['position','inset','width','height']],
+                            [document.querySelector('#catchProcessingMedia'),['width','height','aspect-ratio']],
+                            [document.querySelector('#catchPhotoEffects'),['position','inset','width','height']],
+                          ])for(const prop of props)node.style.removeProperty(prop);
+                        }"""
+                    )
                     desktop.screenshot(path=str(ARTIFACTS / "desktop-photo-selected-ui-simulation.png"), full_page=True)
                     desktop.evaluate("window._catchUiSmokeStartedAt = performance.now()")
                     desktop.locator("#catchStartButton").click()
