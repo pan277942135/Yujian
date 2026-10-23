@@ -23,7 +23,7 @@ env:
   SERVICE: yujian-model-factory-console
   PR_NUMBER: '177'
   EXPECTED_BRANCH: feat/ai-catch-recognition-web-swos-rr09-v1
-  TARGET_SHA: cb9e3780afb5e2904e3dfe5148210a4ccc3747b4
+  TARGET_SHA: 4de911dc497c150545d938b60b2694f3c4723e37
   TAG: catch-pr177
   WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
   DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
@@ -162,7 +162,7 @@ jobs:
               f.write("PREVIEW_REVISION="+tagged["revisionName"]+"\n")
           with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as f:
               f.write("## No-traffic deployment\n")
-              f.write("- Preview URL: "+tagged["url"]+"/platform/model/catch-recognition\n")
+              f.write("- Preview URL: "+tagged["url"]+"/platform/model/catch-recognition/swos-preview\n")
               f.write("- Revision: `"+tagged["revisionName"]+"`\n")
               f.write("- Source SHA: `"+os.environ["TARGET_SHA"]+"`\n")
               f.write("- Existing default traffic: unchanged\n")
@@ -182,7 +182,7 @@ jobs:
           PY
           LOGIN="$(curl --max-time 30 -sS -o /dev/null -w '%{http_code}' "$PREVIEW_URL/login")"
           test "$LOGIN" = 200
-          PAGE="$(curl --max-time 30 -sS -o /dev/null -w '%{http_code}' "$PREVIEW_URL/platform/model/catch-recognition")"
+          PAGE="$(curl --max-time 30 -sS -o /dev/null -w '%{http_code}' "$PREVIEW_URL/platform/model/catch-recognition/swos-preview")"
           if [[ "$PAGE" != "303" && "$PAGE" != "200" ]]; then
             echo "Preview route returned unexpected HTTP $PAGE" >&2
             exit 1
