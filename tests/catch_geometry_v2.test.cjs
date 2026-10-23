@@ -87,7 +87,7 @@ test('REVIEW_PROXY candidate paint is muted, opt-in, and unit-fixture-only (not 
  maskCanvasDraws.length=0;offscreenMaskCanvases.length=0;
  const layers=[];
  const host={dataset:{},querySelectorAll:()=>layers};
- const media={dataset:{},removeAttribute(name){delete this.dataset[name.replace(/-([a-z])/g,(_match,letter)=>letter.toUpperCase())];}};
+ const media={dataset:{},removeAttribute(name){const key=name.replace(/^data-/,"").replace(/-([a-z])/g,(_match,letter)=>letter.toUpperCase());delete this.dataset[key];}};
  const focus={style:{},dataset:{},classList:{add(){},remove(){}},removeAttribute(){}};
  const renderer=context.window.YujianCatch.createSwosRenderer({media,host,focus,maskCanvas:mainMaskCanvas,getReducedMotion:()=>true});
  renderer.start(0,{processingFrames:[{id:'P0',at:0},{id:'P7',at:2800}],waterStrength:[0,0],goldStrength:[0,100]});
