@@ -16,7 +16,7 @@ import time
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from PIL import Image, ImageOps
+from PIL import Image, ImageChops, ImageOps, ImageStat
 from playwright.sync_api import sync_playwright
 import uvicorn
 
