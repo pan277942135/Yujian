@@ -2,7 +2,7 @@
 
 Base main at the last live audit: 6a2064c2a02a76437b6e09a5241bc199cfa05048.
 
-Current candidate source: a0596aaf609914e0de8a325da06b2f286a139150 (PR #177, same repository and expected branch). Exact-source CI run: https://github.com/pan277942135/Yujian/actions/runs/39963664724 (PASS: validate and Chromium). The fixture BBox focus report is BBOX_ONLY with no outline; ROI mean pixel delta 4.22 and max 17. This is fixture evidence only, not live inference, production Mask, or visual acceptance.
+Current candidate source: ba265369cb4f08a1fcc811ca60d66a32bd93ea2e (PR #177, same repository and expected branch). Exact-source CI run: https://github.com/pan277942135/Yujian/actions/runs/39975828538 (`validate` PASS; Chromium was IN_PROGRESS at this pin update). Prior successful run 39963664724 is historical and bound to a0596aa. The current regression has already exercised the public-photo BBOX_ONLY pixel gate (ROI mean 4.25, max 15, no outline) on the earlier attempt; only the exact final run can satisfy preflight. This remains fixture evidence, not live inference, production Mask, or visual acceptance.
 
 The preview workflow is pinned to this exact candidate SHA. Before any no-traffic deployment, it verifies that PR #177 is still open/unmerged on the expected branch, that its live HEAD equals the pin, and that the latest exact-source ci.yml pull-request run has succeeded. A changed PR HEAD makes preflight fail closed; update the pin only after confirming the new exact-SHA CI.
 
