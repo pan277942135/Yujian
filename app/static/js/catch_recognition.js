@@ -287,7 +287,7 @@
 
   function renderDiagnostics(result) {
     const top1 = result.classifier?.top1;
-    const bbox = result.detector?.detections?.[0]?.bbox || null;
+    const bbox = result.detector?.quality_gate?.primary_bbox || result.detector?.detections?.[0]?.bbox || null;
     const details = {
       request_id: result.request_id,
       result_state: result.result_state,
@@ -504,7 +504,7 @@
   }
 
   function drawBBoxIfRequested(result) {
-    const first = result.detector?.detections?.[0]?.bbox;
+    const first = result.detector?.quality_gate?.primary_bbox || result.detector?.detections?.[0]?.bbox;
     if (!first) return;
     state.bbox = core.PhotoViewport.validBox(first);
     if (!state.bbox) return;
@@ -565,13 +565,23 @@
     nodes.speciesLabel.textContent = "识别鱼种";
     nodes.confidence.textContent = `${(Number(top1.confidence) * 100).toFixed(1)}%`;
     nodes.confidence.className = "catch-confidence";
+    // The renderer starts the same 850ms clock as the shared-photo handoff;
+    // there is no inserted business-state gap between P7 and R0.
+    swosRenderer.startReveal(eventStart, {
+      revealFrames: RR09_FRAMES,
+      revealWaterStrength: [0, 12, 18, 14, 8, 2, 0],
+      revealGoldStrength: [0, 0, 0, 0, 0, 0, 0],
+    }, {
+      resultState: result.result_state,
+      maskTrust: state.photo?.mask?.trust_state || "NONE",
+    });
     const revealAt = async (target) => delay(Math.max(0, eventStart + target - performance.now()));
     await transitionSharedPhoto(eventStart, requestSequence); // R0 → R0.5 → R1, measured from live DOM rectangles.
     if (!state.current(requestSequence)) return;
     await revealAt(RR09_FRAMES[3].at); // R2 380ms; no precise transfer without qualified SAM.
     if (!state.current(requestSequence)) return;
     nodes.resultPanel.dataset.rr09Frame = "R2";
-    nodes.resultPanel.dataset.revealState = state.photo.mask.status === "TRUSTED_MASK_THREE_LAYERS" ? "qualified-mask-transfer" : "gold-transfer-unavailable";
+    nodes.resultPanel.dataset.revealState = state.photo.mask.trust_state === "TRUSTED_MASK" ? "qualified-mask-transfer" : "gold-transfer-unavailable";
     await revealAt(RR09_FRAMES[4].at); // R3 550ms; keep the name hidden without a trusted glyph trace.
     if (!state.current(requestSequence)) return;
     nodes.resultPanel.dataset.rr09Frame = "R3";
@@ -945,7 +955,7 @@
   window.addEventListener("resize", () => {
     updatePhotoGeometry();
     const check = $("catchShowBBox");
-    const bbox = state.inference?.detector?.detections?.[0]?.bbox;
+    const bbox = state.inference?.detector?.quality_gate?.primary_bbox || state.inference?.detector?.detections?.[0]?.bbox;
     if (check?.checked && bbox) mapBboxToElement(nodes.processingPhoto, nodes.bbox, bbox);
     updateStageNav(app.dataset.activeStage || "upload");
   });

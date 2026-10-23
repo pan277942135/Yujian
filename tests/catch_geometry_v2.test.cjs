@@ -2,7 +2,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const vm=require('node:vm');
-const context={window:{},crypto:require('node:crypto').webcrypto,URL:{createObjectURL:()=> 'blob:fixture',revokeObjectURL:()=>{}},AbortController};
+const context={window:{},crypto:require('node:crypto').webcrypto,performance:{now:()=>0},URL:{createObjectURL:()=> 'blob:fixture',revokeObjectURL:()=>{}},AbortController};
 vm.createContext(context);
 for(const name of ['photo-session','recognition-controller','stage-view','swos-renderer'])vm.runInContext(fs.readFileSync(`app/static/js/catch/${name}.js`,'utf8'),context);
 const {PhotoViewport:g,RecognitionController}=context.window.YujianCatch;
@@ -38,6 +38,21 @@ test('SWOS samples the frozen 8-point curves and keeps perceptual strength separ
  assert.ok(Number(paint.caustic)>0&&Number(paint.caustic)<0.75);
  assert.ok(Number(paint.focus)>0&&Number(paint.focus)<0.25);
  assert.notEqual(Number(paint.caustic),0.75);assert.notEqual(Number(paint.focus),1);
+});
+test('SWOS exposes the complete 3650ms clock and blocks gold for an unqualified mask',()=>{
+ const t=context.window.YujianCatch.SWOSTimeline;
+ assert.equal(t.processingMs,2800);assert.equal(t.revealMs,850);assert.equal(t.totalMs,3650);
+ const names=['photo-base','ambient-water','caustic-field','ripple-field','peripheral-refraction','fish-focus','residual-gold-trace'];
+ const nodes=names.map(name=>({dataset:{opticalLayer:name},style:{},removeAttribute(){},}));
+ const host={querySelectorAll:()=>nodes};
+ const media={dataset:{}};const focus={style:{},dataset:{},removeAttribute(){}};
+ const renderer=context.window.YujianCatch.createSwosRenderer({media,host,focus,getReducedMotion:()=>true});
+ renderer.start(0,{processingFrames:[{id:'P0',at:0},{id:'P7',at:2800}],waterStrength:[0,0],goldStrength:[0,100]});
+ renderer.setGeometry({x1:.1,y1:.2,x2:.8,y2:.9});
+ renderer.startReveal(0,{revealFrames:[{id:'R0',at:0},{id:'R5',at:850}],revealWaterStrength:[0,0],revealGoldStrength:[0,100]},{resultState:'RESULT_HIGH',maskTrust:'BBOX_ONLY'});
+ assert.equal(media.dataset.swosPhase,'RESULT_REVEAL');
+ assert.equal(focus.dataset.geometryTrust,'BBOX_ONLY_SOFT_REGION');
+ assert.equal(nodes[6].style.opacity,'0');
 });
 test('journey remains explicit about unavailable segmentation during processing',()=>{
  const makeStep=()=>({dataset:{},attrs:{},status:{textContent:''},image:{src:'',hidden:true,removeAttribute(){}},placeholder:{hidden:false},querySelector(selector){return selector==='[data-journey-status]'?this.status:selector==='.journey-placeholder'?this.placeholder:this.image;},setAttribute(key,value){this.attrs[key]=value;},removeAttribute(key){delete this.attrs[key];}});

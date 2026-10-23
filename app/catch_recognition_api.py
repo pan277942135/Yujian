@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.inference_api import MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, _inspect_image, _predict_bytes
 from app.models import ModelVersion
+from app.segmentation.product_adapter import build_product_segmentation
 
 
 logger = logging.getLogger(__name__)
@@ -85,7 +86,7 @@ def _active_classifier(db: Session) -> ModelVersion:
     return rows[0]
 
 
-def _response_payload(result: dict, request_id: str) -> dict:
+def _response_payload(result: dict, request_id: str, *, segmentation: dict | None = None) -> dict:
     detector = result.get("detector") or {}
     quality_gate = result.get("quality_gate") or {}
     crop = result.get("crop") or None
@@ -128,14 +129,18 @@ def _response_payload(result: dict, request_id: str) -> dict:
                 for stage in stages
             ],
         },
-        # SAM remains an explicitly unqualified optional enhancement. No mask
-        # or precise fish contour is emitted until its real-image gate passes.
-        "segmentation": {
-            "status": "UNAVAILABLE",
-            "reason_code": "SAM_NOT_QUALIFIED",
+        # The adapter never emits mask pixels.  It binds the optional result
+        # to this request's exact bytes and detector box, and keeps all SAM
+        # candidates review-only until independent qualification/sign-off.
+        "segmentation": segmentation
+        or {
+            "status": "NONE",
+            "reason_code": "SEGMENTATION_NOT_RUN",
+            "trust_state": "NONE",
             "model_version": None,
             "quality": None,
             "mask": None,
+            "production_qualified": False,
         },
     }
 
@@ -183,7 +188,8 @@ def infer_catch_photo(
         data, _meta = _read_product_image(file)
         model = _active_classifier(db)
         result = _predict_bytes(db, model.model_version, data, include_intermediates=False)
-        payload = _response_payload(result, request_id)
+        segmentation = build_product_segmentation(data=data, result=result, session_id=request_id)
+        payload = _response_payload(result, request_id, segmentation=segmentation)
         logger.info(
             "product_recognition_complete request_id=%s detector=%s classifier=%s state=%s total_ms=%s",
             request_id,

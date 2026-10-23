@@ -30,13 +30,15 @@
       this.url = URL.createObjectURL(file); this.width = width; this.height = height;
       this.aspectRatio = width / height; this.orientation = "BROWSER_EXIF_NORMALIZED";
       this.processingGeometry = null; this.resultGeometry = null; this.bbox = null;
-      this.mask = {status:"UNAVAILABLE",value:null}; this.result = null;
+      this.mask = {status:"NONE",trust_state:"NONE",value:null}; this.result = null;
     }
     geometry(frame, fit = "contain") { return viewport(this.width,this.height,frame,fit); }
     accept(result) {
       this.result = result;
-      this.bbox = validBox(result.detector?.detections?.[0]?.bbox);
-      // Optional masks remain unavailable until a separately admitted qualification.
+      this.bbox = validBox(result.detector?.quality_gate?.primary_bbox || result.detector?.detections?.[0]?.bbox);
+      // The server is the authority for source-bound segmentation.  Never
+      // infer a mask from a client box or promote a heuristic candidate.
+      this.mask = result.segmentation || {status:"NONE",trust_state:"NONE",value:null};
     }
     dispose() { URL.revokeObjectURL(this.url); }
   }

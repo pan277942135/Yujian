@@ -10,6 +10,9 @@ from PIL import Image
 from starlette.datastructures import UploadFile
 
 from app import catch_recognition_api as product_api
+from app.segmentation import product_adapter
+from app.segmentation.quality_gate import SegmentationQuality
+from app.segmentation.service import FishSegmentationResult
 
 
 def _png_bytes() -> bytes:
@@ -100,18 +103,59 @@ def test_product_inference_returns_real_pipeline_data_without_debug_artifacts_or
     assert body["detector"]["model_version"] == "DET_FISH_v0.3"
     assert body["classifier"]["top3"][0]["species"] == "草鱼"
     assert body["timing"]["total_ms"] == 54
-    assert body["segmentation"] == {
-        "status": "UNAVAILABLE",
-        "reason_code": "SAM_NOT_QUALIFIED",
-        "model_version": None,
-        "quality": None,
-        "mask": None,
+    assert body["segmentation"]["status"] in {"TRUSTED_BBOX_ONLY", "CANDIDATE_REVIEW_ONLY"}
+    assert body["segmentation"]["trust_state"] in {"BBOX_ONLY", "REVIEW_ONLY"}
+    assert body["segmentation"]["production_qualified"] is False
+    assert body["segmentation"]["source_binding"]["source_sha256"]
+    assert body["segmentation"]["source_binding"]["bbox"] == {
+        "x1": 0.1,
+        "y1": 0.2,
+        "x2": 0.8,
+        "y2": 0.9,
     }
     assert "image_gcs_uri" not in body
     assert "debug" not in response.body.decode()
     assert "base64" not in response.body.decode()
     assert len(calls) == 1
     assert calls[0][1:] == ("CLASSIFIER_v1", _png_bytes(), False)
+
+
+def test_product_segmentation_binds_exact_source_and_detector_bbox_without_trusting_sam(monkeypatch):
+    data = _png_bytes()
+    result = _pipeline_result()
+    result["quality_gate"] = {"classifier_allowed": True, "primary_bbox": result["detector"]["detections"][0]["bbox"]}
+    observed = {}
+
+    def fake_cutout(image, bbox):
+        observed["size"] = image.size
+        observed["bbox"] = bbox
+        return FishSegmentationResult(
+            quality=SegmentationQuality.GOOD,
+            reason="mask_passed_basic_checks",
+            width=image.width,
+            height=image.height,
+            mask_area_ratio=0.3,
+            edge_ratio=0.1,
+            connected_components=1,
+            processing_ms=12.0,
+            cutout_png=b"private-artifact-not-serialized",
+            mask=object(),
+        )
+
+    monkeypatch.setattr(product_adapter, "generate_fish_cutout", fake_cutout)
+    body = product_adapter.build_product_segmentation(data=data, result=result, session_id="REC_test")
+
+    import hashlib
+
+    assert observed["size"] == (4, 3)
+    assert observed["bbox"].x1 == 0.1
+    assert body["status"] == "CANDIDATE_REVIEW_ONLY"
+    assert body["trust_state"] == "REVIEW_ONLY"
+    assert body["production_qualified"] is False
+    assert body["mask"] is None
+    assert body["source_binding"]["session_id"] == "REC_test"
+    assert body["source_binding"]["source_sha256"] == hashlib.sha256(data).hexdigest()
+    assert "private-artifact" not in json.dumps(body)
 
 
 def test_product_inference_rejects_unapproved_image_format(monkeypatch):
