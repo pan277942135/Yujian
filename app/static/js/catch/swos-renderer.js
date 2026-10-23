@@ -77,9 +77,12 @@
       out_color=vec4(color,alpha);
     }`;
 
-  function compileShader(gl,type,source){
+  function compileShader(gl,type,source,onError){
     const shader=gl.createShader(type);gl.shaderSource(shader,source);gl.compileShader(shader);
-    if(!gl.getShaderParameter(shader,gl.COMPILE_STATUS)){gl.deleteShader(shader);return null;}
+    if(!gl.getShaderParameter(shader,gl.COMPILE_STATUS)){
+      const diagnostic=(gl.getShaderInfoLog(shader)||"NO_SHADER_INFO_LOG").replace(/\\s+/g," ").trim().slice(0,160);
+      onError?.(diagnostic);gl.deleteShader(shader);return null;
+    }
     return shader;
   }
 
@@ -95,8 +98,10 @@
       if(!waterGLCanvas){webglFailureReason="WEBGL2_CANVAS_MISSING";return false;}
       try{gl=waterGLCanvas.getContext("webgl2",{alpha:true,antialias:false,premultipliedAlpha:true});}catch(_error){gl=null;webglFailureReason="WEBGL2_CONTEXT_EXCEPTION";}
       if(!gl){if(!webglFailureReason||webglFailureReason==="WEBGL2_INIT_NOT_ATTEMPTED")webglFailureReason="WEBGL2_UNAVAILABLE";return false;}
-      const vertex=compileShader(gl,gl.VERTEX_SHADER,VERTEX_SHADER),fragment=compileShader(gl,gl.FRAGMENT_SHADER,FRAGMENT_SHADER);
-      if(!vertex||!fragment){gl=null;webglFailureReason="WEBGL2_SHADER_COMPILE_FAILED";return false;}
+      const shaderDiagnostics=[];
+      const vertex=compileShader(gl,gl.VERTEX_SHADER,VERTEX_SHADER,log=>shaderDiagnostics.push("vertex: "+log));
+      const fragment=compileShader(gl,gl.FRAGMENT_SHADER,FRAGMENT_SHADER,log=>shaderDiagnostics.push("fragment: "+log));
+      if(!vertex||!fragment){gl=null;webglFailureReason="WEBGL2_SHADER_COMPILE_FAILED"+(shaderDiagnostics.length?": "+shaderDiagnostics.join(" | "):"");return false;}
       glProgram=gl.createProgram();gl.attachShader(glProgram,vertex);gl.attachShader(glProgram,fragment);gl.linkProgram(glProgram);
       if(!gl.getProgramParameter(glProgram,gl.LINK_STATUS)){gl=null;glProgram=null;webglFailureReason="WEBGL2_PROGRAM_LINK_FAILED";return false;}
       gl.bindVertexArray(gl.createVertexArray());gl.useProgram(glProgram);gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
