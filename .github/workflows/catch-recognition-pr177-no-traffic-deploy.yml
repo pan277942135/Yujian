@@ -184,7 +184,7 @@ jobs:
               f.write("PREVIEW_REVISION="+tagged["revisionName"]+"\n")
           with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as f:
               f.write("## No-traffic deployment\n")
-              f.write("- Preview URL: "+tagged["url"]+"/platform/model/catch-recognition\n")
+              f.write("- Preview URL: "+tagged["url"]+"/platform/model/catch-recognition/swos-preview\n")
               f.write("- Revision: `"+tagged["revisionName"]+"`\n")
               f.write("- Source SHA: `"+os.environ["TARGET_SHA"]+"`\n")
               f.write("- Existing default traffic: unchanged\n")
@@ -204,7 +204,7 @@ jobs:
           PY
           LOGIN="$(curl --max-time 30 -sS -o /dev/null -w '%{http_code}' "$PREVIEW_URL/login")"
           test "$LOGIN" = 200
-          PAGE="$(curl --max-time 30 -sS -o /dev/null -w '%{http_code}' "$PREVIEW_URL/platform/model/catch-recognition")"
+          PAGE="$(curl --max-time 30 -sS -o /dev/null -w '%{http_code}' "$PREVIEW_URL/platform/model/catch-recognition/swos-preview")"
           if [[ "$PAGE" != "303" && "$PAGE" != "200" ]]; then
             echo "Preview route returned unexpected HTTP $PAGE" >&2
             exit 1
