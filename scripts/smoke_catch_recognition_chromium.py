@@ -404,7 +404,10 @@ def main() -> None:
                         water_runtime["fallback_visual_note"]="Canvas2D radial caustics and ripple bands are active; shader refraction is unavailable. No pixel parity is implied."
                     water_runtime["fixture_only"]=True
                     water_runtime["real_inference_requested"]=False
-                    water_runtime["rendered_source_sha"]=os.environ.get("GITHUB_SHA")
+                    event_path=os.environ.get("GITHUB_EVENT_PATH")
+                    event=json.loads(Path(event_path).read_text(encoding="utf-8")) if event_path and Path(event_path).is_file() else {}
+                    water_runtime["rendered_source_sha"]=(event.get("pull_request") or {}).get("head",{}).get("sha") or os.environ.get("GITHUB_SHA")
+                    assert water_runtime["rendered_source_sha"],"source SHA must be recorded for renderer evidence"
                     water_runtime["run_id"]=os.environ.get("GITHUB_RUN_ID")
                     (ARTIFACTS/"product-water-render-runtime-ui-simulation.json").write_text(json.dumps(water_runtime,ensure_ascii=False,indent=2),encoding="utf-8")
                     desktop.locator("#catchProcessingMedia").screenshot(path=str(ARTIFACTS/"product-P3-water-render-runtime-ui-simulation.png"))
