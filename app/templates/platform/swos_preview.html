@@ -1,0 +1,26 @@
+{% extends "platform/base.html" %}
+{% set product_shell = true %}
+{% block head %}<link rel="stylesheet" href="/static/css/swos_preview.css">{% endblock %}
+{% block content %}
+<main class="swos-workbench" id="swosWorkbench">
+  <header><h1>SWOS · 可播放动效验收</h1><p>本地照片视觉 Fixture。不会上传图片或调用识别模型；“鱼种名称”仅用于检查中文笔画。</p></header>
+  <div class="swos-layout">
+    <section class="swos-stage" aria-label="动画画布"><canvas id="swosCanvas" aria-label="照片和光学效果"></canvas><div class="swos-empty" id="swosEmpty">选择本地照片后播放完整 3650ms 动效</div></section>
+    <aside class="swos-controls" aria-label="验收控制台">
+      <label>本地真实照片 <input id="swosPhoto" type="file" accept="image/jpeg,image/png,image/webp"></label>
+      <label>中文标题 Fixture <input id="swosName" value="鱼种名称" maxlength="16" aria-label="测试中文标题"></label>
+      <div class="swos-row"><button id="swosPlay">播放</button><button id="swosRestart">重播</button><button id="swosPrev">上一帧</button><button id="swosNext">下一帧</button></div>
+      <label>时间轴 <input id="swosSeek" type="range" min="0" max="3650" step="1" value="0"><output id="swosTime">P0 · 0ms</output></label>
+      <label>速度 <select id="swosRate"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option></select></label>
+      <label>视口 <select id="swosViewport"><option value="360,640">360 × 640</option><option value="390,844">390 × 844</option><option value="430,932">430 × 932</option><option value="480,800">480 × 800</option><option value="768,1024">768 × 1024</option><option value="1024,768">1024 × 768</option><option value="1280,800">1280 × 800</option><option value="1440,1000">1440 × 1000</option><option value="320,480">320 × 480</option><option value="free">自由宽高</option></select></label>
+      <div class="swos-row"><label>宽 <input id="swosWidth" type="number" min="240" max="2000" value="360"></label><label>高 <input id="swosHeight" type="number" min="320" max="2000" value="640"></label></div>
+      <div class="swos-row"><label><input id="swosWater" type="checkbox" checked>水光</label><label><input id="swosFish" type="checkbox" checked>鱼区柔光</label><label><input id="swosCompare" type="checkbox">原图对照</label></div>
+      <label><input id="swosReduce" type="checkbox">Reduce Motion</label>
+      <div id="swosKeys" class="swos-keys" aria-label="15 个关键帧"></div>
+      <div class="swos-row"><button id="swosExport">导出当前帧 PNG</button><button id="swosRecord">录制播放 WebM</button></div>
+      <pre id="swosInfo" aria-live="polite"></pre>
+    </aside>
+  </div>
+</main>
+{% endblock %}
+{% block scripts %}<script src="/static/js/catch/swos-preview.js"></script>{% endblock %}

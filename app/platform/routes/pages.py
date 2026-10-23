@@ -79,6 +79,19 @@ for _page in PLATFORM_PAGES:
     )
 
 
+@router.get("/platform/model/catch-recognition/swos-preview", response_class=HTMLResponse, name="swos_playable_preview")
+def swos_playable_preview(request: Request) -> HTMLResponse:
+    """Private-photo, local-only visual review surface. It never calls inference."""
+    page = PlatformPage(
+        "/platform/model/catch-recognition/swos-preview",
+        "platform/swos_preview.html",
+        "SWOS 动效验收",
+        "模型工厂",
+        "在浏览器中逐帧审查视觉时间线；测试鱼种文字不代表推理结果。",
+    )
+    return _render(request, page)
+
+
 @router.get("/platform/data/datasets/{dataset_id}", response_class=HTMLResponse, name="platform_dataset_detail")
 def platform_dataset_detail_page(request: Request, dataset_id: str) -> HTMLResponse:
     """Render one DatasetVersion without adding it to the sidebar menu."""
