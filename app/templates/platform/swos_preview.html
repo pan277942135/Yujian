@@ -14,7 +14,7 @@
       <label>速度 <select id="swosRate"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option></select></label>
       <label>视口 <select id="swosViewport"><option value="360,640">360 × 640</option><option value="390,844">390 × 844</option><option value="430,932">430 × 932</option><option value="480,800">480 × 800</option><option value="768,1024">768 × 1024</option><option value="1024,768">1024 × 768</option><option value="1280,800">1280 × 800</option><option value="1440,1000">1440 × 1000</option><option value="320,480">320 × 480</option><option value="free">自由宽高</option></select></label>
       <div class="swos-row"><label>宽 <input id="swosWidth" type="number" min="240" max="2000" value="360"></label><label>高 <input id="swosHeight" type="number" min="320" max="2000" value="640"></label></div>
-      <div class="swos-row"><label><input id="swosWater" type="checkbox" checked>水光</label><label><input id="swosFish" type="checkbox" checked>鱼区柔光</label><label><input id="swosCompare" type="checkbox">原图对照</label></div>
+      <div class="swos-row"><label><input id="swosWater" type="checkbox" checked>水光</label><label><input id="swosFish" type="checkbox" disabled title="本地照片没有可信鱼体 Mask">鱼体金光（缺少可信 Mask）</label><label><input id="swosCompare" type="checkbox">原图对照</label></div>
       <label><input id="swosReduce" type="checkbox">Reduce Motion</label>
       <div id="swosKeys" class="swos-keys" aria-label="15 个关键帧"></div>
       <div class="swos-row"><button id="swosExport">导出当前帧 PNG</button><button id="swosRecord">录制播放 WebM</button></div>

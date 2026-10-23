@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from playwright.sync_api import sync_playwright
 import uvicorn
 import sys
+from PIL import Image, ImageChops, ImageStat
 ROOT=Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path: sys.path.insert(0,str(ROOT))
 from app.platform.routes.pages import templates, PlatformPage, PLATFORM_PAGES
@@ -49,6 +50,17 @@ def main():
                     records.append({'key':id,'at':at,'photo_rect':trace['photo_rect'],'outer_rect':trace['outer_rect']})
                 assert records[7]['photo_rect']==records[8]['photo_rect']
                 mid=records[9]['photo_rect'];assert records[8]['photo_rect']['w']>mid['w']>records[10]['photo_rect']['w']
+                page.locator('#swosSeek').evaluate('(n)=>{n.value=1200;n.dispatchEvent(new Event("input",{bubbles:true}))}')
+                page.locator('#swosWater').uncheck()
+                page.locator('#swosCanvas').screenshot(path=str(OUT/'P3-original-comparison.png'))
+                page.locator('#swosWater').check()
+                with Image.open(OUT/'P3-1200.png') as lit, Image.open(OUT/'P3-original-comparison.png') as original:
+                    rect=records[3]['photo_rect']
+                    crop=(int(rect['x']),int(rect['y']),int(rect['x']+rect['w']),int(rect['y']+rect['h']))
+                    difference=ImageChops.difference(lit.crop(crop).convert('RGB'),original.crop(crop).convert('RGB'))
+                    ambient_pixel_delta=sum(ImageStat.Stat(difference).mean)/3
+                    assert ambient_pixel_delta>2.5, f'ambient optical field imperceptible: {ambient_pixel_delta:.2f}'
+                assert not page.locator('#swosFish').is_enabled()
                 for w,h in [(1440,1000),(1280,800),(1024,768),(768,1024),(480,800),(430,932),(390,844),(360,640),(320,480)]:
                     page.locator('#swosWidth').fill(str(w));page.locator('#swosHeight').fill(str(h));page.locator('#swosHeight').dispatch_event('change')
                     page.locator('#swosSeek').evaluate('(n)=>{n.value=2900;n.dispatchEvent(new Event("input",{bubbles:true}))}')
@@ -56,7 +68,7 @@ def main():
                     assert trace['photo_rect']['w']>0 and trace['photo_rect']['h']>0
                     page.locator('#swosCanvas').screenshot(path=str(OUT/f'viewport-{w}x{h}.png'))
                 assert not errors,errors
-                (OUT/'trace.json').write_text(json.dumps({'source':'verified public fixture; visual test only','frames':records,'browser':browser.version,'errors':errors},ensure_ascii=False,indent=2))
+                (OUT/'trace.json').write_text(json.dumps({'source':'verified public fixture; visual test only','frames':records,'ambient_pixel_delta_P3':ambient_pixel_delta,'mask_trust':'NONE','browser':browser.version,'errors':errors},ensure_ascii=False,indent=2))
                 page.close()
             finally:browser.close()
     finally:server.should_exit=True;thread.join(timeout=5)
