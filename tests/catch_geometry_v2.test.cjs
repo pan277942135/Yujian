@@ -2,6 +2,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const vm=require('node:vm');
+let maskDecodeGate=null;
 const maskCanvasDraws=[],offscreenMaskCanvases=[];
 function createMaskCanvas(main=false){
  const pixels=new Uint8ClampedArray([255,255,255,255,0,0,0,255,128,128,128,255,0,0,0,0]);
@@ -11,7 +12,7 @@ function createMaskCanvas(main=false){
  return canvas;
 }
 const mainMaskCanvas=createMaskCanvas(true);
-const context={window:{},crypto:require('node:crypto').webcrypto,performance:{now:()=>0},URL:{createObjectURL:()=> 'blob:fixture',revokeObjectURL:()=>{}},AbortController,Image:class{async decode(){}set src(value){this._src=value;}get src(){return this._src;}},document:{createElement(name){assert.equal(name,'canvas');return createMaskCanvas(false);}}};
+const context={window:{},crypto:require('node:crypto').webcrypto,performance:{now:()=>0},URL:{createObjectURL:()=> 'blob:fixture',revokeObjectURL:()=>{}},AbortController,Image:class{async decode(){if(maskDecodeGate)await maskDecodeGate;}set src(value){this._src=value;}get src(){return this._src;}},document:{createElement(name){assert.equal(name,'canvas');return createMaskCanvas(false);}}};
 vm.createContext(context);
 for(const name of ['photo-session','recognition-controller','stage-view','swos-renderer'])vm.runInContext(fs.readFileSync(`app/static/js/catch/${name}.js`,'utf8'),context);
 const {PhotoViewport:g,RecognitionController}=context.window.YujianCatch;
@@ -86,7 +87,7 @@ test('REVIEW_PROXY candidate paint is muted, opt-in, and unit-fixture-only (not 
  maskCanvasDraws.length=0;offscreenMaskCanvases.length=0;
  const layers=[];
  const host={dataset:{},querySelectorAll:()=>layers};
- const media={dataset:{},removeAttribute(name){delete this.dataset[name];}};
+ const media={dataset:{},removeAttribute(name){delete this.dataset[name.replace(/-([a-z])/g,(_match,letter)=>letter.toUpperCase())];}};
  const focus={style:{},dataset:{},classList:{add(){},remove(){}},removeAttribute(){}};
  const renderer=context.window.YujianCatch.createSwosRenderer({media,host,focus,maskCanvas:mainMaskCanvas,getReducedMotion:()=>true});
  renderer.start(0,{processingFrames:[{id:'P0',at:0},{id:'P7',at:2800}],waterStrength:[0,0],goldStrength:[0,100]});
@@ -109,6 +110,16 @@ test('REVIEW_PROXY candidate paint is muted, opt-in, and unit-fixture-only (not 
  renderer.stop();
  assert.equal(host.dataset.maskState,'NONE');
  assert.equal(media.dataset.maskTrust,undefined);
+ let finishDecode;
+ maskDecodeGate=new Promise(resolve=>{finishDecode=resolve;});
+ const staleLoad=renderer.setMask({status:'REVIEW_PROXY',renderAllowed:true,value:'data:image/png;base64,STALE_TEST_FIXTURE_ONLY'});
+ renderer.stop();
+ finishDecode();
+ assert.equal(await staleLoad,false,'a decode started before reset must be discarded');
+ assert.equal(host.dataset.maskState,'NONE');
+ assert.equal(media.dataset.maskTrust,undefined);
+ assert.equal(maskCanvasDraws.length,1,'the stale decode must not repaint after reset');
+ maskDecodeGate=null;
 });
 test('journey remains explicit about unavailable segmentation during processing',()=>{
  const makeStep=()=>({dataset:{},attrs:{},status:{textContent:''},image:{src:'',hidden:true,removeAttribute(){}},placeholder:{hidden:false},querySelector(selector){return selector==='[data-journey-status]'?this.status:selector==='.journey-placeholder'?this.placeholder:this.image;},setAttribute(key,value){this.attrs[key]=value;},removeAttribute(key){delete this.attrs[key];}});
