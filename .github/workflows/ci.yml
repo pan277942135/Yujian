@@ -162,6 +162,10 @@ jobs:
           DET_FISH_LANDSCAPE_PHOTO: ${{ runner.temp }}/det-fish-display/landscape.jpg
           DET_FISH_PORTRAIT_PHOTO: ${{ runner.temp }}/det-fish-display/portrait.jpg
         run: python scripts/smoke_catch_recognition_chromium.py
+      - name: Run SWOS playable preview Chromium rendering
+        env:
+          DET_FISH_PORTRAIT_PHOTO: ${{ runner.temp }}/det-fish-display/portrait.jpg
+        run: python scripts/smoke_swos_preview_chromium.py
       - name: Upload Chromium screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -177,4 +181,5 @@ jobs:
           path: |
             test-results/catch-recognition-chromium/*.png
             test-results/catch-recognition-chromium/render-capabilities.json
+            test-results/swos-preview-chromium/*
           if-no-files-found: warn
