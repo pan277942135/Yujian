@@ -321,7 +321,7 @@ def main() -> int:
     base_url = args.base_url.rstrip("/")
     status, health, health_ms = request_json(base_url + "/health/deploy", timeout=30)
     report["runtime_binding"] = {
-        "http_status": status, "round_trip_ms": health_ms, "payload": health,
+        "http_status": status, "round_trip_ms": health_ms, "payload": {key: health.get(key) for key in ("status", "git_commit", "revision", "service")},
         "matches_expected": status == 200 and health.get("git_commit") == args.expected_sha
         and health.get("revision") == args.expected_revision,
     }
@@ -405,7 +405,7 @@ def main() -> int:
 
     status_after, health_after, health_after_ms = request_json(base_url + "/health/deploy", timeout=30)
     report["runtime_binding"]["after"] = {
-        "http_status": status_after, "round_trip_ms": health_after_ms, "payload": health_after,
+        "http_status": status_after, "round_trip_ms": health_after_ms, "payload": {key: health_after.get(key) for key in ("status", "git_commit", "revision", "service")},
         "matches_expected": status_after == 200 and health_after.get("git_commit") == args.expected_sha
         and health_after.get("revision") == args.expected_revision,
     }
