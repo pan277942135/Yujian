@@ -2,7 +2,11 @@ import hashlib
 import json
 from pathlib import Path
 
-from trainer.detector_dataset_gate import validate_v02_dataset, validate_v02_materialized_dataset
+from trainer.detector_dataset_gate import (
+    _negative_split_distribution_ok,
+    validate_v02_dataset,
+    validate_v02_materialized_dataset,
+)
 
 
 def ready_dataset():
@@ -103,6 +107,18 @@ def ready_dataset():
         "splits": counts,
     }
     return report, manifest_bytes, archive_bytes, rows
+
+
+def test_negative_split_distribution_gate_rejects_holdout_heavy_pools():
+    assert _negative_split_distribution_ok(
+        {"train": 492, "val": 62, "test": 61}, 615
+    )
+    assert not _negative_split_distribution_ok(
+        {"train": 32, "val": 369, "test": 214}, 615
+    )
+    assert not _negative_split_distribution_ok(
+        {"train": 590, "val": 25, "test": 0}, 615
+    )
 
 
 def test_gate_derives_verified_counts_from_manifest_and_hashes():

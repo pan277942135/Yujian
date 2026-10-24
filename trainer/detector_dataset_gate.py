@@ -1,4 +1,4 @@
-"""Strict, offline-checkable gate for the reviewed DET_DS_v0.2 artifact.
+"""Strict, offline-checkable gate for the configured reviewed detector dataset version.
 
 This module is intentionally stdlib-only so the console and GPU worker can use
 the same dataset contract without importing either runtime's heavy dependencies.
@@ -9,13 +9,15 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 
-DATASET_VERSION = "DET_DS_v0.2"
+DATASET_VERSION = os.environ.get("DETECTOR_DATASET_VERSION", "DET_DS_v0.2").strip() or "DET_DS_v0.2"
+SUPPORTED_DATASET_VERSIONS = {"DET_DS_v0.2", "DET_DS_v0.3"}
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _HELD_OUT_SHA256 = {
     # Case A, Case B, and the confirmed 04-181200 incident image.
@@ -73,6 +75,27 @@ def _valid_box(box: dict[str, Any]) -> bool:
     )
 
 
+def _negative_split_distribution_ok(split_counts: dict[str, int], total_negatives: int) -> bool:
+    """Reject large negative pools that are almost entirely held out from training.
+
+    Tiny synthetic/test datasets are exempt. For production-sized pools, at least
+    55% must be available to train, while both validation and test must each have
+    5%-25% of negatives. Source-group isolation is still enforced separately.
+    """
+    if total_negatives < 20:
+        return True
+    if sum(max(0, int(split_counts.get(split, 0))) for split in ("train", "val", "test")) != total_negatives:
+        return False
+    train_share = split_counts.get("train", 0) / total_negatives
+    val_share = split_counts.get("val", 0) / total_negatives
+    test_share = split_counts.get("test", 0) / total_negatives
+    return (
+        train_share >= 0.55
+        and 0.05 <= val_share <= 0.25
+        and 0.05 <= test_share <= 0.25
+    )
+
+
 def validate_v02_dataset(
     report: dict[str, Any] | None,
     manifest_bytes: bytes | None,
@@ -104,13 +127,15 @@ def validate_v02_dataset(
     if not isinstance(report, dict):
         return {
             "ready": False,
-            "blockers": ["尚未找到 DET_DS_v0.2/bootstrap_report.json"],
+            "blockers": [f"尚未找到 {DATASET_VERSION}/bootstrap_report.json"],
             "counts": counts,
             "counts_verified": False,
         }
 
+    if DATASET_VERSION not in SUPPORTED_DATASET_VERSIONS:
+        blockers.append(f"不支持的数据集版本: {DATASET_VERSION}")
     if report.get("dataset_version") != DATASET_VERSION:
-        blockers.append("数据集版本不是 DET_DS_v0.2")
+        blockers.append(f"数据集版本不是 {DATASET_VERSION}")
     if report.get("status") != "FROZEN_READY_FOR_TRAINING":
         blockers.append("数据集尚未标记为 FROZEN_READY_FOR_TRAINING")
     source_reconciliation = report.get("source_reconciliation")
@@ -145,7 +170,7 @@ def validate_v02_dataset(
         blockers.append("缺少按来源组划分且无数据泄漏的 PASS 记录")
 
     if manifest_bytes is None:
-        blockers.append("缺少 DET_DS_v0.2/bootstrap_manifest.json")
+        blockers.append(f"缺少 {DATASET_VERSION}/bootstrap_manifest.json")
         manifest = None
         manifest_counts_verified = False
     else:
@@ -167,7 +192,7 @@ def validate_v02_dataset(
     if not _sha(expected_archive_sha):
         blockers.append("冻结报告缺少有效的 archive_sha256")
     elif not _sha(archive_sha256) or archive_sha256 != expected_archive_sha:
-        blockers.append("DET_DS_v0.2.tar.gz 实际 SHA-256 与冻结报告不一致")
+        blockers.append(f"{DATASET_VERSION}.tar.gz 实际 SHA-256 与冻结报告不一致")
 
     split_images: dict[str, int] = defaultdict(int)
     split_boxes: dict[str, int] = defaultdict(int)
@@ -473,6 +498,18 @@ def validate_v02_dataset(
     negatives_match = _count(report.get("negatives")) == counts["human_reviewed_negatives"]
     if not negatives_match:
         blockers.append("冻结报告无鱼负样本数量与逐图人工审核记录不一致")
+
+    negative_split_counts = {
+        split: counts[f"{split}_negative_images"] for split in ("train", "val", "test")
+    }
+    negative_split_distribution_verified = _negative_split_distribution_ok(
+        negative_split_counts, counts["human_reviewed_negatives"]
+    )
+    if not negative_split_distribution_verified:
+        blockers.append(
+            "无鱼负样本在 train/val/test 分布失衡：需避免绝大多数负样本集中于验证集或测试集"
+        )
+
     if counts["train_images"] < 40:
         blockers.append("训练集完整场景图片不足 40 张")
     if counts["train_boxes"] < 30:
@@ -490,6 +527,8 @@ def validate_v02_dataset(
         "ready": not blockers,
         "blockers": blockers,
         "counts": counts,
+        "negative_split_distribution_verified": negative_split_distribution_verified,
+        "negative_split_counts": negative_split_counts,
         "counts_verified": bool(
             manifest is not None
             and manifest_counts_verified

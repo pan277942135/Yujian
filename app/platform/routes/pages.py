@@ -30,7 +30,7 @@ PLATFORM_PAGES = (
     PlatformPage("/platform/model/training", "platform/model_training.html", "模型训练", "模型工厂", "从已冻结数据集创建训练任务并追踪结果。", "/api/platform/training/jobs"),
     PlatformPage("/platform/model/registry", "platform/model_registry.html", "模型仓库", "模型工厂", "查看模型版本、指标和发布状态。", "/api/platform/models"),
     PlatformPage("/platform/model/evaluation", "platform/model_evaluation.html", "模型评估", "模型工厂", "查看指标、混淆关系和错误案例。", "/api/platform/models/{model_id}/evaluation"),
-    PlatformPage("/platform/model/det-fish-training", "platform/det_fish_training.html", "DET_FISH 训练", "模型工厂", "检查 DET_DS_v0.2 数据门禁、启动 YOLOX-Nano 训练并追踪模型产物。", "/api/det-fish/training/status"),
+    PlatformPage("/platform/model/det-fish-training", "platform/det_fish_training.html", "DET_FISH 训练", "模型工厂", "检查当前冻结 DET_DS 数据门禁、启动 YOLOX-Nano 训练并追踪模型产物。", "/api/det-fish/training/status"),
     PlatformPage("/platform/model/det-fish-test", "platform/det_fish_test.html", "DET_FISH 模型测试", "模型工厂", "上传单张照片，对可用的 DET_FISH 版本进行 BBox 检测与坐标验收。", "/api/det-fish/models"),
     PlatformPage("/platform/pipeline", "platform/pipeline.html", "智能流水线", "智能流水线", "追踪一张鱼照片如何经过 AI 节点生成资产。", "/api/platform/pipelines"),
     PlatformPage("/platform/lab/fish-portrait", "platform/lab/fish_portrait.html", "Fish Portrait POC", "智能流水线", "基于真实钓获照片和标准鱼体资产，验证 AI 鱼体数字化生成效果。", "/api/platform/portrait/jobs"),

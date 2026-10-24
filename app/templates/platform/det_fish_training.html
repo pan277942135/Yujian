@@ -42,7 +42,7 @@
 <div id="detTrainingNotice"></div>
 <div class="metric-grid" style="margin-top:14px">
   <div class="metric-card"><div class="metric-label">人工 Accepted Pool 图片</div><div id="acceptedPoolImages" class="metric-value">—</div><div id="acceptedBboxCount" class="metric-detail">人工 accepted_bbox —</div></div>
-  <div class="metric-card"><div class="metric-label">DET_DS_v0.2</div><div id="datasetStatus" class="metric-value" style="font-size:22px">—</div><div id="datasetArchive" class="metric-detail">冻结数据包状态</div></div>
+  <div class="metric-card"><div class="metric-label" id="datasetVersionLabel">当前冻结数据集</div><div id="datasetStatus" class="metric-value" style="font-size:22px">—</div><div id="datasetArchive" class="metric-detail">冻结数据包状态</div></div>
   <div class="metric-card"><div class="metric-label">冻结完整场景图片</div><div id="totalDatasetImages" class="metric-value">—</div><div id="totalDatasetBoxes" class="metric-detail">人工鱼体框 — · 有框图片 —</div></div>
   <div class="metric-card"><div class="metric-label">Train 图片</div><div id="trainImages" class="metric-value">—</div><div id="trainBoxes" class="metric-detail">鱼体框 —</div></div>
   <div class="metric-card"><div class="metric-label">Validation 图片</div><div id="valImages" class="metric-value">—</div><div id="valBoxes" class="metric-detail">鱼体框 —</div></div>
@@ -56,7 +56,7 @@
   <section class="panel">
     <div class="panel-heading"><div><h2>训练门禁</h2><p>门禁未通过时，GPU 启动按钮会保持禁用</p></div><span id="gateTag" class="status-tag status-neutral">检查中</span></div>
     <div id="gateBlockers" class="loading">正在读取冻结数据集与证据…</div>
-    <div class="notice warning" style="margin-top:14px">训练输入必须是原始完整场景图和人工 accepted_bbox；6,308 张 Crop 是分类器素材，不能直接替代检测器原图。</div>
+    <div class="notice warning" style="margin-top:14px">数据输入规范：检测器从 Accepted Pool 关联的原始完整场景图读取图片，并使用核验通过的人工 accepted_bbox 作为标签。分类器 Crop 素材不能直接替代检测器原图。本提示是固定规范说明；当前是否可训练，以本页实时门禁和冻结数据集报告为准。</div>
   </section>
   <section class="panel">
     <div class="panel-heading"><div><h2>启动 DET_FISH_v0.2</h2><p>YOLOX-Nano · 416×416 · NVIDIA L4</p></div><span class="status-tag status-neutral">独立版本</span></div>
@@ -150,7 +150,8 @@ function renderDetTrainingStatus(data){
   const countsKnown=Boolean(datasetGate.counts_verified);
   document.getElementById('acceptedPoolImages').textContent=fmtCount(pool.accepted_images);
   document.getElementById('acceptedBboxCount').textContent='人工 accepted_bbox '+fmtCount(pool.accepted_bbox)+' · 不代表已冻结入训';
-  document.getElementById('datasetStatus').textContent=dataset.status||'NOT_BUILT';
+  document.getElementById('datasetVersionLabel').textContent=dataset.version||'当前冻结数据集';
+   document.getElementById('datasetStatus').textContent=dataset.status||'NOT_BUILT';
   document.getElementById('datasetArchive').textContent='归档 SHA '+(dataset.archive_sha256_verified?'已核验':'未核验')+' · Manifest SHA '+(dataset.manifest_sha256_verified?'已核验':'未核验');
   document.getElementById('totalDatasetImages').textContent=fmtCount(countsKnown?counts.human_reviewed_complete_scene_images:null);
   document.getElementById('totalDatasetBoxes').textContent='人工鱼体框 '+fmtCount(countsKnown?counts.train_boxes+counts.val_boxes+counts.test_boxes:null)+' · 有框图片 '+fmtCount(countsKnown?counts.human_reviewed_bbox_images:null);

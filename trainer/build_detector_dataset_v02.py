@@ -1,4 +1,4 @@
-"""Build the reviewed DET_DS_v0.2 detector dataset from complete source scenes.
+"""Build the reviewed detector dataset version selected by DETECTOR_DATASET_VERSION.
 
 This is deliberately separate from ``build_detector_dataset`` (the legacy
 Google Vision pseudo-label builder) and ``build_reviewed_datasets`` (the crop
@@ -83,12 +83,14 @@ def _source_group(image: Any) -> tuple[str, str]:
     group = str(getattr(image, "group_id", None) or "").strip()
     if group:
         return f"group:{group}", "ImageAsset.group_id"
-    batch = str(getattr(image, "batch_id", None) or "").strip()
-    if not batch:
-        raise ValueError("missing source group and batch id")
-    # A batch is a conservative fallback: it can reduce split efficiency, but
-    # it will not spread a same-batch capture session over multiple splits.
-    return f"batch:{batch}", "ImageAsset.batch_id_fallback"
+    # batch_id identifies an ingestion/import batch, not necessarily a capture
+    # session. Grouping every asset in that batch can join hundreds of unrelated
+    # scenes and strand most negatives in validation/test. Use a stable per-asset
+    # fallback; exact source SHA and explicit group_id still join true duplicates.
+    asset_id = str(getattr(image, "id", None) or "").strip()
+    if not asset_id:
+        raise ValueError("missing source group and stable ImageAsset.id")
+    return f"asset:{asset_id}", "ImageAsset.id_fallback"
 
 
 def collect_source_records(db) -> dict[str, Any]:
@@ -592,28 +594,65 @@ def _audit_source_objects(
     }
 
 
-def _stable_split(groups: dict[str, set[str]]) -> dict[str, str]:
-    """Assign connected source-group/hash components to deterministic splits."""
+def _stable_split(
+    groups: dict[str, set[str]],
+    fish_presence_by_sha: dict[str, bool],
+) -> dict[str, str]:
+    """Assign connected source-group/hash components with deterministic class balance."""
 
     target_ratios = SPLIT_RATIOS
-    current = {name: 0 for name in target_ratios}
-    total_images = sum(len(images) for images in groups.values())
-    target = {name: total_images * ratio for name, ratio in target_ratios.items()}
+    split_order = {name: index for index, name in enumerate(target_ratios)}
+    class_totals = {
+        fish_present: sum(1 for value in fish_presence_by_sha.values() if value is fish_present)
+        for fish_present in (True, False)
+    }
+    target = {
+        split: {
+            fish_present: class_totals[fish_present] * ratio
+            for fish_present in (True, False)
+        }
+        for split, ratio in target_ratios.items()
+    }
+    current = {
+        split: {True: 0, False: 0}
+        for split in target_ratios
+    }
     assignments: dict[str, str] = {}
     components = sorted(
         groups,
         key=lambda key: (-len(groups[key]), hashlib.sha256(f"{DATASET_VERSION}:{key}".encode()).hexdigest()),
     )
+
     for component in components:
-        # Keep an entire source component together. Pick the split with the
-        # largest proportional deficit after accounting for this component.
-        size = len(groups[component])
-        split = max(
+        missing_labels = set(groups[component]) - set(fish_presence_by_sha)
+        if missing_labels:
+            raise ValueError(f"missing class labels for source component {component}")
+        component_counts = {
+            fish_present: sum(
+                1 for image_sha in groups[component]
+                if fish_presence_by_sha[image_sha] is fish_present
+            )
+            for fish_present in (True, False)
+        }
+
+        def candidate_score(candidate: str) -> float:
+            score = 0.0
+            for split in target_ratios:
+                for fish_present in (True, False):
+                    count = current[split][fish_present]
+                    if split == candidate:
+                        count += component_counts[fish_present]
+                    expected = target[split][fish_present]
+                    score += ((count - expected) / max(expected, 1.0)) ** 2
+            return score
+
+        split = min(
             target_ratios,
-            key=lambda name: ((target[name] - current[name]) / max(target[name], 1.0), -list(target_ratios).index(name)),
+            key=lambda name: (candidate_score(name), split_order[name]),
         )
         assignments[component] = split
-        current[split] += size
+        for fish_present in (True, False):
+            current[split][fish_present] += component_counts[fish_present]
     return assignments
 
 
@@ -921,7 +960,8 @@ def _materialize(
     component_images: dict[str, set[str]] = defaultdict(set)
     for image_sha, component in component_by_sha.items():
         component_images[component].add(image_sha)
-    split_by_component = _stable_split(component_images)
+    fish_presence_by_sha = {image_sha: bool(item["box_map"]) for image_sha, item in images.items()}
+    split_by_component = _stable_split(component_images, fish_presence_by_sha)
 
     manifest_rows: list[dict[str, Any]] = []
     split_counts = {split: {"images": 0, "annotations": 0, "negative_images": 0} for split in SPLIT_RATIOS}
@@ -1182,7 +1222,7 @@ def _build_report(data: dict[str, Any], manifest_rows: list[dict[str, Any]], arc
         "archive_sha256": archive_sha256,
         "source_record_errors": data.get("source_record_errors") or [],
         "source_scope": "approved ImageAsset + training_eligible + accepted BatchCropReview; full-scene ImageAsset.gcs_uri; no crops and no Google Vision labels",
-        "split_method": "deterministic connected components of exact source SHA and ImageAsset.group_id (batch_id conservative fallback), 80/10/10 target",
+        "split_method": "deterministic class-aware connected components of exact source SHA and ImageAsset.group_id; ImageAsset.id fallback when group_id is absent; 80/10/10 target",
         "materialization_policy": "EXIF-transposed RGB complete scenes; original PNGs are retained as lossless PNG and other formats are stored as high-quality JPEG quality=95; source-byte SHA remains separately recorded",
         "held_out_sha256": sorted(_HELD_OUT_SHA256),
     }
