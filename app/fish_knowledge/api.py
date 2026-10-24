@@ -666,8 +666,12 @@ def get_knowledge_media(species_id: str, asset_type: str, asset_key: str, db: Se
             ]
             if len(legacy_cards) == 1:
                 is_referenced = True
+                # Canonical GCS role folder is ecology/ while the public API
+                # and FishCard contract use ECO/eco. No status gate is weakened:
+                # only one ACTIVE unbound legacy card with no competing version.
+                storage_role = "ecology" if expected_role == "ECO" else expected_role.lower()
                 legacy_version_object_name = (
-                    f"fish-assets/fish-knowledge/{row.id}/{expected_role.lower()}/{asset_key}"
+                    f"fish-assets/fish-knowledge/{row.id}/{storage_role}/{asset_key}"
                 )
     elif normalized_type == "cover":
         is_referenced = (
