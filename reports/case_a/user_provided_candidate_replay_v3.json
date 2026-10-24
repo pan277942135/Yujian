@@ -1,0 +1,1314 @@
+{
+  "schema_version": "CASE_A_ORIENTATION_REPLAY_V1",
+  "status": "REPLAYED",
+  "executed_at_utc": "2026-10-19T09:59:06.440029+00:00",
+  "diagnostic_git_sha": "f81cb21abe520dae11ad9f4a677567b1a2103b26",
+  "command_template": "python scripts/diagnose_detector_orientation.py --onnx <onnx> --metadata <metadata> --ground-truth-json <gt> --expected-image-sha256 <expected> --json-out <output> <image>",
+  "runtime": {
+    "onnxruntime": "1.23.2",
+    "numpy": "2.5.4",
+    "pillow": "11.3.0",
+    "execution_provider": "CPUExecutionProvider"
+  },
+  "model": {
+    "model_version": "DET_FISH_v0.1",
+    "model_family": "YOLOX_NANO",
+    "dataset_version": "DET_DS_v0.1",
+    "onnx_sha256": "12b97f7c081987f33f99d255cdd2e935fb9cf93b893146f54ff98b9c4e3a8e4f",
+    "onnx_bytes": 3753998,
+    "metadata_sha256": "53994a745c192e3c2afc31ad256800bb87f841fafd07977f0fd38fa7e1f8327e",
+    "input_name": "images",
+    "input_shape": [
+      1,
+      3,
+      416,
+      416
+    ],
+    "output_name": "output",
+    "output_shape": [
+      1,
+      3549,
+      6
+    ],
+    "output_contract": "decoded_xywh_objectness_class_probability"
+  },
+  "production_gate": {
+    "weak_confidence": 0.2,
+    "strong_confidence": 0.35,
+    "nms_iou": 0.45,
+    "min_primary_area_ratio": 0.08,
+    "candidate_probe_confidence": 0.0,
+    "candidate_probe_nms": false,
+    "candidate_probe_top_k": 20,
+    "correct_candidate_iou_threshold": 0.5
+  },
+  "images": [
+    {
+      "source": {
+        "sha256": "0fc341627e4345131a15fbf3514454f053dcb349db17bf1171c8f2f8756226cf",
+        "bytes": 292569,
+        "format": "JPEG",
+        "width": 1152,
+        "height": 1536,
+        "exif_orientation": 1,
+        "orientation_normalization": {
+          "applied": false,
+          "status": "identity_exif_orientation_1"
+        },
+        "local_path_disclosed": false
+      },
+      "ground_truth_xyxy": null,
+      "orientations": [
+        {
+          "orientation": "ORIGINAL",
+          "view_dimensions": [
+            1152,
+            1536
+          ],
+          "input_scale": 0.2708333333333333,
+          "input_draw_dimensions": [
+            312,
+            416
+          ],
+          "input_tensor": {
+            "shape": [
+              1,
+              3,
+              416,
+              416
+            ],
+            "dtype": "float32",
+            "sha256": "1d949e89fea279f0d21796fce1494ebb2e346d83723d3015db93a80f6ed09a50",
+            "channel_means": [
+              133.20291137695312,
+              146.73101806640625,
+              153.9432373046875
+            ],
+            "channel_statistics": [
+              {
+                "channel": 0,
+                "mean": 133.20291137695312,
+                "std": 59.66872024536133,
+                "min": 0.0,
+                "max": 255.0
+              },
+              {
+                "channel": 1,
+                "mean": 146.73101806640625,
+                "std": 55.04759216308594,
+                "min": 0.0,
+                "max": 254.0
+              },
+              {
+                "channel": 2,
+                "mean": 153.9432373046875,
+                "std": 59.34381866455078,
+                "min": 0.0,
+                "max": 255.0
+              }
+            ],
+            "min": 0.0,
+            "max": 255.0
+          },
+          "raw_output_summary": {
+            "shape": [
+              1,
+              3549,
+              6
+            ],
+            "dtype": "float32",
+            "raw_output_sha256": "c86b22f19680dd786adf4e673adeb20ec8d0b3075915b413c25348c68adb669b",
+            "raw_output_bytes": 85176,
+            "finite_value_count": 21294,
+            "non_finite_value_count": 0,
+            "min": 5.960464477539063e-08,
+            "max": 452.09918212890625,
+            "column_ranges": [
+              {
+                "column": 0,
+                "min": 5.493712902069092,
+                "max": 408.4284362792969
+              },
+              {
+                "column": 1,
+                "min": 3.0574724674224854,
+                "max": 410.1966552734375
+              },
+              {
+                "column": 2,
+                "min": 10.16211223602295,
+                "max": 424.965576171875
+              },
+              {
+                "column": 3,
+                "min": 6.2713775634765625,
+                "max": 452.09918212890625
+              },
+              {
+                "column": 4,
+                "min": 5.960464477539063e-08,
+                "max": 0.04692864418029785
+              },
+              {
+                "column": 5,
+                "min": 1.4185905456542969e-05,
+                "max": 0.8586550951004028
+              }
+            ],
+            "objectness_and_class_probability_within_0_1": true
+          },
+          "raw_output_artifact": {
+            "filename": "0fc341627e43.original.npy",
+            "file_sha256": "faea8540569825b35a4496b04ce4eef1720a323a23cdfdc1ceb04a2365f73804",
+            "file_bytes": 85304,
+            "raw_output_sha256": "c86b22f19680dd786adf4e673adeb20ec8d0b3075915b413c25348c68adb669b",
+            "shape": [
+              1,
+              3549,
+              6
+            ],
+            "dtype": "float32"
+          },
+          "production_gate": {
+            "status": "no_fish",
+            "detection_count_after_threshold_and_nms": 0,
+            "primary_confidence": null,
+            "primary_bbox_original_xyxy": null,
+            "primary_area_ratio": null,
+            "detections": []
+          },
+          "best_correct_candidate": null,
+          "top_candidates": [
+            {
+              "rank": 1,
+              "objectness": 0.04692864418029785,
+              "fish_probability": 0.7674329280853271,
+              "confidence": 0.03601458681436043,
+              "bbox_original_xyxy": [
+                0.20384353857774004,
+                0.20954025708712065,
+                0.40614939347291606,
+                0.8271602117098295
+              ],
+              "area_ratio": 0.12494813292026692,
+              "gt_iou": null
+            },
+            {
+              "rank": 2,
+              "objectness": 0.045608967542648315,
+              "fish_probability": 0.7809408903121948,
+              "confidence": 0.03561790771897577,
+              "bbox_original_xyxy": [
+                0.20341742955721343,
+                0.23380376742436337,
+                0.4076530077518561,
+                0.8312142262092004
+              ],
+              "area_ratio": 0.12201247046944792,
+              "gt_iou": null
+            },
+            {
+              "rank": 3,
+              "objectness": 0.03876382112503052,
+              "fish_probability": 0.7158010005950928,
+              "confidence": 0.02774718194818604,
+              "bbox_original_xyxy": [
+                0.21022588778764775,
+                0.24748677473801836,
+                0.5150017616076348,
+                1.0
+              ],
+              "area_ratio": 0.2293478757903172,
+              "gt_iou": null
+            },
+            {
+              "rank": 4,
+              "objectness": 0.022313982248306274,
+              "fish_probability": 0.7142322063446045,
+              "confidence": 0.01593736477354213,
+              "bbox_original_xyxy": [
+                0.18503190309573445,
+                0.23603787788977992,
+                0.48450679045457107,
+                1.0
+              ],
+              "area_ratio": 0.22878747046537598,
+              "gt_iou": null
+            },
+            {
+              "rank": 5,
+              "objectness": 0.02126219868659973,
+              "fish_probability": 0.7428292036056519,
+              "confidence": 0.015794182117272015,
+              "bbox_original_xyxy": [
+                0.1944253139006786,
+                0.2555821858919584,
+                0.4318845455463116,
+                1.0
+              ],
+              "area_ratio": 0.1767688821614172,
+              "gt_iou": null
+            },
+            {
+              "rank": 6,
+              "objectness": 0.01836642622947693,
+              "fish_probability": 0.7608298063278198,
+              "confidence": 0.013973724511107122,
+              "bbox_original_xyxy": [
+                0.20370949231661284,
+                0.25728750228881836,
+                0.4302225724244729,
+                0.955687926365779
+              ],
+              "area_ratio": 0.15819683120630806,
+              "gt_iou": null
+            },
+            {
+              "rank": 7,
+              "objectness": 0.012952685356140137,
+              "fish_probability": 0.7574114799499512,
+              "confidence": 0.009810512584920161,
+              "bbox_original_xyxy": [
+                0.2042070780044947,
+                0.2565728701077975,
+                0.44536798428266483,
+                1.0
+              ],
+              "area_ratio": 0.17928556039658247,
+              "gt_iou": null
+            },
+            {
+              "rank": 8,
+              "objectness": 0.01398700475692749,
+              "fish_probability": 0.6948003768920898,
+              "confidence": 0.009718176176704674,
+              "bbox_original_xyxy": [
+                0.2786863889449682,
+                0.2859611878028283,
+                0.5900629850534292,
+                1.0
+              ],
+              "area_ratio": 0.22233497483128398,
+              "gt_iou": null
+            },
+            {
+              "rank": 9,
+              "objectness": 0.012150228023529053,
+              "fish_probability": 0.6964832544326782,
+              "confidence": 0.008462430355926642,
+              "bbox_original_xyxy": [
+                0.24955991598275995,
+                0.2542442541856032,
+                0.5882387650318636,
+                1.0
+              ],
+              "area_ratio": 0.2525716976641758,
+              "gt_iou": null
+            },
+            {
+              "rank": 10,
+              "objectness": 0.010688930749893188,
+              "fish_probability": 0.6937049031257629,
+              "confidence": 0.007414963670372643,
+              "bbox_original_xyxy": [
+                0.2720331778893104,
+                0.2985492119422326,
+                0.6124401826124926,
+                1.0
+              ],
+              "area_ratio": 0.23877876172346027,
+              "gt_iou": null
+            },
+            {
+              "rank": 11,
+              "objectness": 0.008054137229919434,
+              "fish_probability": 0.7929868698120117,
+              "confidence": 0.006386825070990199,
+              "bbox_original_xyxy": [
+                0.19794767330854368,
+                0.20769449380727914,
+                0.40443488879081535,
+                0.8683729905348558
+              ],
+              "area_ratio": 0.13642166311829046,
+              "gt_iou": null
+            },
+            {
+              "rank": 12,
+              "objectness": 0.00790560245513916,
+              "fish_probability": 0.7863254547119141,
+              "confidence": 0.006216376445308924,
+              "bbox_original_xyxy": [
+                0.1975685877677722,
+                0.1917687562795786,
+                0.40426773902697444,
+                0.8504572281470666
+              ],
+              "area_ratio": 0.13615034807923068,
+              "gt_iou": null
+            },
+            {
+              "rank": 13,
+              "objectness": 0.007958084344863892,
+              "fish_probability": 0.739625096321106,
+              "confidence": 0.005885998900101441,
+              "bbox_original_xyxy": [
+                0.19411736268263596,
+                0.263421865609976,
+                0.40961291239811826,
+                0.9693850003756009
+              ],
+              "area_ratio": 0.15213191380518346,
+              "gt_iou": null
+            },
+            {
+              "rank": 14,
+              "objectness": 0.006826251745223999,
+              "fish_probability": 0.6445566415786743,
+              "confidence": 0.004399905899472145,
+              "bbox_original_xyxy": [
+                0.20389574001996946,
+                0.3272982010474572,
+                0.7149524444188828,
+                1.0
+              ],
+              "area_ratio": 0.3437887644159069,
+              "gt_iou": null
+            },
+            {
+              "rank": 15,
+              "objectness": 0.005214601755142212,
+              "fish_probability": 0.8250229358673096,
+              "confidence": 0.004302166049406253,
+              "bbox_original_xyxy": [
+                0.3859683122390356,
+                0.4087974108182468,
+                0.5455637406080197,
+                1.0
+              ],
+              "area_ratio": 0.09435323047331443,
+              "gt_iou": null
+            },
+            {
+              "rank": 16,
+              "objectness": 0.004240095615386963,
+              "fish_probability": 0.7782094478607178,
+              "confidence": 0.0032996824677269387,
+              "bbox_original_xyxy": [
+                0.3487018377352984,
+                0.3526647641108587,
+                0.5464377097594433,
+                1.0
+              ],
+              "area_ratio": 0.1280013973604949,
+              "gt_iou": null
+            },
+            {
+              "rank": 17,
+              "objectness": 0.005119591951370239,
+              "fish_probability": 0.6313750147819519,
+              "confidence": 0.003232382443973947,
+              "bbox_original_xyxy": [
+                0.07523309267484225,
+                0.3222749049846943,
+                0.6276363715147362,
+                1.0
+              ],
+              "area_ratio": 0.37437756463853356,
+              "gt_iou": null
+            },
+            {
+              "rank": 18,
+              "objectness": 0.0025149881839752197,
+              "fish_probability": 0.7736327648162842,
+              "confidence": 0.0019456772622490348,
+              "bbox_original_xyxy": [
+                0.19804820036276793,
+                0.22615355711716875,
+                0.4243885187002329,
+                0.8730030426612267
+              ],
+              "area_ratio": 0.14640811847446752,
+              "gt_iou": null
+            },
+            {
+              "rank": 19,
+              "objectness": 0.0023133158683776855,
+              "fish_probability": 0.8267569541931152,
+              "confidence": 0.0019125499814265368,
+              "bbox_original_xyxy": [
+                0.32854901827298677,
+                0.44617082522465634,
+                0.5401809888008313,
+                1.0
+              ],
+              "area_ratio": 0.117207959593516,
+              "gt_iou": null
+            },
+            {
+              "rank": 20,
+              "objectness": 0.0028769969940185547,
+              "fish_probability": 0.6451112627983093,
+              "confidence": 0.0018559831638782498,
+              "bbox_original_xyxy": [
+                0.050606165176782854,
+                0.2247564242436336,
+                0.545865474603115,
+                1.0
+              ],
+              "area_ratio": 0.3839465979662984,
+              "gt_iou": null
+            }
+          ]
+        },
+        {
+          "orientation": "CW90",
+          "view_dimensions": [
+            1536,
+            1152
+          ],
+          "input_scale": 0.2708333333333333,
+          "input_draw_dimensions": [
+            416,
+            312
+          ],
+          "input_tensor": {
+            "shape": [
+              1,
+              3,
+              416,
+              416
+            ],
+            "dtype": "float32",
+            "sha256": "ad96ce6547ae2dd1bf29c5b5ec4c5d8ebd1f4d8b216f981e387bc6faa3d7d1d6",
+            "channel_means": [
+              133.20375061035156,
+              146.7320098876953,
+              153.9437713623047
+            ],
+            "channel_statistics": [
+              {
+                "channel": 0,
+                "mean": 133.20375061035156,
+                "std": 59.66891098022461,
+                "min": 0.0,
+                "max": 255.0
+              },
+              {
+                "channel": 1,
+                "mean": 146.7320098876953,
+                "std": 55.046566009521484,
+                "min": 0.0,
+                "max": 254.0
+              },
+              {
+                "channel": 2,
+                "mean": 153.9437713623047,
+                "std": 59.343868255615234,
+                "min": 0.0,
+                "max": 255.0
+              }
+            ],
+            "min": 0.0,
+            "max": 255.0
+          },
+          "raw_output_summary": {
+            "shape": [
+              1,
+              3549,
+              6
+            ],
+            "dtype": "float32",
+            "raw_output_sha256": "43736dfede7a2244273cd53252b926b7eba5f6475aa7fbe187c54ae00761a743",
+            "raw_output_bytes": 85176,
+            "finite_value_count": 21294,
+            "non_finite_value_count": 0,
+            "min": 0.0,
+            "max": 438.37274169921875,
+            "column_ranges": [
+              {
+                "column": 0,
+                "min": 5.008497714996338,
+                "max": 409.09234619140625
+              },
+              {
+                "column": 1,
+                "min": 3.8881351947784424,
+                "max": 438.37274169921875
+              },
+              {
+                "column": 2,
+                "min": 6.928734302520752,
+                "max": 348.50164794921875
+              },
+              {
+                "column": 3,
+                "min": 4.420721054077148,
+                "max": 357.7713928222656
+              },
+              {
+                "column": 4,
+                "min": 0.0,
+                "max": 0.5405392646789551
+              },
+              {
+                "column": 5,
+                "min": 0.0,
+                "max": 0.8543938398361206
+              }
+            ],
+            "objectness_and_class_probability_within_0_1": true
+          },
+          "raw_output_artifact": {
+            "filename": "0fc341627e43.cw90.npy",
+            "file_sha256": "97fff4d1957cf958f9bbdd238e5c92f27bee9f0cac98298ad74c440e4f5a406d",
+            "file_bytes": 85304,
+            "raw_output_sha256": "43736dfede7a2244273cd53252b926b7eba5f6475aa7fbe187c54ae00761a743",
+            "shape": [
+              1,
+              3549,
+              6
+            ],
+            "dtype": "float32"
+          },
+          "production_gate": {
+            "status": "ready",
+            "detection_count_after_threshold_and_nms": 1,
+            "primary_confidence": 0.43014012439380167,
+            "primary_bbox_original_xyxy": [
+              0.1866730421017378,
+              0.2660208848806528,
+              0.41496653434557795,
+              0.7915863257188063
+            ],
+            "primary_area_ratio": 0.11998316989161542,
+            "detections": [
+              {
+                "confidence": 0.43014012439380167,
+                "bbox_original_xyxy": [
+                  0.1866730421017378,
+                  0.2660208848806528,
+                  0.41496653434557795,
+                  0.7915863257188063
+                ],
+                "area_ratio": 0.11998316989161542
+              }
+            ]
+          },
+          "best_correct_candidate": null,
+          "top_candidates": [
+            {
+              "rank": 1,
+              "objectness": 0.5405392646789551,
+              "fish_probability": 0.7957611083984375,
+              "confidence": 0.43014012439380167,
+              "bbox_original_xyxy": [
+                0.1866730421017378,
+                0.2660208848806528,
+                0.41496653434557795,
+                0.7915863257188063
+              ],
+              "area_ratio": 0.11998316989161542,
+              "gt_iou": null
+            },
+            {
+              "rank": 2,
+              "objectness": 0.5379694104194641,
+              "fish_probability": 0.7843339443206787,
+              "confidence": 0.4219476695981683,
+              "bbox_original_xyxy": [
+                0.1930977625724597,
+                0.28041060154254616,
+                0.4133080824827537,
+                0.7877840812389667
+              ],
+              "area_ratio": 0.11172887627794782,
+              "gt_iou": null
+            },
+            {
+              "rank": 3,
+              "objectness": 0.5136395692825317,
+              "fish_probability": 0.7869408130645752,
+              "confidence": 0.40420394027333373,
+              "bbox_original_xyxy": [
+                0.18652961192986905,
+                0.28223653940054083,
+                0.41994294142111754,
+                0.7860598930945764
+              ],
+              "area_ratio": 0.11759908646117175,
+              "gt_iou": null
+            },
+            {
+              "rank": 4,
+              "objectness": 0.5358558893203735,
+              "fish_probability": 0.7540754079818726,
+              "confidence": 0.4040757483587498,
+              "bbox_original_xyxy": [
+                0.17836774923862556,
+                0.2108543652754563,
+                0.4177662409268893,
+                0.8041196419642521
+              ],
+              "area_ratio": 0.14202681241031817,
+              "gt_iou": null
+            },
+            {
+              "rank": 5,
+              "objectness": 0.4866292178630829,
+              "fish_probability": 0.7870292067527771,
+              "confidence": 0.38299140731750647,
+              "bbox_original_xyxy": [
+                0.1828738848368327,
+                0.26776273433978737,
+                0.41941658655802416,
+                0.7871623039245605
+              ],
+              "area_ratio": 0.12286017746240623,
+              "gt_iou": null
+            },
+            {
+              "rank": 6,
+              "objectness": 0.49413251876831055,
+              "fish_probability": 0.7641150951385498,
+              "confidence": 0.37757411658969886,
+              "bbox_original_xyxy": [
+                0.17974053896390474,
+                0.2261283947871281,
+                0.4226520978487455,
+                0.8039476321293757
+              ],
+              "area_ratio": 0.14035897169645517,
+              "gt_iou": null
+            },
+            {
+              "rank": 7,
+              "objectness": 0.4224435091018677,
+              "fish_probability": 0.7525438070297241,
+              "confidence": 0.3179072465945154,
+              "bbox_original_xyxy": [
+                0.18519954192332733,
+                0.19617319107055664,
+                0.41417606060321516,
+                0.8183391644404484
+              ],
+              "area_ratio": 0.1424613986233216,
+              "gt_iou": null
+            },
+            {
+              "rank": 8,
+              "objectness": 0.30032825469970703,
+              "fish_probability": 0.7638096809387207,
+              "confidence": 0.22939362839906607,
+              "bbox_original_xyxy": [
+                0.1853897754962628,
+                0.23212803327120257,
+                0.4276239566313915,
+                0.8007002243628869
+              ],
+              "area_ratio": 0.1377276191253001,
+              "gt_iou": null
+            },
+            {
+              "rank": 9,
+              "objectness": 0.23710566759109497,
+              "fish_probability": 0.7710880637168884,
+              "confidence": 0.1828293501191176,
+              "bbox_original_xyxy": [
+                0.18225777454865286,
+                0.24452941234295178,
+                0.4323845398731721,
+                0.8031107278970572
+              ],
+              "area_ratio": 0.13971613763026297,
+              "gt_iou": null
+            },
+            {
+              "rank": 10,
+              "objectness": 0.1798442006111145,
+              "fish_probability": 0.7559127807617188,
+              "confidence": 0.13594652978781596,
+              "bbox_original_xyxy": [
+                0.18352524439493817,
+                0.23324755521921003,
+                0.4240223199893267,
+                0.8002603054046631
+              ],
+              "area_ratio": 0.13636490824433306,
+              "gt_iou": null
+            },
+            {
+              "rank": 11,
+              "objectness": 0.12162905931472778,
+              "fish_probability": 0.7468130588531494,
+              "confidence": 0.090834169832263,
+              "bbox_original_xyxy": [
+                0.19622181623409957,
+                0.2770272034865159,
+                0.4182258019080529,
+                0.8125170927781326
+              ],
+              "area_ratio": 0.11888088971084293,
+              "gt_iou": null
+            },
+            {
+              "rank": 12,
+              "objectness": 0.08297201991081238,
+              "fish_probability": 0.8136216998100281,
+              "confidence": 0.06750783587650666,
+              "bbox_original_xyxy": [
+                0.17810567220052084,
+                0.22373553422781134,
+                0.41263443384415066,
+                0.8150912614969107
+              ],
+              "area_ratio": 0.13868992640728997,
+              "gt_iou": null
+            },
+            {
+              "rank": 13,
+              "objectness": 0.0671682357788086,
+              "fish_probability": 0.7624295949935913,
+              "confidence": 0.051211050801271085,
+              "bbox_original_xyxy": [
+                0.20401159922281903,
+                0.2730986338395338,
+                0.41372864062969505,
+                0.8079980886899508
+              ],
+              "area_ratio": 0.11217753112138032,
+              "gt_iou": null
+            },
+            {
+              "rank": 14,
+              "objectness": 0.01781749725341797,
+              "fish_probability": 0.6725788116455078,
+              "confidence": 0.011983671129200957,
+              "bbox_original_xyxy": [
+                0.46398236201359677,
+                0.2438695063957801,
+                0.9872574928479317,
+                0.5809190273284912
+              ],
+              "area_ratio": 0.17636963216371435,
+              "gt_iou": null
+            },
+            {
+              "rank": 15,
+              "objectness": 0.01198539137840271,
+              "fish_probability": 0.8383365869522095,
+              "confidence": 0.010047792101456565,
+              "bbox_original_xyxy": [
+                0.21701155564723873,
+                0.2586018122159518,
+                0.41520369969881504,
+                0.7801063610957218
+              ],
+              "area_ratio": 0.1033581046751317,
+              "gt_iou": null
+            },
+            {
+              "rank": 16,
+              "objectness": 0.012314319610595703,
+              "fish_probability": 0.6905878782272339,
+              "confidence": 0.008504119851693304,
+              "bbox_original_xyxy": [
+                0.47007159697703826,
+                0.24379363426795375,
+                0.9911055442614435,
+                0.6087956061730018
+              ],
+              "area_ratio": 0.19017841818827874,
+              "gt_iou": null
+            },
+            {
+              "rank": 17,
+              "objectness": 0.010584115982055664,
+              "fish_probability": 0.7487661242485046,
+              "confidence": 0.007925027502480475,
+              "bbox_original_xyxy": [
+                0.17257264944223258,
+                0.233953072474553,
+                0.44421592125525844,
+                0.833785240466778
+              ],
+              "area_ratio": 0.16294037265210856,
+              "gt_iou": null
+            },
+            {
+              "rank": 18,
+              "objectness": 0.010580897331237793,
+              "fish_probability": 0.6583185195922852,
+              "confidence": 0.006965600667058425,
+              "bbox_original_xyxy": [
+                0.1758860196822729,
+                0.03180885314941406,
+                0.43196955705300355,
+                0.7825086300189679
+              ],
+              "area_ratio": 0.19224185436417354,
+              "gt_iou": null
+            },
+            {
+              "rank": 19,
+              "objectness": 0.008403927087783813,
+              "fish_probability": 0.7133423089981079,
+              "confidence": 0.00599487675345145,
+              "bbox_original_xyxy": [
+                0.5751224297743578,
+                0.4490338013722346,
+                0.970635059552315,
+                0.5329607541744525
+              ],
+              "area_ratio": 0.03319416981205572,
+              "gt_iou": null
+            },
+            {
+              "rank": 20,
+              "objectness": 0.008500277996063232,
+              "fish_probability": 0.6930973529815674,
+              "confidence": 0.0058915201786788884,
+              "bbox_original_xyxy": [
+                0.44662971985645783,
+                0.2535236065204326,
+                1.0,
+                0.595626244178185
+              ],
+              "area_ratio": 0.18930943243851514,
+              "gt_iou": null
+            }
+          ]
+        },
+        {
+          "orientation": "CCW90",
+          "view_dimensions": [
+            1536,
+            1152
+          ],
+          "input_scale": 0.2708333333333333,
+          "input_draw_dimensions": [
+            416,
+            312
+          ],
+          "input_tensor": {
+            "shape": [
+              1,
+              3,
+              416,
+              416
+            ],
+            "dtype": "float32",
+            "sha256": "b8a9608b44db4c16180e0350db6215cd031da72deceec20495288f66ac40bcab",
+            "channel_means": [
+              133.20375061035156,
+              146.7320098876953,
+              153.9437713623047
+            ],
+            "channel_statistics": [
+              {
+                "channel": 0,
+                "mean": 133.20375061035156,
+                "std": 59.66891098022461,
+                "min": 0.0,
+                "max": 255.0
+              },
+              {
+                "channel": 1,
+                "mean": 146.7320098876953,
+                "std": 55.046566009521484,
+                "min": 0.0,
+                "max": 254.0
+              },
+              {
+                "channel": 2,
+                "mean": 153.9437713623047,
+                "std": 59.343868255615234,
+                "min": 0.0,
+                "max": 255.0
+              }
+            ],
+            "min": 0.0,
+            "max": 255.0
+          },
+          "raw_output_summary": {
+            "shape": [
+              1,
+              3549,
+              6
+            ],
+            "dtype": "float32",
+            "raw_output_sha256": "d93f8bc51b5c1f79a7d50d92e0cebd603b40187559c701161067a0100fabce01",
+            "raw_output_bytes": 85176,
+            "finite_value_count": 21294,
+            "non_finite_value_count": 0,
+            "min": 0.0,
+            "max": 419.0389099121094,
+            "column_ranges": [
+              {
+                "column": 0,
+                "min": 5.5153398513793945,
+                "max": 407.60260009765625
+              },
+              {
+                "column": 1,
+                "min": 2.750441074371338,
+                "max": 419.0389099121094
+              },
+              {
+                "column": 2,
+                "min": 6.0697407722473145,
+                "max": 390.1212463378906
+              },
+              {
+                "column": 3,
+                "min": 4.445956230163574,
+                "max": 326.76275634765625
+              },
+              {
+                "column": 4,
+                "min": 0.0,
+                "max": 0.4534209370613098
+              },
+              {
+                "column": 5,
+                "min": 0.0,
+                "max": 0.8697618246078491
+              }
+            ],
+            "objectness_and_class_probability_within_0_1": true
+          },
+          "raw_output_artifact": {
+            "filename": "0fc341627e43.ccw90.npy",
+            "file_sha256": "fb010f01d72926a4429955ce210cbf01644974831708bea1c6b1c9e99155d8f3",
+            "file_bytes": 85304,
+            "raw_output_sha256": "d93f8bc51b5c1f79a7d50d92e0cebd603b40187559c701161067a0100fabce01",
+            "shape": [
+              1,
+              3549,
+              6
+            ],
+            "dtype": "float32"
+          },
+          "production_gate": {
+            "status": "fish_too_small",
+            "detection_count_after_threshold_and_nms": 1,
+            "primary_confidence": 0.35959395627708446,
+            "primary_bbox_original_xyxy": [
+              0.6121163123693221,
+              0.44500584785754865,
+              0.9935860633850098,
+              0.5668357060505794
+            ],
+            "primary_area_ratio": 0.04647440567117199,
+            "detections": [
+              {
+                "confidence": 0.35959395627708446,
+                "bbox_original_xyxy": [
+                  0.6121163123693221,
+                  0.44500584785754865,
+                  0.9935860633850098,
+                  0.5668357060505794
+                ],
+                "area_ratio": 0.04647440567117199
+              }
+            ]
+          },
+          "best_correct_candidate": null,
+          "top_candidates": [
+            {
+              "rank": 1,
+              "objectness": 0.4534209370613098,
+              "fish_probability": 0.7930687069892883,
+              "confidence": 0.35959395627708446,
+              "bbox_original_xyxy": [
+                0.6121163123693221,
+                0.44500584785754865,
+                0.9935860633850098,
+                0.5668357060505794
+              ],
+              "area_ratio": 0.04647440567117199,
+              "gt_iou": null
+            },
+            {
+              "rank": 2,
+              "objectness": 0.4373835027217865,
+              "fish_probability": 0.7902916073799133,
+              "confidence": 0.34566051140745735,
+              "bbox_original_xyxy": [
+                0.6196475640321388,
+                0.4453728978450482,
+                0.9964731412056165,
+                0.5627661255689768
+              ],
+              "area_ratio": 0.044236770793326885,
+              "gt_iou": null
+            },
+            {
+              "rank": 3,
+              "objectness": 0.44939669966697693,
+              "fish_probability": 0.759783148765564,
+              "confidence": 0.3414440395178282,
+              "bbox_original_xyxy": [
+                0.6124980999873235,
+                0.4441529191457309,
+                1.0,
+                0.5625299169467046
+              ],
+              "area_ratio": 0.04587131156567374,
+              "gt_iou": null
+            },
+            {
+              "rank": 4,
+              "objectness": 0.3276492953300476,
+              "fish_probability": 0.7629726529121399,
+              "confidence": 0.24998745208275963,
+              "bbox_original_xyxy": [
+                0.5859405199686686,
+                0.4443152225934543,
+                0.9952024924449432,
+                0.5651085468438956
+              ],
+              "area_ratio": 0.0494361141447018,
+              "gt_iou": null
+            },
+            {
+              "rank": 5,
+              "objectness": 0.31191712617874146,
+              "fish_probability": 0.779977560043335,
+              "confidence": 0.2432883590126238,
+              "bbox_original_xyxy": [
+                0.5834550735278008,
+                0.4490108994337229,
+                0.993238241244585,
+                0.5659113893142114
+              ],
+              "area_ratio": 0.04790385305087044,
+              "gt_iou": null
+            },
+            {
+              "rank": 6,
+              "objectness": 0.31008291244506836,
+              "fish_probability": 0.7570087909698486,
+              "confidence": 0.23473549065045063,
+              "bbox_original_xyxy": [
+                0.6128677099178998,
+                0.44175636768341064,
+                1.0,
+                0.5670120807794424
+              ],
+              "area_ratio": 0.04849053105673329,
+              "gt_iou": null
+            },
+            {
+              "rank": 7,
+              "objectness": 0.12217608094215393,
+              "fish_probability": 0.7867850065231323,
+              "confidence": 0.09612630864104332,
+              "bbox_original_xyxy": [
+                0.6055444692954038,
+                0.3248817645586454,
+                0.9971790191454765,
+                0.4859498189045833
+              ],
+              "area_ratio": 0.0630798149589984,
+              "gt_iou": null
+            },
+            {
+              "rank": 8,
+              "objectness": 0.10754132270812988,
+              "fish_probability": 0.7613586783409119,
+              "confidence": 0.08187751932409526,
+              "bbox_original_xyxy": [
+                0.6028111653450208,
+                0.44280578998418957,
+                1.0,
+                0.5663373791254483
+              ],
+              "area_ratio": 0.04906536793409426,
+              "gt_iou": null
+            },
+            {
+              "rank": 9,
+              "objectness": 0.10472378134727478,
+              "fish_probability": 0.7524202466011047,
+              "confidence": 0.07879629338631666,
+              "bbox_original_xyxy": [
+                0.6185202720837715,
+                0.4409003166052012,
+                0.9985049076569386,
+                0.5973577957886916
+              ],
+              "area_ratio": 0.059451438210235,
+              "gt_iou": null
+            },
+            {
+              "rank": 10,
+              "objectness": 0.0626409649848938,
+              "fish_probability": 0.741474986076355,
+              "confidence": 0.04644670863998357,
+              "bbox_original_xyxy": [
+                0.5954827650999411,
+                0.3259333738913903,
+                0.9999897174346142,
+                0.4833130561388456
+              ],
+              "area_ratio": 0.0636611756253174,
+              "gt_iou": null
+            },
+            {
+              "rank": 11,
+              "objectness": 0.049752891063690186,
+              "fish_probability": 0.7651836276054382,
+              "confidence": 0.03807009766797265,
+              "bbox_original_xyxy": [
+                0.6080537575941819,
+                0.43794774092160743,
+                1.0,
+                0.5968447190064651
+              ],
+              "area_ratio": 0.06227907348999958,
+              "gt_iou": null
+            },
+            {
+              "rank": 12,
+              "objectness": 0.041967153549194336,
+              "fish_probability": 0.729072630405426,
+              "confidence": 0.030597103028739525,
+              "bbox_original_xyxy": [
+                0.5920111216031587,
+                0.3258050680160523,
+                0.9987370050870455,
+                0.4877495490587675
+              ],
+              "area_ratio": 0.0658670121274379,
+              "gt_iou": null
+            },
+            {
+              "rank": 13,
+              "objectness": 0.03477385640144348,
+              "fish_probability": 0.7797633409500122,
+              "confidence": 0.027115378445305538,
+              "bbox_original_xyxy": [
+                0.6031005932734563,
+                0.3273084988960853,
+                0.9946768711774777,
+                0.48480511628664463
+              ],
+              "area_ratio": 0.06167193922026898,
+              "gt_iou": null
+            },
+            {
+              "rank": 14,
+              "objectness": 0.0313258171081543,
+              "fish_probability": 0.7550607919692993,
+              "confidence": 0.02365289627476841,
+              "bbox_original_xyxy": [
+                0.5782844347831531,
+                0.32814570573660046,
+                0.9999463497064053,
+                0.48343421862675595
+              ],
+              "area_ratio": 0.0654792517108471,
+              "gt_iou": null
+            },
+            {
+              "rank": 15,
+              "objectness": 0.02195879817008972,
+              "fish_probability": 0.7294799089431763,
+              "confidence": 0.016018502089618636,
+              "bbox_original_xyxy": [
+                0.6107547588837452,
+                0.4397072196006775,
+                1.0,
+                0.5608762823618375
+              ],
+              "area_ratio": 0.04716448105029834,
+              "gt_iou": null
+            },
+            {
+              "rank": 16,
+              "objectness": 0.016988545656204224,
+              "fish_probability": 0.7337116003036499,
+              "confidence": 0.012464693020245221,
+              "bbox_original_xyxy": [
+                0.6110798640128894,
+                0.44561255895174473,
+                0.992675964648907,
+                0.6067350644331713
+              ],
+              "area_ratio": 0.06148371981641773,
+              "gt_iou": null
+            },
+            {
+              "rank": 17,
+              "objectness": 0.016054004430770874,
+              "fish_probability": 0.7239419221878052,
+              "confidence": 0.011622166826423808,
+              "bbox_original_xyxy": [
+                0.5942826760120881,
+                0.3273490025446965,
+                0.9971574758872007,
+                0.4860257368821364
+              ],
+              "area_ratio": 0.06392685759103252,
+              "gt_iou": null
+            },
+            {
+              "rank": 18,
+              "objectness": 0.013383626937866211,
+              "fish_probability": 0.7059042453765869,
+              "confidence": 0.009447559073976208,
+              "bbox_original_xyxy": [
+                0.2800870553041115,
+                0.2685943016639123,
+                0.6366351690047827,
+                0.8972332294170674
+              ],
+              "area_ratio": 0.22414002388919996,
+              "gt_iou": null
+            },
+            {
+              "rank": 19,
+              "objectness": 0.00977259874343872,
+              "fish_probability": 0.6880083084106445,
+              "confidence": 0.0067236291302492646,
+              "bbox_original_xyxy": [
+                0.26720801377907777,
+                0.26749185415414667,
+                0.6301924754411746,
+                0.944482289827787
+              ],
+              "area_ratio": 0.24573700884338476,
+              "gt_iou": null
+            },
+            {
+              "rank": 20,
+              "objectness": 0.007024019956588745,
+              "fish_probability": 0.7504745721817017,
+              "confidence": 0.005271348371916673,
+              "bbox_original_xyxy": [
+                0.6281798925155249,
+                0.4499492140916678,
+                0.9992295534182818,
+                0.5826230920278109
+              ],
+              "area_ratio": 0.04922859741885966,
+              "gt_iou": null
+            }
+          ]
+        }
+      ],
+      "bounded_retry_replay": {
+        "policy_version": "DETECTOR_ORIENTATION_RETRY_v2",
+        "attempts": [
+          "ORIGINAL",
+          "CW90",
+          "CCW90"
+        ],
+        "selected_attempt": "CW90",
+        "selection_reason": "GOOD_HIGHEST_RANK_SCORE",
+        "selected_gate_status": "ready"
+      }
+    }
+  ]
+}

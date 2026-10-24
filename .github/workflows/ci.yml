@@ -18,7 +18,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install dependencies
-        run: python -m pip install -r requirements.txt pytest
+        run: python -m pip install -r requirements.txt pytest 'onnx>=1.17.0,<2'
       - name: Compile Python
         run: python -m compileall app evaluation scripts trainer tests
       - name: Run SWOS resource quality probe unit tests (offline)

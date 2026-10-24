@@ -1,0 +1,114 @@
+{
+  "schema_version": "CASE_A_PREPROCESSING_PARITY_V1",
+  "status": "STATIC_CONTRACT_MATCH_RUNTIME_PARITY_BLOCKED",
+  "baselines": {
+    "backend_main_sha": "05554ce1b7104c7bce05610979dfc3478b6d24a5",
+    "android_main_sha": "0d3238e8a41b87363e9a17b04c9cc45fca4c426d",
+    "android_source_checkout_sha": "2e31e75d95f052a0fa589a29fd88a09bc8571b2b",
+    "android_processing_pr166_changed_detector_files": false
+  },
+  "case_a_source": {
+    "sha256": "2dd703a46b378093604e10f0add454606393138f7501774bd3bbcca75352c9fe",
+    "expected_dimensions": [
+      1440,
+      1920
+    ],
+    "historical_exif_orientation": 1,
+    "source_bytes_available": false,
+    "input_tensor_hash_available": false
+  },
+  "checks": [
+    {
+      "id": "exif_orientation_and_decode",
+      "backend": {
+        "implementation": "Pillow ImageOps.exif_transpose(...).convert('RGB')",
+        "source": "pan277942135/Yujian@05554ce1b7104c7bce05610979dfc3478b6d24a5:app/detector_runtime.py:195-217"
+      },
+      "android": {
+        "implementation": "ExifInterface.rotationDegrees, BitmapFactory decode, Matrix rotation; detector receives the oriented in-memory Bitmap",
+        "source": "pan277942135/Yujian_App@0d3238e8a41b87363e9a17b04c9cc45fca4c426d:app/src/main/java/com/yujian/ai/media/RecognitionImageStore.kt:55-121"
+      },
+      "static_conclusion": "Both apply EXIF orientation before detector input; Case A historical EXIF was 1.",
+      "runtime_parity": "UNVERIFIED",
+      "notes": "Android BitmapFactory/Skia decoding is not proven byte-identical to Pillow JPEG decoding. Android persists a JPEG92 copy for later use, but detect() receives the oriented in-memory Bitmap, so that persisted re-encode is not the detector input."
+    },
+    {
+      "id": "source_downsample",
+      "backend": {
+        "implementation": "Primary recognition API _predict_bytes EXIF-transposes and converts to RGB, then calls detect(full raster) without the 2048 source downsample. The normalize_android_source helper applies a power-of-two sample cap, but this primary API path does not call it.",
+        "source": "pan277942135/Yujian@05554ce1b7104c7bce05610979dfc3478b6d24a5:app/inference_api.py:407-422; helper only: app/detector_runtime.py:195-217"
+      },
+      "android": {
+        "implementation": "BitmapFactory.Options.inSampleSize, doubling integer sample until longest side/sample <= 2048",
+        "source": "pan277942135/Yujian_App@0d3238e8a41b87363e9a17b04c9cc45fca4c426d:app/src/main/java/com/yujian/ai/media/RecognitionImageStore.kt:61-101"
+      },
+      "static_conclusion": "Case A maximum dimension is 1920, so Android uses inSampleSize=1 and the backend primary API also keeps the full raster. For larger images, the primary backend API and Android source sampling behavior differ; this generic difference is not applicable to the stated Case A dimensions.",
+      "runtime_parity": "CASE_A_SIZE_CONTRACT_MATCH_STATICALLY; PIXEL_PARITY_UNVERIFIED",
+      "notes": "The exact decoded pixel raster is not available because the authorized Case A bytes could not be retrieved. Backend source sampling helper behavior must not be mistaken for the primary _predict_bytes path."
+    },
+    {
+      "id": "resize_letterbox_channels_tensor",
+      "backend": {
+        "implementation": "416 square input; scale=min(416/w,416/h); integer-truncated draw size; top-left placement; uint8 fill 114; RGB to BGR; float32 NCHW, values 0..255; Pillow bilinear resize",
+        "source": "pan277942135/Yujian@05554ce1b7104c7bce05610979dfc3478b6d24a5:app/detector_runtime.py:220-233"
+      },
+      "android": {
+        "implementation": "Same scale/draw size, top-left placement, 114 fill, BGR plane order, float32 NCHW 0..255; custom Pillow-compatible separable bilinear with 22-bit fixed coefficients",
+        "source": "pan277942135/Yujian_App@0d3238e8a41b87363e9a17b04c9cc45fca4c426d:app/src/main/java/com/yujian/ai/ai/FishDetectorEngine.kt:270-364"
+      },
+      "static_conclusion": "The model-input contract matches by code, including BGR, fill, tensor shape/order/range and integer dimensions. Android explicitly mirrors Pillow resize semantics.",
+      "runtime_parity": "UNVERIFIED",
+      "notes": "No same-byte image was processed through both implementations and no Android-produced 416x416 tensor SHA/summary was captured."
+    },
+    {
+      "id": "onnx_contract_and_output_decode",
+      "backend": {
+        "implementation": "Validates model metadata hash/bytes, single input/output and input shape [1,3,416,416]; output is decoded xywh/objectness/class_probability; confidence=obj*class; box mapped by scale and source size; threshold then NMS",
+        "source": "pan277942135/Yujian@05554ce1b7104c7bce05610979dfc3478b6d24a5:app/detector_runtime.py:129-186,309-346"
+      },
+      "android": {
+        "implementation": "Validates bundled ONNX SHA/bytes and contract constants; verifies input/output counts and input name; confidence=obj*class; identical normalized xywh inverse-scale mapping; NMS IoU=0.45",
+        "source": "pan277942135/Yujian_App@0d3238e8a41b87363e9a17b04c9cc45fca4c426d:app/src/main/java/com/yujian/ai/ai/FishDetectorEngine.kt:91-103,222-267,436-465,525-540"
+      },
+      "static_conclusion": "Decode formulas and production gate constants match by source inspection. Metadata declares decoded probabilities; neither consumer applies an additional sigmoid.",
+      "runtime_parity": "PARTIAL_STATIC_ONLY",
+      "notes": "The Android output shape is materialized and row width checked at decode, but no current device trace proves actual runtime output. The 2026-10-07 production smoke observed a GCS model / Golden Manifest hash mismatch and did not prove current production decode behavior. The ONNX graph's actual sigmoid/logit boundary remains unverified; only its metadata contract and consumer interpretation are known.",
+      "onnx_graph_semantics": "NOT_INDEPENDENTLY_VERIFIED; metadata declares decoded_xywh_objectness_class_probability and the consumers treat columns 4-5 as probabilities; no ONNX graph parser or runtime output inspection was available in this investigation."
+    },
+    {
+      "id": "orientation_coordinate_mapping_and_gate",
+      "backend": {
+        "implementation": "CW90: [y1,1-x2,y2,1-x1]; CCW90: [1-y2,x1,1-y1,x2]; map before assessment; ORIGINAL then bounded retries",
+        "source": "pan277942135/Yujian@05554ce1b7104c7bce05610979dfc3478b6d24a5:app/detector_runtime.py:236-245,404 onward"
+      },
+      "android": {
+        "implementation": "Same CW90/CCW90 normalized-coordinate formulas; assess after map; retry only after ORIGINAL no_fish",
+        "source": "pan277942135/Yujian_App@0d3238e8a41b87363e9a17b04c9cc45fca4c426d:app/src/main/java/com/yujian/ai/ai/FishDetectorEngine.kt:108-180,467-504"
+      },
+      "static_conclusion": "Coordinate transforms, retry trigger, and priority/score selection appear aligned by code. Production values match: weak 0.20, strong 0.35, NMS 0.45, minimum area 0.08.",
+      "runtime_parity": "UNVERIFIED",
+      "notes": "No Case A orientation replay was run in this investigation because both Case A source identity and current production artifact identity gates are blocked."
+    }
+  ],
+  "overall": {
+    "source_code_contract_comparison": "NO_CASE_A_SIZE_INPUT_CONTRACT_MISMATCH_FOUND; GENERIC_LARGE_SOURCE_DOWNSAMPLE_DIFFERENCE_EXISTS",
+    "end_to_end_android_backend_parity": "NOT_ESTABLISHED",
+    "root_cause_implication": "PREPROCESSING_PARITY_BUG_NOT_CONFIRMED_FOR_CASE_A; generic >2048 source-sampling behavior differs in the primary API path and must be reviewed separately. Do not eliminate Case A pixel/runtime parity until same-source tensor and runtime comparisons exist.",
+    "case_b_positive_control": {
+      "expected_sha256": "a7ed3bb0410c191364f6d853b4078aebdc2f3b9baa4da34b7b3f6e8e0e93a56",
+      "asset_present": true,
+      "sha_verified": true,
+      "runtime_replay": "NOT_RUN_GATE_A_FAILED",
+      "historical_reported_ccw90_confidence": 0.6355004065391654,
+      "historical_reported_ccw90_gt_iou": 0.7135640302038609,
+      "historical_gate": "READY",
+      "historical_values_are_current_replay": false
+    }
+  },
+  "required_next_evidence": [
+    "Restore read access to the production GCS model objects and record generation, updated timestamp, current ONNX SHA, metadata, contract and checkpoint SHA.",
+    "Obtain the authorized original Case A byte object with SHA-256 2dd703a46b378093604e10f0add454606393138f7501774bd3bbcca75352c9fe; do not use a re-encoded substitute.",
+    "On identical source bytes, export or log Android normalized bitmap and 416x416 tensor hash/statistics and compare with backend Pillow output.",
+    "Run Case B positive control and Case A three-direction replay only after Gate A resolves to one explicit model artifact identity."
+  ]
+}

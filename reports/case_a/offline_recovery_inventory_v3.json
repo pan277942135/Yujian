@@ -1,0 +1,1378 @@
+{
+  "schema_version": "CASE_A_OFFLINE_RECOVERY_V3",
+  "scope": "Offline-only evidence recovery and reproducible replay; no GCP access or billing changes.",
+  "checked_at_utc": "2026-10-19",
+  "repository_baseline": {
+    "backend_repository": "pan277942135/Yujian",
+    "backend_main_sha": "05554ce1b7104c7bce05610979dfc3478b6d24a5",
+    "android_repository": "pan277942135/Yujian_App",
+    "android_main_sha": "0d3238e8a41b87363e9a17b04c9cc45fca4c426d",
+    "pr_number": 164,
+    "pr_branch": "investigate/case-a-low-objectness-root-cause-v1",
+    "pr_base_sha": "05554ce1b7104c7bce05610979dfc3478b6d24a5",
+    "pr_head_at_v3_start": "c526d2e6a2618d6b81d6d301318e5eb0e1581ef1",
+    "pr_state_at_v3_start": "OPEN_DRAFT_UNMERGED",
+    "baseline_ci_run_id": 39223185096,
+    "baseline_ci_conclusion": "success",
+    "baseline_ci_job": "validate"
+  },
+  "case_a_source": {
+    "historical_sha256": "2dd703a46b378093604e10f0add454606393138f7501774bd3bbcca75352c9fe",
+    "historical_dimensions": [
+      1440,
+      1920
+    ],
+    "source_recovery_status": "BLOCKED_EXACT_SOURCE_UNAVAILABLE",
+    "local_image_files_hashed": 1993,
+    "exact_sha_matches_in_scratch_tmp_mnt_data": 0,
+    "attachments": [
+      {
+        "uploaded_name": "01-IMG_1415.jpg",
+        "bytes": 292569,
+        "sha256": "0fc341627e4345131a15fbf3514454f053dcb349db17bf1171c8f2f8756226cf",
+        "format": "JPEG",
+        "dimensions": [
+          1152,
+          1536
+        ],
+        "exif_orientation": 1,
+        "historical_case_a_sha_match": false,
+        "use_classification": "USER_PROVIDED_CASE_A_CANDIDATE"
+      },
+      {
+        "uploaded_name": "02-screenshot_20261007_012240_com.xingin.xhs_hos.jpg",
+        "bytes": 174425,
+        "sha256": "10409025dd5fe590b9487ef4dc43ea019a9e2083143fb458bf160a6c37eec5a6",
+        "format": "JPEG",
+        "dimensions": [
+          911,
+          1536
+        ],
+        "exif_orientation": 1,
+        "historical_case_a_sha_match": false,
+        "use_classification": "SCREENSHOT_CONTEXT_NOT_USED_AS_SOURCE"
+      }
+    ],
+    "ground_truth_xyxy_historical_only": [
+      0.105,
+      0.22,
+      0.38,
+      1.0
+    ],
+    "ground_truth_applied_to_candidate": false,
+    "case_b_reference_sha256_from_v3_prompt": "a7ed3bb0410c191364f6d853b4078aebdc2f3b9baa4da34b7b3f6e8e0e93a56",
+    "case_b_reference_sha_matches_local_fixture": false
+  },
+  "model_identity": {
+    "github_release": {
+      "tag": "detector-model-v0.1",
+      "release_id": 379655230,
+      "asset_id": 537791631,
+      "asset_name": "det_fish_v0_1_android_bundle.zip",
+      "published_at": "2026-08-31T10:00:08Z",
+      "registered_sha256": "246ddacaf89ca7ecc9c64a47d3e12c5ee9088d92c763a38626778505ae8c15ee",
+      "downloaded_bytes": 4064690,
+      "downloaded_sha256": "246ddacaf89ca7ecc9c64a47d3e12c5ee9088d92c763a38626778505ae8c15ee",
+      "download_matches_registered_digest": true,
+      "source_url": "https://github.com/pan277942135/Yujian/releases/download/detector-model-v0.1/det_fish_v0_1_android_bundle.zip"
+    },
+    "bundle_preflight": {
+      "bundle": {
+        "path_disclosed": false,
+        "sha256": "246ddacaf89ca7ecc9c64a47d3e12c5ee9088d92c763a38626778505ae8c15ee",
+        "bytes": 4064690,
+        "expected_sha256": "246ddacaf89ca7ecc9c64a47d3e12c5ee9088d92c763a38626778505ae8c15ee",
+        "matches_expected": true
+      },
+      "onnx": {
+        "sha256": "12b97f7c081987f33f99d255cdd2e935fb9cf93b893146f54ff98b9c4e3a8e4f",
+        "bytes": 3753998,
+        "metadata_sha256": "12b97f7c081987f33f99d255cdd2e935fb9cf93b893146f54ff98b9c4e3a8e4f",
+        "metadata_bytes": 3753998,
+        "expected_historical_sha256": "12b97f7c081987f33f99d255cdd2e935fb9cf93b893146f54ff98b9c4e3a8e4f",
+        "matches_metadata": true,
+        "matches_metadata_bytes": true,
+        "matches_historical_case_a_sha": true
+      },
+      "metadata": {
+        "sha256": "53994a745c192e3c2afc31ad256800bb87f841fafd07977f0fd38fa7e1f8327e",
+        "model_version": "DET_FISH_v0.1",
+        "model_family": "YOLOX_NANO",
+        "dataset_version": "DET_DS_v0.1",
+        "git_commit": "eea53de7064fb79bb3e3f4ebaa741ff6e5ef55ad",
+        "training": {
+          "epochs": 30,
+          "epochs_completed": 30,
+          "batch_size": 16,
+          "ap50": 0.8939257346787309,
+          "ap50_95": 0.5312755466360295,
+          "checkpoint_best_ap50_95": 0.5290000182835463,
+          "checkpoint_selection": "yolox_best_ckpt",
+          "checkpoint_source": "best_ckpt.pth",
+          "pretrained_source": "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_nano.pth"
+        },
+        "dataset_report": {
+          "source": "FishPresenceResult/google-vision-presence-v0.4",
+          "selected": 594,
+          "positives": 440,
+          "negatives": 154,
+          "incomplete_candidates": 222,
+          "splits": {
+            "train": {
+              "images": 477,
+              "annotations": 481
+            },
+            "val": {
+              "images": 50,
+              "annotations": 50
+            },
+            "test": {
+              "images": 67,
+              "annotations": 54
+            }
+          },
+          "contract_version": "RECOGNITION_PIPELINE_v1",
+          "published": {
+            "dataset_version": "DET_DS_v0.1",
+            "gcs": {
+              "DET_DS_v0.1.tar.gz": "gs://yujian-model-factory-571785698442/detector-datasets/DET_DS_v0.1/DET_DS_v0.1.tar.gz",
+              "bootstrap_report.json": "gs://yujian-model-factory-571785698442/detector-datasets/DET_DS_v0.1/bootstrap_report.json",
+              "bootstrap_manifest.json": "gs://yujian-model-factory-571785698442/detector-datasets/DET_DS_v0.1/bootstrap_manifest.json"
+            }
+          }
+        },
+        "onnx_contract": {
+          "input_name": "images",
+          "input_shape": [
+            1,
+            3,
+            416,
+            416
+          ],
+          "output_shape": [
+            1,
+            3549,
+            6
+          ],
+          "output_contract": "decoded_xywh_objectness_class_probability",
+          "onnx_opset": 17
+        },
+        "checkpoint_sha256": "4b7945b85a0f890e9da0fd651c45ae6406025b2bf19ec948da24771fa5e31db8"
+      },
+      "pipeline_contract": {
+        "contract_version": "RECOGNITION_PIPELINE_v1",
+        "detector": {
+          "model_family": "YOLOX_NANO",
+          "class_name": "fish",
+          "input_size": 416,
+          "strong_confidence": 0.35,
+          "weak_confidence": 0.2,
+          "nms_iou": 0.45
+        },
+        "quality_gate": {
+          "min_primary_area_ratio": 0.08,
+          "incomplete_edge_margin_ratio": 0.015
+        },
+        "crop": {
+          "expand_ratio": 0.15,
+          "classifier_size": 224,
+          "resize_mode": "letterbox",
+          "padding_rgb": [
+            124,
+            116,
+            104
+          ],
+          "normalization_mean": [
+            0.485,
+            0.456,
+            0.406
+          ],
+          "normalization_std": [
+            0.229,
+            0.224,
+            0.225
+          ]
+        },
+        "statuses": [
+          "ready",
+          "no_fish",
+          "uncertain",
+          "multiple_fish",
+          "incomplete_fish",
+          "fish_too_small"
+        ]
+      },
+      "golden_manifest": {
+        "sha256": "883ab6e54cd7aa2c66907765d401ff22385384c1a8ba242167e8c10ec2ae0d19",
+        "model_version": "DET_FISH_v0.1",
+        "dataset_version": "DET_DS_v0.1",
+        "onnx_sha256": "12b97f7c081987f33f99d255cdd2e935fb9cf93b893146f54ff98b9c4e3a8e4f",
+        "onnx_bytes": 3753998,
+        "input_shape": [
+          1,
+          3,
+          416,
+          416
+        ],
+        "case_count": 5,
+        "matches_bundle_onnx": true,
+        "matches_bundle_bytes": true
+      }
+    },
+    "last_observed_gcs_sha256_from_v1_evidence": "2338f44c3c4913764af401dc3a3585287f36659be7560b3b7b41efc9931634b1",
+    "current_gcs_object_status": "UNAVAILABLE_NOT_ACCESSED_GCP_DISABLED_BY_USER",
+    "checkpoint": {
+      "metadata_declared_sha256": "4b7945b85a0f890e9da0fd651c45ae6406025b2bf19ec948da24771fa5e31db8",
+      "checkpoint_bytes_available": false
+    },
+    "onnx_graph_audit_file": "onnx_output_contract_v3.json",
+    "onnx_graph_audit_summary": {
+      "ir_version": 8,
+      "opsets": [
+        {
+          "domain": "",
+          "version": 17
+        }
+      ],
+      "input": {
+        "name": "images",
+        "dtype": "FLOAT",
+        "shape": [
+          1,
+          3,
+          416,
+          416
+        ]
+      },
+      "output": {
+        "name": "output",
+        "dtype": "FLOAT",
+        "shape": [
+          1,
+          3549,
+          6
+        ]
+      },
+      "node_count": 562,
+      "sigmoid_node_count": 110,
+      "objectness_head_sigmoid_count": 3,
+      "class_head_sigmoid_count": 3,
+      "softmax_node_count": 0,
+      "onnx_checker": "PASS",
+      "head_probability_activations_observed": true
+    }
+  },
+  "runtime_replays": {
+    "engine": "backend scripts/diagnose_detector_orientation.py with ONNX Runtime CPUExecutionProvider",
+    "repeatability_check": {
+      "user_candidate": {
+        "run_count": 2,
+        "orientations": [
+          {
+            "orientation": "ORIGINAL",
+            "identical": true,
+            "input_tensor_sha256": "1d949e89fea279f0d21796fce1494ebb2e346d83723d3015db93a80f6ed09a50",
+            "raw_output_sha256": "c86b22f19680dd786adf4e673adeb20ec8d0b3075915b413c25348c68adb669b",
+            "top_candidates_identical": true,
+            "production_gate_identical": true
+          },
+          {
+            "orientation": "CW90",
+            "identical": true,
+            "input_tensor_sha256": "ad96ce6547ae2dd1bf29c5b5ec4c5d8ebd1f4d8b216f981e387bc6faa3d7d1d6",
+            "raw_output_sha256": "43736dfede7a2244273cd53252b926b7eba5f6475aa7fbe187c54ae00761a743",
+            "top_candidates_identical": true,
+            "production_gate_identical": true
+          },
+          {
+            "orientation": "CCW90",
+            "identical": true,
+            "input_tensor_sha256": "b8a9608b44db4c16180e0350db6215cd031da72deceec20495288f66ac40bcab",
+            "raw_output_sha256": "d93f8bc51b5c1f79a7d50d92e0cebd603b40187559c701161067a0100fabce01",
+            "top_candidates_identical": true,
+            "production_gate_identical": true
+          }
+        ],
+        "bitwise_reproducible": true,
+        "comparison_ignores": [
+          "execution timestamp",
+          "optional raw-output artifact path metadata"
+        ]
+      },
+      "case_b": {
+        "run_count": 2,
+        "orientations": [
+          {
+            "orientation": "ORIGINAL",
+            "identical": true,
+            "input_tensor_sha256": "eefbf9eb9eecb223c9941a2dc2b7b3d6e468ea896ef6fb11397bc51f6b130553",
+            "raw_output_sha256": "37ba6ae7ea58a5a9bee441063f4ff0f68d66fe596d2aba9ecf9287cea6010b48",
+            "top_candidates_identical": true,
+            "production_gate_identical": true
+          },
+          {
+            "orientation": "CW90",
+            "identical": true,
+            "input_tensor_sha256": "3d2d7c03cd6aa2f2fea7db6bf07f4d4f6302bf60af98555c8deab884d8b72b2b",
+            "raw_output_sha256": "40bd3de2ed99eb15429c979447fdb7008152c473b75e96aa7294faa479e04326",
+            "top_candidates_identical": true,
+            "production_gate_identical": true
+          },
+          {
+            "orientation": "CCW90",
+            "identical": true,
+            "input_tensor_sha256": "5c7e815188bf85bf55cb388df3ae300b50f0f1bb7a05955fb71e277d259d9123",
+            "raw_output_sha256": "98cb155d0eef1bd2d34c544fb4204ccd8e38f533cc337d32ae62ee15ef3967d3",
+            "top_candidates_identical": true,
+            "production_gate_identical": true
+          }
+        ],
+        "bitwise_reproducible": true,
+        "comparison_ignores": [
+          "execution timestamp",
+          "optional raw-output artifact path metadata"
+        ]
+      }
+    },
+    "case_a_historical_replay_status": "NOT_REPRODUCED_INPUT_SHA_MISMATCH",
+    "android_device_runtime_status": "NOT_RUN_ADB_AND_EMULATOR_NOT_INSTALLED",
+    "user_candidate_summary": {
+      "source": {
+        "sha256": "0fc341627e4345131a15fbf3514454f053dcb349db17bf1171c8f2f8756226cf",
+        "bytes": 292569,
+        "format": "JPEG",
+        "width": 1152,
+        "height": 1536,
+        "exif_orientation": 1,
+        "orientation_normalization": {
+          "applied": false,
+          "status": "identity_exif_orientation_1"
+        },
+        "local_path_disclosed": false
+      },
+      "ground_truth_xyxy": null,
+      "orientations": [
+        {
+          "orientation": "ORIGINAL",
+          "view_dimensions": [
+            1152,
+            1536
+          ],
+          "input_scale": 0.2708333333333333,
+          "input_draw_dimensions": [
+            312,
+            416
+          ],
+          "input_tensor": {
+            "shape": [
+              1,
+              3,
+              416,
+              416
+            ],
+            "dtype": "float32",
+            "sha256": "1d949e89fea279f0d21796fce1494ebb2e346d83723d3015db93a80f6ed09a50",
+            "channel_means": [
+              133.20291137695312,
+              146.73101806640625,
+              153.9432373046875
+            ],
+            "channel_statistics": [
+              {
+                "channel": 0,
+                "mean": 133.20291137695312,
+                "std": 59.66872024536133,
+                "min": 0.0,
+                "max": 255.0
+              },
+              {
+                "channel": 1,
+                "mean": 146.73101806640625,
+                "std": 55.04759216308594,
+                "min": 0.0,
+                "max": 254.0
+              },
+              {
+                "channel": 2,
+                "mean": 153.9432373046875,
+                "std": 59.34381866455078,
+                "min": 0.0,
+                "max": 255.0
+              }
+            ],
+            "min": 0.0,
+            "max": 255.0
+          },
+          "raw_output_summary": {
+            "shape": [
+              1,
+              3549,
+              6
+            ],
+            "dtype": "float32",
+            "raw_output_sha256": "c86b22f19680dd786adf4e673adeb20ec8d0b3075915b413c25348c68adb669b",
+            "raw_output_bytes": 85176,
+            "finite_value_count": 21294,
+            "non_finite_value_count": 0,
+            "min": 5.960464477539063e-08,
+            "max": 452.09918212890625,
+            "column_ranges": [
+              {
+                "column": 0,
+                "min": 5.493712902069092,
+                "max": 408.4284362792969
+              },
+              {
+                "column": 1,
+                "min": 3.0574724674224854,
+                "max": 410.1966552734375
+              },
+              {
+                "column": 2,
+                "min": 10.16211223602295,
+                "max": 424.965576171875
+              },
+              {
+                "column": 3,
+                "min": 6.2713775634765625,
+                "max": 452.09918212890625
+              },
+              {
+                "column": 4,
+                "min": 5.960464477539063e-08,
+                "max": 0.04692864418029785
+              },
+              {
+                "column": 5,
+                "min": 1.4185905456542969e-05,
+                "max": 0.8586550951004028
+              }
+            ],
+            "objectness_and_class_probability_within_0_1": true
+          },
+          "raw_output_artifact": {
+            "filename": "0fc341627e43.original.npy",
+            "file_sha256": "faea8540569825b35a4496b04ce4eef1720a323a23cdfdc1ceb04a2365f73804",
+            "file_bytes": 85304,
+            "raw_output_sha256": "c86b22f19680dd786adf4e673adeb20ec8d0b3075915b413c25348c68adb669b",
+            "shape": [
+              1,
+              3549,
+              6
+            ],
+            "dtype": "float32"
+          },
+          "top_candidate": {
+            "rank": 1,
+            "objectness": 0.04692864418029785,
+            "fish_probability": 0.7674329280853271,
+            "confidence": 0.03601458681436043,
+            "bbox_original_xyxy": [
+              0.20384353857774004,
+              0.20954025708712065,
+              0.40614939347291606,
+              0.8271602117098295
+            ],
+            "area_ratio": 0.12494813292026692,
+            "gt_iou": null
+          },
+          "production_gate": {
+            "status": "no_fish",
+            "detection_count_after_threshold_and_nms": 0,
+            "primary_confidence": null,
+            "primary_bbox_original_xyxy": null,
+            "primary_area_ratio": null,
+            "detections": []
+          }
+        },
+        {
+          "orientation": "CW90",
+          "view_dimensions": [
+            1536,
+            1152
+          ],
+          "input_scale": 0.2708333333333333,
+          "input_draw_dimensions": [
+            416,
+            312
+          ],
+          "input_tensor": {
+            "shape": [
+              1,
+              3,
+              416,
+              416
+            ],
+            "dtype": "float32",
+            "sha256": "ad96ce6547ae2dd1bf29c5b5ec4c5d8ebd1f4d8b216f981e387bc6faa3d7d1d6",
+            "channel_means": [
+              133.20375061035156,
+              146.7320098876953,
+              153.9437713623047
+            ],
+            "channel_statistics": [
+              {
+                "channel": 0,
+                "mean": 133.20375061035156,
+                "std": 59.66891098022461,
+                "min": 0.0,
+                "max": 255.0
+              },
+              {
+                "channel": 1,
+                "mean": 146.7320098876953,
+                "std": 55.046566009521484,
+                "min": 0.0,
+                "max": 254.0
+              },
+              {
+                "channel": 2,
+                "mean": 153.9437713623047,
+                "std": 59.343868255615234,
+                "min": 0.0,
+                "max": 255.0
+              }
+            ],
+            "min": 0.0,
+            "max": 255.0
+          },
+          "raw_output_summary": {
+            "shape": [
+              1,
+              3549,
+              6
+            ],
+            "dtype": "float32",
+            "raw_output_sha256": "43736dfede7a2244273cd53252b926b7eba5f6475aa7fbe187c54ae00761a743",
+            "raw_output_bytes": 85176,
+            "finite_value_count": 21294,
+            "non_finite_value_count": 0,
+            "min": 0.0,
+            "max": 438.37274169921875,
+            "column_ranges": [
+              {
+                "column": 0,
+                "min": 5.008497714996338,
+                "max": 409.09234619140625
+              },
+              {
+                "column": 1,
+                "min": 3.8881351947784424,
+                "max": 438.37274169921875
+              },
+              {
+                "column": 2,
+                "min": 6.928734302520752,
+                "max": 348.50164794921875
+              },
+              {
+                "column": 3,
+                "min": 4.420721054077148,
+                "max": 357.7713928222656
+              },
+              {
+                "column": 4,
+                "min": 0.0,
+                "max": 0.5405392646789551
+              },
+              {
+                "column": 5,
+                "min": 0.0,
+                "max": 0.8543938398361206
+              }
+            ],
+            "objectness_and_class_probability_within_0_1": true
+          },
+          "raw_output_artifact": {
+            "filename": "0fc341627e43.cw90.npy",
+            "file_sha256": "97fff4d1957cf958f9bbdd238e5c92f27bee9f0cac98298ad74c440e4f5a406d",
+            "file_bytes": 85304,
+            "raw_output_sha256": "43736dfede7a2244273cd53252b926b7eba5f6475aa7fbe187c54ae00761a743",
+            "shape": [
+              1,
+              3549,
+              6
+            ],
+            "dtype": "float32"
+          },
+          "top_candidate": {
+            "rank": 1,
+            "objectness": 0.5405392646789551,
+            "fish_probability": 0.7957611083984375,
+            "confidence": 0.43014012439380167,
+            "bbox_original_xyxy": [
+              0.1866730421017378,
+              0.2660208848806528,
+              0.41496653434557795,
+              0.7915863257188063
+            ],
+            "area_ratio": 0.11998316989161542,
+            "gt_iou": null
+          },
+          "production_gate": {
+            "status": "ready",
+            "detection_count_after_threshold_and_nms": 1,
+            "primary_confidence": 0.43014012439380167,
+            "primary_bbox_original_xyxy": [
+              0.1866730421017378,
+              0.2660208848806528,
+              0.41496653434557795,
+              0.7915863257188063
+            ],
+            "primary_area_ratio": 0.11998316989161542,
+            "detections": [
+              {
+                "confidence": 0.43014012439380167,
+                "bbox_original_xyxy": [
+                  0.1866730421017378,
+                  0.2660208848806528,
+                  0.41496653434557795,
+                  0.7915863257188063
+                ],
+                "area_ratio": 0.11998316989161542
+              }
+            ]
+          }
+        },
+        {
+          "orientation": "CCW90",
+          "view_dimensions": [
+            1536,
+            1152
+          ],
+          "input_scale": 0.2708333333333333,
+          "input_draw_dimensions": [
+            416,
+            312
+          ],
+          "input_tensor": {
+            "shape": [
+              1,
+              3,
+              416,
+              416
+            ],
+            "dtype": "float32",
+            "sha256": "b8a9608b44db4c16180e0350db6215cd031da72deceec20495288f66ac40bcab",
+            "channel_means": [
+              133.20375061035156,
+              146.7320098876953,
+              153.9437713623047
+            ],
+            "channel_statistics": [
+              {
+                "channel": 0,
+                "mean": 133.20375061035156,
+                "std": 59.66891098022461,
+                "min": 0.0,
+                "max": 255.0
+              },
+              {
+                "channel": 1,
+                "mean": 146.7320098876953,
+                "std": 55.046566009521484,
+                "min": 0.0,
+                "max": 254.0
+              },
+              {
+                "channel": 2,
+                "mean": 153.9437713623047,
+                "std": 59.343868255615234,
+                "min": 0.0,
+                "max": 255.0
+              }
+            ],
+            "min": 0.0,
+            "max": 255.0
+          },
+          "raw_output_summary": {
+            "shape": [
+              1,
+              3549,
+              6
+            ],
+            "dtype": "float32",
+            "raw_output_sha256": "d93f8bc51b5c1f79a7d50d92e0cebd603b40187559c701161067a0100fabce01",
+            "raw_output_bytes": 85176,
+            "finite_value_count": 21294,
+            "non_finite_value_count": 0,
+            "min": 0.0,
+            "max": 419.0389099121094,
+            "column_ranges": [
+              {
+                "column": 0,
+                "min": 5.5153398513793945,
+                "max": 407.60260009765625
+              },
+              {
+                "column": 1,
+                "min": 2.750441074371338,
+                "max": 419.0389099121094
+              },
+              {
+                "column": 2,
+                "min": 6.0697407722473145,
+                "max": 390.1212463378906
+              },
+              {
+                "column": 3,
+                "min": 4.445956230163574,
+                "max": 326.76275634765625
+              },
+              {
+                "column": 4,
+                "min": 0.0,
+                "max": 0.4534209370613098
+              },
+              {
+                "column": 5,
+                "min": 0.0,
+                "max": 0.8697618246078491
+              }
+            ],
+            "objectness_and_class_probability_within_0_1": true
+          },
+          "raw_output_artifact": {
+            "filename": "0fc341627e43.ccw90.npy",
+            "file_sha256": "fb010f01d72926a4429955ce210cbf01644974831708bea1c6b1c9e99155d8f3",
+            "file_bytes": 85304,
+            "raw_output_sha256": "d93f8bc51b5c1f79a7d50d92e0cebd603b40187559c701161067a0100fabce01",
+            "shape": [
+              1,
+              3549,
+              6
+            ],
+            "dtype": "float32"
+          },
+          "top_candidate": {
+            "rank": 1,
+            "objectness": 0.4534209370613098,
+            "fish_probability": 0.7930687069892883,
+            "confidence": 0.35959395627708446,
+            "bbox_original_xyxy": [
+              0.6121163123693221,
+              0.44500584785754865,
+              0.9935860633850098,
+              0.5668357060505794
+            ],
+            "area_ratio": 0.04647440567117199,
+            "gt_iou": null
+          },
+          "production_gate": {
+            "status": "fish_too_small",
+            "detection_count_after_threshold_and_nms": 1,
+            "primary_confidence": 0.35959395627708446,
+            "primary_bbox_original_xyxy": [
+              0.6121163123693221,
+              0.44500584785754865,
+              0.9935860633850098,
+              0.5668357060505794
+            ],
+            "primary_area_ratio": 0.04647440567117199,
+            "detections": [
+              {
+                "confidence": 0.35959395627708446,
+                "bbox_original_xyxy": [
+                  0.6121163123693221,
+                  0.44500584785754865,
+                  0.9935860633850098,
+                  0.5668357060505794
+                ],
+                "area_ratio": 0.04647440567117199
+              }
+            ]
+          }
+        }
+      ],
+      "bounded_retry_replay": {
+        "policy_version": "DETECTOR_ORIENTATION_RETRY_v2",
+        "attempts": [
+          "ORIGINAL",
+          "CW90",
+          "CCW90"
+        ],
+        "selected_attempt": "CW90",
+        "selection_reason": "GOOD_HIGHEST_RANK_SCORE",
+        "selected_gate_status": "ready"
+      }
+    },
+    "case_b_positive_control_summary": {
+      "source": {
+        "sha256": "a7ed3bb0410c191364f6d853b4078aebdc2f3b9baa4da34b7b3f6e8e0e93a56b",
+        "bytes": 151870,
+        "format": "JPEG",
+        "width": 1152,
+        "height": 1536,
+        "exif_orientation": 1,
+        "orientation_normalization": {
+          "applied": false,
+          "status": "identity_exif_orientation_1"
+        },
+        "local_path_disclosed": false
+      },
+      "ground_truth_xyxy": null,
+      "orientations": [
+        {
+          "orientation": "ORIGINAL",
+          "view_dimensions": [
+            1152,
+            1536
+          ],
+          "input_scale": 0.2708333333333333,
+          "input_draw_dimensions": [
+            312,
+            416
+          ],
+          "input_tensor": {
+            "shape": [
+              1,
+              3,
+              416,
+              416
+            ],
+            "dtype": "float32",
+            "sha256": "eefbf9eb9eecb223c9941a2dc2b7b3d6e468ea896ef6fb11397bc51f6b130553",
+            "channel_means": [
+              66.96483612060547,
+              72.26190185546875,
+              76.2030258178711
+            ],
+            "channel_statistics": [
+              {
+                "channel": 0,
+                "mean": 66.96483612060547,
+                "std": 65.22294616699219,
+                "min": 0.0,
+                "max": 255.0
+              },
+              {
+                "channel": 1,
+                "mean": 72.26190185546875,
+                "std": 68.47755432128906,
+                "min": 0.0,
+                "max": 253.0
+              },
+              {
+                "channel": 2,
+                "mean": 76.2030258178711,
+                "std": 73.98452758789062,
+                "min": 0.0,
+                "max": 255.0
+              }
+            ],
+            "min": 0.0,
+            "max": 255.0
+          },
+          "raw_output_summary": {
+            "shape": [
+              1,
+              3549,
+              6
+            ],
+            "dtype": "float32",
+            "raw_output_sha256": "37ba6ae7ea58a5a9bee441063f4ff0f68d66fe596d2aba9ecf9287cea6010b48",
+            "raw_output_bytes": 85176,
+            "finite_value_count": 21294,
+            "non_finite_value_count": 0,
+            "min": 5.960464477539063e-08,
+            "max": 504.7647399902344,
+            "column_ranges": [
+              {
+                "column": 0,
+                "min": 3.0323100090026855,
+                "max": 408.43206787109375
+              },
+              {
+                "column": 1,
+                "min": 2.826582908630371,
+                "max": 409.8111877441406
+              },
+              {
+                "column": 2,
+                "min": 12.069412231445312,
+                "max": 432.2049560546875
+              },
+              {
+                "column": 3,
+                "min": 6.274111270904541,
+                "max": 504.7647399902344
+              },
+              {
+                "column": 4,
+                "min": 5.960464477539063e-08,
+                "max": 0.012112259864807129
+              },
+              {
+                "column": 5,
+                "min": 9.098649024963379e-05,
+                "max": 0.7819181680679321
+              }
+            ],
+            "objectness_and_class_probability_within_0_1": true
+          },
+          "raw_output_artifact": {
+            "filename": "a7ed3bb0410c.original.npy",
+            "file_sha256": "d73a61e069a1c203122584473e9b6f342e98ff978cca3e1886cc2930b81dec66",
+            "file_bytes": 85304,
+            "raw_output_sha256": "37ba6ae7ea58a5a9bee441063f4ff0f68d66fe596d2aba9ecf9287cea6010b48",
+            "shape": [
+              1,
+              3549,
+              6
+            ],
+            "dtype": "float32"
+          },
+          "top_candidate": {
+            "rank": 1,
+            "objectness": 0.012112259864807129,
+            "fish_probability": 0.6755938529968262,
+            "confidence": 0.008182968310563865,
+            "bbox_original_xyxy": [
+              0.5588158949827536,
+              0.3634770650130052,
+              0.8749944124466335,
+              0.818981592471783
+            ],
+            "area_ratio": 0.14402074619000152,
+            "gt_iou": null
+          },
+          "production_gate": {
+            "status": "no_fish",
+            "detection_count_after_threshold_and_nms": 0,
+            "primary_confidence": null,
+            "primary_bbox_original_xyxy": null,
+            "primary_area_ratio": null,
+            "detections": []
+          }
+        },
+        {
+          "orientation": "CW90",
+          "view_dimensions": [
+            1536,
+            1152
+          ],
+          "input_scale": 0.2708333333333333,
+          "input_draw_dimensions": [
+            416,
+            312
+          ],
+          "input_tensor": {
+            "shape": [
+              1,
+              3,
+              416,
+              416
+            ],
+            "dtype": "float32",
+            "sha256": "3d2d7c03cd6aa2f2fea7db6bf07f4d4f6302bf60af98555c8deab884d8b72b2b",
+            "channel_means": [
+              66.96380615234375,
+              72.26231384277344,
+              76.20308685302734
+            ],
+            "channel_statistics": [
+              {
+                "channel": 0,
+                "mean": 66.96380615234375,
+                "std": 65.22185516357422,
+                "min": 0.0,
+                "max": 255.0
+              },
+              {
+                "channel": 1,
+                "mean": 72.26231384277344,
+                "std": 68.47830963134766,
+                "min": 0.0,
+                "max": 253.0
+              },
+              {
+                "channel": 2,
+                "mean": 76.20308685302734,
+                "std": 73.98514556884766,
+                "min": 0.0,
+                "max": 255.0
+              }
+            ],
+            "min": 0.0,
+            "max": 255.0
+          },
+          "raw_output_summary": {
+            "shape": [
+              1,
+              3549,
+              6
+            ],
+            "dtype": "float32",
+            "raw_output_sha256": "40bd3de2ed99eb15429c979447fdb7008152c473b75e96aa7294faa479e04326",
+            "raw_output_bytes": 85176,
+            "finite_value_count": 21294,
+            "non_finite_value_count": 0,
+            "min": 0.0,
+            "max": 456.5648193359375,
+            "column_ranges": [
+              {
+                "column": 0,
+                "min": 5.797580242156982,
+                "max": 407.238037109375
+              },
+              {
+                "column": 1,
+                "min": 2.0452208518981934,
+                "max": 417.1413269042969
+              },
+              {
+                "column": 2,
+                "min": 6.355489253997803,
+                "max": 456.5648193359375
+              },
+              {
+                "column": 3,
+                "min": 4.465757369995117,
+                "max": 378.2970275878906
+              },
+              {
+                "column": 4,
+                "min": 0.0,
+                "max": 0.2501544952392578
+              },
+              {
+                "column": 5,
+                "min": 5.960464477539063e-08,
+                "max": 0.815605878829956
+              }
+            ],
+            "objectness_and_class_probability_within_0_1": true
+          },
+          "raw_output_artifact": {
+            "filename": "a7ed3bb0410c.cw90.npy",
+            "file_sha256": "e2c26aa33283ead2e5f9b548dcdd8312558e2e6ca3cb93e859e07c38718f7716",
+            "file_bytes": 85304,
+            "raw_output_sha256": "40bd3de2ed99eb15429c979447fdb7008152c473b75e96aa7294faa479e04326",
+            "shape": [
+              1,
+              3549,
+              6
+            ],
+            "dtype": "float32"
+          },
+          "top_candidate": {
+            "rank": 1,
+            "objectness": 0.2501544952392578,
+            "fish_probability": 0.7879334688186646,
+            "confidence": 0.19710509917445052,
+            "bbox_original_xyxy": [
+              0.5224159436348157,
+              0.3293141034933237,
+              0.9727226648575221,
+              0.7711109564854548
+            ],
+            "area_ratio": 0.1989440923173966,
+            "gt_iou": null
+          },
+          "production_gate": {
+            "status": "no_fish",
+            "detection_count_after_threshold_and_nms": 0,
+            "primary_confidence": null,
+            "primary_bbox_original_xyxy": null,
+            "primary_area_ratio": null,
+            "detections": []
+          }
+        },
+        {
+          "orientation": "CCW90",
+          "view_dimensions": [
+            1536,
+            1152
+          ],
+          "input_scale": 0.2708333333333333,
+          "input_draw_dimensions": [
+            416,
+            312
+          ],
+          "input_tensor": {
+            "shape": [
+              1,
+              3,
+              416,
+              416
+            ],
+            "dtype": "float32",
+            "sha256": "5c7e815188bf85bf55cb388df3ae300b50f0f1bb7a05955fb71e277d259d9123",
+            "channel_means": [
+              66.96380615234375,
+              72.26231384277344,
+              76.20308685302734
+            ],
+            "channel_statistics": [
+              {
+                "channel": 0,
+                "mean": 66.96380615234375,
+                "std": 65.22185516357422,
+                "min": 0.0,
+                "max": 255.0
+              },
+              {
+                "channel": 1,
+                "mean": 72.26231384277344,
+                "std": 68.47830963134766,
+                "min": 0.0,
+                "max": 253.0
+              },
+              {
+                "channel": 2,
+                "mean": 76.20308685302734,
+                "std": 73.98514556884766,
+                "min": 0.0,
+                "max": 255.0
+              }
+            ],
+            "min": 0.0,
+            "max": 255.0
+          },
+          "raw_output_summary": {
+            "shape": [
+              1,
+              3549,
+              6
+            ],
+            "dtype": "float32",
+            "raw_output_sha256": "98cb155d0eef1bd2d34c544fb4204ccd8e38f533cc337d32ae62ee15ef3967d3",
+            "raw_output_bytes": 85176,
+            "finite_value_count": 21294,
+            "non_finite_value_count": 0,
+            "min": 0.0,
+            "max": 499.18341064453125,
+            "column_ranges": [
+              {
+                "column": 0,
+                "min": 3.5889697074890137,
+                "max": 407.1519470214844
+              },
+              {
+                "column": 1,
+                "min": 3.0747876167297363,
+                "max": 454.6921081542969
+              },
+              {
+                "column": 2,
+                "min": 6.176518440246582,
+                "max": 499.18341064453125
+              },
+              {
+                "column": 3,
+                "min": 3.1488561630249023,
+                "max": 408.6146545410156
+              },
+              {
+                "column": 4,
+                "min": 0.0,
+                "max": 0.8232370615005493
+              },
+              {
+                "column": 5,
+                "min": 1.1920928955078125e-07,
+                "max": 0.8729072213172913
+              }
+            ],
+            "objectness_and_class_probability_within_0_1": true
+          },
+          "raw_output_artifact": {
+            "filename": "a7ed3bb0410c.ccw90.npy",
+            "file_sha256": "e64979ea3468613573326a68b2e6a1fb1418e1c57079dcd867e7088ffb1dee1e",
+            "file_bytes": 85304,
+            "raw_output_sha256": "98cb155d0eef1bd2d34c544fb4204ccd8e38f533cc337d32ae62ee15ef3967d3",
+            "shape": [
+              1,
+              3549,
+              6
+            ],
+            "dtype": "float32"
+          },
+          "top_candidate": {
+            "rank": 1,
+            "objectness": 0.8232370615005493,
+            "fish_probability": 0.7719531059265137,
+            "confidence": 0.6355004065391654,
+            "bbox_original_xyxy": [
+              0.34293004793998516,
+              0.36365035864023065,
+              0.6054356770637708,
+              0.9249753585228554
+            ],
+            "area_ratio": 0.14735097223709728,
+            "gt_iou": null
+          },
+          "production_gate": {
+            "status": "ready",
+            "detection_count_after_threshold_and_nms": 2,
+            "primary_confidence": 0.6355004065391654,
+            "primary_bbox_original_xyxy": [
+              0.34293004793998516,
+              0.36365035864023065,
+              0.6054356770637708,
+              0.9249753585228554
+            ],
+            "primary_area_ratio": 0.14735097223709728,
+            "detections": [
+              {
+                "confidence": 0.6355004065391654,
+                "bbox_original_xyxy": [
+                  0.34293004793998516,
+                  0.36365035864023065,
+                  0.6054356770637708,
+                  0.9249753585228554
+                ],
+                "area_ratio": 0.14735097223709728
+              },
+              {
+                "confidence": 0.295960743839462,
+                "bbox_original_xyxy": [
+                  0.6047607568594124,
+                  0.33458498808053827,
+                  0.885664450816619,
+                  0.7654347603137678
+                ],
+                "area_ratio": 0.12102729256093528
+              }
+            ]
+          }
+        }
+      ],
+      "bounded_retry_replay": {
+        "policy_version": "DETECTOR_ORIENTATION_RETRY_v2",
+        "attempts": [
+          "ORIGINAL",
+          "CW90",
+          "CCW90"
+        ],
+        "selected_attempt": "CCW90",
+        "selection_reason": "GOOD_HIGHEST_RANK_SCORE",
+        "selected_gate_status": "ready"
+      }
+    },
+    "evidence_files": [
+      "user_provided_candidate_replay_v3.json",
+      "case_b_positive_control_replay_v3.json"
+    ],
+    "raw_output_artifacts": [
+      {
+        "source_sha256": "0fc341627e4345131a15fbf3514454f053dcb349db17bf1171c8f2f8756226cf",
+        "orientation": "ORIGINAL",
+        "filename": "0fc341627e43.original.npy",
+        "file_sha256": "faea8540569825b35a4496b04ce4eef1720a323a23cdfdc1ceb04a2365f73804",
+        "file_bytes": 85304,
+        "raw_output_sha256": "c86b22f19680dd786adf4e673adeb20ec8d0b3075915b413c25348c68adb669b",
+        "shape": [
+          1,
+          3549,
+          6
+        ],
+        "dtype": "float32",
+        "repository_path": "raw_outputs_v3/0fc341627e43.original.npy"
+      },
+      {
+        "source_sha256": "0fc341627e4345131a15fbf3514454f053dcb349db17bf1171c8f2f8756226cf",
+        "orientation": "CW90",
+        "filename": "0fc341627e43.cw90.npy",
+        "file_sha256": "97fff4d1957cf958f9bbdd238e5c92f27bee9f0cac98298ad74c440e4f5a406d",
+        "file_bytes": 85304,
+        "raw_output_sha256": "43736dfede7a2244273cd53252b926b7eba5f6475aa7fbe187c54ae00761a743",
+        "shape": [
+          1,
+          3549,
+          6
+        ],
+        "dtype": "float32",
+        "repository_path": "raw_outputs_v3/0fc341627e43.cw90.npy"
+      },
+      {
+        "source_sha256": "0fc341627e4345131a15fbf3514454f053dcb349db17bf1171c8f2f8756226cf",
+        "orientation": "CCW90",
+        "filename": "0fc341627e43.ccw90.npy",
+        "file_sha256": "fb010f01d72926a4429955ce210cbf01644974831708bea1c6b1c9e99155d8f3",
+        "file_bytes": 85304,
+        "raw_output_sha256": "d93f8bc51b5c1f79a7d50d92e0cebd603b40187559c701161067a0100fabce01",
+        "shape": [
+          1,
+          3549,
+          6
+        ],
+        "dtype": "float32",
+        "repository_path": "raw_outputs_v3/0fc341627e43.ccw90.npy"
+      },
+      {
+        "source_sha256": "a7ed3bb0410c191364f6d853b4078aebdc2f3b9baa4da34b7b3f6e8e0e93a56b",
+        "orientation": "ORIGINAL",
+        "filename": "a7ed3bb0410c.original.npy",
+        "file_sha256": "d73a61e069a1c203122584473e9b6f342e98ff978cca3e1886cc2930b81dec66",
+        "file_bytes": 85304,
+        "raw_output_sha256": "37ba6ae7ea58a5a9bee441063f4ff0f68d66fe596d2aba9ecf9287cea6010b48",
+        "shape": [
+          1,
+          3549,
+          6
+        ],
+        "dtype": "float32",
+        "repository_path": "raw_outputs_v3/a7ed3bb0410c.original.npy"
+      },
+      {
+        "source_sha256": "a7ed3bb0410c191364f6d853b4078aebdc2f3b9baa4da34b7b3f6e8e0e93a56b",
+        "orientation": "CW90",
+        "filename": "a7ed3bb0410c.cw90.npy",
+        "file_sha256": "e2c26aa33283ead2e5f9b548dcdd8312558e2e6ca3cb93e859e07c38718f7716",
+        "file_bytes": 85304,
+        "raw_output_sha256": "40bd3de2ed99eb15429c979447fdb7008152c473b75e96aa7294faa479e04326",
+        "shape": [
+          1,
+          3549,
+          6
+        ],
+        "dtype": "float32",
+        "repository_path": "raw_outputs_v3/a7ed3bb0410c.cw90.npy"
+      },
+      {
+        "source_sha256": "a7ed3bb0410c191364f6d853b4078aebdc2f3b9baa4da34b7b3f6e8e0e93a56b",
+        "orientation": "CCW90",
+        "filename": "a7ed3bb0410c.ccw90.npy",
+        "file_sha256": "e64979ea3468613573326a68b2e6a1fb1418e1c57079dcd867e7088ffb1dee1e",
+        "file_bytes": 85304,
+        "raw_output_sha256": "98cb155d0eef1bd2d34c544fb4204ccd8e38f533cc337d32ae62ee15ef3967d3",
+        "shape": [
+          1,
+          3549,
+          6
+        ],
+        "dtype": "float32",
+        "repository_path": "raw_outputs_v3/a7ed3bb0410c.ccw90.npy"
+      }
+    ],
+    "diagnostic_git_sha": "f81cb21abe520dae11ad9f4a677567b1a2103b26",
+    "raw_output_artifact_format": "NumPy .npy, exact float32 model output, no quantization"
+  },
+  "training_data": {
+    "manifest_available": false,
+    "dataset_archive_available": false,
+    "best_checkpoint_available": false,
+    "tracked_manifest_archive_or_checkpoint_matches": false,
+    "dataset_summary_is_metadata_only": true,
+    "case_a_or_case_b_training_membership_verified": false,
+    "case_a_case_b_added_by_v3": false,
+    "actual_case_a_case_b_membership_verified": false,
+    "historical_report_claims_held_out": true
+  },
+  "root_cause_disposition": {
+    "confirmed": [
+      "ARCHIVED_RELEASE_ONNX_MATCHES_HISTORICAL_CASE_A_ONNX",
+      "CASE_B_POSITIVE_CONTROL_REPRODUCED",
+      "ARCHIVED_ONNX_HEAD_APPLIES_SIGMOID_TO_OBJECTNESS_AND_CLASS_OUTPUTS"
+    ],
+    "not_confirmed_for_case_a": [
+      "ARTIFACT_MISMATCH_AS_UNIQUE_CAUSE",
+      "PREPROCESSING_MISMATCH",
+      "TRAINING_LABEL_NOISE",
+      "DIFFICULT_DOMAIN_COVERAGE_GAP",
+      "MODEL_DETECTION_FAILURE"
+    ],
+    "final": "BLOCKED_INSUFFICIENT_EVIDENCE_FOR_HISTORICAL_CASE_A_LOW_OBJECTNESS"
+  }
+}
