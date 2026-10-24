@@ -19,6 +19,8 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: python -m pip install -r requirements.txt pytest httpx
+      - name: Run SWOS resource quality probe unit tests (offline)
+        run: python -m pytest -q tests/test_swos_mask_quality_probe.py
       - name: Validate catch frontend modules and geometry
         run: |
           node --check app/static/js/catch_recognition.js
