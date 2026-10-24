@@ -320,6 +320,7 @@
         status: result.segmentation.status,
         reason_code: result.segmentation.reason_code,
         geometry_trust_state: result.segmentation.geometry_trust_state,
+        production_qualification: result.segmentation.production_qualification || {status:"NOT_QUALIFIED"},
         model_version: result.segmentation.model_version,
         checkpoint_sha256: result.segmentation.checkpoint_sha256,
         source_image_sha256: result.segmentation.source_image_sha256,
@@ -343,7 +344,10 @@
       const state = result.segmentation?.status;
       const trust = result.segmentation?.geometry_trust_state || "NONE";
       segmentation.classList.remove("failed", "done", "running");
-      if (state === "REVIEW_READY") {
+      if (trust === "TRUSTED_MASK" && result.segmentation?.production_qualification?.status === "QUALIFIED") {
+        segmentation.classList.add("done");
+        segmentation.querySelector("span:last-child").textContent = `SAM ${result.segmentation.model_version} · TRUSTED_MASK（生产资格已通过）· ${result.segmentation.quality?.status || "质量已测"}`;
+      } else if (state === "REVIEW_READY") {
         segmentation.classList.add("done");
         segmentation.querySelector("span:last-child").textContent = `SAM ${result.segmentation.model_version} · ${trust}（仅审查候选）· ${result.segmentation.quality?.status || "质量未测"}`;
       } else if (trust === "BBOX_ONLY") {
@@ -614,11 +618,11 @@
     // there is no inserted business-state gap between P7 and R0.
     swosRenderer.startReveal(eventStart, {
       revealFrames: RR09_FRAMES,
-      revealWaterStrength: [0, 12, 18, 14, 8, 2, 0],
-      revealGoldStrength: [0, 0, 0, 0, 0, 0, 0],
+      revealWaterStrength: [0, 0, 0, 0, 0, 0, 0],
+      revealGoldStrength: [100, 100, 100, 30, 0, 0, 0],
     }, {
       resultState: result.result_state,
-      maskTrust: state.photo?.mask?.trust_state || "NONE",
+      maskTrust: state.photo?.mask?.status || "NONE",
     });
     const revealAt = async (target) => delay(Math.max(0, eventStart + target - performance.now()));
     await transitionSharedPhoto(eventStart, requestSequence); // R0 → R0.5 → R1, measured from live DOM rectangles.
@@ -626,7 +630,8 @@
     await revealAt(RR09_FRAMES[3].at); // R2 380ms; no precise transfer without qualified SAM.
     if (!state.current(requestSequence)) return;
     nodes.resultPanel.dataset.rr09Frame = "R2";
-    nodes.resultPanel.dataset.revealState = state.photo.mask.trust_state === "TRUSTED_MASK" ? "qualified-mask-transfer" : "gold-transfer-unavailable";
+    nodes.resultPanel.dataset.revealState = state.photo.mask.status === "TRUSTED_MASK" && state.photo.mask.productionQualified === true
+      ? "qualified-mask-transfer" : "gold-transfer-unavailable";
     await revealAt(RR09_FRAMES[4].at); // R3 550ms; keep the name hidden without a trusted glyph trace.
     if (!state.current(requestSequence)) return;
     nodes.resultPanel.dataset.rr09Frame = "R3";
@@ -692,11 +697,13 @@
       state.phase = "RESULT";
       swosRenderer.setGeometry(state.bbox);
       const reviewMask = state.photo?.mask?.status === "REVIEW_PROXY" && state.photo.mask.renderAllowed;
+      const trustedMask = state.photo?.mask?.status === "TRUSTED_MASK"
+        && state.photo.mask.renderAllowed && state.photo.mask.productionQualified === true;
       nodes.samReviewControl.hidden = !reviewMask;
       nodes.samReviewNote.hidden = !reviewMask;
       nodes.samReviewToggle.checked = false;
       nodes.samReviewToggle.disabled = !reviewMask;
-      if (reviewMask) await swosRenderer.setMask(state.photo.mask);
+      if (reviewMask || trustedMask) await swosRenderer.setMask(state.photo.mask);
       const elapsed = performance.now() - requestStartedAt;
       nodes.dimensions.textContent = `${payload.input?.width || "—"} × ${payload.input?.height || "—"} · ${payload.input?.format || "—"}`;
       renderDiagnostics(payload);

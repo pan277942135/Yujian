@@ -121,6 +121,80 @@ test('REVIEW_PROXY candidate paint is muted, opt-in, and unit-fixture-only (not 
  assert.equal(maskCanvasDraws.length,1,'the stale decode must not repaint after reset');
  maskDecodeGate=null;
 });
+
+test('PhotoSession binds review and trusted masks to the exact photo and qualification gate',()=>{
+ const PhotoSession=context.window.YujianCatch.PhotoSession;
+ const sourceSha='a'.repeat(64),maskSha='b'.repeat(64),box={x1:.1,y1:.2,x2:.8,y2:.9};
+ const makeResult=(trust,qualification,extra={})=>({
+  input:{source_sha256:sourceSha},
+  detector:{quality_gate:{primary_bbox:box}},
+  segmentation:{
+   geometry_trust_state:trust,source_image_sha256:sourceSha,bbox:box,
+   production_qualification:{status:qualification},
+   quality:{status:'GOOD'},
+   mask:{data_base64:'MASK_FIXTURE_ONLY',sha256:maskSha,source_image_sha256:sourceSha,width:800,height:600,
+    render_allowed:trust==='TRUSTED_MASK',render_allowed_in_review_mode:trust==='REVIEW_PROXY'},
+   ...extra,
+  },
+ });
+ const candidate=new PhotoSession({name:'candidate-fixture'},800,600);
+ candidate.accept(makeResult('REVIEW_PROXY','NOT_QUALIFIED'));
+ assert.equal(candidate.mask.status,'REVIEW_PROXY');
+ assert.equal(candidate.mask.renderAllowed,true);
+ assert.equal(candidate.mask.productionQualified,false);
+ candidate.dispose();
+ const trusted=new PhotoSession({name:'trusted-fixture'},800,600);
+ trusted.accept(makeResult('TRUSTED_MASK','QUALIFIED'));
+ assert.equal(trusted.mask.status,'TRUSTED_MASK');
+ assert.equal(trusted.mask.renderAllowed,true);
+ assert.equal(trusted.mask.productionQualified,true);
+ trusted.dispose();
+ const unqualified=new PhotoSession({name:'unqualified-fixture'},800,600);
+ unqualified.accept(makeResult('TRUSTED_MASK','NOT_QUALIFIED'));
+ assert.equal(unqualified.mask.status,'BBOX_ONLY');
+ assert.equal(unqualified.mask.value,null);
+ unqualified.dispose();
+ const stale=new PhotoSession({name:'stale-fixture'},800,600);
+ stale.accept(makeResult('TRUSTED_MASK','QUALIFIED',{source_image_sha256:'c'.repeat(64)}));
+ assert.equal(stale.mask.status,'BBOX_ONLY');
+ stale.dispose();
+});
+
+test('RR09 runtime strengths match frozen keyframes and only allow gold for a qualified mask',()=>{
+ const source=fs.readFileSync('app/static/js/catch_recognition.js','utf8');
+ const gold=source.match(/revealGoldStrength:\s*\[([^\]]+)\]/);
+ const water=source.match(/revealWaterStrength:\s*\[([^\]]+)\]/);
+ assert.ok(gold&&water);
+ assert.deepEqual(gold[1].split(',').map(value=>Number(value.trim())),[100,100,100,30,0,0,0]);
+ assert.deepEqual(water[1].split(',').map(value=>Number(value.trim())),[0,0,0,0,0,0,0]);
+ assert.match(source,/state\.photo\?\.mask\?\.status \|\| "NONE"/);
+ assert.doesNotMatch(source,/state\.photo\?\.mask\?\.trust_state/);
+});
+
+test('qualified TRUSTED_MASK drives the frozen gold trace while BBOX_ONLY cannot',async()=>{
+ maskCanvasDraws.length=0;offscreenMaskCanvases.length=0;
+ const host={dataset:{},querySelectorAll:()=>[]};
+ const media={dataset:{},removeAttribute(name){const key=name.replace(/^data-/,'').replace(/-([a-z])/g,(_m,letter)=>letter.toUpperCase());delete this.dataset[key];}};
+ const focus={style:{},dataset:{},classList:{add(){},remove(){}},removeAttribute(){}};
+ const renderer=context.window.YujianCatch.createSwosRenderer({media,host,focus,maskCanvas:mainMaskCanvas,getReducedMotion:()=>true});
+ renderer.start(0,{processingFrames:[{id:'P0',at:0},{id:'P7',at:2800}],waterStrength:[0,0],goldStrength:[0,100]});
+ const loaded=await renderer.setMask({status:'TRUSTED_MASK',renderAllowed:true,productionQualified:true,value:'data:image/png;base64,TRUSTED_TEST_FIXTURE'});
+ assert.equal(loaded,true);
+ assert.equal(media.dataset.maskTrust,'TRUSTED_MASK');
+ renderer.startReveal(0,{
+  revealFrames:[{id:'R0',at:0},{id:'R2',at:380},{id:'R3',at:550},{id:'R5',at:850}],
+  revealWaterStrength:[0,0,0,0],revealGoldStrength:[100,30,0,0],
+ },{resultState:'RESULT_HIGH',maskTrust:'TRUSTED_MASK'});
+ renderer.renderAt(2801);
+ assert.equal(media.dataset.relativeFishGoldStrength,'100');
+ assert.ok(maskCanvasDraws.some(draw=>draw.composite==='screen'&&draw.filter==='blur(18px)'));
+ assert.deepEqual(offscreenMaskCanvases[0].ctx.painted.slice(0,4),[245,190,86,255]);
+ const drawnAtR0=maskCanvasDraws.length;
+ renderer.renderAt(3350);
+ assert.equal(media.dataset.relativeFishGoldStrength,'0');
+ assert.equal(maskCanvasDraws.length,drawnAtR0);
+ renderer.stop();
+});
 test('journey remains explicit about unavailable segmentation during processing',()=>{
  const makeStep=()=>({dataset:{},attrs:{},status:{textContent:''},image:{src:'',hidden:true,removeAttribute(){}},placeholder:{hidden:false},querySelector(selector){return selector==='[data-journey-status]'?this.status:selector==='.journey-placeholder'?this.placeholder:this.image;},setAttribute(key,value){this.attrs[key]=value;},removeAttribute(key){delete this.attrs[key];}});
  const steps=Array.from({length:5},makeStep),root={dataset:{},querySelectorAll:()=>steps};

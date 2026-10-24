@@ -48,6 +48,10 @@ def _default_segmentation(result: dict, source_sha256: str | None = None) -> dic
         "status": "NOT_RUN" if enabled and has_bbox else ("DISABLED" if not enabled else "UNAVAILABLE"),
         "reason_code": "SAM_CANDIDATE_NOT_RUN" if enabled and has_bbox else ("CANDIDATE_FLAG_OFF" if not enabled else "NO_ELIGIBLE_PRIMARY_BBOX"),
         "geometry_trust_state": "BBOX_ONLY" if has_bbox else "NONE",
+        "production_qualification": {
+            "status": "NOT_QUALIFIED",
+            "reason_code": "GROUND_TRUTH_METRICS_AND_VISUAL_SIGNOFF_PENDING",
+        },
         "model_version": None,
         "checkpoint_sha256": None,
         "quality": None,
@@ -96,6 +100,10 @@ def _run_same_request_sam(data: bytes, result: dict, source_sha256: str, request
             # The basic SAM heuristic is useful for review but is not a
             # production qualification.  Keep the production gate closed.
             "geometry_trust_state": "REVIEW_PROXY" if mask_available and quality != SegmentationQuality.INVALID.value else "BBOX_ONLY",
+            "production_qualification": {
+                "status": "NOT_QUALIFIED",
+                "reason_code": "GROUND_TRUTH_METRICS_AND_VISUAL_SIGNOFF_PENDING",
+            },
             "model_version": provenance["model_version"],
             "checkpoint_sha256": provenance["checkpoint_sha256"],
             "checkpoint_bytes": provenance["checkpoint_bytes"],
@@ -117,6 +125,7 @@ def _run_same_request_sam(data: bytes, result: dict, source_sha256: str, request
                 "height": segmentation.height,
                 "source_image_sha256": source_sha256,
                 "centroid": centroid,
+                "render_allowed": False,
                 "render_allowed_in_review_mode": mask_available and quality != SegmentationQuality.INVALID.value,
             } if mask_available else None,
         }

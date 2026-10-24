@@ -108,6 +108,7 @@ def test_product_inference_returns_real_pipeline_data_without_debug_artifacts_or
     assert body["segmentation"]["status"] == "DISABLED"
     assert body["segmentation"]["reason_code"] == "CANDIDATE_FLAG_OFF"
     assert body["segmentation"]["geometry_trust_state"] == "BBOX_ONLY"
+    assert body["segmentation"]["production_qualification"]["status"] == "NOT_QUALIFIED"
     assert body["segmentation"]["mask"] is None
     assert body["input"]["source_sha256"] == hashlib.sha256(_png_bytes()).hexdigest()
     assert "image_gcs_uri" not in body
@@ -166,11 +167,14 @@ def test_candidate_sam_uses_same_pipeline_bbox_and_binds_mask_to_exact_source(mo
     assert body["input"]["source_sha256"] == hashlib.sha256(data).hexdigest()
     assert body["segmentation"]["source_image_sha256"] == body["input"]["source_sha256"]
     assert body["segmentation"]["geometry_trust_state"] == "REVIEW_PROXY"
+    assert body["segmentation"]["production_qualification"]["status"] == "NOT_QUALIFIED"
     assert body["segmentation"]["quality"]["status"] == "GOOD"
     assert body["segmentation"]["checkpoint_sha256"] == "sam-checkpoint-sha"
     assert body["segmentation"]["mask"]["source_image_sha256"] == body["input"]["source_sha256"]
     assert body["segmentation"]["mask"]["width"] == 4
     assert body["segmentation"]["mask"]["height"] == 3
+    assert body["segmentation"]["mask"]["render_allowed"] is False
+    assert body["segmentation"]["mask"]["render_allowed_in_review_mode"] is True
     assert body["timing"]["segmentation_ms"] >= 0
 
 

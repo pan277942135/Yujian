@@ -261,13 +261,15 @@
       async setMask(mask){
         const sequence=++maskLoadSequence;
         maskVisible=false;maskImage=null;maskTexture=null;reviewMaskTexture=null;maskStatus="NONE";
-        if(mask?.status!=="REVIEW_PROXY"||mask.renderAllowed!==true||!mask.value){paint(lastElapsed);return false;}
+        const trustedAllowed=mask?.status==="TRUSTED_MASK"&&mask.renderAllowed===true&&mask.productionQualified===true;
+        const reviewAllowed=mask?.status==="REVIEW_PROXY"&&mask.renderAllowed===true;
+        if((!trustedAllowed&&!reviewAllowed)||!mask.value){paint(lastElapsed);return false;}
         const image=new Image();image.src=mask.value;
         try{await image.decode();}catch(_error){if(sequence===maskLoadSequence)paint(lastElapsed);return false;}
         if(sequence!==maskLoadSequence)return false;
-        maskImage=image;maskStatus="REVIEW_PROXY";paint(lastElapsed);return true;
+        maskImage=image;maskStatus=mask.status;maskVisible=trustedAllowed;paint(lastElapsed);return true;
       },
-      setMaskReviewEnabled(enabled){maskVisible=Boolean(enabled&&maskImage&&maskStatus==="REVIEW_PROXY");paint(lastElapsed);},
+      setMaskReviewEnabled(enabled){maskVisible=maskStatus==="TRUSTED_MASK"||Boolean(enabled&&maskImage&&maskStatus==="REVIEW_PROXY");paint(lastElapsed);},
       stop(reset=true){
         running=false;if(raf)cancelAnimationFrame(raf);raf=0;
         if(reset){

@@ -39,25 +39,39 @@
       this.bbox = validBox(result.detector?.quality_gate?.primary_bbox || result.detector?.detections?.[0]?.bbox);
       const trust = result.segmentation?.geometry_trust_state;
       const mask = result.segmentation?.mask;
+      const qualification = result.segmentation?.production_qualification?.status || "NOT_QUALIFIED";
       const sameSource = Boolean(this.sourceSha256 && result.segmentation?.source_image_sha256 === this.sourceSha256
         && mask?.source_image_sha256 === this.sourceSha256);
       const sameDimensions = mask?.width === this.width && mask?.height === this.height;
       const sameBox = validBox(result.segmentation?.bbox) && this.bbox
         && ["x1","y1","x2","y2"].every((key) => Math.abs(result.segmentation.bbox[key] - this.bbox[key]) < 0.00001);
-      if (trust === "REVIEW_PROXY" && mask?.data_base64 && sameSource && sameDimensions && sameBox) {
+      const validMaskDigest = /^[a-f0-9]{64}$/i.test(String(mask?.sha256 || ""));
+      const quality = result.segmentation?.quality;
+      const reviewAllowed = trust === "REVIEW_PROXY"
+        && quality?.status !== "INVALID"
+        && mask?.render_allowed_in_review_mode === true;
+      const productionAllowed = trust === "TRUSTED_MASK"
+        && qualification === "QUALIFIED"
+        && quality?.status === "GOOD"
+        && mask?.render_allowed === true;
+      if ((reviewAllowed || productionAllowed) && mask?.data_base64 && validMaskDigest
+          && sameSource && sameDimensions && sameBox) {
         this.mask = {
-          status:"REVIEW_PROXY",
+          status:trust,
+          trust_state:trust,
           value:`data:image/png;base64,${mask.data_base64}`,
           sha256:mask.sha256,
           sourceSha256:this.sourceSha256,
           width:mask.width,
           height:mask.height,
           centroid:mask.centroid,
-          renderAllowed:result.segmentation.quality?.status !== "INVALID" && mask.render_allowed_in_review_mode === true,
-          quality:result.segmentation.quality,
+          renderAllowed:true,
+          productionQualified:productionAllowed,
+          qualificationStatus:qualification,
+          quality,
         };
       } else {
-        this.mask = {status:this.bbox ? "BBOX_ONLY" : "NONE",value:null};
+        this.mask = {status:this.bbox ? "BBOX_ONLY" : "NONE",value:null,productionQualified:false,qualificationStatus:qualification};
       }
     }
     dispose() { URL.revokeObjectURL(this.url); }

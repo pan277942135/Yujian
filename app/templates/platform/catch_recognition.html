@@ -1,7 +1,7 @@
 {% extends "platform/base.html" %}
 
 {% set product_shell = true %}
-{% block head %}<link rel="stylesheet" href="/static/css/catch_recognition.css?v=swos-sam-review-v1">{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/css/catch_recognition.css?v=swos-delivery-closure-v2">{% endblock %}
 {% block content %}
 <div class="catch-page" id="catchRecognitionApp" data-component="RecognitionWorkspace" data-stage="IDLE" data-visual-contract="PR190_V2_CANDIDATE_NOT_ADOPTED" data-api="{{ catch_api_url|default('/api/product/catch-recognition/infer') }}" data-ui-simulation="{{ 'true' if ui_simulation else 'false' }}">
   {% if ui_simulation %}<div class="catch-notice" role="note" style="border-color:#e8b7ae;background:#fff1ee;color:#913d34"><strong>UI_SIMULATION_ONLY</strong><span>仅用于 Chromium 排版与交互验收；此页面没有调用生产模型，也不代表真实识别结果。</span></div>{% endif %}
@@ -97,5 +97,5 @@
 {% endblock %}
 
 {% block scripts %}
-{% for module in ['photo-session','recognition-api','recognition-controller','stage-view','photo-transition','swos-renderer'] %}<script src="/static/js/catch/{{ module }}.js?v=swos-sam-review-v1"></script>{% endfor %}
-<script src="/static/js/catch_recognition.js?v=swos-sam-review-v1"></script>{% endblock %}
+{% for module in ['photo-session','recognition-api','recognition-controller','stage-view','photo-transition','swos-renderer'] %}<script src="/static/js/catch/{{ module }}.js?v=swos-delivery-closure-v2"></script>{% endfor %}
+<script src="/static/js/catch_recognition.js?v=swos-delivery-closure-v2"></script>{% endblock %}
