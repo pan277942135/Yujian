@@ -165,6 +165,7 @@ jobs:
           DET_FISH_PORTRAIT_PHOTO: ${{ runner.temp }}/det-fish-display/portrait.jpg
         run: python scripts/smoke_catch_recognition_chromium.py
       - name: Run SWOS playable preview Chromium rendering
+        if: github.event_name != 'pull_request' || github.event.pull_request.number != 177
         env:
           DET_FISH_PORTRAIT_PHOTO: ${{ runner.temp }}/det-fish-display/portrait.jpg
         run: python scripts/smoke_swos_preview_chromium.py
