@@ -3,12 +3,17 @@ from __future__ import annotations
 import base64
 import io
 import json
+import hashlib
+import urllib.error
 from pathlib import Path
 
 import pytest
 from PIL import Image
 
+from scripts import swos_mask_quality_probe as probe
 from scripts.swos_mask_quality_probe import (
+    console_auth_headers,
+    retry_delay_seconds,
     build_multipart,
     decode_data_url,
     digest_bytes,
@@ -166,3 +171,59 @@ def test_mask_artifact_generation_checks_shared_source_dimensions(tmp_path):
         wrong.save(wrong_bytes, format="PNG")
         write_mask_artifacts(source_bytes.getvalue(), wrong_bytes.getvalue(), tmp_path, "bad")
 
+
+
+
+def test_console_auth_cookie_matches_product_guard_without_exposing_key(monkeypatch):
+    key = "test-only-access-key"
+    monkeypatch.setenv("SWOS_PROBE_CONSOLE_ACCESS_KEY", key)
+    headers = console_auth_headers()
+    expected = hashlib.sha256(("yujian-console:" + key).encode("utf-8")).hexdigest()
+    assert headers == {"Cookie": f"yujian_console={expected}"}
+    assert key not in str(headers)
+
+
+def test_console_auth_fails_closed_when_secret_is_missing(monkeypatch):
+    monkeypatch.delenv("SWOS_PROBE_CONSOLE_ACCESS_KEY", raising=False)
+    with pytest.raises(ValueError, match="AUTH_NOT_CONFIGURED"):
+        console_auth_headers()
+
+
+def test_retry_after_is_bounded_and_falls_back_to_backoff():
+    assert retry_delay_seconds({"Retry-After": "3"}, 0) == 3
+    assert retry_delay_seconds({}, 2) == 4
+    assert retry_delay_seconds({"Retry-After": "999"}, 0) == 8
+
+
+def test_download_source_retries_wikimedia_rate_limit(monkeypatch, tmp_path):
+    raw = b"licensed-fixture-bytes"
+    spec = {
+        "id": "fixture",
+        "download_url": "https://example.invalid/photo.jpg",
+        "filename": "photo.jpg",
+        "expected_digest": {"algorithm": "sha256", "value": probe.digest_bytes(raw, "sha256")},
+    }
+    calls = {"count": 0}
+
+    class Response:
+        status = 200
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            return False
+        def read(self, _limit):
+            return raw
+
+    def fake_urlopen(request, timeout):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise urllib.error.HTTPError(request.full_url, 429, "Too Many Requests", {"Retry-After": "0"}, None)
+        return Response()
+
+    monkeypatch.setattr(probe.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(probe.time, "sleep", lambda _delay: None)
+    downloaded, path, verified = probe.download_source(spec, tmp_path)
+    assert calls["count"] == 2
+    assert downloaded == raw
+    assert path.read_bytes() == raw
+    assert verified["verified"] == "true"

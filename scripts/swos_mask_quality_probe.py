@@ -11,6 +11,7 @@ import base64
 import hashlib
 import io
 import json
+import os
 import statistics
 import sys
 import tempfile
@@ -18,12 +19,13 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
 from PIL import Image, ImageEnhance, ImageOps
 
-USER_AGENT = "YuJian-SWOS-Resource-Quality-Probe/1.0 (attribution is recorded in report)"
+USER_AGENT = "YuJian-SWOS-Resource-Quality-Probe/1.1 (+https://github.com/pan277942135/Yujian)"
 MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
 MAX_UPLOAD_EDGE = 1600
 
@@ -68,6 +70,34 @@ def build_multipart(image_bytes: bytes, filename: str, field_name: str = "image"
     return body, f"multipart/form-data; boundary={boundary}"
 
 
+def console_auth_headers() -> dict[str, str]:
+    """Build the same console-cookie value as app/secure.py without logging the key."""
+    access_key = os.getenv("SWOS_PROBE_CONSOLE_ACCESS_KEY", "").strip()
+    if not access_key:
+        raise ValueError("AUTH_NOT_CONFIGURED: SWOS_PROBE_CONSOLE_ACCESS_KEY is missing")
+    cookie_value = hashlib.sha256(("yujian-console:" + access_key).encode("utf-8")).hexdigest()
+    return {"Cookie": f"yujian_console={cookie_value}"}
+
+
+def retry_delay_seconds(headers: Any, attempt: int) -> float:
+    """Respect Retry-After where available, otherwise use bounded exponential backoff."""
+    value = str(headers.get("Retry-After", "")).strip() if headers else ""
+    if value:
+        try:
+            delay = float(value)
+        except ValueError:
+            try:
+                retry_at = parsedate_to_datetime(value)
+                if retry_at.tzinfo is None:
+                    retry_at = retry_at.replace(tzinfo=timezone.utc)
+                delay = (retry_at - datetime.now(timezone.utc)).total_seconds()
+            except (TypeError, ValueError, OverflowError):
+                delay = float(2 ** attempt)
+    else:
+        delay = float(2 ** attempt)
+    return max(0.5, min(8.0, delay))
+
+
 def request_json(url: str, data: bytes | None = None, headers: dict[str, str] | None = None,
                  timeout: int = 180) -> tuple[int | None, dict[str, Any], float]:
     request_headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
@@ -102,8 +132,22 @@ def download_source(spec: dict[str, Any], directory: Path) -> tuple[bytes, Path,
         spec["download_url"],
         headers={"User-Agent": USER_AGENT, "Accept": "image/jpeg,*/*;q=0.8"},
     )
-    with urllib.request.urlopen(request, timeout=90) as response:
-        raw = response.read(MAX_DOWNLOAD_BYTES + 1)
+    raw: bytes | None = None
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(request, timeout=90) as response:
+                raw = response.read(MAX_DOWNLOAD_BYTES + 1)
+            break
+        except urllib.error.HTTPError as exc:
+            if exc.code not in {429, 500, 502, 503, 504} or attempt >= 3:
+                raise
+            time.sleep(retry_delay_seconds(exc.headers, attempt))
+        except (urllib.error.URLError, TimeoutError):
+            if attempt >= 3:
+                raise
+            time.sleep(min(8.0, float(2 ** attempt)))
+    if raw is None:
+        raise RuntimeError("fixture download exhausted retries without a response")
     if not raw:
         raise ValueError("empty fixture download")
     if len(raw) > MAX_DOWNLOAD_BYTES:
@@ -318,6 +362,8 @@ def write_report(output_dir: Path, report: dict[str, Any], manifest: dict[str, A
         "",
         f"- Overall probe status: **{report.get('status')}**",
         f"- Production Mask qualification: **{report.get('production_mask_qualification')}**",
+        f"- Authentication status: **{report.get('auth_status', 'NOT_REPORTED')}**",
+        f"- Fixture HTTP 429 errors: **{len(report.get('fixture_download_errors', []))}**",
         f"- Source SHA: {report.get('expected_source_sha')}",
         f"- Preview revision: {report.get('expected_revision')}",
         f"- Independent licensed source scenes: {len(manifest.get('sources', []))}",
@@ -369,6 +415,8 @@ def main() -> int:
         "schema_version": "1.0",
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "status": "RUNNING",
+        "auth_status": "NOT_CHECKED",
+        "fixture_download_errors": [],
         "qualification_scope": "CANDIDATE_MASK_AND_API_LATENCY_ONLY",
         "production_mask_qualification": "NOT_QUALIFIED_NO_GROUND_TRUTH_OR_VISUAL_SIGNOFF",
         "expected_source_sha": args.expected_sha,
@@ -398,6 +446,17 @@ def main() -> int:
         print(json.dumps({"status": report["status"], "report": str(output_dir / "report.json")}, ensure_ascii=False))
         return 3
 
+    try:
+        auth_headers = console_auth_headers()
+        report["auth_status"] = "CONFIGURED_NOT_YET_VERIFIED"
+    except ValueError:
+        report["status"] = "BLOCKED_AUTH_NOT_CONFIGURED"
+        report["auth_status"] = "AUTH_NOT_CONFIGURED"
+        report["error"] = "SWOS_PROBE_CONSOLE_ACCESS_KEY is not configured; no protected inference request was made."
+        write_report(output_dir, report, manifest)
+        print(json.dumps({"status": report["status"], "auth_status": report["auth_status"], "report": str(output_dir / "report.json")}, ensure_ascii=False))
+        return 4
+
     transport_errors = 0
     with tempfile.TemporaryDirectory(prefix="yujian-swos-photo-fixtures-") as temp:
         work_dir = Path(temp)
@@ -414,7 +473,7 @@ def main() -> int:
                     http_status, payload, elapsed_ms = request_json(
                         base_url + "/api/product/catch-recognition/infer",
                         data=body,
-                        headers={"Content-Type": content_type},
+                        headers={"Content-Type": content_type, **auth_headers},
                         timeout=180,
                     )
                     case: dict[str, Any] = {
@@ -431,11 +490,24 @@ def main() -> int:
                         "timing": {"round_trip_ms": elapsed_ms},
                         "status": "HTTP_ERROR",
                     }
+                    if http_status in {401, 403}:
+                        case["status"] = "AUTH_REJECTED"
+                        case["error_category"] = "AUTH_REJECTED"
+                        case["error"] = {"http_status": http_status, "detail": payload.get("detail", "protected inference API rejected the configured credential")}
+                        report["cases"].append(case)
+                        report["status"] = "BLOCKED_AUTH_REJECTED"
+                        report["auth_status"] = "AUTH_REJECTED"
+                        report["error"] = "The protected inference API rejected the configured probe credential; no valid mask conclusion can be drawn."
+                        write_report(output_dir, report, manifest)
+                        print(json.dumps({"status": report["status"], "auth_status": report["auth_status"], "report": str(output_dir / "report.json")}, ensure_ascii=False))
+                        return 4
                     if http_status != 200:
+                        case["status"] = "INFERENCE_HTTP_ERROR"
                         case["error"] = payload
                         transport_errors += 1
                         report["cases"].append(case)
                         continue
+                    report["auth_status"] = "AUTHENTICATED"
                     try:
                         verify_same_request_binding(payload, case["upload_sha256"])
                     except ValueError as exc:
@@ -476,10 +548,16 @@ def main() -> int:
                     report["cases"].append(case)
             except Exception as exc:
                 transport_errors += 1
+                is_rate_limited = isinstance(exc, urllib.error.HTTPError) and exc.code == 429
                 report["cases"].append({
-                    "id": spec.get("id"), "source_id": spec.get("id"), "status": "FIXTURE_OR_PROBE_ERROR",
+                    "id": spec.get("id"),
+                    "source_id": spec.get("id"),
+                    "status": "FIXTURE_RATE_LIMITED" if is_rate_limited else "FIXTURE_OR_PROBE_ERROR",
+                    "error_category": "FIXTURE_HTTP_429" if is_rate_limited else type(exc).__name__,
                     "error": f"{type(exc).__name__}: {exc}",
                 })
+                if is_rate_limited:
+                    report["fixture_download_errors"].append({"source_id": spec.get("id"), "http_status": 429})
 
     status_after, health_after, health_after_ms = request_json(base_url + "/health/deploy", timeout=30)
     report["runtime_binding"]["after"] = {
@@ -493,6 +571,8 @@ def main() -> int:
     report["transport_or_binding_errors"] = transport_errors
     if not report["runtime_binding"]["after"]["matches_expected"]:
         report["status"] = "BLOCKED_RUNTIME_CHANGED_DURING_PROBE"
+    elif report.get("auth_status") != "AUTHENTICATED":
+        report["status"] = "BLOCKED_NO_AUTHENTICATED_INFERENCE"
     elif transport_errors:
         report["status"] = "BLOCKED_ONE_OR_MORE_CASES_FAILED"
     elif len(masks) < 2:
