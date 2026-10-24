@@ -32,6 +32,7 @@ PLATFORM_PAGES = (
     PlatformPage("/platform/model/evaluation", "platform/model_evaluation.html", "模型评估", "模型工厂", "查看指标、混淆关系和错误案例。", "/api/platform/models/{model_id}/evaluation"),
     PlatformPage("/platform/model/det-fish-training", "platform/det_fish_training.html", "DET_FISH 训练", "模型工厂", "检查 DET_DS_v0.2 数据门禁、启动 YOLOX-Nano 训练并追踪模型产物。", "/api/det-fish/training/status"),
     PlatformPage("/platform/model/det-fish-test", "platform/det_fish_test.html", "DET_FISH 模型测试", "模型工厂", "上传单张照片，对可用的 DET_FISH 版本进行 BBox 检测与坐标验收。", "/api/det-fish/models"),
+    PlatformPage("/platform/model/catch-recognition", "platform/catch_recognition.html", "AI渔获识别", "模型工厂", "使用当前生产 Detector 与 Classifier 识别一张真实鱼获照片。", "/api/product/catch-recognition/infer"),
     PlatformPage("/platform/pipeline", "platform/pipeline.html", "智能流水线", "智能流水线", "追踪一张鱼照片如何经过 AI 节点生成资产。", "/api/platform/pipelines"),
     PlatformPage("/platform/lab/fish-portrait", "platform/lab/fish_portrait.html", "Fish Portrait POC", "智能流水线", "基于真实钓获照片和标准鱼体资产，验证 AI 鱼体数字化生成效果。", "/api/platform/portrait/jobs"),
     PlatformPage("/fish-portrait/qwen-lab", "platform/lab/qwen_image_edit.html", "Qwen Image Edit Lab", "智能流水线", "测试 Qwen 对真实鱼获图片的编辑能力。", "/api/fish-portrait/qwen-lab/generate"),
@@ -76,6 +77,19 @@ for _page in PLATFORM_PAGES:
         response_class=HTMLResponse,
         name=f"platform_{_page.title.replace(' ', '_')}",
     )
+
+
+@router.get("/platform/model/catch-recognition/swos-preview", response_class=HTMLResponse, name="swos_playable_preview")
+def swos_playable_preview(request: Request) -> HTMLResponse:
+    """Local fixture by default; real inference starts only after explicit preview action."""
+    page = PlatformPage(
+        "/platform/model/catch-recognition/swos-preview",
+        "platform/swos_preview.html",
+        "SWOS 动效验收",
+        "模型工厂",
+        "逐帧审查视觉时间线；可显式调用同源真实识别接口，测试鱼种文字不代表推理结果。",
+    )
+    return _render(request, page)
 
 
 @router.get("/platform/data/datasets/{dataset_id}", response_class=HTMLResponse, name="platform_dataset_detail")

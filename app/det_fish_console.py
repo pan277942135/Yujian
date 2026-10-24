@@ -355,9 +355,15 @@ def _list_job_executions(limit: int | None = 8) -> list[dict[str, Any]]:
 def det_fish_models() -> dict[str, Any]:
     try:
         bucket = _bucket()
+        models = [_model_summary(bucket, version) for version in sorted(ALLOWED_MODEL_VERSIONS)]
+        available = [model["model_version"] for model in models if model.get("available")]
+        latest_candidate = max(available, key=lambda version: tuple(int(part) for part in re.findall(r"\d+", version)), default=None)
         return {
-            "models": [_model_summary(bucket, version) for version in sorted(ALLOWED_MODEL_VERSIONS)],
-            "default_model_version": DETECTOR_MODEL_VERSION,
+            "models": models,
+            # This changes only the explicit test console's initial selection;
+            # the production detector remains pinned by DETECTOR_MODEL_VERSION.
+            "default_model_version": latest_candidate or DETECTOR_MODEL_VERSION,
+            "default_model_reason": "LATEST_AVAILABLE_CANDIDATE" if latest_candidate else "CONFIGURED_PRODUCTION_FALLBACK",
         }
     except Exception as exc:
         raise HTTPException(status_code=503, detail="无法读取 DET_FISH 模型仓库") from exc

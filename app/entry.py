@@ -24,6 +24,7 @@ from app.training_api import router as training_router, templates as training_te
 from app.inference_api import router as inference_router, templates as inference_templates
 from app.feedback_ingest_api import router as feedback_ingest_router
 from app.inference_upload_api import router as inference_upload_router
+from app.catch_recognition_api import router as catch_recognition_router
 from app.auth_api import me_router, router as auth_router
 from app.catches_api import router as catches_router
 from app.batch_upload_api import router as batch_upload_router, templates as batch_upload_templates
@@ -166,6 +167,7 @@ app.include_router(inspect_router)
 app.include_router(dataset_freeze_router)
 app.include_router(training_router)
 app.include_router(inference_router)
+app.include_router(catch_recognition_router)
 app.include_router(feedback_ingest_router)
 app.include_router(inference_upload_router)
 app.include_router(auth_router)

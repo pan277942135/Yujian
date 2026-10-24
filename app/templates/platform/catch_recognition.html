@@ -1,0 +1,101 @@
+{% extends "platform/base.html" %}
+
+{% set product_shell = true %}
+{% block head %}<link rel="stylesheet" href="/static/css/catch_recognition.css?v=web-product-runtime-v2">{% endblock %}
+{% block content %}
+<div class="catch-page" id="catchRecognitionApp" data-component="RecognitionWorkspace" data-stage="IDLE" data-visual-contract="YUJIAN_SWOS_WEB_PIXEL_BASELINE_V1" data-runtime-visual-verified="false" data-api="{{ catch_api_url|default('/api/product/catch-recognition/infer') }}" data-ui-simulation="{{ 'true' if ui_simulation else 'false' }}">
+  {% if ui_simulation %}<div class="catch-notice" role="note" style="border-color:#e8b7ae;background:#fff1ee;color:#913d34"><strong>UI_SIMULATION_ONLY</strong><span>仅用于 Chromium 排版与交互验收；此页面没有调用生产模型，也不代表真实识别结果。</span></div>{% endif %}
+  <div class="page-heading"><div><h1>AI渔获识别</h1><p>上传真实鱼获照片，查看当前生产模型返回的识别结果。</p></div></div>
+  <p class="catch-intro">留住真实鱼获，发现它的名字。</p>
+  <div class="catch-notice"><span aria-hidden="true">◈</span><div><strong>照片处理说明</strong> 识别请求仅用于本次推理；推理接口不写入图片存储。点击“保存本次鱼获”后，照片才会上传到你的鱼获记录。当前没有登记公开使用许可的示例照片。</div></div>
+  <nav data-component="StageNavigation" class="catch-stages" aria-label="识别流程">
+    <button class="catch-stage-step active" id="catchTabUpload" type="button" aria-current="step" aria-controls="catchUploadPanel" data-stage-step="upload"><span class="num">1</span><span>上传照片</span></button>
+    <button class="catch-stage-step" id="catchTabProcessing" type="button" aria-controls="catchProcessingPanel" data-stage-step="processing" disabled><span class="num">2</span><span>AI 核心识别</span></button>
+    <button class="catch-stage-step" id="catchTabResult" type="button" aria-controls="catchResultPanel" data-stage-step="result" disabled><span class="num">3</span><span>识别结果</span></button>
+  </nav>
+  <div class="catch-live-status" id="catchLiveStatus" role="status" aria-live="polite">选择一张包含鱼获的真实照片开始识别。</div>
+  <div class="catch-grid" id="catchStageGrid">
+    <section class="catch-panel is-active" id="catchUploadPanel" data-component="UploadStage" data-stage="upload" aria-labelledby="catchUploadHeading">
+      <div class="catch-panel-head"><div><span class="catch-panel-kicker">01 · PHOTO INPUT</span><h2 id="catchUploadHeading">上传照片</h2><p>支持 JPEG、PNG、WEBP，单张不超过 15 MB</p></div><span class="status-tag status-neutral" id="catchUploadBadge">待上传</span></div>
+      <div class="catch-panel-body">
+        <label class="catch-drop" id="catchDrop" for="catchFileInput">
+          <input class="catch-file" id="catchFileInput" type="file" accept="image/jpeg,image/png,image/webp" aria-label="选择鱼获照片">
+          <span><svg class="catch-drop-icon" viewBox="0 0 48 48" aria-hidden="true"><path d="M24 33V10m0 0-8 8m8-8 8 8M9 29v8a4 4 0 0 0 4 4h22a4 4 0 0 0 4-4v-8" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/></svg><strong>拖入照片，或选择文件</strong><small>只接受可解码的真实图片文件<br>识别前可随时重新选择</small></span>
+        </label>
+        <div class="catch-upload-preview" id="catchUploadPreview"><img id="catchUploadPhoto" alt="已选择的鱼获照片"></div>
+        <div class="catch-file-meta" id="catchFileMeta" hidden><strong id="catchFileName">—</strong><span id="catchFileSize">—</span></div>
+        <div class="catch-upload-actions"><button class="catch-button primary" id="catchStartButton" type="button" disabled>开始识别</button><button class="catch-button" id="catchClearButton" type="button" disabled>清除照片</button></div>
+
+      </div>
+    </section>
+
+    <section class="catch-panel" id="catchProcessingPanel" data-component="ProcessingStage" data-stage="processing" data-business-state="idle" aria-labelledby="catchProcessingHeading">
+      <div class="catch-panel-head"><div><span class="catch-panel-kicker">02 · LIVE RECOGNITION</span><h2 id="catchProcessingHeading">AI 核心识别</h2><p>从水光中，逐步发现鱼获</p></div><span class="status-tag status-neutral" id="catchProcessingBadge">等待照片</span></div>
+      <div class="catch-panel-body">
+        <div class="catch-media" id="catchProcessingMedia" data-swos-state="idle">
+          <div class="catch-photo-stage" id="catchPhotoStage" hidden>
+          <img id="catchProcessingPhoto" data-optical-layer="photo-base" alt="正在识别的原始鱼获照片" hidden>
+          <div class="catch-media-empty" id="catchProcessingEmpty">照片将在这里呈现<br>识别期间请稍候</div>
+          <div id="catchPhotoEffects" class="catch-photo-effects" data-component="OpticalHost" data-mask-state="NONE" aria-hidden="true">
+          {% for layer in ['ambient-water','caustic-field','ripple-field','peripheral-refraction','residual-gold-trace'] %}<div data-optical-layer="{{ layer }}"></div>{% endfor %}<div data-optical-layer="fish-focus" class="catch-region-glow" id="catchRegionGlow"></div><canvas id="catchWaterGLCanvas" aria-hidden="true"></canvas><canvas id="catchWater2DCanvas" aria-hidden="true" hidden></canvas><canvas id="catchMaskCanvas" aria-hidden="true"></canvas><div class="catch-bbox" id="catchBBoxOverlay"></div></div>
+          </div>
+        </div>
+        <div class="catch-media-caption"><span>原始照片 · 保留完整画面</span><strong id="catchPhotoDimensions">—</strong></div>
+        <button class="catch-button" id="catchCancelButton" type="button" hidden>取消本次识别</button>
+        <div class="catch-processing-state"><span class="catch-pulse" aria-hidden="true"></span><span id="catchBusinessMessage">等待真实推理</span></div>
+        <details class="catch-detail" data-component="AdvancedDiagnostics"><summary>高级识别诊断</summary><ul class="catch-task-list" id="catchTaskList" aria-label="识别阶段状态">
+          <li class="catch-task" data-task="input_validation"><span class="dot"></span><span>图片校验与方向归一化</span></li>
+          <li class="catch-task" data-task="detector"><span class="dot"></span><span>鱼体定位与检测质量门</span></li>
+          <li class="catch-task" data-task="crop"><span class="dot"></span><span>标准 Crop</span></li>
+          <li class="catch-task" data-task="classifier"><span class="dot"></span><span>鱼种分类</span></li>
+          <li class="catch-task" data-task="segmentation"><span class="dot"></span><span>SAM 轮廓增强 · 尚无候选 Mask</span></li>
+        </ul>
+        <label class="catch-sam-review-control" id="catchSamReviewControl" hidden><input id="catchSamReviewToggle" type="checkbox" disabled> 调试查看 SAM REVIEW_PROXY Mask</label>
+        <p class="catch-sam-review-note" id="catchSamReviewNote" hidden>REVIEW_PROXY 只用于目视审查。SAM 启发式 GOOD 不代表生产资格；生产 Mask 状态仍为 NOT_QUALIFIED。</p>
+        <pre id="catchDiagnostic">尚无推理数据。</pre></details>
+      </div>
+    </section>
+
+    <section class="catch-panel" id="catchResultPanel" data-component="ResultStage" data-stage="result" data-business-state="idle" aria-labelledby="catchResultHeading">
+      <div class="catch-panel-head"><div><span class="catch-panel-kicker">03 · RECOGNITION RESULT</span><h2 id="catchResultHeading">识别结果</h2><p>仅在真实分类结果就绪后显示</p></div><span class="status-tag status-neutral" id="catchResultBadge">等待识别</span></div>
+      <div class="catch-panel-body">
+        <div class="catch-empty-state" id="catchResultEmpty"><div><span class="catch-empty-icon" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M4 17c5-7 12-10 21-7l5 7-5 7C16 27 9 24 4 17Zm20-1h.1M9 12 5 8m4 14-4 4" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg></span><strong>结果会显示在这里</strong><br>识别状态由真实模型响应决定。</div></div>
+        <div class="catch-result-content" id="catchResultContent">
+          <div class="catch-media catch-result-media" id="catchResultMedia"><img class="catch-result-backdrop" id="catchResultBackdrop" alt="" aria-hidden="true" hidden><img id="catchResultPhoto" alt="识别结果对应的原始鱼获照片" hidden></div>
+          <div class="catch-result-head"><div class="catch-species-block"><span class="catch-species-label" id="catchSpeciesLabel">识别鱼种</span><span class="catch-species-name" id="catchSpeciesName"></span></div><span class="catch-confidence" id="catchConfidence"></span></div>
+          <div class="catch-candidates" id="catchCandidates" hidden></div>
+          <form class="catch-form" id="catchRecordForm">
+            <div class="catch-field"><label for="catchLength">长度 · cm</label><input id="catchLength" type="number" min="0.1" max="1000" step="0.1" inputmode="decimal" placeholder="可选"></div>
+            <div class="catch-field"><label for="catchWeight">重量 · kg</label><input id="catchWeight" type="number" min="0.001" max="1000" step="0.001" inputmode="decimal" placeholder="可选"></div>
+            <div class="catch-field"><label for="catchCapturedAt">捕获时间</label><input id="catchCapturedAt" type="datetime-local"></div>
+            <div class="catch-field"><label for="catchLocation">捕获地点</label><input id="catchLocation" type="text" maxlength="512" placeholder="可选"></div>
+            <div class="catch-field full"><label for="catchStory">鱼获故事 · 可选</label><textarea id="catchStory" maxlength="4096" placeholder="记录这次鱼获的经历"></textarea></div>
+            <p class="catch-form-hint" id="catchSaveHint">识别结果尚未就绪。</p>
+            <div class="catch-field full"><label for="catchSpeciesSelect">鱼种确认</label><select id="catchSpeciesSelect" required disabled><option value="">等待真实识别结果</option></select></div>
+            <div class="catch-cta-row"><button class="catch-button primary" id="catchSaveButton" type="button" disabled>保存本次鱼获</button><button class="catch-button gold" id="catchMemoryButton" type="button" disabled aria-describedby="catchMemoryNote">继续记录记忆</button><p class="catch-cta-note" id="catchMemoryNote">Web 记忆详情路由尚未登记；此入口暂不可操作。</p></div>
+          </form>
+          <p class="catch-rr09-note" id="catchTimingNote" hidden>名义 Processing 2800ms + RR09 850ms = 3650ms；真实识别较慢时等待真实结果，不提前揭晓。</p>
+        </div>
+      </div>
+    </section>
+  </div>
+  {% include "platform/catch_recognition_journey.html" %}
+  <footer class="catch-product-footer" data-component="ProductFooter">渔见 AI · 从一张照片，记录一次相遇</footer>
+</div>
+
+<div class="catch-modal-backdrop" id="catchLoginBackdrop" role="presentation">
+  <section class="catch-modal" role="dialog" aria-modal="true" aria-labelledby="catchLoginHeading">
+    <h2 id="catchLoginHeading">登录鱼获账户</h2><p>识别不会自动保存照片。登录后，只有提交保存时才会将这张照片写入你的鱼获记录。</p>
+    <form id="catchLoginForm">
+      <div class="catch-field"><label for="catchLoginUsername">账号</label><input id="catchLoginUsername" name="username" autocomplete="username" minlength="3" maxlength="32" required></div>
+      <div class="catch-field" style="margin-top:10px"><label for="catchLoginPassword">密码</label><input id="catchLoginPassword" name="password" type="password" autocomplete="current-password" minlength="1" maxlength="72" required></div>
+      <div class="catch-login-error" id="catchLoginError" role="status" aria-live="polite"></div>
+      <div class="catch-modal-actions"><button class="catch-button" id="catchLoginCancel" type="button">取消</button><button class="catch-button primary" id="catchLoginSubmit" type="submit">登录并保存</button></div>
+    </form>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% for module in ['photo-session','recognition-api','recognition-controller','stage-view','photo-transition','swos-renderer'] %}<script src="/static/js/catch/{{ module }}.js?v=web-product-runtime-v2"></script>{% endfor %}
+<script src="/static/js/catch_recognition.js?v=web-product-runtime-v2"></script>{% endblock %}

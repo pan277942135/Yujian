@@ -1,0 +1,7 @@
+<section class="catch-journey" data-component="ProcessJourney" aria-labelledby="catchJourneyHeading">
+<h2 id="catchJourneyHeading">一次识别的旅程</h2>
+<ol>
+{% for title, description in [('上传照片','选择你的真实鱼获照片'),('水光自然增强','等待识别，水光渐起'),('鱼体逐步高亮','可信轮廓就绪后呈现'),('照片缩小接续','同一张照片进入结果'),('结果揭晓','查看鱼种，确认并记录')] %}
+<li data-journey-step="{{ loop.index0 }}" data-state="pending"><strong>{{ title }}</strong><div class="catch-journey-preview" aria-hidden="true"><svg class="journey-placeholder" viewBox="0 0 40 28"><path d="M3 14c5-7 13-10 22-8l9 8-9 8C16 24 8 21 3 14Zm22-1h.1m-18-5L2 4m7 17-7 3" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7"/></svg><img data-journey-photo alt="" hidden></div><small>{{ description }}</small><small data-journey-status>等待开始</small></li>
+{% endfor %}
+</ol></section>

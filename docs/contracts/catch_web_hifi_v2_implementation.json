@@ -1,0 +1,168 @@
+{
+  "task_id": "YUJIAN_AI_CATCH_RECOGNITION_WEB_FOUNDATION_AND_ARCHITECTURE_V2",
+  "implementation_status": "B2_CANDIDATE_CONTRACT_IMPLEMENTED",
+  "work_a": {
+    "repository": "pan277942135/Yujian_App",
+    "pr": 190,
+    "sha": "d43db392784d29bb18898292511737e118add4cf",
+    "authority_status": "VISUAL_CONTRACT_DEFINED",
+    "main_adopted": true,
+    "main_adoption_scope": "DESIGN_CONTRACT_ONLY",
+    "pixel_source_approval": "NOT_TRACED",
+    "publication_permission": "NOT_CONFIRMED"
+  },
+  "live_adoption_audit": {
+    "checked_date": "2026-10-22",
+    "yujian_app_main_sha": "e83124a3a1d5ce189b884e0e1d696597c6f3a237",
+    "yujian_app_main_tree_sha": "7824ef331bfb9d90316fd2295c796cdb24f6493f",
+    "pr190_state": "MERGED",
+    "pr186_state": "MERGED",
+    "pr187_state": "CLOSED_UNMERGED",
+    "pr190_merge_tree_matches_main": true,
+    "cited_contract_paths_present_on_main": true,
+    "adoption_scope": "DESIGN_CONTRACT_ONLY",
+    "pr190_contract_adoption_label_conflicts_with_live_state": false,
+    "pixel_frozen_source": "NOT_CONFIRMED",
+    "runtime_visual_verified": false,
+    "current_yujian_app_main_sha": "3ccabae787c69acdf86be7f19e4c262f903c4671",
+    "pr193_state": "MERGED_AUDIT_SNAPSHOT_LABEL_ONLY"
+  },
+  "admission": {
+    "status": "BLOCKED_MISSING_REGISTRY",
+    "missing": [
+      "AGENTS.md",
+      "CONTROL_PLANE_REGISTRY.yaml"
+    ]
+  },
+  "contract_sources": [
+    "design/pages/recognition/web/WEB_HIFI_CONTRACT_V2.md",
+    "design/pages/recognition/web/WEB_HIFI_HANDOFF_A_V2.md",
+    "design/pages/recognition/web/WEB_HIFI_HANDOFF_B_V2.md",
+    "design/pages/recognition/web/WEB_HIFI_GAP_MATRIX_V2.md",
+    "design/pages/recognition/web/contracts/Acceptance_Matrix_V2.json",
+    "design/pages/recognition/web/contracts/Asset_Manifest_V2.json",
+    "design/pages/recognition/web/contracts/Authority_References_V2.json",
+    "design/pages/recognition/web/contracts/Component_Geometry_V2.json",
+    "design/pages/recognition/web/contracts/Page_State_Matrix_V2.json",
+    "design/pages/recognition/web/contracts/Page_Structure_V2.json",
+    "design/pages/recognition/web/contracts/Responsive_Rules_V2.json",
+    "design/pages/recognition/web/contracts/Visual_Tokens_V2.json",
+    "design/pages/recognition/web/contracts/Work_B_Implementation_Mapping_V2.json"
+  ],
+  "timing_ms": {
+    "processing": 2800,
+    "rr09": 850,
+    "total": 3650,
+    "r05_relative": 100,
+    "r05_global": 2900
+  },
+  "processing_keyframes": [
+    0,
+    350,
+    950,
+    1200,
+    1550,
+    2050,
+    2600,
+    2800
+  ],
+  "processing_water_relative_strength": [
+    0,
+    10,
+    45,
+    75,
+    60,
+    35,
+    10,
+    0
+  ],
+  "processing_gold_relative_strength": [
+    0,
+    0,
+    15,
+    45,
+    100,
+    100,
+    100,
+    100
+  ],
+  "rr09_keyframes": [
+    0,
+    100,
+    200,
+    380,
+    550,
+    680,
+    850
+  ],
+  "optical_layers": [
+    "Photo Base",
+    "Ambient Water",
+    "Caustic Field",
+    "Ripple Field",
+    "Peripheral Refraction",
+    "Fish Focus",
+    "Residual Gold Trace"
+  ],
+  "gold_geometry": {
+    "trusted_mask": "NOT_AVAILABLE",
+    "bbox_fallback": "SOFT_REGION_ONLY",
+    "none": "NO_SPATIAL_GOLD",
+    "precise_outline_and_glyph_transfer": "NOT_IMPLEMENTED_UNQUALIFIED_MASK"
+  },
+  "responsive_viewports": [
+    "1440x1000",
+    "1280x800",
+    "1024x768",
+    "768x1024",
+    "480px",
+    "430x932",
+    "390x844",
+    "360x640",
+    "320x480"
+  ],
+  "gap_status": {
+    "G01": "FIXED",
+    "G02": "FIXED_PIXEL_SOURCE_UNMEASURED",
+    "G03": "FIXED_CANDIDATE_DIRECTION",
+    "G04": "FIXED_CONTRAST_DERIVATIVE",
+    "G05": "FIXED",
+    "G06": "FIXED",
+    "G07": "FIXED",
+    "G08": "FIXED",
+    "G09": "PARTIAL_MASK_QUALIFICATION_BLOCKED",
+    "G10": "FIXED_CANDIDATE_GEOMETRY",
+    "G11": "FIXED_SHARED_PHOTO_GEOMETRY",
+    "G12": "PARTIAL_MASK_QUALIFICATION_BLOCKED",
+    "G13": "FIXED",
+    "G14": "PASS_UI_SIMULATION_ONLY",
+    "G15": "FIXED",
+    "G16": "FIXED",
+    "G17": "BLOCKED_AUTHORITY_CONFLICT",
+    "G18": "FIXED_NO_SAMPLE_PHOTO"
+  },
+  "preview": {
+    "status": "BLOCKED_REVIEW_REQUIRED",
+    "infra_pr": 180,
+    "audit_baseline_source_sha": "655c4af07a0244fcf29441b5652c48ca74f2e6a2",
+    "infra_reviews_at_b1_audit": 0,
+    "infra_ci_at_b1_audit": "SKIPPED_NOT_PASS",
+    "b2_source_sha_pin": "MUST_MATCH_FINAL_PRODUCT_SHA",
+    "no_traffic": "REQUIRED",
+    "deployment_revision": null,
+    "url": null
+  },
+  "verification": {
+    "visual_source_comparison": "NOT_MEASURED_UNAPPROVED_SOURCE",
+    "real_photo_visual_acceptance": "USER_PENDING",
+    "real_model_inference": "NOT_RUN_BY_WORK",
+    "production_traffic": "UNCHANGED",
+    "chromium_ui_simulation": {
+      "status": "PASS",
+      "workflow_run_id": 39808178529,
+      "tested_app_code_sha": "af61e3efc9ea8aa89e9f1e7f4a7c88764a797b3f",
+      "scope": "nine viewports; shared photo geometry midpoint; P7/R5; High/Medium/Low/recovery; slow response; Reduce Motion; cancel/reselect",
+      "real_photo_or_model_inference": "NOT_RUN"
+    }
+  }
+}

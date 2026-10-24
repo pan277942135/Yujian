@@ -41,19 +41,23 @@
 </style>
 {% block head %}{% endblock %}
 </head>
-<body>
+<body{% if product_shell %} class="catch-product-shell" data-component="ProductShell"{% endif %}>
 <div class="platform-app">
-  {% include "platform/sidebar.html" %}
-  <button id="platformSidebarOverlay" class="sidebar-overlay" type="button" aria-label="关闭导航" onclick="closePlatformSidebar()"></button>
+  {% if not product_shell %}{% include "platform/sidebar.html" %}{% endif %}
+  {% if not product_shell %}<button id="platformSidebarOverlay" class="sidebar-overlay" type="button" aria-label="关闭导航" onclick="closePlatformSidebar()"></button>{% endif %}
   <div class="platform-main">
-    <header class="platform-topbar">
+    <header class="platform-topbar"{% if product_shell %} data-component="ProductHeader"{% endif %}>
+      {% if product_shell %}<a class="catch-brand" href="/platform"><span class="brand-mark" aria-hidden="true">渔</span><strong>渔见 AI</strong></a>{% else %}
       <button class="mobile-menu" type="button" onclick="togglePlatformSidebar()" aria-label="打开导航">☰</button>
       <div class="breadcrumb"><span>渔见 AI 智能生产平台</span><strong>{{ page_title }}</strong></div>
+      {% endif %}
+      {% if product_shell %}<span class="catch-product-title">AI渔获识别</span>{% endif %}
       <div class="topbar-spacer"></div>
+      {% if product_shell %}<a class="catch-platform-return" href="/platform">返回智能生产平台</a>{% endif %}
       <a class="topbar-link" href="/">切换工作台</a>
       <a class="topbar-link" href="/logout">退出</a>
     </header>
-    <main class="page-wrap">
+    <main class="page-wrap"{% if product_shell %} data-component="ProductContent"{% endif %}>
       {% block content %}{% endblock %}
     </main>
   </div>

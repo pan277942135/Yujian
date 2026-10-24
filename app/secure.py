@@ -1,6 +1,8 @@
 import hashlib
 import os
 import secrets
+from html import escape
+from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -45,6 +47,16 @@ def is_app_api_path(path: str) -> bool:
     return any(path == prefix or path.startswith(prefix + "/") for prefix in PUBLIC_API_PATH_PREFIXES)
 
 
+def _safe_return_path(value: str) -> str:
+    # Only origin-relative paths; reject protocol-relative paths and browser normalization tricks.
+    if not value or not value.startswith("/") or value.startswith("//"):
+        return "/"
+    if any(ord(c) < 32 for c in value) or "\\" in value or "%" in value:
+        return "/"
+    parsed = urlsplit(value)
+    return value if not parsed.netloc and not parsed.scheme and parsed.path not in {"/login", "/logout"} else "/"
+
+
 def install_access_guard(app: FastAPI) -> None:
     @app.middleware("http")
     async def console_access_guard(request: Request, call_next):
@@ -76,14 +88,15 @@ def install_access_guard(app: FastAPI) -> None:
 
         if request.url.path.startswith("/api/") or request.url.path.startswith("/media/"):
             return JSONResponse({"detail": "需要先登录模型工厂控制台"}, status_code=401)
-        return RedirectResponse("/login", status_code=303)
+        return RedirectResponse("/login?next=" + quote(_safe_return_path(request.url.path), safe=""), status_code=303)
 
     @app.get("/login", response_class=HTMLResponse)
-    async def login_page():
+    async def login_page(request: Request):
         if not _configured_key():
             return RedirectResponse("/", status_code=303)
+        target = _safe_return_path(request.query_params.get("next", "/"))
         return HTMLResponse(
-            """<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>渔见 AI 模型工厂登录</title><style>body{font-family:system-ui;margin:0;background:#f6f7f8;display:grid;place-items:center;min-height:100vh;color:#171717}.box{width:min(380px,calc(100vw - 48px));background:white;border:1px solid #e5e7eb;border-radius:16px;padding:24px}input,button{box-sizing:border-box;width:100%;padding:11px;border-radius:9px;border:1px solid #d1d5db;font:inherit;margin-top:10px}button{background:#111827;color:white;font-weight:700;cursor:pointer}.muted{color:#6b7280;font-size:13px}</style></head><body><form class='box' method='post' action='/login'><h2>渔见 AI 模型工厂</h2><div class='muted'>请输入访问口令</div><input type='password' name='access_key' autofocus required><button type='submit'>进入模型工厂</button></form></body></html>"""
+            """<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>渔见 AI 模型工厂登录</title><style>body{font-family:system-ui;margin:0;background:#f6f7f8;display:grid;place-items:center;min-height:100vh;color:#171717}.box{width:min(380px,calc(100vw - 48px));background:white;border:1px solid #e5e7eb;border-radius:16px;padding:24px}input,button{box-sizing:border-box;width:100%;padding:11px;border-radius:9px;border:1px solid #d1d5db;font:inherit;margin-top:10px}button{background:#111827;color:white;font-weight:700;cursor:pointer}.muted{color:#6b7280;font-size:13px}</style></head><body><form class='box' method='post' action='/login'><h2>渔见 AI 模型工厂</h2><div class='muted'>请输入访问口令</div><input type='hidden' name='next' value='RETURN_TARGET'><input type='password' name='access_key' autofocus required><button type='submit'>进入模型工厂</button></form></body></html>""".replace("RETURN_TARGET", escape(target, quote=True))
         )
 
     @app.post("/login")
@@ -95,7 +108,7 @@ def install_access_guard(app: FastAPI) -> None:
         supplied = str(form.get("access_key", ""))
         if not secrets.compare_digest(supplied, key):
             return HTMLResponse("访问口令错误。<a href='/login'>返回重新输入</a>", status_code=401)
-        response = RedirectResponse("/", status_code=303)
+        response = RedirectResponse(_safe_return_path(str(form.get("next", "/"))), status_code=303)
         response.set_cookie(
             COOKIE_NAME,
             _cookie_value(key),

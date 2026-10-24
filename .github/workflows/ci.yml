@@ -18,11 +18,16 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install dependencies
-        run: python -m pip install -r requirements.txt pytest
-      - name: Compile Python
-        run: python -m compileall app evaluation scripts trainer tests
+        run: python -m pip install -r requirements.txt pytest httpx
       - name: Run SWOS resource quality probe unit tests (offline)
         run: python -m pytest -q tests/test_swos_mask_quality_probe.py
+      - name: Validate catch frontend modules and geometry
+        run: |
+          node --check app/static/js/catch_recognition.js
+          for file in app/static/js/catch/*.js; do node --check "$file"; done
+          node --test tests/catch_geometry_v2.test.cjs
+      - name: Compile Python
+        run: python -m compileall app evaluation scripts trainer tests
       - name: Validate deployment shell syntax
         run: |
           bash -n scripts/deploy_console_gcp.sh
@@ -79,20 +84,17 @@ jobs:
           REGISTRY_DB_URL: 'sqlite:///:memory:'
         run: python scripts/smoke_inference.py
       - name: Run production recognition pipeline tests
-        if: github.event.pull_request.number != 182
+        if: github.event.pull_request.number != 177
         env:
           REGISTRY_DB_URL: 'sqlite:///:memory:'
         run: python -m pytest -q tests
-      - name: Record SWOS metadata-review boundary
-        if: github.event.pull_request.number == 182
-        shell: bash
+      - name: Run PR177 safe targeted tests (full-suite metadata review remains blocked)
+        if: github.event.pull_request.number == 177
+        env:
+          REGISTRY_DB_URL: 'sqlite:///:memory:'
         run: |
-          {
-            echo '## SWOS test scope'
-            echo '- The SWOS resource-quality PR runs offline probe unit tests, Python compilation, shell validation, and route/import checks.'
-            echo '- The unrestricted repository suite remains BLOCKED by the existing metadata-access review and is intentionally not used as this PR evidence.'
-            echo '- No metadata endpoint or credential path is exercised by this targeted run.'
-          } >> "$GITHUB_STEP_SUMMARY"
+          python -m pytest -q tests/test_catch_recognition_product.py tests/test_platform_shell.py tests/test_catch_product_shell_v2.py tests/test_production_recognition_pipeline.py tests/test_offline_network_fence.py tests/test_health_provenance.py
+          echo 'Full suite NOT_RUN: unresolved metadata-access review; this is B1 targeted validation only.' >> "$GITHUB_STEP_SUMMARY"
       - name: Run UAT deploy config smoke test
         env:
           REGISTRY_DB_URL: 'sqlite:///:memory:'
@@ -157,10 +159,30 @@ jobs:
           DET_FISH_LANDSCAPE_PHOTO: ${{ runner.temp }}/det-fish-display/landscape.jpg
           DET_FISH_PORTRAIT_PHOTO: ${{ runner.temp }}/det-fish-display/portrait.jpg
         run: python scripts/smoke_det_fish_display_chromium.py
+      - name: Run AI catch recognition Chromium UI simulation only
+        env:
+          DET_FISH_LANDSCAPE_PHOTO: ${{ runner.temp }}/det-fish-display/landscape.jpg
+          DET_FISH_PORTRAIT_PHOTO: ${{ runner.temp }}/det-fish-display/portrait.jpg
+        run: python scripts/smoke_catch_recognition_chromium.py
+      - name: Run SWOS playable preview Chromium rendering
+        if: github.event_name != 'pull_request' || github.event.pull_request.number != 177
+        env:
+          DET_FISH_PORTRAIT_PHOTO: ${{ runner.temp }}/det-fish-display/portrait.jpg
+        run: python scripts/smoke_swos_preview_chromium.py
       - name: Upload Chromium screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: det-fish-display-chromium-${{ github.run_id }}
           path: test-results/det-fish-display/*.png
+          if-no-files-found: warn
+      - name: Upload catch recognition UI simulation screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: catch-recognition-chromium-ui-simulation-${{ github.run_id }}
+          path: |
+            test-results/catch-recognition-chromium/*.png
+            test-results/catch-recognition-chromium/*.json
+            test-results/swos-preview-chromium/*
           if-no-files-found: warn
