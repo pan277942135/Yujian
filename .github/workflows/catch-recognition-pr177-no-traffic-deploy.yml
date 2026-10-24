@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       target_sha:
-        description: "Optional exact current PR #177 HEAD; omitted SHA is resolved from the live PR"
-        required: false
+        description: "Exact current PR #177 HEAD; automatic CI trigger supplies the SHA"
+        required: true
         type: string
   workflow_run:
     workflows: ["ci"]
