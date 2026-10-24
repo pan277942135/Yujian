@@ -1,12 +1,12 @@
 name: AI Catch Recognition PR177 Tagged Preview
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/catch-recognition-pr177-no-traffic-deploy.yml
   workflow_dispatch:
+    inputs:
+      target_sha:
+        description: "Exact current PR #177 HEAD with successful exact-source CI"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -23,7 +23,7 @@ env:
   SERVICE: yujian-model-factory-console
   PR_NUMBER: '177'
   EXPECTED_BRANCH: feat/ai-catch-recognition-web-swos-rr09-v1
-  TARGET_SHA: 6da640859f063d7f42ee5432e6b35ecb162802ff
+  TARGET_SHA: ${{ inputs.target_sha }}
   TAG: catch-pr177
   WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
   DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
@@ -76,7 +76,7 @@ jobs:
             echo "- Source SHA: $TARGET_SHA"
             echo "- PR: #$PR_NUMBER (open, same repository, exact HEAD)"
             echo "- Deployment: fixed Cloud Run service, --no-traffic, fixed tag"
-            echo "- User-uploaded photos and real inference: not exercised by workflow"
+            echo "- Licensed public fixture inference and SAM probe run after deploy; private user photos are excluded; browser visual acceptance is separate"
           } >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
@@ -223,6 +223,8 @@ jobs:
 
       - name: Probe same-request detector, classifier, and SAM masks on the no-traffic revision
         id: swos_mask_probe
+        env:
+          SWOS_PROBE_CONSOLE_ACCESS_KEY: ${{ secrets.CONSOLE_ACCESS_KEY }}
         shell: bash
         run: |
           set -euo pipefail
