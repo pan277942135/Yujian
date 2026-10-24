@@ -240,7 +240,7 @@ def test_cloud_run_detector_job_must_match_l4_worker_contract():
                     "resources": {"limits": {"cpu": "4", "memory": "16Gi", "nvidia.com/gpu": "1"}},
                 }],
                 "serviceAccount": "detector@project.iam.gserviceaccount.com",
-                "nodeSelector": {"run.googleapis.com/accelerator": "nvidia-l4"},
+                "nodeSelector": {"accelerator": "nvidia-l4"},
                 "maxRetries": 0,
                 "gpuZonalRedundancyDisabled": True,
             }
