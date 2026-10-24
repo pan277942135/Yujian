@@ -4,9 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       target_sha:
-        description: "Exact current PR #177 HEAD with successful exact-source CI"
-        required: true
+        description: "Optional exact current PR #177 HEAD; omitted SHA is resolved from the live PR"
+        required: false
         type: string
+  workflow_run:
+    workflows: ["ci"]
+    types: [completed]
+    branches:
+      - feat/ai-catch-recognition-web-swos-rr09-v1
 
 permissions:
   contents: read
@@ -23,7 +28,7 @@ env:
   SERVICE: yujian-model-factory-console
   PR_NUMBER: '177'
   EXPECTED_BRANCH: feat/ai-catch-recognition-web-swos-rr09-v1
-  TARGET_SHA: ${{ inputs.target_sha }}
+  TARGET_SHA: ${{ inputs.target_sha || github.event.workflow_run.head_sha || '' }}
   TAG: catch-pr177
   WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
   DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
@@ -32,7 +37,19 @@ env:
 
 jobs:
   preflight:
-    if: github.repository == 'pan277942135/Yujian' && github.ref == 'refs/heads/main'
+    if: >-
+      github.repository == 'pan277942135/Yujian' &&
+      github.ref == 'refs/heads/main' &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'workflow_run' &&
+          github.event.workflow_run.name == 'ci' &&
+          github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.head_branch == 'feat/ai-catch-recognition-web-swos-rr09-v1' &&
+          github.event.workflow_run.head_repository.full_name == github.repository
+        )
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Verify exact approved same-repository PR HEAD
