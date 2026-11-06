@@ -1,0 +1,367 @@
+name: Freeze model artifacts
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/freeze-model-artifacts.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: yujian-model-artifact-freeze
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: gemini-api-project-503706
+  WIF_PROVIDER: projects/571785698442/locations/global/workloadIdentityPools/github-actions/providers/yujian-main
+  DEPLOY_SERVICE_ACCOUNT: yujian-github-deployer@gemini-api-project-503706.iam.gserviceaccount.com
+  BUCKET: yujian-model-factory-571785698442
+
+jobs:
+  publish-frozen-models:
+    if: github.repository == 'pan277942135/Yujian' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3.0.0
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v3.0.1
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          version: '>= 416.0.0'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Download exact registered model artifacts from GCS
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/detector dist/classifier dist/private
+          DET="gs://${BUCKET}/models/DET_FISH_v0.3"
+          CLS="gs://${BUCKET}/models/MODEL_CROP_M1_v0.2"
+          gcloud storage cp "$DET/fish_detector_yolox_nano_v0_1.onnx" dist/detector/DET_FISH_v0.3.onnx
+          gcloud storage cp "$DET/best_ckpt.pth" dist/detector/DET_FISH_v0.3_best_ckpt.pth
+          gcloud storage cp "$DET/detector_metadata.json" dist/private/detector_metadata.source.json
+          gcloud storage cp "$DET/recognition_pipeline_v1.json" dist/detector/recognition_pipeline_v1.json
+          gcloud storage cp "$CLS/model_torchscript.pt" dist/classifier/model_torchscript.pt
+          gcloud storage cp "$CLS/model_state_dict.pt" dist/classifier/model_state_dict.pt
+          gcloud storage cp "$CLS/metrics.json" dist/classifier/metrics.json
+          gcloud storage cp "$CLS/class_map.json" dist/classifier/class_map.json
+          gcloud storage cp "$CLS/confusion_matrix.csv" dist/classifier/confusion_matrix.csv
+          gcloud storage cp "$CLS/export/MODEL_CROP_M1_v0.2.tflite" dist/classifier/MODEL_CROP_M1_v0.2.tflite
+
+      - name: Verify source ZIP byte identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, pathlib, sys
+          expected = {
+            "dist/detector/DET_FISH_v0.3.onnx": "98257b953b0e9f8aa673572fe4a9749a730ed8a2c014a42b7c492a0e3592c9a1",
+            "dist/detector/DET_FISH_v0.3_best_ckpt.pth": "3e2b4d835de65bf408f565f5104c9993d3c558527690782e75a4415e3c67ca89",
+            "dist/classifier/model_torchscript.pt": "61319bfee5848ca7d0894d1b22feebe2ac0804a516352a43c26c4ad175204ef1",
+            "dist/classifier/model_state_dict.pt": "c267569b188673d3228f5510de30c666a0ed673231afd29025bb8f2dea5c9f03",
+            "dist/classifier/MODEL_CROP_M1_v0.2.tflite": "29c2f2fd1608178f023b8e35edf632c0dd685df4a7ae1c3562220a7352ccce18",
+            "dist/classifier/class_map.json": "dcf7ef7b85e7a88fda6669cf5681e41413755a73d4367c2c90a5d5861bc95d5e",
+            "dist/classifier/metrics.json": "bcebb2bf8825b2ce5e4f7825921089a041860598b8a5a269b83697090e926e7c",
+            "dist/classifier/confusion_matrix.csv": "10925128a8e6a11537b58a59f3fba95c2109ad87458b40305115ed75327a8456"
+          }
+          failures=[]
+          for name,wanted in expected.items():
+            p=pathlib.Path(name)
+            if not p.is_file():
+              failures.append(f"MISSING {name}")
+              continue
+            actual=hashlib.sha256(p.read_bytes()).hexdigest()
+            print(f"{name} {p.stat().st_size} {actual}")
+            if actual != wanted:
+              failures.append(f"SHA_MISMATCH {name}: expected={wanted} actual={actual}")
+          if failures:
+            print("\n".join(failures),file=sys.stderr)
+            raise SystemExit(1)
+          print("USER_UPLOAD_GCS_BYTE_IDENTITY_PASS")
+          PY
+
+      - name: Validate contracts and build redacted public metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, pathlib
+          root=pathlib.Path("dist"); det=root/"detector"; cls=root/"classifier"
+          def load(p): return json.loads(p.read_text(encoding="utf-8"))
+          def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
+          def dump(p,v): p.write_text(json.dumps(v,ensure_ascii=False,indent=2,sort_keys=True)+"\n",encoding="utf-8")
+
+          dm=load(root/"private"/"detector_metadata.source.json")
+          dc=load(det/"recognition_pipeline_v1.json")
+          rc=load(pathlib.Path("config/recognition_pipeline_v1.json"))
+          if json.dumps(dc,sort_keys=True,separators=(",",":")) != json.dumps(rc,sort_keys=True,separators=(",",":")):
+            raise SystemExit("DETECTOR_PIPELINE_CONTRACT_MISMATCH")
+          if (dm.get("model_version"),dm.get("dataset_version"),dm.get("model_family")) != ("DET_FISH_v0.3","DET_DS_v0.3","YOLOX_NANO"):
+            raise SystemExit("DETECTOR_VERSION_OR_FAMILY_MISMATCH")
+          if dm.get("onnx_sha256") != sha(det/"DET_FISH_v0.3.onnx") or int(dm.get("onnx_bytes") or 0) != (det/"DET_FISH_v0.3.onnx").stat().st_size:
+            raise SystemExit("DETECTOR_ONNX_METADATA_MISMATCH")
+          if dm.get("checkpoint_sha256") != sha(det/"DET_FISH_v0.3_best_ckpt.pth"):
+            raise SystemExit("DETECTOR_CHECKPOINT_METADATA_MISMATCH")
+          onnx=dm.get("onnx") or {}; training=dm.get("training") or {}; ds=dm.get("dataset_report") or {}
+          rec=ds.get("source_reconciliation") or {}
+          if onnx.get("input_shape") != [1,3,416,416] or onnx.get("output_shape") != [1,3549,6]:
+            raise SystemExit(f"DETECTOR_TENSOR_CONTRACT_MISMATCH: {onnx}")
+          if int(training.get("epochs_completed") or 0) != 30 or int(training.get("epochs") or 0) != 30:
+            raise SystemExit("DETECTOR_TRAINING_EPOCH_GATE_FAIL")
+          if ds.get("source_image_audit_verified") is not True or rec.get("status") != "PASS":
+            raise SystemExit("DETECTOR_DATASET_AUDIT_GATE_FAIL")
+
+          summary=ds.get("source_image_audit_summary") or {}; splits=ds.get("splits") or {}
+          public_detector={
+            "model_version":dm["model_version"],"model_family":dm["model_family"],
+            "class_names":dm.get("class_names") or ["fish"],"dataset_version":dm["dataset_version"],
+            "source_code_commit":dm.get("git_commit"),"trainer_image_digest":dm.get("trainer_image_digest"),
+            "training":training,
+            "dataset_summary":{
+              "status":ds.get("status"),"source_images_read":ds.get("original_source_images_read"),
+              "unique_complete_scene_images":ds.get("unique_complete_scene_images"),
+              "unique_positive_images":ds.get("unique_positive_images"),"negative_images":ds.get("negatives"),
+              "accepted_bbox_records":ds.get("source_accepted_bbox_record_count"),
+              "human_negative_records":ds.get("source_human_negative_record_count"),
+              "source_image_audit_verified":ds.get("source_image_audit_verified"),
+              "human_review_verified":ds.get("human_review_verified"),"split_integrity":ds.get("split_integrity"),
+              "source_reconciliation_status":rec.get("status"),
+              "source_image_audit_summary":{k:summary.get(k) for k in (
+                "source_record_rows","unique_exif_normalized_images","unique_original_sha256",
+                "unique_source_uris_attempted","unique_source_uris_failed","unique_source_uris_read_and_decoded"
+              ) if k in summary},
+              "splits":{k:{f:(v or {}).get(f) for f in ("images","annotations","negative_images") if f in (v or {})} for k,v in splits.items()}
+            },
+            "pipeline_contract":dc,"onnx":onnx,"onnx_sha256":sha(det/"DET_FISH_v0.3.onnx"),
+            "onnx_bytes":(det/"DET_FISH_v0.3.onnx").stat().st_size,
+            "checkpoint_sha256":sha(det/"DET_FISH_v0.3_best_ckpt.pth"),
+            "public_metadata_redactions":{
+              "source_image_audit_rows_included":False,"source_image_sha256_rows_included":False,
+              "review_record_ids_included":False,"internal_gcs_uris_included":False,"trainer_internal_uri_included":False
+            }
+          }
+          dump(det/"DET_FISH_v0.3.public.metadata.json",public_detector)
+
+          cm=load(cls/"class_map.json"); metrics=load(cls/"metrics.json")
+          if len(cm.get("classes") or []) != 15: raise SystemExit("CLASSIFIER_CLASS_COUNT_MISMATCH")
+          names=[x.get("species_key") for x in sorted(cm["classes"],key=lambda x:int(x["class_index"]))]
+          if any(not x for x in names): raise SystemExit("CLASSIFIER_CLASS_MAP_INVALID")
+          public_classifier={
+            "model_id":"MODEL_CROP_M1_v0.2","dataset_id":"DS_M1_v1.1",
+            "input_shape":[1,3,224,224],"output_shape":[1,15],"num_classes":15,
+            "class_names":names,"source_code_commit":"809a5130800a0664b0e4429f629907b7d1fbcfaf",
+            "conversion_version":"litert-torch","tflite_sha256":sha(cls/"MODEL_CROP_M1_v0.2.tflite"),
+            "torchscript_sha256":sha(cls/"model_torchscript.pt"),"state_dict_sha256":sha(cls/"model_state_dict.pt"),
+            "preprocessing":{"crop_expand_ratio":0.15,"resize_mode":"letterbox","padding_rgb":[124,116,104],
+              "normalization_mean":[0.485,0.456,0.406],"normalization_std":[0.229,0.224,0.225]},
+            "validation_metrics":{
+              "validation_accuracy":(metrics.get("validation") or {}).get("accuracy"),
+              "validation_macro_f1":(metrics.get("validation") or {}).get("macro_f1"),
+              "test_accuracy":(metrics.get("test") or {}).get("accuracy"),
+              "test_macro_f1":(metrics.get("test") or {}).get("macro_f1")
+            },
+            "public_metadata_redactions":{"internal_gcs_uris_included":False,"publish_job_ids_included":False}
+          }
+          dump(cls/"MODEL_CROP_M1_v0.2.public.metadata.json",public_classifier)
+          dump(cls/"classifier_contract.json",{"model_id":"MODEL_CROP_M1_v0.2","input_shape":[1,3,224,224],
+            "output_shape":[1,15],"class_map":"class_map.json","preprocessing":public_classifier["preprocessing"]})
+
+          det_manifest={"model_id":"DET_FISH_v0.3","release_tag":"detector-model-v0.3","model_family":"YOLOX_NANO",
+            "dataset_version":"DET_DS_v0.3","assets":{
+              "onnx":{"file":"DET_FISH_v0.3.onnx","bytes":(det/"DET_FISH_v0.3.onnx").stat().st_size,"sha256":sha(det/"DET_FISH_v0.3.onnx")},
+              "checkpoint":{"file":"DET_FISH_v0.3_best_ckpt.pth","bytes":(det/"DET_FISH_v0.3_best_ckpt.pth").stat().st_size,"sha256":sha(det/"DET_FISH_v0.3_best_ckpt.pth")},
+              "metadata":{"file":"DET_FISH_v0.3.public.metadata.json","sha256":sha(det/"DET_FISH_v0.3.public.metadata.json")},
+              "pipeline_contract":{"file":"recognition_pipeline_v1.json","sha256":sha(det/"recognition_pipeline_v1.json")}}}
+          cls_manifest={"model_id":"MODEL_CROP_M1_v0.2","release_tag":"classifier-model-v0.2","dataset_version":"DS_M1_v1.1",
+            "assets":{
+              "tflite":{"file":"MODEL_CROP_M1_v0.2.tflite","bytes":(cls/"MODEL_CROP_M1_v0.2.tflite").stat().st_size,"sha256":sha(cls/"MODEL_CROP_M1_v0.2.tflite")},
+              "torchscript":{"file":"model_torchscript.pt","bytes":(cls/"model_torchscript.pt").stat().st_size,"sha256":sha(cls/"model_torchscript.pt")},
+              "state_dict":{"file":"model_state_dict.pt","bytes":(cls/"model_state_dict.pt").stat().st_size,"sha256":sha(cls/"model_state_dict.pt")},
+              "class_map":{"file":"class_map.json","sha256":sha(cls/"class_map.json")},
+              "metrics":{"file":"metrics.json","sha256":sha(cls/"metrics.json")},
+              "confusion_matrix":{"file":"confusion_matrix.csv","sha256":sha(cls/"confusion_matrix.csv")},
+              "metadata":{"file":"MODEL_CROP_M1_v0.2.public.metadata.json","sha256":sha(cls/"MODEL_CROP_M1_v0.2.public.metadata.json")},
+              "classifier_contract":{"file":"classifier_contract.json","sha256":sha(cls/"classifier_contract.json")}}}
+          dump(det/"MODEL_MANIFEST.json",det_manifest); dump(cls/"MODEL_MANIFEST.json",cls_manifest)
+
+          lock={"schema_version":"YUJIAN_MODEL_LOCK_V1","repository":"pan277942135/Yujian",
+            "freeze_policy":"versioned tags; refuse existing tags; SHA-256 verified against source package and remote release downloads",
+            "models":{
+              "detector":{"model_id":"DET_FISH_v0.3","release_tag":"detector-model-v0.3",
+                "release_url":"https://github.com/pan277942135/Yujian/releases/tag/detector-model-v0.3",
+                "bundle_url":"https://github.com/pan277942135/Yujian/releases/download/detector-model-v0.3/DET_FISH_v0.3_bundle.zip",
+                "runtime_asset_url":"https://github.com/pan277942135/Yujian/releases/download/detector-model-v0.3/DET_FISH_v0.3.onnx",
+                "onnx_sha256":sha(det/"DET_FISH_v0.3.onnx"),"checkpoint_sha256":sha(det/"DET_FISH_v0.3_best_ckpt.pth"),
+                "input_shape":[1,3,416,416],"output_shape":[1,3549,6],"letterbox_fill":114,"nms_iou":0.45},
+              "classifier":{"model_id":"MODEL_CROP_M1_v0.2","source_release_tag":"classifier-model-v0.2",
+                "source_release_url":"https://github.com/pan277942135/Yujian/releases/tag/classifier-model-v0.2",
+                "bundle_url":"https://github.com/pan277942135/Yujian/releases/download/classifier-model-v0.2/MODEL_CROP_M1_v0.2_bundle.zip",
+                "mobile_release_tag":"mobile-model-v0.2","mobile_release_url":"https://github.com/pan277942135/Yujian/releases/tag/mobile-model-v0.2",
+                "runtime_asset_url":"https://github.com/pan277942135/Yujian/releases/download/mobile-model-v0.2/fish_classifier_v0_2.tflite",
+                "tflite_sha256":sha(cls/"MODEL_CROP_M1_v0.2.tflite"),"torchscript_sha256":sha(cls/"model_torchscript.pt"),
+                "state_dict_sha256":sha(cls/"model_state_dict.pt"),"input_shape":[1,3,224,224],"output_shape":[1,15],"num_classes":15}
+            }}
+          dump(root/"MODEL_LOCK.json",lock)
+          (det/"MODEL_LOCK.json").write_bytes((root/"MODEL_LOCK.json").read_bytes())
+          (cls/"MODEL_LOCK.json").write_bytes((root/"MODEL_LOCK.json").read_bytes())
+
+          for folder in (det,cls):
+            files=sorted(p for p in folder.iterdir() if p.is_file() and p.name != "SHA256SUMS")
+            (folder/"SHA256SUMS").write_text("".join(f"{sha(p)}  {p.name}\n" for p in files),encoding="utf-8")
+          PY
+
+      - name: Build single-download bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import pathlib,zipfile
+          for folder,bundle in (
+            (pathlib.Path("dist/detector"),"DET_FISH_v0.3_bundle.zip"),
+            (pathlib.Path("dist/classifier"),"MODEL_CROP_M1_v0.2_bundle.zip")):
+            with zipfile.ZipFile(folder/bundle,"w",compression=zipfile.ZIP_DEFLATED,compresslevel=9) as z:
+              for p in sorted(folder.iterdir()):
+                if p.is_file() and p.name != bundle:
+                  z.write(p,p.name)
+          PY
+
+      - name: Record bundle and checksum manifest hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd dist/detector && sha256sum DET_FISH_v0.3_bundle.zip SHA256SUMS > BUNDLE_SHA256SUMS.txt)
+          (cd dist/classifier && sha256sum MODEL_CROP_M1_v0.2_bundle.zip SHA256SUMS > BUNDLE_SHA256SUMS.txt)
+
+      - name: Publish versioned releases without overwriting existing tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-remote --tags origin "refs/tags/detector-model-v0.3" | grep -q .; then
+            echo "Refusing to overwrite detector-model-v0.3" >&2; exit 1
+          fi
+          if git ls-remote --tags origin "refs/tags/classifier-model-v0.2" | grep -q .; then
+            echo "Refusing to overwrite classifier-model-v0.2" >&2; exit 1
+          fi
+          gh release create detector-model-v0.3 --target "$GITHUB_SHA" \
+            --title "DET_FISH v0.3 — frozen detector model" \
+            --notes "Version-pinned YOLOX-Nano detector. Public metadata excludes source-image audit rows, review IDs, per-image hashes, and internal GCS URIs. Verify SHA-256 in MODEL_LOCK.json before use." \
+            dist/detector/DET_FISH_v0.3_bundle.zip dist/detector/DET_FISH_v0.3.onnx \
+            dist/detector/DET_FISH_v0.3_best_ckpt.pth dist/detector/DET_FISH_v0.3.public.metadata.json \
+            dist/detector/recognition_pipeline_v1.json dist/detector/MODEL_MANIFEST.json \
+            dist/detector/SHA256SUMS dist/detector/BUNDLE_SHA256SUMS.txt dist/MODEL_LOCK.json
+          gh release create classifier-model-v0.2 --target "$GITHUB_SHA" \
+            --title "MODEL_CROP_M1 v0.2 — frozen classifier source and mobile model" \
+            --notes "Version-pinned 15-class classifier. Includes TFLite runtime model, TorchScript and state_dict source artifacts. Public metadata excludes internal GCS URIs and publish job identifiers. Existing mobile-model-v0.2 remains the Android runtime distribution." \
+            dist/classifier/MODEL_CROP_M1_v0.2_bundle.zip dist/classifier/MODEL_CROP_M1_v0.2.tflite \
+            dist/classifier/model_torchscript.pt dist/classifier/model_state_dict.pt \
+            dist/classifier/class_map.json dist/classifier/metrics.json dist/classifier/confusion_matrix.csv \
+            dist/classifier/MODEL_CROP_M1_v0.2.public.metadata.json dist/classifier/classifier_contract.json \
+            dist/classifier/MODEL_MANIFEST.json dist/classifier/SHA256SUMS dist/classifier/BUNDLE_SHA256SUMS.txt dist/MODEL_LOCK.json
+
+      - name: Re-download GitHub assets and verify remote byte identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p verify/detector verify/classifier
+          gh release download detector-model-v0.3 --dir verify/detector
+          gh release download classifier-model-v0.2 --dir verify/classifier
+          python - <<'PY'
+          import hashlib,pathlib,sys
+          expected={
+            "verify/detector/DET_FISH_v0.3.onnx":"98257b953b0e9f8aa673572fe4a9749a730ed8a2c014a42b7c492a0e3592c9a1",
+            "verify/detector/DET_FISH_v0.3_best_ckpt.pth":"3e2b4d835de65bf408f565f5104c9993d3c558527690782e75a4415e3c67ca89",
+            "verify/classifier/MODEL_CROP_M1_v0.2.tflite":"29c2f2fd1608178f023b8e35edf632c0dd685df4a7ae1c3562220a7352ccce18",
+            "verify/classifier/model_torchscript.pt":"61319bfee5848ca7d0894d1b22feebe2ac0804a516352a43c26c4ad175204ef1",
+            "verify/classifier/model_state_dict.pt":"c267569b188673d3228f5510de30c666a0ed673231afd29025bb8f2dea5c9f03"}
+          errors=[]
+          for name,wanted in expected.items():
+            p=pathlib.Path(name)
+            if not p.is_file(): errors.append("MISSING_REMOTE_ASSET "+name); continue
+            actual=hashlib.sha256(p.read_bytes()).hexdigest()
+            print(name,p.stat().st_size,actual)
+            if actual != wanted: errors.append("REMOTE_SHA_MISMATCH "+name+" "+actual)
+          if errors: print("\n".join(errors),file=sys.stderr); raise SystemExit(1)
+          print("GITHUB_RELEASE_REMOTE_BYTE_IDENTITY_PASS")
+          PY
+          python - <<'PY'
+          import hashlib,pathlib,sys
+          errors=[]
+          for folder in (pathlib.Path("verify/detector"),pathlib.Path("verify/classifier")):
+            sums=folder/"SHA256SUMS"
+            bundle_sums=folder/"BUNDLE_SHA256SUMS.txt"
+            for manifest in (sums,bundle_sums):
+              if not manifest.is_file():
+                errors.append("MISSING_CHECKSUM_MANIFEST "+str(manifest))
+                continue
+              for line in manifest.read_text(encoding="utf-8").splitlines():
+                if not line.strip(): continue
+                wanted,name=line.split(None,1)
+                name=name.strip().lstrip("*")
+                path=folder/name
+                if not path.is_file():
+                  errors.append("MISSING_CHECKSUM_TARGET "+str(path)); continue
+                actual=hashlib.sha256(path.read_bytes()).hexdigest()
+                if actual != wanted: errors.append("CHECKSUM_MISMATCH "+str(path))
+                else: print("CHECKSUM_PASS",path.name,actual)
+          if errors: print("\\n".join(errors),file=sys.stderr); raise SystemExit(1)
+          print("ALL_RELEASE_ASSETS_AND_BUNDLES_CHECKSUM_PASS")
+          PY
+          python - <<'PY'
+          import hashlib,pathlib,sys
+          errors=[]
+          for folder in (pathlib.Path("verify/detector"),pathlib.Path("verify/classifier")):
+            for manifest_name in ("SHA256SUMS","BUNDLE_SHA256SUMS.txt"):
+              manifest=folder/manifest_name
+              if not manifest.is_file():
+                errors.append("MISSING_CHECKSUM_MANIFEST "+str(manifest))
+                continue
+              for line in manifest.read_text(encoding="utf-8").splitlines():
+                if not line.strip(): continue
+                wanted,name=line.split(None,1)
+                name=name.strip().lstrip("*")
+                path=folder/name
+                if not path.is_file():
+                  errors.append("MISSING_CHECKSUM_TARGET "+str(path))
+                  continue
+                actual=hashlib.sha256(path.read_bytes()).hexdigest()
+                if actual != wanted: errors.append("CHECKSUM_MISMATCH "+str(path))
+                else: print("CHECKSUM_PASS",path.name,actual)
+          if errors:
+            print("\\n".join(errors),file=sys.stderr)
+            raise SystemExit(1)
+          print("ALL_REMOTE_RELEASE_ASSETS_AND_BUNDLES_CHECKSUM_PASS")
+          PY
+          gh release view detector-model-v0.3 --json url,isDraft,isPrerelease,assets
+          gh release view classifier-model-v0.2 --json url,isDraft,isPrerelease,assets
+
+      - name: Write publication summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Frozen model releases"
+            echo "- Detector: https://github.com/pan277942135/Yujian/releases/tag/detector-model-v0.3"
+            echo "- Classifier source: https://github.com/pan277942135/Yujian/releases/tag/classifier-model-v0.2"
+            echo "- Existing Android classifier: https://github.com/pan277942135/Yujian/releases/tag/mobile-model-v0.2"
+            echo "- Source package and remote release SHA-256 checks are mandatory."
+            echo "- Source-image audit rows, review IDs, per-image source hashes, and internal GCS URIs are not published."
+          } >> "$GITHUB_STEP_SUMMARY"
