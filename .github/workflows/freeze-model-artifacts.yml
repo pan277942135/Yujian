@@ -49,12 +49,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist/detector dist/classifier
+          mkdir -p dist/detector dist/classifier dist/private
           DET="gs://${BUCKET}/models/DET_FISH_v0.3"
           CLS="gs://${BUCKET}/models/MODEL_CROP_M1_v0.2"
           gcloud storage cp "$DET/fish_detector_yolox_nano_v0_1.onnx" dist/detector/DET_FISH_v0.3.onnx
           gcloud storage cp "$DET/best_ckpt.pth" dist/detector/DET_FISH_v0.3_best_ckpt.pth
-          gcloud storage cp "$DET/detector_metadata.json" dist/detector/detector_metadata.source.json
+          gcloud storage cp "$DET/detector_metadata.json" dist/private/detector_metadata.source.json
           gcloud storage cp "$DET/recognition_pipeline_v1.json" dist/detector/recognition_pipeline_v1.json
           gcloud storage cp "$CLS/model_torchscript.pt" dist/classifier/model_torchscript.pt
           gcloud storage cp "$CLS/model_state_dict.pt" dist/classifier/model_state_dict.pt
@@ -106,7 +106,7 @@ jobs:
           def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
           def dump(p,v): p.write_text(json.dumps(v,ensure_ascii=False,indent=2,sort_keys=True)+"\n",encoding="utf-8")
 
-          dm=load(det/"detector_metadata.source.json")
+          dm=load(root/"private"/"detector_metadata.source.json")
           dc=load(det/"recognition_pipeline_v1.json")
           rc=load(pathlib.Path("config/recognition_pipeline_v1.json"))
           if json.dumps(dc,sort_keys=True,separators=(",",":")) != json.dumps(rc,sort_keys=True,separators=(",",":")):
@@ -244,8 +244,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sha256sum dist/detector/DET_FISH_v0.3_bundle.zip dist/detector/SHA256SUMS > dist/detector/BUNDLE_SHA256SUMS.txt
-          sha256sum dist/classifier/MODEL_CROP_M1_v0.2_bundle.zip dist/classifier/SHA256SUMS > dist/classifier/BUNDLE_SHA256SUMS.txt
+          (cd dist/detector && sha256sum DET_FISH_v0.3_bundle.zip SHA256SUMS > BUNDLE_SHA256SUMS.txt)
+          (cd dist/classifier && sha256sum MODEL_CROP_M1_v0.2_bundle.zip SHA256SUMS > BUNDLE_SHA256SUMS.txt)
 
       - name: Publish versioned releases without overwriting existing tags
         env:
