@@ -325,6 +325,31 @@ jobs:
           if errors: print("\\n".join(errors),file=sys.stderr); raise SystemExit(1)
           print("ALL_RELEASE_ASSETS_AND_BUNDLES_CHECKSUM_PASS")
           PY
+          python - <<'PY'
+          import hashlib,pathlib,sys
+          errors=[]
+          for folder in (pathlib.Path("verify/detector"),pathlib.Path("verify/classifier")):
+            for manifest_name in ("SHA256SUMS","BUNDLE_SHA256SUMS.txt"):
+              manifest=folder/manifest_name
+              if not manifest.is_file():
+                errors.append("MISSING_CHECKSUM_MANIFEST "+str(manifest))
+                continue
+              for line in manifest.read_text(encoding="utf-8").splitlines():
+                if not line.strip(): continue
+                wanted,name=line.split(None,1)
+                name=name.strip().lstrip("*")
+                path=folder/name
+                if not path.is_file():
+                  errors.append("MISSING_CHECKSUM_TARGET "+str(path))
+                  continue
+                actual=hashlib.sha256(path.read_bytes()).hexdigest()
+                if actual != wanted: errors.append("CHECKSUM_MISMATCH "+str(path))
+                else: print("CHECKSUM_PASS",path.name,actual)
+          if errors:
+            print("\\n".join(errors),file=sys.stderr)
+            raise SystemExit(1)
+          print("ALL_REMOTE_RELEASE_ASSETS_AND_BUNDLES_CHECKSUM_PASS")
+          PY
           gh release view detector-model-v0.3 --json url,isDraft,isPrerelease,assets
           gh release view classifier-model-v0.2 --json url,isDraft,isPrerelease,assets
 
