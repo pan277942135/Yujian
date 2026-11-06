@@ -8,15 +8,24 @@ Model binaries are published as versioned GitHub Releases in this repository.
 - Classifier: `MODEL_CROP_M1_v0.2` — source release tag `classifier-model-v0.2`
 - Existing Android classifier runtime asset: release tag `mobile-model-v0.2`
 
+## Publish procedure
+
+1. Create a draft GitHub Release on `main` using the exact version tag.
+2. Upload only the matching prebuilt bundle:
+   - `DET_FISH_v0.3_bundle.zip`
+   - `MODEL_CROP_M1_v0.2_bundle.zip`
+3. Publish the release. The `Verify and expand frozen model releases` workflow downloads the bundle, verifies its archive SHA-256, validates the internal `SHA256SUMS`, checks public metadata redaction, expands the individual model files into the release, and downloads them again for remote SHA-256 verification.
+4. Do not upload the original source ZIP or raw detector metadata. The release bundles contain redacted public metadata.
+
 ## Retrieval
 
-Use versioned release assets, not a floating branch URL. Download the bundle or individual runtime asset and verify SHA-256 against `MODEL_LOCK.json` attached to each release.
+Use versioned release assets, not a floating branch URL. Download the bundle or the individual runtime asset and verify SHA-256 against `MODEL_LOCK.json` and `SHA256SUMS`.
 
 ## Freeze policy
 
-- Release tags are created only if they do not already exist.
-- Publishing refuses to overwrite an existing tag.
-- GitHub Actions compares GCS bytes with the exact SHA-256 values of the uploaded source packages.
-- The workflow downloads published assets again and verifies their SHA-256 before reporting success.
+- The release tag identifies a model version; do not reuse or replace an existing tag.
+- The verification workflow does not overwrite existing release assets.
+- It verifies exact model hashes and re-downloads every expanded asset before reporting success.
 - Public metadata excludes source-image audit rows, review IDs, per-image source hashes, and internal GCS URIs.
-- Build/test status is not a substitute for runtime or visual acceptance.
+- The existing `mobile-model-v0.2` Android classifier release remains unchanged.
+- GitHub's platform-level immutable-release setting is not assumed; the freeze evidence is the versioned tag, no-overwrite workflow, and SHA-256 manifests.
